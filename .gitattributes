@@ -1,0 +1,6 @@
+# Normalize line endings so committed text is stable across machines
+# (core.autocrlf is true globally on this account).
+* text=auto
+*.md   text eol=lf
+*.mjs  text eol=lf
+*.ps1  text eol=crlf

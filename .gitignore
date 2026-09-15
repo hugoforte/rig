@@ -1,0 +1,25 @@
+# Machine-specific: work root, mirror root, identities, secrets sources.
+rig.local.json
+
+# Hard guards. This repo is pushed to GitHub, and the catalogue + work docs are the
+# kind of files secrets accidentally land in. Nothing below is ever wanted here.
+*.env
+.env.*
+!*.env.example
+!*.env.sample
+*.secrets.env
+*.local.json
+*.pem
+*.key
+*.pfx
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vs/
+.vscode/
+.idea/
+node_modules/

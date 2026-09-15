@@ -1,0 +1,10 @@
+{
+  "name": "rig",
+  "private": true,
+  "type": "module",
+  "description": "Cross-repo work harness. Zero dependencies.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test"
+  }
+}

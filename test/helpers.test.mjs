@@ -1,0 +1,90 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
+} from '../bin/rig.mjs'
+
+test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
+  const { flags, positional } = parseArgs(['new', '--ticket', 'my-id', '--title', 'T', '--type=chore', '--force'])
+  assert.deepEqual(positional, ['new', 'my-id'])
+  assert.equal(flags.ticket, true)
+  assert.equal(flags.title, 'T')
+  assert.equal(flags.type, 'chore')
+  assert.equal(flags.force, true)
+})
+
+test('parseArgs: a value flag at the end is true, not undefined', () => {
+  assert.equal(parseArgs(['--email']).flags.email, true)
+})
+
+test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {
+  const { data, body } = parseFrontmatter(`---
+repo: billing
+org: acme
+setup: []
+talks_to:
+  - repo: orders-api
+    how: emits OrderReturned
+  - repo: orders-web
+---
+
+Prose here.`)
+  assert.equal(data.repo, 'billing')
+  assert.deepEqual(data.setup, [])
+  assert.deepEqual(data.talks_to, [{ repo: 'orders-api', how: 'emits OrderReturned' }, { repo: 'orders-web' }])
+  assert.equal(body.trim(), 'Prose here.')
+})
+
+test('parseFrontmatter: no frontmatter means empty data and the whole text as body', () => {
+  const { data, body } = parseFrontmatter('just text')
+  assert.deepEqual(data, {})
+  assert.equal(body, 'just text')
+})
+
+test('isJiraKey: upper-case PROJECT-number only', () => {
+  assert.ok(isJiraKey('PROJ-42'))
+  assert.ok(!isJiraKey('proj-42'))
+  assert.ok(!isJiraKey('PROJ-42-slug'))
+})
+
+test('isGithubKey: owner/repo#number only', () => {
+  assert.ok(isGithubKey('acme/platform#7'))
+  assert.ok(!isGithubKey('platform#7'))
+  assert.ok(!isGithubKey('acme/platform'))
+})
+
+test('slug: lower-case, dashed, bounded', () => {
+  assert.equal(slug('Refunds double-charge on retry!'), 'refunds-double-charge-on-retry')
+  assert.equal(slug('x'.repeat(80)).length, 48)
+})
+
+test('parseTrackerFlag: every kind, merged into one object', () => {
+  assert.deepEqual(parseTrackerFlag('a=github:acme/platform,b=jira:PROJ,c=none'), {
+    a: { kind: 'github', repo: 'acme/platform' },
+    b: { kind: 'jira', project: 'PROJ' },
+    c: { kind: 'none' },
+  })
+})
+
+test('parseTrackerFlag: rejects bad shapes with a RigError', () => {
+  for (const bad of ['a=github', 'a=github:noslash', 'a=jira:proj', 'a=none:junk', 'a=svn:x', 'nonsense']) {
+    assert.throws(() => parseTrackerFlag(bad), RigError, bad)
+  }
+})
+
+const oneTracker = { tracker: { a: { kind: 'github', repo: 'x/y' }, b: { kind: 'none' } } }
+const twoTrackers = { tracker: { a: { kind: 'github', repo: 'x/y' }, b: { kind: 'jira', project: 'P' } } }
+
+test('trackerFor: the only live tracker wins without --org', () => {
+  assert.deepEqual(trackerFor(oneTracker), { org: 'a', kind: 'github', repo: 'x/y' })
+})
+
+test('trackerFor: several live trackers need --org', () => {
+  assert.throws(() => trackerFor(twoTrackers), /pass --org/)
+  assert.equal(trackerFor(twoTrackers, 'b').project, 'P')
+})
+
+test('trackerFor: none configured, or an unknown --org, dies', () => {
+  assert.throws(() => trackerFor({ tracker: {} }), /no tracker configured/)
+  assert.throws(() => trackerFor(twoTrackers, 'zzz'), /no tracker configured for org/)
+})
