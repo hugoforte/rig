@@ -5,8 +5,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { githubViaGh, githubInMemory, GithubError } from './github.mjs'
-import { twgViaCli, twgInMemory, JiraError } from './jira.mjs'
+import { RigError, TrackerError } from './errors.mjs'
+import { githubViaGh, githubInMemory } from './github.mjs'
+import { twgViaCli, twgInMemory } from './jira.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -33,7 +34,6 @@ const step = s => console.log(`${C.cyan('·')} ${s}`)
 const warn = s => console.log(`${C.yellow('!')} ${s}`)
 const ok = s => console.log(`${C.green('✓')} ${s}`)
 
-class RigError extends Error {}
 const die = msg => { throw new RigError(msg) }
 
 function run (cmd, args, opts = {}) {
@@ -115,11 +115,11 @@ const github = () => githubAdapter.get()
 const jira = () => jiraAdapter.get()
 const persistFakeTrackers = () => { githubAdapter.persist(); jiraAdapter.persist() }
 
-// A tracker call the caller can carry on without: true, or the error's message.
-// Anything else is a bug and propagates.
-function attempt (call) {
-  try { call(); return true } catch (e) {
-    if (e instanceof GithubError || e instanceof JiraError) return e.message
+// Runs a tracker call the caller can carry on without, and answers why it failed, or
+// nothing when it didn't. Anything but a tracker failure is a bug and propagates.
+function trackerFailure (call) {
+  try { call() } catch (e) {
+    if (e instanceof TrackerError) return e.message
     throw e
   }
 }
@@ -263,12 +263,14 @@ const findCatalog = (name) =>
 // along from GitHub for the catalogue stub `rig attach` drafts on first sight.
 function resolveOrg (cfg, repo) {
   const cat = findCatalog(repo)
-  if (cat) return { org: cat.org, repo: cat.repo, language: '' }
+  if (cat) return { org: cat.org, repo: cat.repo }
   for (const org of cfg.orgs) {
     const found = github().repo(org, repo)
     if (found) return { org, repo: found.name, language: found.language }
   }
-  die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')} (is gh authenticated?)`)
+  const auth = github().auth()
+  const why = auth === 'ok' ? '' : ` — gh is ${auth === 'missing' ? 'not on PATH' : 'not authenticated'}, so GitHub was never asked`
+  die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}${why}`)
 }
 
 function draftCatalogEntry (org, repo, stack) {
@@ -561,7 +563,7 @@ function ticketWriteBack (work, states) {
   if (!work.repos.length) reason = 'No repos were attached, so there are no PRs to check.'
   else {
     const unmerged = states.filter(s => !s.pr || s.pr.state !== 'MERGED').map(s =>
-      `${s.repo} (${s.missing ? 'worktree missing' : s.pr ? `PR #${s.pr.number} ${s.pr.state.toLowerCase()}` : 'no PR'})`)
+      `${s.repo} (${s.missing ? 'worktree missing' : s.prError ? 'PR state unknown' : s.pr ? `PR #${s.pr.number} ${s.pr.state.toLowerCase()}` : 'no PR'})`)
     if (unmerged.length) reason = `Not every PR is merged — ${unmerged.join(', ')}.`
   }
   const merged = reason === ''
@@ -574,12 +576,12 @@ function ticketWriteBack (work, states) {
   ].join('\n')
   for (const key of githubKeys) {
     const [repo, n] = key.split('#')
-    const commented = attempt(() => github().commentIssue(repo, n, githubBody))
-    if (commented !== true) { warn(`${key}: could not comment (${commented})`); continue }
+    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody))
+    if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
-    const closed = attempt(() => github().closeIssue(repo, n))
-    if (closed === true) step(`closed ${key}`)
-    else warn(`${key}: commented, but could not close (${closed})`)
+    const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+    if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
+    else step(`closed ${key}`)
   }
 
   const jiraBody = [
@@ -589,9 +591,9 @@ function ticketWriteBack (work, states) {
     '', 'rig does not transition Jira tickets — move this one yourself.',
   ].join('\n')
   for (const key of jiraKeys) {
-    const commented = attempt(() => jira().commentIssue(key, jiraBody))
-    if (commented === true) step(`commented on ${key}`)
-    else warn(`${key}: could not comment (${commented})`)
+    const notCommented = trackerFailure(() => jira().commentIssue(key, jiraBody))
+    if (notCommented) warn(`${key}: could not comment (${notCommented})`)
+    else step(`commented on ${key}`)
   }
 }
 
@@ -714,6 +716,12 @@ function joinOrCreateDataRepo (spec) {
     return target
   }
 
+  // Everything from here asks GitHub, and "gh could not answer" would otherwise read as
+  // "does not exist" and send an existing repo down the create path.
+  const auth = github().auth()
+  if (auth === 'missing') die('gh not found on PATH — joining or creating a data repo needs it')
+  if (auth === 'unauthenticated') die('gh is not authenticated — joining or creating a data repo needs it (gh auth login)')
+
   if (github().repoExists(spec)) {
     step(`joining ${spec}: cloning to ${target}`)
     github().clone(spec, target)
@@ -729,10 +737,10 @@ function joinOrCreateDataRepo (spec) {
   // creates the repo from it and pushes with its own credentials.
   step(`${spec} does not exist: creating it, private`)
   ensureDataRootCheckout(target)
-  const created = attempt(() => github().createRepo(spec, { source: target, description: 'rig data root: repo catalogue and work records' }))
-  if (created !== true) {
+  const notCreated = trackerFailure(() => github().createRepo(spec, { source: target, description: 'rig data root: repo catalogue and work records' }))
+  if (notCreated) {
     fs.rmSync(target, { recursive: true, force: true })
-    die(`could not create ${spec}: ${created}\n` +
+    die(`could not create ${spec}: ${notCreated}\n` +
       `  No permission to create repos in "${owner}"? Use --data-root <dir> for a local data root instead.`)
   }
   ok(`created ${spec} and pushed its first commit`)
@@ -985,11 +993,14 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
   const sec = copySecrets(cfg, repo, dest)
   if (sec.copied) step(`copied ${sec.copied} secrets file(s)`)
 
-  if (draftCatalogEntry(org, repo, language)) {
+  // Draft only for a repo the catalogue does not know: a hit means its file exists, or
+  // that its frontmatter names a different path — a misconfiguration, not a gap to fill.
+  const known = findCatalog(repo)
+  if (!known && draftCatalogEntry(org, repo, language)) {
     warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh`)
   }
 
-  const cat = findCatalog(repo)
+  const cat = known || findCatalog(repo)
   work.status = nextStatusAfterAttach(work)
   work.repos.push({ repo, org, path: dest, base, role: cat?.role || '', attachedAt: new Date().toISOString() })
   saveWork(work)
@@ -1064,7 +1075,9 @@ function repoState (cfg, entry, branch) {
     s.behind = behind || 0
     s.ahead = ahead || 0
   }
-  s.pr = github().prForBranch(entry.org, entry.repo, branch)
+  // One repo GitHub cannot answer for must not take the whole listing down; the caller
+  // shows the state as unknown, and `close` treats unknown as a blocker.
+  s.prError = trackerFailure(() => { s.pr = github().prForBranch(entry.org, entry.repo, branch) })
   return s
 }
 
@@ -1096,7 +1109,8 @@ cmds.list = ({ flags }) => {
       if (s.dirty) { bits.push(C.yellow(`${s.dirty} dirty`)); anyDirty = true }
       if (s.ahead) bits.push(`${s.ahead} ahead`)
       if (s.behind) bits.push(C.dim(`${s.behind} behind`))
-      if (s.pr) bits.push(s.pr.state === 'MERGED' ? C.green(`PR #${s.pr.number} merged`) : `PR #${s.pr.number} ${s.pr.state.toLowerCase()}`)
+      if (s.prError) bits.push(C.yellow('PR state unknown'))
+      else if (s.pr) bits.push(s.pr.state === 'MERGED' ? C.green(`PR #${s.pr.number} merged`) : `PR #${s.pr.number} ${s.pr.state.toLowerCase()}`)
       if (!s.pr || s.pr.state !== 'MERGED') allMerged = false
       say(`  ${r.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
     }
@@ -1125,7 +1139,7 @@ cmds.status = ({ flags }) => {
       say(`  changes ${s.dirty || 'none'}`)
       say(`  commits ${s.ahead} ahead · ${s.behind} behind`)
     }
-    say(`  pr      ${s.pr ? `#${s.pr.number} ${s.pr.state} ${s.pr.url}` : 'none'}`)
+    say(`  pr      ${s.pr ? `#${s.pr.number} ${s.pr.state} ${s.pr.url}` : s.prError ? `unknown — ${s.prError}` : 'none'}`)
     say('')
   }
 }
@@ -1182,6 +1196,7 @@ cmds.close = ({ flags }) => {
     if (s.dirty) blockers.push(`${r.repo}: ${s.dirty} uncommitted change(s)`)
     if (s.ahead) blockers.push(`${r.repo}: ${s.ahead} unpushed commit(s)`)
     if (s.pr && s.pr.state === 'OPEN') blockers.push(`${r.repo}: PR #${s.pr.number} still open`)
+    if (s.prError) blockers.push(`${r.repo}: PR state unknown (${s.prError})`)
   }
   if (blockers.length && !flags.force) {
     warn('not closing — unfinished business:')
@@ -1419,7 +1434,7 @@ if (isMain) {
   try {
     await cmd(parseArgs(rest))
   } catch (e) {
-    if (!(e instanceof RigError || e instanceof GithubError || e instanceof JiraError)) throw e
+    if (!(e instanceof RigError)) throw e
     console.error(`${C.red('✗')} ${e.message}`)
     process.exitCode = 1
   } finally {

@@ -19,24 +19,16 @@
 //   activeSprintId(boardId)                       the board's active sprint id, or null
 // Every call but present() throws JiraError when twg is missing or the call fails.
 import { spawnSync } from 'node:child_process'
-import { jsonCliHelpers } from './cli-json.mjs'
+import { TrackerError } from './errors.mjs'
+import { jsonCliHelpers, cliRunner } from './cli.mjs'
 
-export class JiraError extends Error {}
-const { fail, firstLine, parseJson } = jsonCliHelpers(JiraError)
+export class JiraError extends TrackerError {}
+const { fail, parseJson } = jsonCliHelpers(JiraError)
 
 const spawnTwg = args => spawnSync('twg', args, { encoding: 'utf8' })
 
 export function twgViaCli ({ exec = spawnTwg } = {}) {
-  const twg = args => {
-    const r = exec(args)
-    if (r.error) fail(`twg not found on PATH (${r.error.message})`)
-    return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
-  }
-  const must = args => {
-    const r = twg(args)
-    if (r.code !== 0) fail(`twg ${args.slice(0, 2).join(' ')}: ${firstLine(r.err || r.out)}`)
-    return r.out
-  }
+  const { must } = cliRunner('twg', exec, fail)
 
   return {
     present () {

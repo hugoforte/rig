@@ -1,7 +1,7 @@
 // GitHub, behind one interface. Every `gh` invocation rig makes lives here, with its
 // output parsing, so callers never build argv or read gh output themselves. Two
-// adapters satisfy the interface: `githubViaGh` shells out to `gh` (DESIGN.md decision
-// 29: rig authenticates to nothing but git), and `githubInMemory` holds canned repos,
+// adapters satisfy the interface: `githubViaGh` shells out to `gh` (DESIGN.md §2: rig
+// authenticates to nothing but git), and `githubInMemory` holds canned repos,
 // PRs and issues for tests. rig picks the adapter; see `github()` in rig.mjs.
 //
 // The interface, and what each call may do:
@@ -14,31 +14,24 @@
 //   repoExists(spec)                    spec is owner/name
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
-// Every call but auth() throws GithubError when gh is missing. Lookups (repo, prForBranch,
-// repoExists) answer null or false when gh fails; every other call throws GithubError.
+// Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
+// but exits non-zero, the lookups (repo, prForBranch, repoExists) answer null or false —
+// "not found" and "gh could not answer" look the same to them — and every other call
+// throws GithubError carrying gh's stderr.
 //
 // createIssue, commentIssue and closeIssue are the tracker operations: what rig does to
-// a ticket. A tracker of another kind presents the same operations under its own names.
+// a ticket. bin/jira.mjs presents the same operations for Jira under its own names.
 import { spawnSync } from 'node:child_process'
-import { jsonCliHelpers } from './cli-json.mjs'
+import { TrackerError } from './errors.mjs'
+import { jsonCliHelpers, cliRunner } from './cli.mjs'
 
-export class GithubError extends Error {}
+export class GithubError extends TrackerError {}
 const { fail, firstLine, parseJson } = jsonCliHelpers(GithubError)
 
 const spawnGh = args => spawnSync('gh', args, { encoding: 'utf8' })
 
 export function githubViaGh ({ exec = spawnGh } = {}) {
-  // Runs gh; missing gh is fatal here, once, for every caller.
-  const gh = args => {
-    const r = exec(args)
-    if (r.error) fail(`gh not found on PATH (${r.error.message})`)
-    return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
-  }
-  const must = args => {
-    const r = gh(args)
-    if (r.code !== 0) fail(`gh ${args.slice(0, 2).join(' ')}: ${firstLine(r.err || r.out)}`)
-    return r.out
-  }
+  const { run: gh, must } = cliRunner('gh', exec, fail)
 
   return {
     auth () {
@@ -56,7 +49,9 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
         '--state', 'all', '--json', 'number,state,url', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
-      const [pr] = parseJson(r.out, 'gh pr list')
+      const prs = parseJson(r.out, 'gh pr list')
+      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
+      const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, url: pr.url } : null
     },
     createIssue (repo, title, body) {
@@ -89,9 +84,12 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 // lookups answer null or false, as gh's non-zero exit does, and writes fail.
 export function githubInMemory (state) {
   state.repos = state.repos || {}
-  const guard = () => { if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)') }
-  const write = () => { guard(); if (state.auth === 'unauthenticated') fail('gh is not authenticated (in-memory GitHub)') }
-  const answers = () => { guard(); return state.auth !== 'unauthenticated' }
+  // Can gh answer at all (missing fails everything), and is it allowed to (writes need auth)?
+  const answers = () => {
+    if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
+    return state.auth !== 'unauthenticated'
+  }
+  const write = () => { if (!answers()) fail('gh is not authenticated (in-memory GitHub)') }
   const lookup = spec => {
     const key = Object.keys(state.repos).find(k => k.toLowerCase() === spec.toLowerCase())
     return key ? { key, repo: state.repos[key] } : null
@@ -110,7 +108,10 @@ export function githubInMemory (state) {
     },
     prForBranch (org, name, branch) {
       if (!answers()) return null
-      const pr = lookup(`${org}/${name}`)?.repo.prs?.find(p => p.branch === branch)
+      // The newest PR on the branch, as `gh pr list --limit 1` answers — a closed PR
+      // re-opened as a new one must show the open one to the close safety check.
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
+        .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
       return pr ? { number: pr.number, state: pr.state, url: pr.url } : null
     },
     createIssue (spec, title, body) {
@@ -123,7 +124,9 @@ export function githubInMemory (state) {
     },
     commentIssue (spec, number, body) {
       write()
-      issue(spec, number).comments.push(body)
+      const found = issue(spec, number)
+      found.comments = found.comments || []   // a hand-seeded fixture may omit it
+      found.comments.push(body)
     },
     closeIssue (spec, number) {
       write()
@@ -135,9 +138,11 @@ export function githubInMemory (state) {
     clone (spec, target) {
       write()
       // The one on-disk effect: a clone is a checkout, so it clones from the recorded source.
-      const source = lookup(spec)?.repo.source || fail(`${spec}: no such repo (in-memory GitHub)`)
+      const found = lookup(spec) || fail(`${spec}: no such repo (in-memory GitHub)`)
+      const source = found.repo.source || fail(`${spec}: exists but has no \`source\` to clone from (in-memory GitHub)`)
       const r = spawnSync('git', ['clone', '-q', source, target], { encoding: 'utf8' })
-      if (r.status !== 0) fail(`clone of ${spec}: ${firstLine(r.stderr)}`)
+      if (r.error) fail(`git not found on PATH (${r.error.message})`)
+      if (r.status !== 0) fail(`clone of ${spec}: ${(r.stderr || '').trim()}`)
     },
     createRepo (spec, { source }) {
       write()

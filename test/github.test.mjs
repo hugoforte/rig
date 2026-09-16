@@ -3,7 +3,7 @@
 // parsers run without gh), and `githubInMemory` holds canned repos, PRs and issues.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { githubViaGh, githubInMemory } from '../bin/github.mjs'
+import { githubViaGh, githubInMemory, GithubError } from '../bin/github.mjs'
 
 // A canned `gh`: `reply(args)` returns stdout, or a { code, err } object.
 const canned = reply => {
@@ -50,6 +50,12 @@ test('gh adapter: prForBranch is null when gh cannot answer', () => {
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x'), null)
 })
 
+test('gh adapter: prForBranch fails as a GithubError, not a TypeError, when gh prints a non-array', () => {
+  const { github } = canned(() => '{"message":"unexpected"}')
+  assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), GithubError)
+  assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), /gh pr list.*not a list/)
+})
+
 test('gh adapter: repo returns GitHub\'s canonical name and language', () => {
   const { github } = canned(() => '{"name":"Platform","language":"TypeScript"}')
   assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
@@ -77,10 +83,12 @@ test('gh adapter: every other call fails when gh is missing', () => {
   assert.throws(() => github.repo('acme', 'platform'), /gh not found on PATH/)
 })
 
-test('gh adapter: commentIssue and closeIssue surface gh\'s first error line', () => {
-  const { github } = canned(() => ({ code: 1, err: 'HTTP 403: Forbidden\nmore detail' }))
-  assert.throws(() => github.commentIssue('acme/platform', 3, 'hi'), /gh issue comment: HTTP 403: Forbidden$/)
-  assert.throws(() => github.closeIssue('acme/platform', 3), /HTTP 403: Forbidden/)
+test('gh adapter: a failed write surfaces the whole of gh\'s stderr, not just its first line', () => {
+  // `gh repo clone` streams git, whose first stderr line is "Cloning into ..." and whose
+  // cause ("fatal: ...") comes later; truncating to one line would hide it.
+  const { github } = canned(() => ({ code: 1, err: "Cloning into 'x'...\nfatal: could not read Username" }))
+  assert.throws(() => github.clone('acme/rig-data', 'x'), /gh repo clone: Cloning into 'x'\.\.\.\nfatal: could not read Username/)
+  assert.throws(() => github.closeIssue('acme/platform', 3), /gh issue close: Cloning into/)
 })
 
 test('gh adapter: repoExists follows gh repo view\'s exit code', () => {
@@ -123,6 +131,16 @@ test('in-memory adapter: prForBranch finds the PR by branch', () => {
   assert.equal(github.prForBranch('acme', 'platform', 'feat/other'), null)
 })
 
+test('in-memory adapter: prForBranch answers the newest PR on a branch, as gh --limit 1 does', () => {
+  // A closed PR re-opened as a new one: the close safety check must see the open one.
+  const state = world()
+  state.repos['acme/Platform'].prs = [
+    { branch: 'feat/x', number: 5, state: 'CLOSED', url: 'u5' },
+    { branch: 'feat/x', number: 9, state: 'OPEN', url: 'u9' },
+  ]
+  assert.equal(githubInMemory(state).prForBranch('acme', 'platform', 'feat/x').number, 9)
+})
+
 test('in-memory adapter: createIssue numbers after the highest existing issue and records it', () => {
   const state = world()
   const github = githubInMemory(state)
@@ -138,6 +156,19 @@ test('in-memory adapter: commentIssue and closeIssue mutate the issue; unknown i
   assert.deepEqual(state.repos['acme/Platform'].issues[0].comments, ['done'])
   assert.equal(state.repos['acme/Platform'].issues[0].state, 'CLOSED')
   assert.throws(() => github.commentIssue('acme/Platform', 99, 'x'), /acme\/Platform#99/)
+})
+
+test('in-memory adapter: commentIssue tolerates a seeded issue with no comments array', () => {
+  const state = world()
+  state.repos['acme/Platform'].issues = [{ number: 3, title: 'Bare', body: '', state: 'OPEN' }]
+  githubInMemory(state).commentIssue('acme/Platform', 3, 'done')
+  assert.deepEqual(state.repos['acme/Platform'].issues[0].comments, ['done'])
+})
+
+test('in-memory adapter: clone names the missing `source` when the repo exists but has none', () => {
+  const state = world()
+  state.repos['acme/rig-data'] = {}
+  assert.throws(() => githubInMemory(state).clone('acme/rig-data', '/tmp/y'), /acme\/rig-data.*no `source`/)
 })
 
 test('in-memory adapter: with gh "missing", every call but auth fails as the real one would', () => {

@@ -7,8 +7,10 @@
 // single one with --test-name-pattern is not supported.
 //
 // GitHub is the in-memory adapter from bin/github.mjs, selected by RIG_FAKE_GITHUB
-// naming a JSON state file the tool reads on start and writes back on exit. Tests seed
-// it and read it back; the real `gh` is never spawned.
+// naming a JSON state file the tool reads on start and writes back on exit (Jira the
+// same, via RIG_FAKE_TWG). Tests seed it and read it back; the real `gh`/`twg` are never
+// spawned. That file is shared state too: a test that seeds a repo or issue is relied on
+// by the later tests that assert on it, which is one more reason the order matters.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -358,16 +360,31 @@ test('status and list read the PR for the work branch from GitHub', () => {
   // A checkout where the worktree would be; rig only needs it to exist and be clean.
   const billing = path.join(workRoot, 'old', 'billing')
   fs.mkdirSync(billing, { recursive: true })
-  for (const args of [['init', '-q', '-b', 'main'], ['commit', '-q', '--allow-empty', '-m', 'seed']]) {
-    const g = spawnSync('git', ['-C', billing, ...args], { encoding: 'utf8', env })
-    assert.equal(g.status, 0, g.stderr)
-  }
+  const g = spawnSync('git', ['-C', billing, 'init', '-q', '-b', 'main'], { encoding: 'utf8', env })
+  assert.equal(g.status, 0, g.stderr)
   let r = rig(['status', '--work', 'old'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /pr\s+#12 MERGED https:\/\/github\.com\/acme\/billing\/pull\/12/)
   r = rig(['list'])
   assert.match(r.out, /PR #12 merged/)
   assert.match(r.out, /safe to `rig close`/)
+})
+
+test('when gh cannot answer, status and list say the PR state is unknown, and close refuses', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  let r = rig(['status', '--work', 'old'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /pr\s+unknown — gh not found on PATH/)
+  r = rig(['list'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /PR state unknown/)
+  assert.doesNotMatch(r.out, /safe to `rig close`/)
+  r = rig(['close', '--work', 'old'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: PR state unknown \(gh not found on PATH/)
+  assert.ok(fs.existsSync(path.join(workRoot, 'old', 'billing')), 'nothing torn down')
+  setGithub(state)
 })
 
 test('close with every PR merged comments on the GitHub ticket and closes it', () => {
