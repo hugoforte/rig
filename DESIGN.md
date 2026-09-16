@@ -63,8 +63,9 @@ Agent integration is a thin layer over it: agents run `rig` commands and read
 can run a shell command can drive it. `AGENTS.md` is the real instruction file; `CLAUDE.md`
 is a one-line pointer to it — the convention the org's repos are already converging on.
 
-`rig` authenticates to nothing except git. Jira prose is fetched by the agent and piped in.
-GitHub state is read by shelling out to `gh`, which is already authenticated on the machine.
+`rig` authenticates to nothing except git. GitHub state is read by shelling out to `gh`,
+and Jira by shelling out to `twg` (ADR-0001, superseding the original "agent pipes the
+brief in" design) — both already authenticated on the machine.
 
 ### 2.1 Vocabulary
 
@@ -194,8 +195,11 @@ attached repo is a no-op, not an error.
 
 ### 5.1 `rig new` — the entry point
 
-1. Takes a work id, a title, and an optional brief on stdin. **The agent fetches Jira prose**
-   and pipes it in; `rig` never authenticates to Atlassian.
+1. Takes a work id, a title, and an optional brief on stdin. A GitHub key still needs its
+   brief piped in; a Jira key is fetched by `rig` itself via `twg` (ADR-0001), the piped
+   brief only overriding what was fetched. When a tracker is configured, `rig new` refuses
+   until one of `--key`, `--ticket`, or `--no-ticket` makes the ticket decision explicit
+   (decision 40).
 2. Runs the repo interview (§6).
 3. For each selected repo: lazily create the bare mirror if absent, `git fetch` it, cut a
    worktree on the shared branch.
@@ -438,13 +442,16 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 26 | Seed catalogue from existing context docs; draft-on-attach after |
 | 27 | Selection is catalogue-only; no code reading |
 | 28 | Unmanaged worktrees outside `D:\w` are ignored, not adopted |
-| 29 | Agent fetches Jira; `rig` shells to `gh`; no credentials in `rig` |
+| 29 | ~~Agent fetches Jira; `rig` shells to `gh`; no credentials in `rig`~~ — superseded by ADR-0001: `rig` shells to `twg` for Jira too |
 | 30 | Old-clone-directory cleanup is a separate later session, not a `rig` feature |
 | 31 | Setup commands are printed, not run; `--setup` opts in |
 | 32 | Secrets sources in `rig.local.json`, copied on attach |
-| 33 | `rig new --ticket` opens GitHub issues via `gh`; Jira tickets stay with the agent |
+| 33 | ~~`rig new --ticket` opens GitHub issues via `gh`; Jira tickets stay with the agent~~ — superseded by ADR-0001: `--ticket` creates in either tracker |
 | 34 | Tool and knowledge split: `rig` public, `rig-data` private, joined by `dataRoot` |
 | 35 | Org-level config (`orgs`, `tracker`) is data: `rig.json` in the data root, nothing in code |
 | 36 | Setup asks where the knowledge lives first; the tool checkout is never the data root; `rig-data` is the name convention |
 | 37 | Worktree paths are derived from the work root, never stored — one record works on every machine |
 | 38 | Every `gh` call lives in `bin/github.mjs` behind one interface; a second, in-memory adapter (`RIG_FAKE_GITHUB`) runs the ticket and PR paths under test |
+| 39 | A work has gates (ticket decided, repos confirmed, design agreed, closed), not stages; gate state is recorded as `status` in `work.json`, not derived |
+| 40 | `rig new` refuses without an explicit `--key`, `--ticket` or `--no-ticket` on any data root with a live tracker; `--no-ticket` records a declined ticket, distinct from an absent one |
+| 41 | `twg` is Jira's client, handled like `gh` (ADR-0001); per-org ticket config (`project`, `type`, `fields`, `board`) lives in `rig.json`, field ids discovered via `field create-metadata`, never hardcoded |

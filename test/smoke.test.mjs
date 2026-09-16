@@ -18,7 +18,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-let tmp, tool, dataRoot, workRoot, env, githubStateFile
+let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
 const rig = (args, input) => {
@@ -28,6 +28,8 @@ const rig = (args, input) => {
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 const github = () => readJson(githubStateFile)
+const setTwg = state => fs.writeFileSync(twgStateFile, JSON.stringify(state))
+const twg = () => readJson(twgStateFile)
 
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-smoke-'))
@@ -41,6 +43,9 @@ before(() => {
   env.RIG_FAKE_GITHUB = githubStateFile
   // No gh at all until a test needs GitHub; init's warning path runs first.
   setGithub({ auth: 'missing' })
+  twgStateFile = path.join(tmp, 'twg.json')
+  env.RIG_FAKE_TWG = twgStateFile
+  setTwg({ present: true, issues: {}, fields: {}, boards: {} })
   // The tool writes `git config --global core.longpaths`; keep that, and every
   // inherited setting, out of the real global config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
@@ -98,27 +103,44 @@ test('init --orgs adds, never replaces', () => {
   assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')).orgs, ['acme', 'acme-labs'])
 })
 
-test('new, ticket, list, status, close on a work with no repos', () => {
-  let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore'], 'the brief')
+test('new refuses without a ticket decision once a tracker is configured', () => {
+  // acme-labs got a live Jira tracker two tests ago; the gate now applies data-root-wide.
+  const r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore'], 'the brief')
+  assert.equal(r.code, 1)
+  assert.match(r.out, /--key.*--ticket.*--no-ticket/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
+})
+
+test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
+  let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore', '--no-ticket'], 'the brief')
   assert.equal(r.code, 0, r.out)
   const record = path.join(dataRoot, 'work', 't1', 'work.json')
   assert.equal(readJson(record).branch, 'chore/smoke-work')
+  assert.equal(readJson(record).ticketsDeclined, true)
+  assert.equal(readJson(record).status, 'planning')
   assert.ok(fs.existsSync(path.join(workRoot, 't1', 'AGENTS.md')), 'generated file in the work folder')
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't1', 'context.md'), 'utf8'), /the brief/)
+  const doc = () => fs.readFileSync(path.join(dataRoot, 'work', 't1', 'context.md'), 'utf8')
+  assert.match(doc(), /the brief/)
+  assert.match(doc(), /^Tickets: none \(declined\) · Status: Planning$/m)
 
   r = rig(['ticket', 'PROJ-9', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.deepEqual(readJson(record).tickets, ['PROJ-9'])
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't1', 'context.md'), 'utf8'), /^Tickets: PROJ-9/m)
+  assert.equal(readJson(record).ticketsDeclined, undefined, 'a real ticket supersedes the decline')
+  assert.match(doc(), /^Tickets: PROJ-9 · Status: Planning$/m)
 
   r = rig(['list'])
   assert.match(r.out, /t1/)
   r = rig(['status', '--work', 't1'])
   assert.match(r.out, /branch chore\/smoke-work/)
+  assert.match(r.out, /status Planning/)
+  assert.match(r.out, /tickets PROJ-9/)
 
   r = rig(['close', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.ok(readJson(record).closedAt)
+  assert.equal(readJson(record).status, 'closed')
+  assert.match(doc(), /^Tickets: PROJ-9 · Status: Closed$/m)
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
 })
 
@@ -175,6 +197,84 @@ test('close on a work with no repos comments on the GitHub ticket and leaves it 
   assert.equal(issue.state, 'OPEN')
   assert.equal(issue.comments.length, 1)
   assert.match(issue.comments[0], /No repos were attached/)
+})
+
+test('rig.json can carry full per-org Jira ticket config; --dry-run previews without creating', () => {
+  // type/fields/board have no CLI setter (Direction: "org facts... never in code") —
+  // an agent or `rig save` (PR3) writes them straight into the data root's rig.json.
+  const rigJson = readJson(path.join(dataRoot, 'rig.json'))
+  rigJson.tracker['acme-labs'] = {
+    kind: 'jira', project: 'PROJ', type: 'Task',
+    fields: { components: ['Payments'], assignee: 'me', story_points: 3, sprint: 'active' },
+    board: 123,
+  }
+  fs.writeFileSync(path.join(dataRoot, 'rig.json'), JSON.stringify(rigJson, null, 2))
+  setTwg({
+    present: true,
+    issues: {},
+    fields: { PROJ: { Task: [
+      { id: 'customfield_10058', name: 'Story Points', allowedValues: [] },
+      { id: 'customfield_10020', name: 'Sprint', allowedValues: [] },
+      { id: 'customfield_10755', name: 'Components', allowedValues: [{ id: '10755', name: 'Payments' }] },
+    ] } },
+    boards: { 123: 7 },
+  })
+
+  const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs', '--dry-run'],
+    'the jira brief\n\nmore detail')
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /would create a Task in PROJ/)
+  assert.match(r.out, /customfield_10058\s+3/)
+  assert.match(r.out, /customfield_10020\s+7/, 'sprint "active" resolved through the board')
+  assert.match(r.out, /customfield_10755\s+\["10755"\]/, 'component name resolved to its id')
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't5')), 'dry-run creates nothing')
+  assert.deepEqual(twg().issues, {}, 'dry-run never calls createIssue')
+})
+
+test('rig new --ticket on a Jira org creates via twg with resolved fields', () => {
+  const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs'],
+    'the jira brief\n\nmore detail')
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /ticket PROJ-1/)
+  const record = readJson(path.join(dataRoot, 'work', 't5', 'work.json'))
+  assert.deepEqual(record.tickets, ['PROJ-1'])
+  const issue = twg().issues['PROJ-1']
+  assert.equal(issue.title, 'Jira ticketed work')
+  assert.equal(issue.body, 'the jira brief')
+  assert.equal(issue.assignee, 'me')
+  assert.deepEqual(issue.fields, { customfield_10755: ['10755'], customfield_10058: 3, customfield_10020: 7 })
+  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)
+})
+
+test('--field name=value,... overrides the org\'s configured default', () => {
+  const r = rig(['new', 't6', '--title', 'Overridden points', '--ticket', '--org', 'acme-labs', '--field', 'story_points=5'],
+    'brief')
+  assert.equal(r.code, 0, r.out)
+  const record = readJson(path.join(dataRoot, 'work', 't6', 'work.json'))
+  const issue = twg().issues[record.tickets[0]]
+  assert.equal(issue.fields.customfield_10058, '5')
+})
+
+test('rig new --key <a Jira key> fetches title and description from Jira, no piped brief needed', () => {
+  const state = twg()
+  state.issues['PROJ-2'] = { title: 'Fetched summary', body: 'Fetched description', comments: [] }
+  setTwg(state)
+  const r = rig(['new', 't7', '--key', 'PROJ-2'], '')
+  assert.equal(r.code, 0, r.out)
+  const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
+  assert.equal(record.title, 'Fetched summary')
+  assert.deepEqual(record.tickets, ['PROJ-2'])
+  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /Fetched description/)
+})
+
+test('close comments on a Jira ticket and never transitions it', () => {
+  const r = rig(['close', '--work', 't5'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /commented on PROJ-1/)
+  const issue = twg().issues['PROJ-1']
+  assert.equal(issue.comments.length, 1)
+  assert.match(issue.comments[0], /No repos were attached/)
+  assert.match(issue.comments[0], /rig does not transition Jira tickets/)
 })
 
 test('an old-shaped record (jiraKeys, stored path) is read and migrated on save', () => {

@@ -6,6 +6,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { githubViaGh, githubInMemory, GithubError } from './github.mjs'
+import { twgViaCli, twgInMemory, JiraError } from './jira.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -91,24 +92,34 @@ function dataRoot () {
 const repoConfigFile = () => path.join(dataRoot(), 'rig.json')
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 
-// GitHub, resolved on first use. Production shells to gh. With RIG_FAKE_GITHUB naming a
-// JSON file, the in-memory adapter runs instead, loaded from that file and written back
-// when the command ends, so a subprocess test sees the issues and comments rig made.
-let resolvedGithub, fakeGithub
-function github () {
-  if (resolvedGithub) return resolvedGithub
-  const file = process.env.RIG_FAKE_GITHUB
-  if (!file) return (resolvedGithub = githubViaGh())
-  fakeGithub = { file, state: exists(file) ? readJson(file) : {} }
-  return (resolvedGithub = githubInMemory(fakeGithub.state))
+// The tracker clients, each resolved on first use. Production shells to the real CLI.
+// With the matching RIG_FAKE_* env var naming a JSON file, the in-memory adapter runs
+// instead, loaded from that file and written back when the command ends, so a
+// subprocess test sees the issues and comments rig made — one mechanism for both.
+function adapterResolver (envVar, viaCli, inMemory) {
+  let resolved, fake
+  return {
+    get () {
+      if (resolved) return resolved
+      const file = process.env[envVar]
+      if (!file) return (resolved = viaCli())
+      fake = { file, state: exists(file) ? readJson(file) : {} }
+      return (resolved = inMemory(fake.state))
+    },
+    persist () { if (fake) writeJson(fake.file, fake.state) },
+  }
 }
-const persistFakeGithub = () => { if (fakeGithub) writeJson(fakeGithub.file, fakeGithub.state) }
+const githubAdapter = adapterResolver('RIG_FAKE_GITHUB', githubViaGh, githubInMemory)
+const jiraAdapter = adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory)
+const github = () => githubAdapter.get()
+const jira = () => jiraAdapter.get()
+const persistFakeTrackers = () => { githubAdapter.persist(); jiraAdapter.persist() }
 
-// A GitHub call the caller can carry on without: true, or the GithubError's message.
+// A tracker call the caller can carry on without: true, or the error's message.
 // Anything else is a bug and propagates.
 function attempt (call) {
   try { call(); return true } catch (e) {
-    if (e instanceof GithubError) return e.message
+    if (e instanceof GithubError || e instanceof JiraError) return e.message
     throw e
   }
 }
@@ -163,6 +174,9 @@ function loadWork (cfg, id) {
   const w = readJson(recordFile(id))
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
+  // Records written before the status gate existed carry no `status`; infer one from
+  // what the record already shows rather than defaulting everything to "planning".
+  if (w.status === undefined) w.status = w.closedAt ? 'closed' : ((w.repos?.length ? 'in-progress' : 'planning'))
   // A worktree's path is derived from this machine's work root, never stored:
   // the same record must work on every machine that shares the data root.
   for (const r of w.repos || []) r.path = path.join(workDir(cfg, id), r.repo)
@@ -313,7 +327,7 @@ const remoteHas = (mirror, branch) =>
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'setup', 'force', 'quick', 'verbose', 'help'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'setup', 'force', 'quick', 'verbose', 'help'])
 
 function parseArgs (argv) {
   const flags = {}
@@ -366,6 +380,39 @@ function trackerFor (cfg, orgFlag) {
   die(`several orgs have trackers (${configured.map(t => t.org).join(', ')}) — pass --org <org>`)
 }
 
+// Does any org have a tracker that can actually hold a ticket? If none do, a work has
+// no way to get one, so the ticket-decision gate at `rig new` does not apply.
+const anyTrackerConfigured = cfg =>
+  Object.values(cfg.tracker || {}).some(t => t && t.kind && t.kind !== 'none')
+
+// The org whose Jira project matches a key's prefix, or null when no org claims it (or
+// more than one does — misconfiguration, not a guess this function should make).
+function orgForJiraKey (cfg, key) {
+  const project = isJiraKey(key) ? /^([A-Z][A-Z0-9]+)-/.exec(key)[1] : null
+  if (!project) return null
+  const owners = Object.entries(cfg.tracker || {}).filter(([, t]) => t.kind === 'jira' && t.project === project)
+  return owners.length === 1 ? owners[0][0] : null
+}
+
+// The context doc header's two rendered facts.
+const ticketsLabel = work =>
+  work.tickets?.length ? work.tickets.join(', ') : (work.ticketsDeclined ? 'none (declined)' : '_none_')
+const STATUS_LABEL = { planning: 'Planning', 'in-progress': 'In progress', designed: 'Designed', closed: 'Closed' }
+const statusLabel = status => STATUS_LABEL[status] || status
+
+// The context doc header, rewritten from the record's tickets and status in one place.
+function syncDocHeader (id, work) {
+  const f = contextFile(id)
+  if (!exists(f)) return
+  writeText(f, readText(f).replace(/^Tickets: .*? · Status: .*$/m,
+    `Tickets: ${ticketsLabel(work)} · Status: ${statusLabel(work.status)}`))
+}
+
+// The only status transition `attach` makes: planning -> in-progress, on the first repo.
+// Already past planning (in-progress, designed, closed) is left alone.
+const nextStatusAfterAttach = work =>
+  (work.status === 'planning' && work.repos.length === 0) ? 'in-progress' : work.status
+
 // Where the work records live on GitHub, for linking issues back to context docs.
 function dataRemoteUrl () {
   const r = git(dataRoot(), 'remote', 'get-url', 'origin')
@@ -380,77 +427,164 @@ const contextDocRef = id => {
   return remote ? `${remote}/blob/main/work/${id}/context.md` : `work/${id}/context.md in the rig data root`
 }
 
-// GitHub: rig creates the issue itself through the GitHub module.
-// Jira: the agent creates it; rig authenticates to nothing but git (DESIGN.md §2).
-function createTicket (cfg, work, brief, orgFlag) {
-  const t = trackerFor(cfg, orgFlag)
-  if (t.kind === 'jira') {
-    warn(`tracker for ${t.org} is Jira${t.project ? ` (${t.project})` : ''} — rig does not talk to Jira`)
-    say(C.dim('  create the ticket with your Jira tooling, then `rig new … --key <KEY>`; see `rig prompt new-work`'))
-    return null
-  }
-  if (t.kind !== 'github') die(`unknown tracker kind "${t.kind}" for ${t.org}`)
-  if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
-  // Thin body: the issue is the ticket, the context doc is the design (DESIGN.md §7.1).
-  const body = [
-    brief.split(/\n\s*\n/)[0] || work.title || work.id,
-    '',
-    `The design lives in the work record: ${contextDocRef(work.id)}`,
-    '',
-    `Opened by \`rig new ${work.id} --ticket\`.`,
-  ].join('\n')
-  step(`creating GitHub issue in ${t.repo}`)
-  const n = github().createIssue(t.repo, work.title || work.id, body)
-  ok(`ticket ${t.repo}#${n}`)
-  return `${t.repo}#${n}`
-}
-
 // Ticket keys: Jira `PROJ-42`, or GitHub `owner/repo#n`. Only the Jira shape is
 // safe in a branch name.
 const isJiraKey = k => /^[A-Z][A-Z0-9]+-\d+$/.test(k)
 const isGithubKey = k => /^[\w.-]+\/[\w.-]+#\d+$/.test(k)
 
-// The context doc header is the one place a key appears in prose.
-function setTicketsInDoc (id, tickets) {
-  const f = contextFile(id)
-  if (!exists(f)) return
-  const shown = tickets.join(', ') || '_none_'
-  writeText(f, readText(f).replace(/^Tickets: .*?( · Status:.*)$/m, `Tickets: ${shown}$1`))
+// Resolves an org's `tracker.<org>.fields` (rig.json, e.g. `{ assignee: "me", sprint:
+// "active", story_points: 3, components: ["Payments"] }`), merged with `--field
+// name=value` overrides, into what `twg jira workitem create --field` wants: a
+// customfield_* id for every name. Field and allowed-value ids are discovered through
+// `field create-metadata`, never hardcoded — see docs/adr/0001-jira-via-twg.md for the
+// KTLO ids that must never be pasted in here as a shortcut.
+// `--field name=value,name2=value2` on top of `t.fields` from rig.json; last write wins.
+function mergeFieldOverrides (configuredFields, overrides) {
+  const configured = { ...configuredFields }
+  for (const o of overrides || []) {
+    const eq = o.indexOf('=')
+    if (eq < 1) die(`--field wants name=value, got "${o}"`)
+    configured[o.slice(0, eq)] = o.slice(eq + 1)
+  }
+  return configured
 }
 
-// On close, GitHub tickets get a comment, and are closed when every PR is merged.
-// `states` covers every attached repo, missing worktrees included.
+// `sprint: "active"` (rig.json) resolved through the org's board to a real sprint id.
+// Any other `sprint` value (or none) passes through unchanged.
+function resolveActiveSprint (jiraClient, t, sprint) {
+  if (sprint !== 'active') return sprint
+  if (!t.board) die(`tracker for ${t.org} has fields.sprint "active" but no "board" in rig.json`)
+  const id = jiraClient.activeSprintId(t.board)
+  return id ?? die(`no active sprint on board ${t.board} (${t.org})`)
+}
+
+// Fixed vocabulary -> a field's human name in Jira; anything else is looked up by that
+// name directly. A bare `customfield_*` key never reaches this — it passes straight
+// through in resolveJiraFields.
+const NAMED_JIRA_FIELDS = { sprint: 'Sprint', story_points: 'Story Points', components: 'Components' }
+
+// `key`/`value` from `t.fields` (rig.json), translated to a customfield_* id and a
+// Jira-ready value: `components` resolves each name to its allowed-value id via the
+// project/type's field metadata (fetched once, on first need, and cached in `metadata`).
+function resolveJiraField (jiraClient, t, metadata, key, value) {
+  const name = NAMED_JIRA_FIELDS[key] || key
+  metadata.current = metadata.current || jiraClient.fieldMetadata(t.project, t.type)
+  const field = metadata.current.find(f => f.name.toLowerCase() === name.toLowerCase()) ||
+    die(`no field named "${name}" for ${t.project}/${t.type} — check rig.json or the name in Jira`)
+  if (key !== 'components') return { id: field.id, value }
+  const names = Array.isArray(value) ? value : [value]
+  const ids = names.map(n => field.allowedValues.find(a => a.name.toLowerCase() === String(n).toLowerCase())?.id || n)
+  return { id: field.id, value: ids }
+}
+
+// Resolves an org's Jira create defaults (rig.json `tracker.<org>.fields`, `--field`
+// overrides applied on top) to `{ assignee, fields }`: `fields` maps customfield_* ids
+// to the values `twg jira workitem create --field` wants.
+function resolveJiraFields (jiraClient, t, overrides) {
+  const configured = mergeFieldOverrides(t.fields, overrides)
+  configured.sprint = resolveActiveSprint(jiraClient, t, configured.sprint)
+
+  let assignee
+  const fields = {}
+  const metadata = {}   // lazily fetched at most once, shared across every field lookup
+  for (const [key, value] of Object.entries(configured)) {
+    if (value === null || value === undefined) continue
+    if (key === 'assignee') { assignee = value; continue }
+    if (/^customfield_/.test(key)) { fields[key] = value; continue }
+    const { id, value: resolved } = resolveJiraField(jiraClient, t, metadata, key, value)
+    fields[id] = resolved
+  }
+  return { assignee, fields }
+}
+
+// Creates a ticket in the org's tracker, or previews it: `dryRun` prints what would be
+// created and returns null without calling out. GitHub: the issue is the ticket, the
+// context doc is the design (DESIGN.md §7.1) — a thin body with a link back to it.
+// Jira: `docs/adr/0001-jira-via-twg.md` (supersedes DESIGN.md decisions 29, 33).
+function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fieldOverrides = [] } = {}) {
+  const t = trackerFor(cfg, orgFlag)
+  const summary = work.title || work.id
+  const description = brief.split(/\n\s*\n/)[0] || summary
+
+  if (t.kind === 'github') {
+    if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
+    const body = [description, '', `The design lives in the work record: ${contextDocRef(work.id)}`,
+      '', `Opened by \`rig new ${work.id} --ticket\`.`].join('\n')
+    if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${description}`); return null }
+    step(`creating GitHub issue in ${t.repo}`)
+    const n = github().createIssue(t.repo, summary, body)
+    ok(`ticket ${t.repo}#${n}`)
+    return `${t.repo}#${n}`
+  }
+
+  if (t.kind === 'jira') {
+    if (!t.project || !t.type) die(`tracker for ${t.org} is Jira but is missing "project" or "type" in rig.json`)
+    const { assignee, fields } = resolveJiraFields(jira(), t, fieldOverrides)
+    if (dryRun) {
+      say(`would create a ${t.type} in ${t.project}:`)
+      say(`  summary      ${summary}`)
+      say(`  description  ${description}`)
+      say(`  assignee     ${assignee || '_none_'}`)
+      for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${JSON.stringify(value)}`)
+      return null
+    }
+    step(`creating Jira ${t.type} in ${t.project}`)
+    const key = jira().createIssue({ project: t.project, type: t.type, summary, description, assignee, fields })
+    ok(`ticket ${key}`)
+    return key
+  }
+
+  die(`unknown tracker kind "${t.kind}" for ${t.org}`)
+}
+
+// On close, every ticket gets a comment with the PR links. GitHub tickets also close
+// when every PR is merged; Jira tickets never do — transitions stay with the agent
+// (Direction: KTLO alone needs two hops to reach "In Progress", which is org workflow,
+// not rig's). `states` covers every attached repo, missing worktrees included.
 function ticketWriteBack (work, states) {
   const keys = work.tickets || []
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
   const githubKeys = keys.filter(isGithubKey)
-  if (!githubKeys.length) return
+  const jiraKeys = keys.filter(isJiraKey)
+  if (!githubKeys.length && !jiraKeys.length) return
 
   let reason = ''
-  if (!work.repos.length) reason = 'No repos were attached, so there are no PRs to check; the issue stays open.'
+  if (!work.repos.length) reason = 'No repos were attached, so there are no PRs to check.'
   else {
     const unmerged = states.filter(s => !s.pr || s.pr.state !== 'MERGED').map(s =>
       `${s.repo} (${s.missing ? 'worktree missing' : s.pr ? `PR #${s.pr.number} ${s.pr.state.toLowerCase()}` : 'no PR'})`)
-    if (unmerged.length) reason = `Not every PR is merged — ${unmerged.join(', ')} — so the issue stays open.`
+    if (unmerged.length) reason = `Not every PR is merged — ${unmerged.join(', ')}.`
   }
   const merged = reason === ''
   const prs = states.filter(s => s.pr).map(s => `- ${s.repo}: ${s.pr.url}`)
-  const body = [
-    `Closed by \`rig close\`.${merged ? '' : ' ' + reason}`,
+
+  const githubBody = [
+    `Closed by \`rig close\`.${merged ? '' : ` ${reason} The issue stays open.`}`,
     ...(prs.length ? ['', ...prs] : []),
-    '',
-    `Context doc: ${contextDocRef(work.id)}`,
+    '', `Context doc: ${contextDocRef(work.id)}`,
   ].join('\n')
   for (const key of githubKeys) {
     const [repo, n] = key.split('#')
-    const commented = attempt(() => github().commentIssue(repo, n, body))
+    const commented = attempt(() => github().commentIssue(repo, n, githubBody))
     if (commented !== true) { warn(`${key}: could not comment (${commented})`); continue }
-    if (!merged) { step(`commented on ${key} (left open: ${reason.replace(/; the issue stays open\.$| — so the issue stays open\.$/, '')})`); continue }
+    if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
     const closed = attempt(() => github().closeIssue(repo, n))
     if (closed === true) step(`closed ${key}`)
     else warn(`${key}: commented, but could not close (${closed})`)
+  }
+
+  const jiraBody = [
+    `\`rig close\` ran.${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
+    ...(prs.length ? ['', ...prs] : []),
+    '', `Context doc: ${contextDocRef(work.id)}`,
+    '', 'rig does not transition Jira tickets — move this one yourself.',
+  ].join('\n')
+  for (const key of jiraKeys) {
+    const commented = attempt(() => jira().commentIssue(key, jiraBody))
+    if (commented === true) step(`commented on ${key}`)
+    else warn(`${key}: could not comment (${commented})`)
   }
 }
 
@@ -466,7 +600,7 @@ function regenerate (cfg, work) {
   lines.push(`# ${work.id}${work.title ? ` — ${work.title}` : ''}`)
   lines.push('')
   if (work.title) lines.push(work.title)
-  if (work.tickets?.length) lines.push(`Tickets: ${work.tickets.join(', ')}`)
+  lines.push(`Tickets: ${ticketsLabel(work)} · Status: ${statusLabel(work.status)}`)
   lines.push('')
   lines.push(`**Context doc (the only copy, edit it there):** \`${contextFile(work.id)}\``)
   if (exists(planFile(work.id))) lines.push(`**Rollout plan:** \`${planFile(work.id)}\``)
@@ -680,6 +814,11 @@ cmds.init = ({ flags }) => {
   const auth = github().auth()
   if (auth === 'missing') warn('gh not found on PATH — org resolution, PR state and --ticket need it')
   else if (auth === 'unauthenticated') warn('gh is not authenticated — org resolution and PR state need it (gh auth login)')
+  // twg only matters to orgs tracked in Jira; DESIGN.md decision 29 no longer bars it
+  // (docs/adr/0001-jira-via-twg.md), but it stays irrelevant to a GitHub-only setup.
+  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'jira') && !jira().present()) {
+    warn('twg not found on PATH — Jira ticket creation, fetch and write-back need it')
+  }
 
   say('')
   if (!orgs.length) {
@@ -699,14 +838,38 @@ cmds.init = ({ flags }) => {
 
 cmds.new = async ({ flags, positional }) => {
   const cfg = config()
-  const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o]] [--repos a,b]')
-  if (exists(recordFile(id))) die(`work "${id}" already exists (${recordFile(id)})`)
+  const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
 
-  const title = flags.title || ''
   const keys = (flags.key || flags.keys || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
   }
+  const noTicket = !!flags['no-ticket']
+  const dryRun = !!flags['dry-run']
+  if (dryRun && !flags.ticket) die('--dry-run only makes sense with --ticket')
+  if (keys.length && noTicket) die('--key and --no-ticket are alternatives; pass one')
+  if (flags.ticket && noTicket) die('--ticket and --no-ticket are alternatives; pass one')
+  // The ticket decision must be explicit whenever it could matter (DESIGN direction:
+  // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
+  if (!keys.length && !flags.ticket && !noTicket && anyTrackerConfigured(cfg)) {
+    die('a tracker is configured — pass --key <key>, --ticket, or --no-ticket (see `rig prompt new-work`)')
+  }
+
+  const brief = readStdin()
+  const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  if (dryRun) { createTicket(cfg, { id, title: flags.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides }); return }
+
+  if (exists(recordFile(id))) die(`work "${id}" already exists (${recordFile(id)})`)
+
+  // A Jira `--key` needs no piped brief any more: rig fetches summary/description
+  // itself, used as a default wherever `--title`/stdin didn't already supply one.
+  let fetched = null
+  const jiraKey = keys.find(isJiraKey)
+  if (jiraKey && orgForJiraKey(cfg, jiraKey)) {
+    try { fetched = jira().getIssue(jiraKey) } catch (e) { warn(`could not fetch ${jiraKey} from Jira: ${e.message}`) }
+  }
+  const title = flags.title || fetched?.title || ''
+
   const idKey = /^([A-Z][A-Z0-9]+-\d+)/.exec(id)?.[1] ?? ''
   // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`;
   // the PR links those with "Fixes #n" instead.
@@ -715,21 +878,22 @@ cmds.new = async ({ flags, positional }) => {
   const branchSlug = flags.slug || slug(title || id.replace(/^[A-Z][A-Z0-9]+-\d+-?/, '') || id)
   const branch = flags.branch ||
     `${type}/${branchKey ? branchKey + '-' : ''}${branchSlug}`.replace(/-$/, '')
-  const brief = readStdin()
 
   const work = {
     id,
     title,
     tickets: keys.length ? keys : (idKey ? [idKey] : []),
+    ...(noTicket ? { ticketsDeclined: true } : {}),
     type,
     branch,
+    status: 'planning',
     repos: [],
     createdAt: new Date().toISOString(),
   }
 
-  // The complete record first — a work with no ticket is a valid state — then
-  // the ticket. If gh fails, `rig ticket <key>` attaches one later; nothing is
-  // half-built and no issue is orphaned.
+  // The complete record first — a work with no ticket is a valid, but now explicit,
+  // state — then the ticket. If gh/twg fails, `rig ticket <key>` attaches one later;
+  // nothing is half-built and no issue is orphaned.
   fs.mkdirSync(workDir(cfg, id), { recursive: true })
   saveWork(work)
 
@@ -740,17 +904,18 @@ cmds.new = async ({ flags, positional }) => {
     .replace(/\{\{TITLE\}\}/g, title || id)
     .replace(/\{\{KEYS\}\}/g, work.tickets.join(', ') || '_none_')
     .replace(/\{\{DATE\}\}/g, new Date().toISOString().slice(0, 10))
-    .replace(/\{\{BRIEF\}\}/g, brief || '_TODO: one line, then the narrative. State scope explicitly._'))
+    .replace(/\{\{BRIEF\}\}/g, brief || fetched?.body || '_TODO: one line, then the narrative. State scope explicitly._'))
   regenerate(cfg, work)
+  syncDocHeader(id, work)   // corrects the template's Tickets line for the declined case
 
   if (flags.ticket && work.tickets.length) {
     warn(`--ticket ignored: the work already has ${work.tickets.join(', ')}`)
   } else if (flags.ticket) {
-    const created = createTicket(cfg, work, brief, flags.org)
+    const created = createTicket(cfg, work, brief || fetched?.body || '', flags.org, { fields: fieldOverrides })
     if (created) {
       work.tickets.push(created)
       saveWork(work)
-      setTicketsInDoc(id, work.tickets)
+      syncDocHeader(id, work)
       regenerate(cfg, work)
     }
   }
@@ -760,7 +925,7 @@ cmds.new = async ({ flags, positional }) => {
   say(`  context  ${contextFile(id)}`)
   say(`  folder   ${workDir(cfg, id)}`)
   say(`  branch   ${branch}`)
-  say(`  tickets  ${work.tickets.join(', ') || 'none'}`)
+  say(`  tickets  ${ticketsLabel(work)}`)
   say('')
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
@@ -811,9 +976,11 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
   }
 
   const cat = findCatalog(repo)
+  work.status = nextStatusAfterAttach(work)
   work.repos.push({ repo, org, path: dest, base, role: cat?.role || '', attachedAt: new Date().toISOString() })
   saveWork(work)
   regenerate(cfg, work)
+  syncDocHeader(id, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
 
   if (cat?.setup?.length) {
@@ -833,8 +1000,9 @@ cmds.ticket = ({ flags, positional }) => {
   if (!isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
   if (work.tickets.includes(key)) return say(`${key} already recorded — nothing to do`)
   work.tickets.push(key)
+  delete work.ticketsDeclined   // a real ticket supersedes an earlier --no-ticket
   saveWork(work)
-  setTicketsInDoc(id, work.tickets)
+  syncDocHeader(id, work)
   regenerate(cfg, work)
   ok(`recorded ${key} on ${id}`)
 }
@@ -931,6 +1099,8 @@ cmds.status = ({ flags }) => {
   const work = loadWork(cfg, id)
   say(`${C.bold(work.id)} — ${work.title || ''}`)
   say(`branch ${work.branch}`)
+  say(`status ${statusLabel(work.status)}`)
+  say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
   say('')
   for (const r of work.repos) {
@@ -1021,7 +1191,9 @@ cmds.close = ({ flags }) => {
   // Windows refuses to remove a directory that is some process's cwd — including ours.
   if (process.cwd().toLowerCase().startsWith(wd.toLowerCase())) process.chdir(RIG_ROOT)
   work.closedAt = new Date().toISOString()
+  work.status = 'closed'
   saveWork(work)
+  syncDocHeader(id, work)
   ticketWriteBack(work, states)
   if (exists(wd)) {
     try {
@@ -1089,6 +1261,9 @@ cmds.doctor = () => {
   const auth = github().auth()
   check('gh authenticated', auth === 'ok',
     { bad: auth === 'missing' ? 'gh not on PATH' : 'PR state and org resolution will not work' })
+  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'jira')) {
+    check('twg present', jira().present(), { bad: 'Jira ticket creation, fetch and write-back will not work' })
+  }
 
   const lp = run('git', ['config', '--global', 'core.longpaths'])
   check('core.longpaths', lp.out === 'true',
@@ -1183,8 +1358,12 @@ cmds.help = () => {
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
        [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY] -> rig.json (the data root)
   rig new <id> --title "..."      create a work (reads a brief on stdin)
-       [--type feat] [--key PROJ-42 | --ticket [--org o]] [--repos a,b] [--setup]
-       --ticket creates the issue in the org's tracker (rig.json) and records it
+       --key K | --ticket [--org o] [--field k=v,...] [--dry-run] | --no-ticket
+       one of the three is required whenever a tracker is configured (the ticket
+       decision must be explicit); --key PROJ-42 fetches its brief from Jira;
+       --ticket creates in the org's tracker (rig.json); --dry-run previews and
+       creates nothing; --no-ticket records a declined ticket
+       [--type feat] [--repos a,b] [--setup]
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
@@ -1204,7 +1383,10 @@ or take --work <id>.`)
 // --------------------------------------------------------------------- main
 
 // Pure helpers, importable by tests. Nothing below the guard runs on import.
-export { parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError }
+export {
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach,
+}
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
 // symlink or junction (`ln -s bin/rig.mjs ~/.local/bin/rig`) argv[1] is the link.
@@ -1227,6 +1409,6 @@ if (isMain) {
     console.error(`${C.red('✗')} ${e.message}`)
     process.exitCode = 1
   } finally {
-    persistFakeGithub()
+    persistFakeTrackers()
   }
 }

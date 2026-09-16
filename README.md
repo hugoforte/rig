@@ -16,7 +16,7 @@ rig close
 
 ## Install
 
-Needs Node 18+, `git`, and an authenticated `gh` (`gh auth login`) — `gh` is how rig resolves org repos, reads PR state and opens issues.
+Needs Node 18+, `git`, and an authenticated `gh` (`gh auth login`) — `gh` is how rig resolves org repos, reads PR state and opens issues. An org tracked in Jira also needs `twg` on PATH, authenticated to that site; GitHub-only setups don't need it.
 
 With the [dotfiles](https://github.com/hugoforte/dotfiles) profile loaded, one command clones and initialises:
 
@@ -39,7 +39,7 @@ node D:\rig\bin\rig.mjs init --data-repo owner/rig-data --email you@work.example
 
 `rig` as a bare command is the dotfiles PowerShell function. In Git Bash — which is what Claude Code's Bash tool runs — use `node D:/rig/bin/rig.mjs <command>`.
 
-Zero dependencies — Node 18+ and `git`, plus `gh` for PR state and org resolution.
+Zero dependencies — Node 18+ and `git`, plus `gh` for PR state and org resolution and, for a Jira-tracked org, `twg` for ticket create/fetch/write-back.
 
 ## Tests
 
@@ -47,13 +47,13 @@ Zero dependencies — Node 18+ and `git`, plus `gh` for PR state and org resolut
 node --test
 ```
 
-Unit tests for the pure helpers and for the GitHub module's two adapters, and one smoke test that copies the tool to a temp directory and runs it end to end against temp roots with the in-memory GitHub adapter (`RIG_FAKE_GITHUB`) in place of `gh`. CI runs the same on Linux and Windows.
+Unit tests for the pure helpers and for the GitHub and Jira modules' adapters, and one smoke test that copies the tool to a temp directory and runs it end to end against temp roots with the in-memory GitHub and Jira adapters (`RIG_FAKE_GITHUB`, `RIG_FAKE_TWG`) in place of `gh` and `twg`. CI runs the same on Linux and Windows.
 
 ## Layout
 
 ```
 D:\rig\                    the tool — committed, generic
-  bin/rig.mjs  bin/github.mjs  prompts/  templates/
+  bin/rig.mjs  bin/github.mjs  bin/jira.mjs  prompts/  templates/
   rig.local.json           gitignored: work root, data root, identities, secrets sources
 
 D:\rig-data\               the knowledge — committed, private; never the tool's own checkout

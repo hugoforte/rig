@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -87,4 +88,46 @@ test('trackerFor: several live trackers need --org', () => {
 test('trackerFor: none configured, or an unknown --org, dies', () => {
   assert.throws(() => trackerFor({ tracker: {} }), /no tracker configured/)
   assert.throws(() => trackerFor(twoTrackers, 'zzz'), /no tracker configured for org/)
+})
+
+test('anyTrackerConfigured: true when any org has a live tracker, false for none/absent', () => {
+  assert.equal(anyTrackerConfigured({ tracker: { a: { kind: 'github', repo: 'x/y' } } }), true)
+  assert.equal(anyTrackerConfigured({ tracker: { a: { kind: 'none' } } }), false)
+  assert.equal(anyTrackerConfigured({ tracker: {} }), false)
+  assert.equal(anyTrackerConfigured({}), false)
+})
+
+test('orgForJiraKey: the org whose tracker project matches the key\'s prefix', () => {
+  const cfg = { tracker: { linenmaster: { kind: 'jira', project: 'KTLO' }, acme: { kind: 'github', repo: 'x/y' } } }
+  assert.equal(orgForJiraKey(cfg, 'KTLO-42'), 'linenmaster')
+  assert.equal(orgForJiraKey(cfg, 'OTHER-1'), null)
+  assert.equal(orgForJiraKey(cfg, 'acme/platform#3'), null, 'not a Jira key at all')
+})
+
+test('orgForJiraKey: null (not a guess) when two orgs claim the same project', () => {
+  const cfg = { tracker: { a: { kind: 'jira', project: 'KTLO' }, b: { kind: 'jira', project: 'KTLO' } } }
+  assert.equal(orgForJiraKey(cfg, 'KTLO-1'), null)
+})
+
+test('ticketsLabel: keys joined, declined, or the placeholder', () => {
+  assert.equal(ticketsLabel({ tickets: ['PROJ-1', 'PROJ-2'] }), 'PROJ-1, PROJ-2')
+  assert.equal(ticketsLabel({ tickets: [], ticketsDeclined: true }), 'none (declined)')
+  assert.equal(ticketsLabel({ tickets: [] }), '_none_')
+})
+
+test('statusLabel: the fixed vocabulary, title-cased for the doc header', () => {
+  assert.equal(statusLabel('planning'), 'Planning')
+  assert.equal(statusLabel('in-progress'), 'In progress')
+  assert.equal(statusLabel('designed'), 'Designed')
+  assert.equal(statusLabel('closed'), 'Closed')
+})
+
+test('nextStatusAfterAttach: planning moves to in-progress on the first repo, not later ones', () => {
+  assert.equal(nextStatusAfterAttach({ status: 'planning', repos: [] }), 'in-progress')
+  assert.equal(nextStatusAfterAttach({ status: 'planning', repos: [{ repo: 'a' }] }), 'planning')
+})
+
+test('nextStatusAfterAttach: any other status is left alone', () => {
+  assert.equal(nextStatusAfterAttach({ status: 'designed', repos: [] }), 'designed')
+  assert.equal(nextStatusAfterAttach({ status: 'closed', repos: [] }), 'closed')
 })
