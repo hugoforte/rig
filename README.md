@@ -47,13 +47,13 @@ Zero dependencies — Node 18+ and `git`, plus `gh` for PR state and org resolut
 node --test
 ```
 
-Unit tests for the pure helpers, and one smoke test that copies the tool to a temp directory and runs it end to end against temp roots with `gh` stubbed. CI runs the same on Linux and Windows.
+Unit tests for the pure helpers and for the GitHub module's two adapters, and one smoke test that copies the tool to a temp directory and runs it end to end against temp roots with the in-memory GitHub adapter (`RIG_FAKE_GITHUB`) in place of `gh`. CI runs the same on Linux and Windows.
 
 ## Layout
 
 ```
 D:\rig\                    the tool — committed, generic
-  bin/rig.mjs  prompts/  templates/
+  bin/rig.mjs  bin/github.mjs  prompts/  templates/
   rig.local.json           gitignored: work root, data root, identities, secrets sources
 
 D:\rig-data\               the knowledge — committed, private; never the tool's own checkout
