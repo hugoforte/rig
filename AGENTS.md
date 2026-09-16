@@ -33,27 +33,37 @@ The tool checkout is never the data root. Knowledge inside a public tool's tree 
 
 ## Starting a work
 
+`rig new` **refuses** on any data root with a live tracker (`rig.json`) unless you pass
+one of `--key`, `--ticket`, or `--no-ticket` — the ticket decision must be explicit.
+`rig prompt new-work` is the full procedure; the shape:
+
 ```bash
 rig new PROJ-42-refund-double-charge --title "Refunds double-charge on retry" --key PROJ-42
 ```
 
-The brief is read from stdin. **You fetch the Jira prose** — with whatever Atlassian tooling
-you have — and pipe it in. `rig` authenticates to nothing but git; it will never call Jira.
+Already have a key? A GitHub key (`owner/repo#7`) still needs its brief piped in; a Jira
+key (`PROJ-42`) rig fetches the summary and description for itself — no pipe needed:
 
 ```bash
-<your jira fetch> | rig new PROJ-42-refund-double-charge --title "..." --key PROJ-42
+<your github issue fetch> | rig new <id> --title "..." --key owner/repo#7
+rig new <id> --key PROJ-42                       # rig fetches the brief
 ```
 
-No ticket yet? Where the org's tracker is GitHub (`rig.json`), rig creates it for you —
-thin body, link to the context doc — and records the key:
+No ticket yet? `rig new --ticket --dry-run` resolves what would be created (for Jira: the
+project, type, and every field, with `sprint: "active"` and named fields like `components`
+resolved to real ids via `rig.json`'s per-org config) and exits without creating anything
+— present it and stop for the user's decision, then run the same command without
+`--dry-run` to create for real:
 
 ```bash
-<brief> | rig new refund-double-charge --title "..." --ticket
+<brief> | rig new refund-double-charge --title "..." --ticket --dry-run   # preview
+<brief> | rig new refund-double-charge --title "..." --ticket             # then create
 ```
 
-Where the tracker is Jira, you create the ticket and pass `--key`. `rig prompt new-work`
-is the full procedure. On `rig close`, GitHub tickets get a comment with the PR links and
-are closed when every PR is merged.
+No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the decision —
+`Tickets: none (declined)`, not a silent empty list. On `rig close`, every ticket gets a
+comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets
+never auto-transition — that stays with you (`docs/adr/0001-jira-via-twg.md`).
 
 Then run the repo interview and attach what it selects:
 
@@ -73,7 +83,10 @@ rig attach orders-web
    lives.
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state — all of
    it comes from `rig status`. The previous attempt at this tool died of hand-maintained
-   tables going stale.
+   tables going stale. **`status`** (`planning` → `in-progress` → `designed` → `closed`,
+   shown in the context doc header) is the one exception: it is a **decision**, not
+   something git or `gh` can answer, so rig records it in `work.json` at each gate
+   (`rig new`, the first `rig attach`, `rig close`) instead of deriving it.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
    your head — that is the only moment the knowledge is cheap.
