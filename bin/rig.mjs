@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { githubViaGh, githubInMemory, GithubError } from './github.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -48,8 +49,6 @@ function must (cmd, args, opts = {}) {
 
 const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 const gitMust = (dir, ...args) => must('git', ['-C', dir, ...args])
-// Is a command on PATH at all? `run` dies when it is not; setup checks want to warn.
-const has = cmd => !spawnSync(cmd, ['--version'], { encoding: 'utf8' }).error
 
 function readStdin () {
   if (process.stdin.isTTY) return ''
@@ -91,6 +90,28 @@ function dataRoot () {
 }
 const repoConfigFile = () => path.join(dataRoot(), 'rig.json')
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+
+// GitHub, resolved on first use. Production shells to gh. With RIG_FAKE_GITHUB naming a
+// JSON file, the in-memory adapter runs instead, loaded from that file and written back
+// when the command ends, so a subprocess test sees the issues and comments rig made.
+let resolvedGithub, fakeGithub
+function github () {
+  if (resolvedGithub) return resolvedGithub
+  const file = process.env.RIG_FAKE_GITHUB
+  if (!file) return (resolvedGithub = githubViaGh())
+  fakeGithub = { file, state: exists(file) ? readJson(file) : {} }
+  return (resolvedGithub = githubInMemory(fakeGithub.state))
+}
+const persistFakeGithub = () => { if (fakeGithub) writeJson(fakeGithub.file, fakeGithub.state) }
+
+// A GitHub call the caller can carry on without: true, or the GithubError's message.
+// Anything else is a bug and propagates.
+function attempt (call) {
+  try { call(); return true } catch (e) {
+    if (e instanceof GithubError) return e.message
+    throw e
+  }
+}
 
 const DEFAULT_CONFIG = {
   workRoot: defaultWorkRoot(),
@@ -224,12 +245,14 @@ function loadCatalog () {
 const findCatalog = (name) =>
   loadCatalog().find(e => e.repo.toLowerCase() === name.toLowerCase())
 
+// Which org a repo belongs to: the catalogue first, then GitHub. The language comes
+// along from GitHub for the catalogue stub `rig attach` drafts on first sight.
 function resolveOrg (cfg, repo) {
   const cat = findCatalog(repo)
-  if (cat) return { org: cat.org, repo: cat.repo }
+  if (cat) return { org: cat.org, repo: cat.repo, language: '' }
   for (const org of cfg.orgs) {
-    const r = run('gh', ['api', `repos/${org}/${repo}`, '--jq', '.name'])
-    if (r.code === 0 && r.out) return { org, repo: r.out }
+    const found = github().repo(org, repo)
+    if (found) return { org, repo: found.name, language: found.language }
   }
   die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')} (is gh authenticated?)`)
 }
@@ -357,7 +380,7 @@ const contextDocRef = id => {
   return remote ? `${remote}/blob/main/work/${id}/context.md` : `work/${id}/context.md in the rig data root`
 }
 
-// GitHub: rig creates the issue itself via gh, which it already shells out to.
+// GitHub: rig creates the issue itself through the GitHub module.
 // Jira: the agent creates it; rig authenticates to nothing but git (DESIGN.md §2).
 function createTicket (cfg, work, brief, orgFlag) {
   const t = trackerFor(cfg, orgFlag)
@@ -377,9 +400,7 @@ function createTicket (cfg, work, brief, orgFlag) {
     `Opened by \`rig new ${work.id} --ticket\`.`,
   ].join('\n')
   step(`creating GitHub issue in ${t.repo}`)
-  const out = must('gh', ['issue', 'create', '--repo', t.repo, '--title', work.title || work.id, '--body', body])
-  const n = /\/issues\/(\d+)\s*$/.exec(out)?.[1]
-  if (!n) die(`could not read the issue number from gh output:\n${out}`)
+  const n = github().createIssue(t.repo, work.title || work.id, body)
   ok(`ticket ${t.repo}#${n}`)
   return `${t.repo}#${n}`
 }
@@ -404,8 +425,8 @@ function ticketWriteBack (work, states) {
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
-  const github = keys.filter(isGithubKey)
-  if (!github.length) return
+  const githubKeys = keys.filter(isGithubKey)
+  if (!githubKeys.length) return
 
   let reason = ''
   if (!work.repos.length) reason = 'No repos were attached, so there are no PRs to check; the issue stays open.'
@@ -422,14 +443,14 @@ function ticketWriteBack (work, states) {
     '',
     `Context doc: ${contextDocRef(work.id)}`,
   ].join('\n')
-  for (const key of github) {
+  for (const key of githubKeys) {
     const [repo, n] = key.split('#')
-    const c = run('gh', ['issue', 'comment', n, '--repo', repo, '--body', body])
-    if (c.code !== 0) { warn(`${key}: could not comment (${c.err.split('\n')[0]})`); continue }
+    const commented = attempt(() => github().commentIssue(repo, n, body))
+    if (commented !== true) { warn(`${key}: could not comment (${commented})`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason.replace(/; the issue stays open\.$| — so the issue stays open\.$/, '')})`); continue }
-    const cl = run('gh', ['issue', 'close', n, '--repo', repo])
-    if (cl.code === 0) step(`closed ${key}`)
-    else warn(`${key}: commented, but could not close (${cl.err.split('\n')[0]})`)
+    const closed = attempt(() => github().closeIssue(repo, n))
+    if (closed === true) step(`closed ${key}`)
+    else warn(`${key}: commented, but could not close (${closed})`)
   }
 }
 
@@ -552,9 +573,9 @@ function joinOrCreateDataRepo (spec) {
     return target
   }
 
-  if (run('gh', ['repo', 'view', spec, '--json', 'name']).code === 0) {
+  if (github().repoExists(spec)) {
     step(`joining ${spec}: cloning to ${target}`)
-    must('gh', ['repo', 'clone', spec, target])
+    github().clone(spec, target)
     // A repo with no commits clones fine and is useless; give it its first commit.
     if (ensureFirstCommit(target, name)) {
       must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'])
@@ -567,11 +588,10 @@ function joinOrCreateDataRepo (spec) {
   // creates the repo from it and pushes with its own credentials.
   step(`${spec} does not exist: creating it, private`)
   ensureDataRootCheckout(target)
-  const cr = run('gh', ['repo', 'create', spec, '--private', '--source', target, '--push',
-    '--description', 'rig data root: repo catalogue and work records'])
-  if (cr.code !== 0) {
+  const created = attempt(() => github().createRepo(spec, { source: target, description: 'rig data root: repo catalogue and work records' }))
+  if (created !== true) {
     fs.rmSync(target, { recursive: true, force: true })
-    die(`could not create ${spec}: ${cr.err.split('\n')[0]}\n` +
+    die(`could not create ${spec}: ${created}\n` +
       `  No permission to create repos in "${owner}"? Use --data-root <dir> for a local data root instead.`)
   }
   ok(`created ${spec} and pushed its first commit`)
@@ -657,10 +677,9 @@ cmds.init = ({ flags }) => {
     ok('set core.longpaths=true (MAX_PATH would otherwise break deep node_modules)')
   }
   // git is already required above; gh is optional until something needs GitHub.
-  if (!has('gh')) warn('gh not found on PATH — org resolution, PR state and --ticket need it')
-  else if (run('gh', ['auth', 'status']).code !== 0) {
-    warn('gh is not authenticated — org resolution and PR state need it (gh auth login)')
-  }
+  const auth = github().auth()
+  if (auth === 'missing') warn('gh not found on PATH — org resolution, PR state and --ticket need it')
+  else if (auth === 'unauthenticated') warn('gh is not authenticated — org resolution and PR state need it (gh auth login)')
 
   say('')
   if (!orgs.length) {
@@ -760,7 +779,7 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
     say(`${repoName} already attached — nothing to do`)
     return
   }
-  const { org, repo } = resolveOrg(cfg, repoName)
+  const { org, repo, language } = resolveOrg(cfg, repoName)
   const mirror = ensureMirror(cfg, org, repo)
   const base = defaultBranch(mirror)
   const dest = path.join(workDir(cfg, id), repo)
@@ -787,8 +806,7 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
   const sec = copySecrets(cfg, repo, dest)
   if (sec.copied) step(`copied ${sec.copied} secrets file(s)`)
 
-  const langR = run('gh', ['api', `repos/${org}/${repo}`, '--jq', '.language'])
-  if (draftCatalogEntry(org, repo, langR.code === 0 ? langR.out : '')) {
+  if (draftCatalogEntry(org, repo, language)) {
     warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh`)
   }
 
@@ -864,11 +882,7 @@ function repoState (cfg, entry, branch) {
     s.behind = behind || 0
     s.ahead = ahead || 0
   }
-  const pr = run('gh', ['pr', 'list', '--repo', `${entry.org}/${entry.repo}`, '--head', branch,
-    '--state', 'all', '--json', 'number,state,url', '--limit', '1'])
-  if (pr.code === 0 && pr.out) {
-    try { s.pr = JSON.parse(pr.out)[0] || null } catch { /* gh not available */ }
-  }
+  s.pr = github().prForBranch(entry.org, entry.repo, branch)
   return s
 }
 
@@ -1072,9 +1086,9 @@ cmds.doctor = () => {
   check('node', true, { ok: process.version })
   const gv = run('git', ['--version'])
   check('git', gv.code === 0, { ok: gv.out })
-  const ghPresent = has('gh')
-  check('gh authenticated', ghPresent && run('gh', ['auth', 'status']).code === 0,
-    { bad: ghPresent ? 'PR state and org resolution will not work' : 'gh not on PATH' })
+  const auth = github().auth()
+  check('gh authenticated', auth === 'ok',
+    { bad: auth === 'missing' ? 'gh not on PATH' : 'PR state and org resolution will not work' })
 
   const lp = run('git', ['config', '--global', 'core.longpaths'])
   check('core.longpaths', lp.out === 'true',
@@ -1209,7 +1223,10 @@ if (isMain) {
   try {
     await cmd(parseArgs(rest))
   } catch (e) {
-    if (e instanceof RigError) { console.error(`${C.red('✗')} ${e.message}`); process.exit(1) }
-    throw e
+    if (!(e instanceof RigError || e instanceof GithubError)) throw e
+    console.error(`${C.red('✗')} ${e.message}`)
+    process.exitCode = 1
+  } finally {
+    persistFakeGithub()
   }
 }

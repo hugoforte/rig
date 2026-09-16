@@ -1,13 +1,14 @@
 // Runs a temp copy of the tool as a subprocess against temp work and data roots.
-// RIG_ROOT follows the file's location, so the tool needs no test-only hooks.
+// RIG_ROOT follows the file's location, so the roots need no test-only hook; GitHub
+// is the one hook, below.
 //
 // The tests below share one temp installation and run in order (init before new,
 // new before close). node:test runs a file's tests serially by default; running a
 // single one with --test-name-pattern is not supported.
 //
-// `gh` is kept away: on Linux/macOS a stub script on PATH prints `[]`; on Windows
-// Node will not spawn a `.cmd` without a shell, so the real gh is removed from PATH
-// instead and the tool takes its "gh not found" path. Nothing here needs gh output.
+// GitHub is the in-memory adapter from bin/github.mjs, selected by RIG_FAKE_GITHUB
+// naming a JSON state file the tool reads on start and writes back on exit. Tests seed
+// it and read it back; the real `gh` is never spawned.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -17,7 +18,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-let tmp, tool, dataRoot, workRoot, env
+let tmp, tool, dataRoot, workRoot, env, githubStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
 const rig = (args, input) => {
@@ -25,6 +26,8 @@ const rig = (args, input) => {
   return { code: r.status, out: strip(r.stdout + r.stderr) }
 }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
+const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
+const github = () => readJson(githubStateFile)
 
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-smoke-'))
@@ -34,16 +37,10 @@ before(() => {
   workRoot = path.join(tmp, 'w')
 
   env = { ...process.env }
-  if (process.platform === 'win32') {
-    env.PATH = process.env.PATH.split(path.delimiter)
-      .filter(p => !fs.existsSync(path.join(p, 'gh.exe'))).join(path.delimiter)
-  } else {
-    const stubs = path.join(tmp, 'stubs')
-    fs.mkdirSync(stubs)
-    // `auth status` fails so the tool's "not authenticated" warning is exercised.
-    fs.writeFileSync(path.join(stubs, 'gh'), "#!/bin/sh\ncase \"$1\" in auth) exit 1 ;; esac\necho '[]'\n", { mode: 0o755 })
-    env.PATH = stubs + path.delimiter + process.env.PATH
-  }
+  githubStateFile = path.join(tmp, 'github.json')
+  env.RIG_FAKE_GITHUB = githubStateFile
+  // No gh at all until a test needs GitHub; init's warning path runs first.
+  setGithub({ auth: 'missing' })
   // The tool writes `git config --global core.longpaths`; keep that, and every
   // inherited setting, out of the real global config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
@@ -91,10 +88,9 @@ test('init --data-root makes a git checkout with a first commit and writes both 
 })
 
 test('init warns rather than crashes without a usable gh', () => {
-  // Windows: gh is off PATH ("not found"). Elsewhere: the stub fails auth ("not authenticated").
   const r = rig(['init'])
   assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /gh not found on PATH|gh is not authenticated/)
+  assert.match(r.out, /gh not found on PATH/)
 })
 
 test('init --orgs adds, never replaces', () => {
@@ -140,6 +136,47 @@ test('a Jira --key is recorded and does reach the branch name', () => {
   assert.equal(readJson(path.join(dataRoot, 'work', 't3', 'work.json')).branch, 'feat/PROJ-42-jira-keyed')
 })
 
+test('init warns when gh is present but not authenticated', () => {
+  setGithub({ auth: 'unauthenticated' })
+  const r = rig(['init'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /gh is not authenticated/)
+})
+
+test('new --ticket opens a ticket in the org\'s GitHub tracker and records its key', () => {
+  setGithub({
+    auth: 'ok',
+    repos: {
+      'acme/platform': {
+        language: 'TypeScript',
+        issues: [{ number: 3, title: 'Existing', body: '', state: 'OPEN', comments: [] }],
+      },
+    },
+  })
+  let r = rig(['init', '--tracker', 'acme=github:acme/platform'])
+  assert.equal(r.code, 0, r.out)
+
+  r = rig(['new', 't4', '--title', 'Ticketed work', '--ticket', '--org', 'acme'], 'first paragraph of the brief\n\nsecond paragraph')
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /ticket acme\/platform#4/)
+  assert.deepEqual(readJson(path.join(dataRoot, 'work', 't4', 'work.json')).tickets, ['acme/platform#4'])
+  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't4', 'context.md'), 'utf8'), /^Tickets: acme\/platform#4/m)
+  const issue = github().repos['acme/platform'].issues[1]
+  assert.equal(issue.title, 'Ticketed work')
+  assert.match(issue.body, /^first paragraph of the brief\n/, 'thin body: the brief\'s first paragraph')
+  assert.match(issue.body, /work\/t4\/context\.md/, 'links to the context doc')
+})
+
+test('close on a work with no repos comments on the GitHub ticket and leaves it open', () => {
+  const r = rig(['close', '--work', 't4'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /commented on acme\/platform#4 \(left open/)
+  const issue = github().repos['acme/platform'].issues[1]
+  assert.equal(issue.state, 'OPEN')
+  assert.equal(issue.comments.length, 1)
+  assert.match(issue.comments[0], /No repos were attached/)
+})
+
 test('an old-shaped record (jiraKeys, stored path) is read and migrated on save', () => {
   const dir = path.join(dataRoot, 'work', 'old')
   fs.mkdirSync(dir, { recursive: true })
@@ -167,6 +204,36 @@ test('an old-shaped record (jiraKeys, stored path) is read and migrated on save'
   assert.deepEqual(saved.tickets, ['acme/platform#3', 'PROJ-1'])
   assert.equal(saved.jiraKeys, undefined)
   assert.equal(saved.repos[0].path, undefined, 'path never stored')
+})
+
+test('status and list read the PR for the work branch from GitHub', () => {
+  const state = github()
+  state.repos['acme/billing'] = {
+    prs: [{ branch: 'feat/old', number: 12, state: 'MERGED', url: 'https://github.com/acme/billing/pull/12' }],
+  }
+  setGithub(state)
+  // A checkout where the worktree would be; rig only needs it to exist and be clean.
+  const billing = path.join(workRoot, 'old', 'billing')
+  fs.mkdirSync(billing, { recursive: true })
+  for (const args of [['init', '-q', '-b', 'main'], ['commit', '-q', '--allow-empty', '-m', 'seed']]) {
+    const g = spawnSync('git', ['-C', billing, ...args], { encoding: 'utf8', env })
+    assert.equal(g.status, 0, g.stderr)
+  }
+  let r = rig(['status', '--work', 'old'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /pr\s+#12 MERGED https:\/\/github\.com\/acme\/billing\/pull\/12/)
+  r = rig(['list'])
+  assert.match(r.out, /PR #12 merged/)
+  assert.match(r.out, /safe to `rig close`/)
+})
+
+test('close with every PR merged comments on the GitHub ticket and closes it', () => {
+  const r = rig(['close', '--work', 'old'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /closed acme\/platform#3/)
+  const issue = github().repos['acme/platform'].issues[0]
+  assert.equal(issue.state, 'CLOSED')
+  assert.match(issue.comments[0], /^Closed by `rig close`\.\n\n- billing: https:\/\/github\.com\/acme\/billing\/pull\/12\n/)
 })
 
 test('doctor after setup reports the data root state', () => {

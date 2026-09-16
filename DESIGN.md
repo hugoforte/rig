@@ -447,3 +447,4 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 35 | Org-level config (`orgs`, `tracker`) is data: `rig.json` in the data root, nothing in code |
 | 36 | Setup asks where the knowledge lives first; the tool checkout is never the data root; `rig-data` is the name convention |
 | 37 | Worktree paths are derived from the work root, never stored — one record works on every machine |
+| 38 | Every `gh` call lives in `bin/github.mjs` behind one interface; a second, in-memory adapter (`RIG_FAKE_GITHUB`) runs the ticket and PR paths under test |
