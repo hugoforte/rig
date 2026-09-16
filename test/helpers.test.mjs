@@ -1,8 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, dataRootState,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -16,6 +20,43 @@ test('parseArgs: values, booleans, and a positional after a boolean flag', () =>
 
 test('parseArgs: a value flag at the end is true, not undefined', () => {
   assert.equal(parseArgs(['--email']).flags.email, true)
+})
+
+test('parseArgs: -m is --message, and a short flag is never eaten as another flag\'s value', () => {
+  const { flags, positional } = parseArgs(['save', '-m', 'design agreed', '--designed'])
+  assert.deepEqual(positional, ['save'])
+  assert.equal(flags.message, 'design agreed')
+  assert.equal(flags.designed, true)
+  const swapped = parseArgs(['save', '--work', '-m', 'note']).flags
+  assert.equal(swapped.work, true, '--work sees a flag next, not a value')
+  assert.equal(swapped.message, 'note')
+})
+
+test('parseArgs: an unknown short flag fails rather than swallowing a positional', () => {
+  assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
+})
+
+test('dataRootState: a plain directory, a checkout of its own, and a directory nested in another repo', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-state-'))
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
+  const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
+  try {
+    const plain = path.join(tmp, 'plain'); fs.mkdirSync(plain)
+    assert.equal(dataRootState(plain).repo, 'none')
+
+    const own = path.join(tmp, 'own'); fs.mkdirSync(own)
+    assert.equal(git(own, 'init', '-q', '-b', 'main').status, 0)
+    assert.deepEqual(dataRootState(own), { repo: 'own', branch: 'main', upstream: false, ahead: 0 })
+
+    const nested = path.join(own, 'notes', 'rig-data'); fs.mkdirSync(nested, { recursive: true })
+    const state = dataRootState(nested)
+    assert.equal(state.repo, 'nested')
+    // git prints the long real path; the temp dir may be an 8.3 short name (CI on Windows).
+    assert.equal(fs.realpathSync.native(state.top).toLowerCase(), fs.realpathSync.native(own).toLowerCase())
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
 })
 
 test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {

@@ -67,12 +67,11 @@ node <root>/bin/rig.mjs init --data-root ..\rig-data --orgs acme --tracker acme=
 `rig doctor` must come back clean — it also reports whether the data root has anything
 uncommitted or unpushed.
 
-## Step 4: Commit the org-level half
+## Step 4: Check the org-level half landed
 
-After **create** or **local**, `rig.json` was written by `init` and is uncommitted: commit
-it in the data root (`git -C <data root> add rig.json && git -C <data root> commit -m
-"Configure orgs and trackers"`), and push if there is a remote. After **join**, nothing
-to commit.
+`init` commits `rig.json` into the data root itself (`rig init: rig.json`) and pushes it
+when the data root has an upstream; the last line it prints says which. After **join**,
+nothing to commit. Nothing to do by hand unless that line warned.
 
 Re-run this prompt to add an org or change a tracker: `--orgs` adds (never removes),
 `--tracker` replaces only the orgs it names, `rig.local.json` gains only what it lacks.

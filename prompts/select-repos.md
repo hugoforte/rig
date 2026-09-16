@@ -79,3 +79,7 @@ rig attach <repo>        # one per selected repo, or --repos a,b,c on rig new
 
 The repo set is mutable — attaching a fourth repo on day two is normal and expected, not
 a sign the interview failed.
+
+Each `rig attach` commits and pushes the data root itself. When the design is then agreed
+and written into the context doc's Direction section, `rig save -m "design agreed"
+--designed` commits that too and records the gate.

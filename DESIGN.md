@@ -185,13 +185,15 @@ rig list                    all works + staleness signals
 rig status                  live per-repo branch/ahead/behind/PR state (derived)
 rig setup <repo>            run the catalogue's setup commands
 rig plan                    scaffold rollout-testing-plan.md
+rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate
 rig close                   safety-checked teardown
 rig doctor                  environment + consistency checks
 rig prompt <name>           print an agent prompt to stdout
 ```
 
 Every command prints what it is about to do and is idempotent. Re-running `attach` on an
-attached repo is a no-op, not an error.
+attached repo is a no-op, not an error. Every command that changes a work ends by
+committing the whole data root and pushing it when it has an upstream (decision 42).
 
 ### 5.1 `rig new` — the entry point
 
@@ -426,7 +428,7 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 10 | One shared branch name; base = per-repo remote HEAD |
 | 11 | Flat repo dirs under a short work root; longpaths on; no symlinks |
 | 12 | `rig close` never automatic; `rig list` surfaces staleness |
-| 13 | Eleven idempotent commands, each announcing its actions |
+| 13 | Idempotent commands (eleven at v2, `ticket`, `catalog` and `save` since), each announcing its actions |
 | 14 | v1 died of forgetting: fix via entry-point capture + ambient state |
 | 15 | Prose doc lives in the data root only — exactly one copy |
 | 16 | Inherit v1's context template; scaffold minimal; drop Branches |
@@ -455,3 +457,6 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 39 | A work has gates (ticket decided, repos confirmed, design agreed, closed), not stages; gate state is recorded as `status` in `work.json`, not derived |
 | 40 | `rig new` refuses without an explicit `--key`, `--ticket` or `--no-ticket` on any data root with a live tracker; `--no-ticket` records a declined ticket, distinct from an absent one |
 | 41 | `twg` is Jira's client, handled like `gh` (ADR-0001); per-org ticket config (`project`, `type`, `fields`, `board`) lives in `rig.json`, field ids discovered via `field create-metadata`, never hardcoded |
+| 42 | Every mutating command commits the whole data root and pushes it when it has an upstream — event-based (decision 20 stands), announced in one line, never prompting, never dying (the work is already done; a git failure warns and waits for the next command); fetch and rebase first, and on conflict abort and say so rather than leave the data root mid-rebase. The commit is owned by dispatch: a command registers what it is committing as, and `main` commits on success or on a reported failure |
+| 43 | `rig save [-m] [--designed]` is the explicit commit for edits made outside rig, chiefly the context doc; `--designed` is the only way a work reaches status `designed` |
+| 44 | Writing a work record, syncing its context doc header and regenerating its folder is one operation (`saveWork`); no caller composes the three, and `doctor` reads the folder's owned entries from the same place `regenerate` writes them |

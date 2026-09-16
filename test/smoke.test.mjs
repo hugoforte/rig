@@ -23,8 +23,8 @@ const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
-const rig = (args, input) => {
-  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env, input })
+const rig = (args, input, envOverride = env) => {
+  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env: envOverride, input })
   return { code: r.status, out: strip(r.stdout + r.stderr) }
 }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
@@ -32,6 +32,9 @@ const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(stat
 const github = () => readJson(githubStateFile)
 const setTwg = state => fs.writeFileSync(twgStateFile, JSON.stringify(state))
 const twg = () => readJson(twgStateFile)
+const gitIn = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
+const lastCommit = dir => gitIn(dir, 'log', '-1', '--format=%s').stdout.trim()
+const dirty = dir => gitIn(dir, 'status', '--porcelain').stdout.trim()
 
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-smoke-'))
@@ -87,6 +90,9 @@ test('init --data-root makes a git checkout with a first commit and writes both 
     '--orgs', 'acme', '--tracker', 'acme=none', '--email', 'you@acme.example'])
   assert.equal(r.code, 0, r.out)
   assert.ok(fs.existsSync(path.join(dataRoot, '.git')))
+  // Every mutating command will `git add -A` here and push; the hard guards come first.
+  assert.match(fs.readFileSync(path.join(dataRoot, '.gitignore'), 'utf8'), /^\*\.env$/m)
+  assert.equal(lastCommit(dataRoot), 'rig init: rig.json', 'the org-level half is committed by init itself')
   assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')), { orgs: ['acme'], tracker: { acme: { kind: 'none' } } })
   const local = readJson(path.join(tool, 'rig.local.json'))
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
@@ -116,6 +122,10 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
 test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
   let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore', '--no-ticket'], 'the brief')
   assert.equal(r.code, 0, r.out)
+  // Every mutating command ends by committing the whole data root, and says so.
+  assert.match(r.out, /data root: committed [0-9a-f]{7,} \(no upstream/)
+  assert.equal(lastCommit(dataRoot), 'rig new t1')
+  assert.equal(dirty(dataRoot), '', 'nothing left uncommitted')
   const record = path.join(dataRoot, 'work', 't1', 'work.json')
   assert.equal(readJson(record).branch, 'chore/smoke-work')
   assert.equal(readJson(record).ticketsDeclined, true)
@@ -127,6 +137,7 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
 
   r = rig(['ticket', 'PROJ-9', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig ticket t1: PROJ-9')
   assert.deepEqual(readJson(record).tickets, ['PROJ-9'])
   assert.equal(readJson(record).ticketsDeclined, undefined, 'a real ticket supersedes the decline')
   assert.match(doc(), /^Tickets: PROJ-9 · Status: Planning$/m)
@@ -140,6 +151,7 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
 
   r = rig(['close', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig close t1')
   assert.ok(readJson(record).closedAt)
   assert.equal(readJson(record).status, 'closed')
   assert.match(doc(), /^Tickets: PROJ-9 · Status: Closed$/m)
@@ -179,6 +191,7 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
   })
   let r = rig(['init', '--tracker', 'acme=github:acme/platform'])
   assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig init: rig.json')
 
   r = rig(['new', 't4', '--title', 'Ticketed work', '--ticket', '--org', 'acme'], 'first paragraph of the brief\n\nsecond paragraph')
   assert.equal(r.code, 0, r.out)
@@ -257,8 +270,11 @@ test('a Jira ticket-creation failure surfaces as a clean error, not a stack trac
   assert.match(r.out, /twg not found on PATH/)
   assert.doesNotMatch(r.out, /at Object\.|at file:|\bnode:internal\b/, 'no raw stack trace reaches the user')
   // The record still gets created even though the ticket did not (existing invariant:
-  // "nothing is half-built" — `rig ticket <key>` can attach one later).
+  // "nothing is half-built" — `rig ticket <key>` can attach one later) — and it is
+  // committed under this command's own message, not swept up by the next one.
   assert.deepEqual(readJson(path.join(dataRoot, 'work', 't5-fail', 'work.json')).tickets, [])
+  assert.equal(lastCommit(dataRoot), 'rig new t5-fail')
+  assert.equal(dirty(dataRoot), '')
 })
 
 test('an unresolvable Jira component name dies loudly instead of reaching twg unresolved', () => {
@@ -312,6 +328,111 @@ test('rig new --key <a Jira key> fetches title and description from Jira, no pip
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /Fetched description/)
 })
 
+test('rig save --designed records the design-agreed gate and commits with the message', () => {
+  const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).status, 'designed')
+  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /^Tickets: PROJ-2 · Status: Designed$/m)
+  assert.equal(lastCommit(dataRoot), 'rig save t7: design agreed')
+})
+
+test('rig save with nothing changed says so and makes no commit', () => {
+  const before = lastCommit(dataRoot)
+  const r = rig(['save', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /nothing to commit/)
+  assert.equal(lastCommit(dataRoot), before)
+})
+
+test('doctor flags an edit made outside rig as uncommitted; rig save sweeps it up', () => {
+  const doc = path.join(dataRoot, 'work', 't7', 'context.md')
+  fs.appendFileSync(doc, '\n## Direction\n\nDecided by hand.\n')
+  let r = rig(['doctor'])
+  assert.match(r.out, /data root has 1 uncommitted change/)
+  r = rig(['save', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig save t7')
+  assert.equal(dirty(dataRoot), '')
+})
+
+test('a commit that fails (no git identity) warns and leaves the edit for next time, never dies', () => {
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nAnonymous edit.\n')
+  const anonymous = { ...env }
+  for (const k of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete anonymous[k]
+  let r = rig(['save', '--work', 't7', '-m', 'who am i'], undefined, anonymous)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /could not commit/)
+  assert.notEqual(dirty(dataRoot), '', 'the change is still there for the next command')
+  r = rig(['save', '--work', 't7', '-m', 'now with an identity'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig save t7: now with an identity')
+  assert.equal(dirty(dataRoot), '')
+})
+
+test('with an upstream, a mutating command pushes, rebasing over what others pushed first', () => {
+  const remote = path.join(tmp, 'rig-data-remote.git')
+  assert.equal(gitIn(tmp, 'init', '-q', '--bare', '-b', 'main', remote).status, 0)
+  assert.equal(gitIn(dataRoot, 'remote', 'add', 'origin', remote).status, 0)
+  assert.equal(gitIn(dataRoot, 'push', '-q', '-u', 'origin', 'main').status, 0)
+
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nAn edit to push.\n')
+  let r = rig(['save', '--work', 't7', '-m', 'pushed'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: committed [0-9a-f]{7,} and pushed/)
+  assert.equal(lastCommit(remote), 'rig save t7: pushed')
+
+  // Another machine pushes first, touching a different file.
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(tmp, 'clone', '-q', remote, other).status, 0)
+  fs.writeFileSync(path.join(other, 'NOTES.md'), 'from the other machine\n')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', 'other machine').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nMore, locally.\n')
+  r = rig(['save', '--work', 't7', '-m', 'after divergence'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /and pushed/)
+  assert.equal(lastCommit(remote), 'rig save t7: after divergence')
+  assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
+})
+
+test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
+  const remote = path.join(tmp, 'rig-data-remote.git')
+  const other = path.join(tmp, 'other-machine')
+  // The other machine rewrites the same header line `rig ticket` is about to rewrite.
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  const otherDoc = path.join(other, 'work', 't7', 'context.md')
+  fs.writeFileSync(otherDoc, fs.readFileSync(otherDoc, 'utf8').replace(/^Tickets: .*$/m, 'Tickets: EDITED-1 · Status: Designed'))
+  assert.equal(gitIn(other, 'commit', '-q', '-am', 'conflicting edit').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+
+  const r = rig(['ticket', 'PROJ-3', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /conflict/)
+  assert.match(r.out, /rebase aborted/)
+  assert.equal(lastCommit(dataRoot), 'rig ticket t7: PROJ-3', 'the local commit is kept')
+  assert.equal(dirty(dataRoot), '', 'tree left clean')
+  assert.ok(!fs.existsSync(path.join(dataRoot, '.git', 'rebase-merge')), 'never left mid-rebase')
+  assert.equal(lastCommit(remote), 'conflicting edit', 'nothing pushed')
+})
+
+test('a fetch that fails (remote unreachable) says so, rather than calling it a conflict', () => {
+  try {
+    assert.equal(gitIn(dataRoot, 'remote', 'set-url', 'origin', path.join(tmp, 'no-such-remote.git')).status, 0)
+    fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nOffline edit.\n')
+    const r = rig(['save', '--work', 't7', '-m', 'offline'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /could not fetch from origin/)
+    assert.doesNotMatch(r.out, /conflict/)
+    assert.equal(lastCommit(dataRoot), 'rig save t7: offline')
+    assert.equal(dirty(dataRoot), '')
+  } finally {
+    // Back to a local-only data root for the tests that follow, whatever happened above.
+    gitIn(dataRoot, 'remote', 'remove', 'origin')
+  }
+})
+
 test('close comments on a Jira ticket and never transitions it', () => {
   const r = rig(['close', '--work', 't5'])
   assert.equal(r.code, 0, r.out)
@@ -360,7 +481,7 @@ test('status and list read the PR for the work branch from GitHub', () => {
   // A checkout where the worktree would be; rig only needs it to exist and be clean.
   const billing = path.join(workRoot, 'old', 'billing')
   fs.mkdirSync(billing, { recursive: true })
-  const g = spawnSync('git', ['-C', billing, 'init', '-q', '-b', 'main'], { encoding: 'utf8', env })
+  const g = gitIn(billing, 'init', '-q', '-b', 'main')
   assert.equal(g.status, 0, g.stderr)
   let r = rig(['status', '--work', 'old'])
   assert.equal(r.code, 0, r.out)
@@ -399,7 +520,7 @@ test('close with every PR merged comments on the GitHub ticket and closes it', (
 test('doctor after setup reports the data root state', () => {
   const r = rig(['doctor'])
   assert.match(r.out, /data root is a git checkout/)
-  assert.match(r.out, /uncommitted change/, 'records were written and not committed')
+  assert.doesNotMatch(r.out, /uncommitted change/, 'every mutating command committed as it went')
   assert.match(r.out, /no upstream — local only/)
 })
 

@@ -58,15 +58,17 @@ function readStdin () {
 
 const exists = p => fs.existsSync(p)
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
-const writeJson = (p, v) => {
-  fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.writeFileSync(p, JSON.stringify(v, null, 2) + '\n')
-}
+const writeJson = (p, v) => writeText(p, JSON.stringify(v, null, 2) + '\n')
 const readText = p => fs.readFileSync(p, 'utf8')
+// Writes only when the content differs: the record, its doc header and its folder are
+// rewritten together on every command, and an unchanged file must not churn — not its
+// mtime under `git add -A`, and not an editor that has it open.
 const writeText = (p, v) => {
+  if (exists(p) && fs.readFileSync(p, 'utf8') === v) return
   fs.mkdirSync(path.dirname(p), { recursive: true })
   fs.writeFileSync(p, v)
 }
+const firstLine = s => (s || '').split('\n')[0]
 
 // ------------------------------------------------------------------- config
 
@@ -90,7 +92,17 @@ function dataRoot () {
   return resolvedDataRoot
 }
 const repoConfigFile = () => path.join(dataRoot(), 'rig.json')
-const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+// Paths compared as git sees them: real (8.3 short names on Windows expanded, links
+// followed) and case-folded, since git prints the long real path and NTFS ignores case.
+const realDir = p => {
+  try { return fs.realpathSync.native(p).toLowerCase() } catch { return path.resolve(p).toLowerCase() }
+}
+const sameDir = (a, b) => realDir(a) === realDir(b)
+const insideDir = (child, parent) => {
+  const c = realDir(child)
+  const p = realDir(parent)
+  return c === p || c.startsWith(p + path.sep)
+}
 
 // The tracker clients, each resolved on first use. Production shells to the real CLI.
 // With the matching RIG_FAKE_* env var naming a JSON file, the in-memory adapter runs
@@ -160,7 +172,7 @@ function findWorkId (cfg, explicit) {
   if (explicit) return explicit
   let dir = process.cwd()
   for (;;) {
-    const marker = path.join(dir, '.rig', 'id')
+    const marker = path.join(dir, WORK_FOLDER.marker, 'id')
     if (exists(marker)) return readText(marker).trim()
     const up = path.dirname(dir)
     if (up === dir) break
@@ -176,15 +188,27 @@ function loadWork (cfg, id) {
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
   // Records written before the status gate existed carry no `status`; infer one from
   // what the record already shows rather than defaulting everything to "planning".
-  if (w.status === undefined) w.status = w.closedAt ? 'closed' : ((w.repos?.length ? 'in-progress' : 'planning'))
+  w.repos = w.repos || []
+  if (w.status === undefined) w.status = w.closedAt ? 'closed' : (w.repos.length ? 'in-progress' : 'planning')
   // A worktree's path is derived from this machine's work root, never stored:
   // the same record must work on every machine that shares the data root.
-  for (const r of w.repos || []) r.path = path.join(workDir(cfg, id), r.repo)
+  for (const r of w.repos) r.path = path.join(workDir(cfg, id), r.repo)
   return w
 }
 
-const saveWork = w => writeJson(recordFile(w.id),
-  { ...w, repos: (w.repos || []).map(({ path: _derived, ...r }) => r) })
+// The current work — `--work <id>`, else the folder the command runs in — as a record.
+const openWork = (cfg, flags) => loadWork(cfg, findWorkId(cfg, flags.work))
+
+// Committing a work: the record, the context doc header and the generated work folder
+// are three views of one fact, written together so no caller can forget one (AGENTS.md
+// rule 2). `repos[].path` is derived by `loadWork` and stripped here — it never reaches
+// disk (DESIGN.md decision 37).
+function saveWork (cfg, work) {
+  writeJson(recordFile(work.id), { ...work, repos: (work.repos || []).map(({ path: _derived, ...r }) => r) })
+  syncDocHeader(work.id, work)
+  if (exists(workDir(cfg, work.id))) regenerate(cfg, work)
+  else if (!work.closedAt) warn(`${work.id}: work folder ${workDir(cfg, work.id)} is missing — its AGENTS.md was not regenerated`)
+}
 
 function listWorkIds () {
   const root = path.join(dataRoot(),'work')
@@ -329,19 +353,24 @@ const remoteHas = (mirror, branch) =>
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'setup', 'force', 'quick', 'verbose', 'help'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help'])
+
+// The short flags rig accepts, each an alias of the long name commands read.
+const SHORT_FLAGS = { m: 'message' }
+const isFlag = a => a.startsWith('--') || /^-[a-z]$/.test(a)
 
 function parseArgs (argv) {
   const flags = {}
   const positional = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a.startsWith('--')) {
-      const [k, v] = a.slice(2).split('=')
-      if (v !== undefined) flags[k] = v
-      else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !argv[i + 1].startsWith('--')) flags[k] = argv[++i]
-      else flags[k] = true
-    } else positional.push(a)
+    if (!isFlag(a)) { positional.push(a); continue }
+    // `--flag`, `--flag=value`, `--flag value`; `-m value` is `--message value`.
+    const [raw, v] = a.replace(/^-+/, '').split('=')
+    const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help\``))
+    if (v !== undefined) flags[k] = v
+    else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !isFlag(argv[i + 1])) flags[k] = argv[++i]
+    else flags[k] = true
   }
   return { flags, positional }
 }
@@ -599,9 +628,12 @@ function ticketWriteBack (work, states) {
 
 // ------------------------------------------------- generated work AGENTS.md
 
+// What rig itself puts directly under a work folder; everything else there is a stray.
+const WORK_FOLDER = { agents: 'AGENTS.md', claude: 'CLAUDE.md', marker: '.rig' }
+const WORK_FOLDER_ENTRIES = Object.values(WORK_FOLDER)
+
 function regenerate (cfg, work) {
   const wd = workDir(cfg, work.id)
-  if (!exists(wd)) return
   const cat = loadCatalog()
   const lines = []
   lines.push('<!-- GENERATED by rig — do not edit. Source of truth: the context doc below. -->')
@@ -636,10 +668,86 @@ function regenerate (cfg, work) {
   lines.push('- Everything here is disposable. Durable knowledge goes in the context doc.')
   lines.push('- This file is regenerated on every mutating rig command. Edits are lost.')
   lines.push('')
-  writeText(path.join(wd, 'AGENTS.md'), lines.join('\n'))
-  writeText(path.join(wd, 'CLAUDE.md'), `See [AGENTS.md](./AGENTS.md).\n`)
-  writeText(path.join(wd, '.rig', 'id'), work.id + '\n')
+  writeText(path.join(wd, WORK_FOLDER.agents), lines.join('\n'))
+  writeText(path.join(wd, WORK_FOLDER.claude), `See [${WORK_FOLDER.agents}](./${WORK_FOLDER.agents}).\n`)
+  writeText(path.join(wd, WORK_FOLDER.marker, 'id'), work.id + '\n')
 }
+
+// ------------------------------------------------------ data root commits
+
+// How the data root stands as a git checkout, read once for both the commit below and
+// `doctor`: `repo` is 'none' (not versioned), 'nested' (a directory inside some other
+// checkout, whose top is `top` — `git add -A` there would stage that whole checkout) or
+// 'own'; `branch` is null on a detached HEAD; `ahead` counts commits the upstream lacks.
+function dataRootState (root) {
+  const top = git(root, 'rev-parse', '--show-toplevel')
+  if (top.code !== 0) return { repo: 'none' }
+  if (!sameDir(top.out, root)) return { repo: 'nested', top: top.out }
+  const branch = git(root, 'symbolic-ref', '-q', '--short', 'HEAD')
+  const upstream = git(root, 'rev-parse', '--abbrev-ref', '@{u}').code === 0
+  return {
+    repo: 'own',
+    branch: branch.code === 0 ? branch.out : null,
+    upstream,
+    ahead: upstream ? Number(git(root, 'rev-list', '--count', '@{u}..HEAD').out) : 0,
+  }
+}
+
+// Every mutating command ends here — see `main`, which runs it once the command has
+// registered what it is committing as (`commitAs`), whether the command then succeeded
+// or reported a failure, so a record written before a later step died is committed under
+// its own message rather than swept into the next command's. The whole data root goes in
+// (catalogue corrections made in passing included), then it is pushed if it has an
+// upstream — event-based, no timer, no hook (DESIGN.md decision 20). Silent but
+// announced: one line, never a prompt. Nothing here dies: the work is already done, so a
+// git failure warns and leaves the change for the next command. Before pushing, others'
+// commits are fetched and rebased under ours; a conflict aborts the rebase and says so,
+// so the data root is never left mid-rebase.
+function commitDataRoot (message) {
+  const root = dataRoot()
+  if (insideDir(root, RIG_ROOT)) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
+  const state = dataRootState(root)
+  if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
+  if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
+
+  const add = git(root, 'add', '-A')
+  if (add.code !== 0) { warn(`data root: could not stage (${firstLine(add.err)}) — commit it by hand`); return }
+  const staged = git(root, 'diff', '--cached', '--quiet').code !== 0
+  if (staged) {
+    const commit = git(root, 'commit', '-q', '-m', message)
+    if (commit.code !== 0) { warn(`data root: could not commit (${firstLine(commit.err || commit.out)}) — the change waits for the next command`); return }
+  }
+  const hash = git(root, 'rev-parse', '--short', 'HEAD').out || '(unborn)'
+  const committed = staged ? `committed ${hash}` : 'nothing to commit'
+  if (!state.branch) { warn(`data root: ${committed} on a detached HEAD — check out a branch and cherry-pick it`); return }
+  if (!state.upstream) {
+    if (staged) ok(`data root: ${committed} (no upstream — not pushed)`)
+    else say(C.dim(`· data root: ${committed}`))
+    return
+  }
+  if (!staged && !state.ahead) { say(C.dim('· data root: nothing to commit, nothing to push')); return }
+
+  const fetch = git(root, 'fetch', '-q')
+  if (fetch.code !== 0) { warn(`data root: ${committed}, but could not fetch from origin (${firstLine(fetch.err) || 'no detail from git'}) — nothing pushed`); return }
+  const rebase = git(root, 'rebase', '-q', '@{u}')
+  if (rebase.code !== 0) {
+    const abort = git(root, 'rebase', '--abort')
+    if (abort.code !== 0) warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`)
+    else warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`)
+    return
+  }
+  const pushed = git(root, 'rev-parse', '--short', 'HEAD').out   // rewritten by the rebase
+  const push = git(root, 'push', '-q')
+  if (push.code !== 0) { warn(`data root: ${committed} as ${pushed}, but the push failed (${firstLine(push.err)}) — push it by hand`); return }
+  ok(`data root: ${staged ? `committed ${pushed}` : `pushed ${pushed}, committed earlier`} and pushed`)
+}
+
+// A mutating command's registration of what it is committing as. Called as soon as the
+// command has written anything worth committing; `main` does the rest.
+let pendingCommit = null
+let currentCommand = null
+const commitAs = (subject, detail) =>
+  { pendingCommit = `rig ${currentCommand}${subject ? ` ${subject}` : ''}${detail ? `: ${detail}` : ''}` }
 
 // ----------------------------------------------------------------- commands
 
@@ -674,6 +782,21 @@ rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records 
 `)
   }
   if (!exists(path.join(target, 'rig.json'))) writeJson(path.join(target, 'rig.json'), { orgs: [], tracker: {} })
+  // Every mutating command will `git add -A` here and push, so the hard guards against
+  // a secret landing beside a context doc go in before the first commit.
+  if (!exists(path.join(target, '.gitignore'))) {
+    writeText(path.join(target, '.gitignore'), `# Hard guards: rig commits and pushes this whole tree after every command.
+*.env
+.env.*
+!*.env.example
+!*.env.sample
+*.secrets.env
+*.local.json
+*.pem
+*.key
+*.pfx
+`)
+  }
   must('git', ['-C', target, 'add', '-A'])
   must('git', ['-C', target, 'commit', '-q', '-m', 'Initialise rig data root'])
   return true
@@ -778,6 +901,7 @@ cmds.init = ({ flags }) => {
     writeJson(repoCfg, next)
     repoJson = next
     ok(`wrote ${repoCfg}`)
+    commitAs('', 'rig.json')
   }
   const orgs = repoJson?.orgs || []
   const email = typeof flags.email === 'string' ? flags.email : ''
@@ -917,9 +1041,9 @@ cmds.new = async ({ flags, positional }) => {
   // state — then the ticket. If gh/twg fails, `rig ticket <key>` attaches one later;
   // nothing is half-built and no issue is orphaned.
   fs.mkdirSync(workDir(cfg, id), { recursive: true })
-  saveWork(work)
-
-  // Context doc — scaffolded minimal, not eleven empty sections (DESIGN.md §7.2).
+  commitAs(id)
+  // Context doc — scaffolded minimal, not eleven empty sections (DESIGN.md §7.2). The
+  // header line it carries is then rewritten by saveWork, which owns it from here on.
   const tpl = readText(path.join(RIG_ROOT, 'templates', 'context.md'))
   writeText(contextFile(id), tpl
     .replace(/\{\{ID\}\}/g, id)
@@ -927,8 +1051,7 @@ cmds.new = async ({ flags, positional }) => {
     .replace(/\{\{KEYS\}\}/g, work.tickets.join(', ') || '_none_')
     .replace(/\{\{DATE\}\}/g, new Date().toISOString().slice(0, 10))
     .replace(/\{\{BRIEF\}\}/g, brief || fetched?.body || '_TODO: one line, then the narrative. State scope explicitly._'))
-  regenerate(cfg, work)
-  syncDocHeader(id, work)   // corrects the template's Tickets line for the declined case
+  saveWork(cfg, work)
 
   if (flags.ticket && work.tickets.length) {
     warn(`--ticket ignored: the work already has ${work.tickets.join(', ')}`)
@@ -936,9 +1059,7 @@ cmds.new = async ({ flags, positional }) => {
     const created = createTicket(cfg, work, brief || fetched?.body || '', flags.org, { fields: fieldOverrides })
     if (created) {
       work.tickets.push(created)
-      saveWork(work)
-      syncDocHeader(id, work)
-      regenerate(cfg, work)
+      saveWork(cfg, work)
     }
   }
 
@@ -952,7 +1073,7 @@ cmds.new = async ({ flags, positional }) => {
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
-    for (const r of repos) await attachRepo(cfg, id, r, { setup: !!flags.setup })
+    for (const r of repos) await attachRepo(cfg, work, r, { setup: !!flags.setup })
   } else {
     say('No repos attached yet. Run the selection interview:')
     say(C.dim('  rig prompt select-repos'))
@@ -960,8 +1081,8 @@ cmds.new = async ({ flags, positional }) => {
   }
 }
 
-async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
-  const work = loadWork(cfg, id)
+// Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
+async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   if (work.repos.some(r => r.repo.toLowerCase() === repoName.toLowerCase())) {
     say(`${repoName} already attached — nothing to do`)
     return
@@ -969,7 +1090,7 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
   const { org, repo, language } = resolveOrg(cfg, repoName)
   const mirror = ensureMirror(cfg, org, repo)
   const base = defaultBranch(mirror)
-  const dest = path.join(workDir(cfg, id), repo)
+  const dest = path.join(workDir(cfg, work.id), repo)
   if (exists(dest)) die(`${dest} already exists`)
 
   if (remoteHas(mirror, work.branch)) {
@@ -1003,9 +1124,7 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
   const cat = known || findCatalog(repo)
   work.status = nextStatusAfterAttach(work)
   work.repos.push({ repo, org, path: dest, base, role: cat?.role || '', attachedAt: new Date().toISOString() })
-  saveWork(work)
-  regenerate(cfg, work)
-  syncDocHeader(id, work)
+  saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
 
   if (cat?.setup?.length) {
@@ -1019,30 +1138,46 @@ async function attachRepo (cfg, id, repoName, { setup = false } = {}) {
 
 cmds.ticket = ({ flags, positional }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   const key = positional[0] || die('usage: rig ticket <PROJ-123 | owner/repo#n>')
   if (!isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
   if (work.tickets.includes(key)) return say(`${key} already recorded — nothing to do`)
   work.tickets.push(key)
   delete work.ticketsDeclined   // a real ticket supersedes an earlier --no-ticket
-  saveWork(work)
-  syncDocHeader(id, work)
-  regenerate(cfg, work)
+  commitAs(id, key)
+  saveWork(cfg, work)
   ok(`recorded ${key} on ${id}`)
 }
 
 cmds.attach = async ({ flags, positional }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
+  const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
-  await attachRepo(cfg, id, name, { setup: !!flags.setup })
+  commitAs(work.id, name)
+  await attachRepo(cfg, work, name, { setup: !!flags.setup })
+}
+
+// The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
+// is the "design agreed" gate: the one status change no other command makes.
+cmds.save = ({ flags }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const id = work.id
+  if (flags.message === true) die('-m needs a message')
+  commitAs(id, flags.message)
+  if (flags.designed) {
+    if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
+    work.status = 'designed'
+    ok(`${id}: design agreed`)
+  }
+  saveWork(cfg, work)
 }
 
 cmds.detach = ({ flags, positional }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   const name = positional[0] || die('usage: rig detach <repo>')
   const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
   if (!entry) die(`${name} is not attached to ${id}`)
@@ -1058,8 +1193,8 @@ cmds.detach = ({ flags, positional }) => {
   git(mirror, 'worktree', 'prune')
 
   work.repos = work.repos.filter(r => r !== entry)
-  saveWork(work)
-  regenerate(cfg, work)
+  commitAs(id, entry.repo)
+  saveWork(cfg, work)
   ok(`detached ${entry.repo}`)
 }
 
@@ -1123,8 +1258,8 @@ cmds.list = ({ flags }) => {
 
 cmds.status = ({ flags }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   say(`${C.bold(work.id)} — ${work.title || ''}`)
   say(`branch ${work.branch}`)
   say(`status ${statusLabel(work.status)}`)
@@ -1155,8 +1290,8 @@ function runSetup (dir, commands) {
 
 cmds.setup = ({ flags, positional }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   const targets = positional.length
     ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
     : work.repos
@@ -1170,8 +1305,8 @@ cmds.setup = ({ flags, positional }) => {
 
 cmds.plan = ({ flags }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   if (exists(planFile(id)) && !flags.force) die(`${planFile(id)} already exists`)
   const tpl = readText(path.join(RIG_ROOT, 'templates', 'rollout-testing-plan.md'))
   writeText(planFile(id), tpl
@@ -1179,14 +1314,15 @@ cmds.plan = ({ flags }) => {
     .replace(/\{\{TITLE\}\}/g, work.title || id)
     .replace(/\{\{KEYS\}\}/g, work.tickets.join(', ') || id)
     .replace(/\{\{DATE\}\}/g, new Date().toISOString().slice(0, 10)))
-  regenerate(cfg, work)
+  commitAs(id)
+  saveWork(cfg, work)   // the generated AGENTS.md gains its "Rollout plan" line
   ok(`created ${planFile(id)}`)
 }
 
 cmds.close = ({ flags }) => {
   const cfg = config()
-  const id = findWorkId(cfg, flags.work)
-  const work = loadWork(cfg, id)
+  const work = openWork(cfg, flags)
+  const id = work.id
   const blockers = []
   const states = []
   for (const r of work.repos) {
@@ -1216,24 +1352,22 @@ cmds.close = ({ flags }) => {
     else step(`removed worktree ${r.repo}`)
     git(mirror, 'worktree', 'prune')
   }
+  commitAs(id)
   const wd = workDir(cfg, id)
   // Windows refuses to remove a directory that is some process's cwd — including ours.
-  if (process.cwd().toLowerCase().startsWith(wd.toLowerCase())) process.chdir(RIG_ROOT)
-  work.closedAt = new Date().toISOString()
-  work.status = 'closed'
-  saveWork(work)
-  syncDocHeader(id, work)
-  ticketWriteBack(work, states)
+  if (insideDir(process.cwd(), wd)) process.chdir(RIG_ROOT)
   if (exists(wd)) {
     try {
       fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
     } catch (e) {
       warn(`worktrees removed, but ${wd} could not be deleted: ${e.code || e.message}`)
       warn('something still has it open (a shell, an editor). Delete it by hand.')
-      ok(`closed ${id} — context doc kept at ${contextFile(id)}`)
-      return
     }
   }
+  work.closedAt = new Date().toISOString()
+  work.status = 'closed'
+  saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as closed
+  ticketWriteBack(work, states)
   ok(`closed ${id} — context doc kept at ${contextFile(id)}`)
 }
 
@@ -1304,23 +1438,27 @@ cmds.doctor = () => {
   check('config file', exists(LOCAL_CONFIG), { bad: `${LOCAL_CONFIG} missing — run \`rig init\`` })
   check('work root', exists(cfg.workRoot), { ok: cfg.workRoot, bad: `${cfg.workRoot} missing` })
   check('mirror root', exists(cfg.mirrorRoot), { ok: cfg.mirrorRoot, bad: `${cfg.mirrorRoot} missing` })
-  const split = !sameDir(dataRoot(), RIG_ROOT)
+  const split = !insideDir(dataRoot(), RIG_ROOT)
   check('data root', split && exists(dataRoot()), {
     ok: dataRoot(),
     bad: split
       ? `${dataRoot()} missing — check dataRoot in rig.local.json`
-      : 'is the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
+      : 'is inside the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
   })
   if (split && exists(dataRoot())) {
-    const inRepo = git(dataRoot(), 'rev-parse', '--is-inside-work-tree').out === 'true'
-    check('data root is a git checkout', inRepo, { bad: 'records written there are not versioned' })
-    if (inRepo) {
-      // Records commit straight to main; nothing else reminds anyone.
+    const state = dataRootState(dataRoot())
+    check('data root is a git checkout of its own', state.repo === 'own', {
+      bad: state.repo === 'nested'
+        ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
+        : 'records written there are not versioned',
+    })
+    if (state.repo === 'own') {
+      // rig commits after its own commands; an edit made outside rig waits for `rig save`.
       const dirty = git(dataRoot(), 'status', '--porcelain').out.split('\n').filter(Boolean).length
-      const up = git(dataRoot(), 'rev-list', '--count', '@{u}..HEAD')   // fails without an upstream
-      if (dirty) warn(`data root has ${dirty} uncommitted change(s) — records commit straight to main`)
-      if (up.code !== 0) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
-      else if (Number(up.out)) warn(`data root has ${up.out} unpushed commit(s)`)
+      if (dirty) warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`)
+      if (!state.branch) { warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'); problems++ }
+      else if (!state.upstream) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
+      else if (state.ahead) warn(`data root has ${state.ahead} unpushed commit(s)`)
       else if (!dirty) ok('data root is committed and pushed')
     }
   }
@@ -1344,7 +1482,7 @@ cmds.doctor = () => {
     if (work.closedAt) continue
     const wd = workDir(cfg, id)
     if (!exists(wd)) { warn(`${id}: work folder missing but not closed`); problems++; continue }
-    const known = new Set([...work.repos.map(r => r.repo), '.rig', 'AGENTS.md', 'CLAUDE.md'])
+    const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
     for (const e of fs.readdirSync(wd)) {
       if (known.has(e)) continue
       warn(`${id}: unmanaged entry "${e}" under the work root — rig owns this folder`)
@@ -1401,12 +1539,15 @@ cmds.help = () => {
   rig setup [repo...]             run the catalogue's setup commands
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig plan                        scaffold the rollout & testing plan
+  rig save [-m text] [--designed] commit edits made outside rig (the context doc);
+                                  --designed records the "design agreed" gate
   rig close [--force]             safety-checked teardown
   rig doctor                      environment + consistency checks
   rig prompt [name]               print an agent prompt
 
 Commands that act on "the current work" find it by walking up from the cwd,
-or take --work <id>.`)
+or take --work <id>. Every command that changes a work ends by committing the
+whole data root, and pushing it when it has an upstream.`)
 }
 
 // --------------------------------------------------------------------- main
@@ -1414,7 +1555,7 @@ or take --work <id>.`)
 // Pure helpers, importable by tests. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, dataRootState,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
@@ -1431,13 +1572,15 @@ if (isMain) {
     console.error(`unknown command "${cmdName}" — try \`rig help\``)
     process.exit(1)
   }
+  currentCommand = cmdName
   try {
     await cmd(parseArgs(rest))
   } catch (e) {
-    if (!(e instanceof RigError)) throw e
+    if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
     console.error(`${C.red('✗')} ${e.message}`)
     process.exitCode = 1
   } finally {
     persistFakeTrackers()
   }
+  if (pendingCommit) commitDataRoot(pendingCommit)
 }
