@@ -92,10 +92,15 @@ function dataRoot () {
   return resolvedDataRoot
 }
 const repoConfigFile = () => path.join(dataRoot(), 'rig.json')
-const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+// Paths compared as git sees them: real (8.3 short names on Windows expanded, links
+// followed) and case-folded, since git prints the long real path and NTFS ignores case.
+const realDir = p => {
+  try { return fs.realpathSync.native(p).toLowerCase() } catch { return path.resolve(p).toLowerCase() }
+}
+const sameDir = (a, b) => realDir(a) === realDir(b)
 const insideDir = (child, parent) => {
-  const c = path.resolve(child).toLowerCase()
-  const p = path.resolve(parent).toLowerCase()
+  const c = realDir(child)
+  const p = realDir(parent)
   return c === p || c.startsWith(p + path.sep)
 }
 

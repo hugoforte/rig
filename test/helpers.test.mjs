@@ -52,7 +52,8 @@ test('dataRootState: a plain directory, a checkout of its own, and a directory n
     const nested = path.join(own, 'notes', 'rig-data'); fs.mkdirSync(nested, { recursive: true })
     const state = dataRootState(nested)
     assert.equal(state.repo, 'nested')
-    assert.equal(path.resolve(state.top).toLowerCase(), path.resolve(own).toLowerCase())
+    // git prints the long real path; the temp dir may be an 8.3 short name (CI on Windows).
+    assert.equal(fs.realpathSync.native(state.top).toLowerCase(), fs.realpathSync.native(own).toLowerCase())
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
