@@ -10,9 +10,13 @@ rig new refund-double-charge --title "…" --ticket   # no ticket yet: rig opens
 rig prompt select-repos          # the interview; an agent runs this
 rig attach billing
 rig attach orders-web
+rig save -m "design agreed" --designed   # the context doc is yours to edit; this commits it
 rig list                         # what's open, what's safe to close
 rig close
 ```
+
+Every command that changes a work commits the data root and pushes it, so the knowledge
+is versioned at the moment it was agreed, not when someone remembers.
 
 ## Install
 

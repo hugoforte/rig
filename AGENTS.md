@@ -86,7 +86,8 @@ rig attach orders-web
    tables going stale. **`status`** (`planning` → `in-progress` → `designed` → `closed`,
    shown in the context doc header) is the one exception: it is a **decision**, not
    something git or `gh` can answer, so rig records it in `work.json` at each gate
-   (`rig new`, the first `rig attach`, `rig close`) instead of deriving it.
+   (`rig new`, the first `rig attach`, `rig save --designed`, `rig close`) instead of
+   deriving it.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
    your head — that is the only moment the knowledge is cheap.
@@ -114,6 +115,20 @@ Two habits worth keeping from the docs this inherits:
   why you stopped is worth more than a tidy answer.
 - **"Key data points"** — column semantics, config keys, idempotency keys. The
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
+
+**End the design gate with `rig save --designed`.** Every rig command that changes a work
+(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`) ends by committing the whole
+data root and pushing it when it has an upstream — one line says which commit and whether
+the push landed; a push that fails warns and never dies. But the context doc is edited by
+you, not by rig, so when the Direction section is agreed, run:
+
+```bash
+rig save -m "design agreed" --designed   # records status "designed", commits, pushes
+rig save -m "refuted the sync hypothesis" # any later edit made outside rig
+```
+
+Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
+was just agreed, with the catalogue corrections you made in passing swept up alongside.
 
 ## Closing
 

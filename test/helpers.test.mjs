@@ -18,6 +18,13 @@ test('parseArgs: a value flag at the end is true, not undefined', () => {
   assert.equal(parseArgs(['--email']).flags.email, true)
 })
 
+test('parseArgs: a short flag takes a value like its long form', () => {
+  const { flags, positional } = parseArgs(['save', '-m', 'design agreed', '--designed'])
+  assert.deepEqual(positional, ['save'])
+  assert.equal(flags.m, 'design agreed')
+  assert.equal(flags.designed, true)
+})
+
 test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {
   const { data, body } = parseFrontmatter(`---
 repo: billing

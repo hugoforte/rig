@@ -83,7 +83,10 @@ hand:
 
 ## After
 
-Continue with the repo interview: `rig prompt select-repos`. When the work is done,
-`rig close` comments on every ticket with the PR links. GitHub tickets also close when
-every PR is merged. Jira tickets never auto-close or transition — move it yourself once
-the comment lands.
+Continue with the repo interview: `rig prompt select-repos`. Once the Direction section
+of the context doc is agreed with the user, end that gate with
+`rig save -m "design agreed" --designed` — rig commits the data root after its own
+commands, but the context doc is yours to edit, so this is how those edits get committed.
+When the work is done, `rig close` comments on every ticket with the PR links. GitHub
+tickets also close when every PR is merged. Jira tickets never auto-close or transition —
+move it yourself once the comment lands.
