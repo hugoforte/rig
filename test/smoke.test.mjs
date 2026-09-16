@@ -23,8 +23,8 @@ const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
-const rig = (args, input) => {
-  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env, input })
+const rig = (args, input, envOverride = env) => {
+  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env: envOverride, input })
   return { code: r.status, out: strip(r.stdout + r.stderr) }
 }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
@@ -90,6 +90,9 @@ test('init --data-root makes a git checkout with a first commit and writes both 
     '--orgs', 'acme', '--tracker', 'acme=none', '--email', 'you@acme.example'])
   assert.equal(r.code, 0, r.out)
   assert.ok(fs.existsSync(path.join(dataRoot, '.git')))
+  // Every mutating command will `git add -A` here and push; the hard guards come first.
+  assert.match(fs.readFileSync(path.join(dataRoot, '.gitignore'), 'utf8'), /^\*\.env$/m)
+  assert.equal(lastCommit(dataRoot), 'rig init: rig.json', 'the org-level half is committed by init itself')
   assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')), { orgs: ['acme'], tracker: { acme: { kind: 'none' } } })
   const local = readJson(path.join(tool, 'rig.local.json'))
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
@@ -188,6 +191,7 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
   })
   let r = rig(['init', '--tracker', 'acme=github:acme/platform'])
   assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig init: rig.json')
 
   r = rig(['new', 't4', '--title', 'Ticketed work', '--ticket', '--org', 'acme'], 'first paragraph of the brief\n\nsecond paragraph')
   assert.equal(r.code, 0, r.out)
@@ -266,8 +270,11 @@ test('a Jira ticket-creation failure surfaces as a clean error, not a stack trac
   assert.match(r.out, /twg not found on PATH/)
   assert.doesNotMatch(r.out, /at Object\.|at file:|\bnode:internal\b/, 'no raw stack trace reaches the user')
   // The record still gets created even though the ticket did not (existing invariant:
-  // "nothing is half-built" — `rig ticket <key>` can attach one later).
+  // "nothing is half-built" — `rig ticket <key>` can attach one later) — and it is
+  // committed under this command's own message, not swept up by the next one.
   assert.deepEqual(readJson(path.join(dataRoot, 'work', 't5-fail', 'work.json')).tickets, [])
+  assert.equal(lastCommit(dataRoot), 'rig new t5-fail')
+  assert.equal(dirty(dataRoot), '')
 })
 
 test('an unresolvable Jira component name dies loudly instead of reaching twg unresolved', () => {
@@ -337,12 +344,28 @@ test('rig save with nothing changed says so and makes no commit', () => {
   assert.equal(lastCommit(dataRoot), before)
 })
 
-test('rig save sweeps up an edit made outside rig, chiefly the context doc', () => {
+test('doctor flags an edit made outside rig as uncommitted; rig save sweeps it up', () => {
   const doc = path.join(dataRoot, 'work', 't7', 'context.md')
   fs.appendFileSync(doc, '\n## Direction\n\nDecided by hand.\n')
-  const r = rig(['save', '--work', 't7'])
+  let r = rig(['doctor'])
+  assert.match(r.out, /data root has 1 uncommitted change/)
+  r = rig(['save', '--work', 't7'])
   assert.equal(r.code, 0, r.out)
   assert.equal(lastCommit(dataRoot), 'rig save t7')
+  assert.equal(dirty(dataRoot), '')
+})
+
+test('a commit that fails (no git identity) warns and leaves the edit for next time, never dies', () => {
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nAnonymous edit.\n')
+  const anonymous = { ...env }
+  for (const k of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete anonymous[k]
+  let r = rig(['save', '--work', 't7', '-m', 'who am i'], undefined, anonymous)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /could not commit/)
+  assert.notEqual(dirty(dataRoot), '', 'the change is still there for the next command')
+  r = rig(['save', '--work', 't7', '-m', 'now with an identity'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(lastCommit(dataRoot), 'rig save t7: now with an identity')
   assert.equal(dirty(dataRoot), '')
 })
 
@@ -394,18 +417,20 @@ test('a rebase conflict is warned about, aborted, and leaves the data root clean
   assert.equal(lastCommit(remote), 'conflicting edit', 'nothing pushed')
 })
 
-test('a pull that fails for another reason says so, rather than calling it a conflict', () => {
-  assert.equal(gitIn(dataRoot, 'remote', 'set-url', 'origin', path.join(tmp, 'no-such-remote.git')).status, 0)
-  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nOffline edit.\n')
-  const r = rig(['save', '--work', 't7', '-m', 'offline'])
-  assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /could not pull from origin/)
-  assert.doesNotMatch(r.out, /conflict/)
-  assert.equal(lastCommit(dataRoot), 'rig save t7: offline')
-  assert.equal(dirty(dataRoot), '')
-
-  // Back to a local-only data root for the tests that follow.
-  assert.equal(gitIn(dataRoot, 'remote', 'remove', 'origin').status, 0)
+test('a fetch that fails (remote unreachable) says so, rather than calling it a conflict', () => {
+  try {
+    assert.equal(gitIn(dataRoot, 'remote', 'set-url', 'origin', path.join(tmp, 'no-such-remote.git')).status, 0)
+    fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nOffline edit.\n')
+    const r = rig(['save', '--work', 't7', '-m', 'offline'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /could not fetch from origin/)
+    assert.doesNotMatch(r.out, /conflict/)
+    assert.equal(lastCommit(dataRoot), 'rig save t7: offline')
+    assert.equal(dirty(dataRoot), '')
+  } finally {
+    // Back to a local-only data root for the tests that follow, whatever happened above.
+    gitIn(dataRoot, 'remote', 'remove', 'origin')
+  }
 })
 
 test('close comments on a Jira ticket and never transitions it', () => {
@@ -456,7 +481,7 @@ test('status and list read the PR for the work branch from GitHub', () => {
   // A checkout where the worktree would be; rig only needs it to exist and be clean.
   const billing = path.join(workRoot, 'old', 'billing')
   fs.mkdirSync(billing, { recursive: true })
-  const g = spawnSync('git', ['-C', billing, 'init', '-q', '-b', 'main'], { encoding: 'utf8', env })
+  const g = gitIn(billing, 'init', '-q', '-b', 'main')
   assert.equal(g.status, 0, g.stderr)
   let r = rig(['status', '--work', 'old'])
   assert.equal(r.code, 0, r.out)

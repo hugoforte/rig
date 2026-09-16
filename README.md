@@ -2,7 +2,7 @@
 
 A cross-repo work harness. Describe a piece of work; `rig` decides which repos are involved,
 assembles a worktree for each in one folder on a shared branch, and keeps the durable
-knowledge about that work in a committed data root — this checkout, or a private repo.
+knowledge about that work in a committed data root — a private repo beside this one.
 
 ```bash
 rig new PROJ-42-refund-double-charge --title "Refunds double-charge on retry"
