@@ -20,15 +20,10 @@
 // createIssue, commentIssue and closeIssue are the tracker operations: what rig does to
 // a ticket. A tracker of another kind presents the same operations under its own names.
 import { spawnSync } from 'node:child_process'
+import { jsonCliHelpers } from './cli-json.mjs'
 
 export class GithubError extends Error {}
-
-const fail = msg => { throw new GithubError(msg) }
-const firstLine = s => (s || '').trim().split('\n')[0]
-
-const parseJson = (text, what) => {
-  try { return JSON.parse(text) } catch (e) { fail(`${what} returned unreadable JSON (${e.message}): ${firstLine(text)}`) }
-}
+const { fail, firstLine, parseJson } = jsonCliHelpers(GithubError)
 
 const spawnGh = args => spawnSync('gh', args, { encoding: 'utf8' })
 

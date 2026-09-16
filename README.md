@@ -53,7 +53,7 @@ Unit tests for the pure helpers and for the GitHub and Jira modules' adapters, a
 
 ```
 D:\rig\                    the tool — committed, generic
-  bin/rig.mjs  bin/github.mjs  bin/jira.mjs  prompts/  templates/
+  bin/rig.mjs  bin/github.mjs  bin/jira.mjs  bin/cli-json.mjs  prompts/  templates/
   rig.local.json           gitignored: work root, data root, identities, secrets sources
 
 D:\rig-data\               the knowledge — committed, private; never the tool's own checkout

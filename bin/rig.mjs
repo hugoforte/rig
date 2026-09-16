@@ -473,7 +473,13 @@ function resolveJiraField (jiraClient, t, metadata, key, value) {
     die(`no field named "${name}" for ${t.project}/${t.type} — check rig.json or the name in Jira`)
   if (key !== 'components') return { id: field.id, value }
   const names = Array.isArray(value) ? value : [value]
-  const ids = names.map(n => field.allowedValues.find(a => a.name.toLowerCase() === String(n).toLowerCase())?.id || n)
+  // A name that matches nothing dies here — passing it through would let a typo or a
+  // renamed/removed component reach `twg` unresolved (ADR-0001: fail loudly, don't guess).
+  const ids = names.map(n => {
+    const allowed = field.allowedValues.find(a => a.name.toLowerCase() === String(n).toLowerCase() || a.id === String(n))
+    return allowed ? allowed.id :
+      die(`"${n}" is not a value for "${field.name}" (${t.project}/${t.type}) — known: ${field.allowedValues.map(a => a.name).join(', ') || 'none'}`)
+  })
   return { id: field.id, value: ids }
 }
 
@@ -508,6 +514,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
 
   if (t.kind === 'github') {
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
+    if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
     const body = [description, '', `The design lives in the work record: ${contextDocRef(work.id)}`,
       '', `Opened by \`rig new ${work.id} --ticket\`.`].join('\n')
     if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${description}`); return null }
@@ -857,9 +864,16 @@ cmds.new = async ({ flags, positional }) => {
 
   const brief = readStdin()
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
-  if (dryRun) { createTicket(cfg, { id, title: flags.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides }); return }
+  // Read the real record, if one already exists, so `--dry-run` doesn't preview a ticket
+  // the real run would just warn-and-skip (an id that already has one).
+  const existing = exists(recordFile(id)) ? readJson(recordFile(id)) : null
+  if (dryRun) {
+    if (existing?.tickets?.length) { warn(`${id} already has a ticket (${existing.tickets.join(', ')}) — nothing to preview`); return }
+    createTicket(cfg, { id, title: flags.title || existing?.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides })
+    return
+  }
 
-  if (exists(recordFile(id))) die(`work "${id}" already exists (${recordFile(id)})`)
+  if (existing) die(`work "${id}" already exists (${recordFile(id)})`)
 
   // A Jira `--key` needs no piped brief any more: rig fetches summary/description
   // itself, used as a default wherever `--title`/stdin didn't already supply one.
@@ -1405,7 +1419,7 @@ if (isMain) {
   try {
     await cmd(parseArgs(rest))
   } catch (e) {
-    if (!(e instanceof RigError || e instanceof GithubError)) throw e
+    if (!(e instanceof RigError || e instanceof GithubError || e instanceof JiraError)) throw e
     console.error(`${C.red('✗')} ${e.message}`)
     process.exitCode = 1
   } finally {

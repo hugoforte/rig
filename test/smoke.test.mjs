@@ -246,6 +246,49 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)
 })
 
+test('a Jira ticket-creation failure surfaces as a clean error, not a stack trace', () => {
+  const state = twg()
+  setTwg({ ...state, present: false })
+  const r = rig(['new', 't5-fail', '--title', 'Should not crash', '--ticket', '--org', 'acme-labs'], 'brief')
+  setTwg(state)   // restore before any later test needs twg present again
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /twg not found on PATH/)
+  assert.doesNotMatch(r.out, /at Object\.|at file:|\bnode:internal\b/, 'no raw stack trace reaches the user')
+  // The record still gets created even though the ticket did not (existing invariant:
+  // "nothing is half-built" — `rig ticket <key>` can attach one later).
+  assert.deepEqual(readJson(path.join(dataRoot, 'work', 't5-fail', 'work.json')).tickets, [])
+})
+
+test('an unresolvable Jira component name dies loudly instead of reaching twg unresolved', () => {
+  const rigJson = readJson(path.join(dataRoot, 'rig.json'))
+  const original = rigJson.tracker['acme-labs'].fields.components
+  rigJson.tracker['acme-labs'].fields.components = ['Not A Real Component']
+  fs.writeFileSync(path.join(dataRoot, 'rig.json'), JSON.stringify(rigJson, null, 2))
+
+  const r = rig(['new', 't5-badcomponent', '--title', 'Bad component', '--ticket', '--org', 'acme-labs'], 'brief')
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /"Not A Real Component" is not a value for "Components"/)
+  assert.deepEqual(readJson(path.join(dataRoot, 'work', 't5-badcomponent', 'work.json')).tickets, [])
+
+  rigJson.tracker['acme-labs'].fields.components = original
+  fs.writeFileSync(path.join(dataRoot, 'rig.json'), JSON.stringify(rigJson, null, 2))
+})
+
+test('--dry-run warns instead of misleadingly previewing when the work already has a ticket', () => {
+  const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs', '--dry-run'],
+    'a different brief')
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /t5 already has a ticket \(PROJ-1\)/)
+  assert.doesNotMatch(r.out, /would create/, 'no misleading preview once a ticket already exists')
+})
+
+test('--field is ignored for a GitHub tracker, and says so', () => {
+  const r = rig(['new', 't6b', '--title', 'Field on GitHub', '--ticket', '--org', 'acme', '--field', 'story_points=5'],
+    'brief')
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /--field is ignored for a GitHub tracker/)
+})
+
 test('--field name=value,... overrides the org\'s configured default', () => {
   const r = rig(['new', 't6', '--title', 'Overridden points', '--ticket', '--org', 'acme-labs', '--field', 'story_points=5'],
     'brief')

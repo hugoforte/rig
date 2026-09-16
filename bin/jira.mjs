@@ -19,14 +19,10 @@
 //   activeSprintId(boardId)                       the board's active sprint id, or null
 // Every call but present() throws JiraError when twg is missing or the call fails.
 import { spawnSync } from 'node:child_process'
+import { jsonCliHelpers } from './cli-json.mjs'
 
 export class JiraError extends Error {}
-
-const fail = msg => { throw new JiraError(msg) }
-const firstLine = s => (s || '').trim().split('\n')[0]
-const parseJson = (text, what) => {
-  try { return JSON.parse(text) } catch (e) { fail(`${what} returned unreadable JSON (${e.message}): ${firstLine(text)}`) }
-}
+const { fail, firstLine, parseJson } = jsonCliHelpers(JiraError)
 
 const spawnTwg = args => spawnSync('twg', args, { encoding: 'utf8' })
 
