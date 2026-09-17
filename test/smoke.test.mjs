@@ -555,7 +555,7 @@ test('a data root from before stamping is warned about, then migrated by update'
   assert.match(updated.out, /migrated: stamp the data root/)
   assert.equal(readJson(file).writtenBy, '1.0.0')
   assert.equal(dirty(dataRoot), '', 'the migration is committed, not left in the tree')
-  assert.match(updated.out, /record format 1, last written by rig 1\.0\.0/, 'the doctor checks run inline')
+  assert.match(updated.out, /record format 1, stamped by rig 1\.0\.0/, 'the doctor checks run inline')
 })
 
 test('a second update migrates nothing', () => {

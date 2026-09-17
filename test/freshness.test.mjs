@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { skipReason, dueForRefresh, staleLine, announces } from '../bin/freshness.mjs'
+import { QUIET_COMMANDS, skipReason, dueForRefresh, staleLine, announces } from '../bin/freshness.mjs'
 
 const onMain = { repo: true, linked: false, branch: 'main', defaultBranch: 'main', upstream: true }
 
@@ -48,10 +48,26 @@ test('a cache written before the checkout moved is ignored, not trusted', () => 
   assert.equal(staleLine({ sha: 'old', behind: 3 }, 'new'), null)
 })
 
-test('the ambient line stays out of piped output and out of the commands that report it themselves', () => {
-  const on = { enabled: true, tty: true }
-  assert.equal(announces('attach', on), true)
-  assert.equal(announces('attach', { enabled: true, tty: false }), false)
-  assert.equal(announces('attach', { enabled: false, tty: true }), false)
-  for (const quiet of ['prompt', 'help', 'doctor', 'update']) assert.equal(announces(quiet, on), false)
+test('the ambient line is announced whether or not anyone is watching a terminal', () => {
+  // It goes to stderr, so a pipe is not a reason to withhold it — an agent shelling out to
+  // rig is the audience that most needs to be told its rig is stale.
+  assert.equal(announces('attach', { enabled: true }), true)
+  assert.equal(announces('attach', { enabled: false }), false)
+})
+
+test('the commands that report freshness themselves never print the ambient line', () => {
+  for (const quiet of QUIET_COMMANDS) assert.equal(announces(quiet, { enabled: true }), false)
+})
+
+test('a check exactly one interval old is due', () => {
+  // The boundary, not a value either side of it: `>=` sliding to `>` is a whole extra
+  // interval of silence and nothing else here would notice.
+  const at = '2026-09-16T12:00:00Z'
+  assert.equal(dueForRefresh({ checkedAt: at }, 24, Date.parse('2026-09-17T12:00:00Z')), true)
+  assert.equal(dueForRefresh({ checkedAt: at }, 24, Date.parse('2026-09-17T11:59:59Z')), false)
+})
+
+test('a check stamped in the future is due, not believed', () => {
+  const now = Date.parse('2026-09-17T12:00:00Z')
+  assert.equal(dueForRefresh({ checkedAt: '2027-01-01T00:00:00Z' }, 24, now), true)
 })

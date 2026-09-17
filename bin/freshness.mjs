@@ -13,9 +13,9 @@
 
 export const DEFAULT_FRESHNESS = { enabled: true, everyHours: 24 }
 
-// Commands that never print the ambient line: `prompt` and `help` exist to be piped into
-// an agent, where a warning is noise in someone else's input; `doctor` and `update` report
-// freshness themselves; the refresh is the check.
+// Commands that never print the ambient line: `doctor` and `update` report freshness
+// themselves and the refresh *is* the check; `prompt` and `help` are reference output being
+// read or fed to an agent, and rig's housekeeping does not belong in the middle of it.
 export const QUIET_COMMANDS = new Set(['prompt', 'help', 'doctor', 'update', 'freshness-refresh'])
 
 // Why the tool checkout is not a thing to judge for freshness, or null when it is.
@@ -37,10 +37,11 @@ export function skipReason (state) {
 const HOUR_MS = 3600_000
 
 // A cache with no readable timestamp is due: an unparsable one is likelier a truncated
-// write than a fresh check.
+// write than a fresh check. So is one stamped in the future — a clock that was wrong when
+// the cache was written would otherwise freeze the check until wall-clock caught up.
 export function dueForRefresh (cache, everyHours = DEFAULT_FRESHNESS.everyHours, now = Date.now()) {
   const at = Date.parse(cache?.checkedAt ?? '')
-  if (Number.isNaN(at)) return true
+  if (Number.isNaN(at) || at > now) return true
   return now - at >= everyHours * HOUR_MS
 }
 
@@ -53,5 +54,8 @@ export function staleLine (cache, head) {
   return `rig is ${n} commit${n === 1 ? '' : 's'} behind ${cache.remote || 'its remote'} — \`rig update\``
 }
 
-export const announces = (command, { enabled, tty }) =>
-  Boolean(enabled) && Boolean(tty) && !QUIET_COMMANDS.has(command)
+// The line goes to stderr, so it cannot pollute a stdout someone is piping — which is what
+// the old TTY test was really protecting. Gating on a TTY as well meant the one audience
+// AGENTS.md names for it, an agent shelling out to rig, could never see it.
+export const announces = (command, { enabled }) =>
+  Boolean(enabled) && !QUIET_COMMANDS.has(command)

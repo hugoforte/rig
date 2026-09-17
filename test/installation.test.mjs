@@ -154,7 +154,7 @@ test('update refuses a diverged tool checkout rather than merging it', () => {
   assert.equal(git(install, 'add', '-A').status, 0)
   assert.equal(git(install, 'commit', '-q', '-m', 'local commit').status, 0)
   const r = rig(['update'])
-  assert.match(r.out, /tool: \d+ commit\(s\) behind but the branch has diverged — not updated/)
+  assert.match(r.out, /tool: \d+ behind and \d+ ahead of its upstream — not updated/)
   assert.equal(git(install, 'log', '-1', '--format=%s').stdout.trim(), 'local commit', 'nothing was rebased under it')
 })
 
