@@ -1624,8 +1624,8 @@ cmds.doctor = () => {
     } else {
       const measured = measureFreshness(tool)
       writeFreshness(cfg, measured)
-      check('rig is up to date', measured.behind === 0, {
-        ok: `with ${tool.upstream}`,
+      check('installed rig', measured.behind === 0, {
+        ok: `up to date with ${tool.upstream}`,
         bad: `${measured.behind} commit(s) behind ${tool.upstream} — run \`rig update\``,
       })
     }
