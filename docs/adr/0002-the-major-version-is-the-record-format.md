@@ -40,7 +40,13 @@ change without a migration being added, and adding one moves the major by constr
 the number that gates writes is never a number anyone has to remember to type. A test
 asserts `package.json` agrees, so the file is not left lying to whoever reads it.
 
-**The data root records what last wrote it** — `writtenBy` in `rig.json`. From it:
+**The data root records the format it was last migrated to** — `writtenBy` in `rig.json`.
+It is a format stamp, not a log of the last rig to touch the data root: it moves when a
+migration runs and at no other time, so a rig at 1.7.0 writing records leaves it reading
+`1.0.0`, which is correct — the format has not changed. The stamp is written by
+`applyMigrations`, never by an individual migration, because a stamp that only migration 1
+knows how to write stops moving after migration 1 and every later major silently fails to
+take. From it:
 
 - data root major **>** tool major → the tool is old. Mutating commands (`new`, `ticket`,
   `attach`, `detach`, `plan`, `save`, `close`) refuse; read-only ones (`list`, `status`,
@@ -58,7 +64,14 @@ happens). If a future migration genuinely must touch worktrees or branch names, 
 migration declares itself unsafe and asks for open works to be closed — the cost paid where
 it is earned, not on every update.
 
-**Migration 1 is additive only.** It adds `writtenBy` and changes nothing else.
+**Migration 1 is additive only.** It adds `writtenBy` and changes nothing else — it carries
+no transform at all, because the format change *is* that the format is now recorded.
+
+**A migration may only carry a hook rig can run.** Today that is `config`, a `rig.json`
+transform. A migration carrying anything else — a `records:` hook for `work/*/work.json`,
+say — is refused rather than reported as applied, because `work.json` and the catalogue
+frontmatter are most of what the major means and neither has a migration mechanism yet.
+Writing one is the price of the first migration that needs it.
 
 ## Why migration 1 is additive, specifically
 

@@ -135,7 +135,8 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 An installation is a checkout nothing pulls. `rig doctor` fetches and reports the version,
 how far the tool checkout is behind its remote, and any pending record migrations; ordinary
 commands print one dim line from a cache a detached fetch wrote after the previous run, and
-never fetch on your time. `rig update` fast-forwards the tool checkout and the data root —
+never fetch on your time. That line goes to stderr, so it reaches you whether or not stdout
+is a terminal and never lands in a pipe someone is reading an answer out of. `rig update` fast-forwards the tool checkout and the data root —
 independently, fast-forward only, whichever is clean — runs pending migrations, prints what
 arrived and ends in the doctor checks.
 

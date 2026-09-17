@@ -57,8 +57,8 @@ rig doctor     # fetches and reports: version, distance from the remote, pending
 
 Between those, the check rides on your own usage: a command ends by spawning a detached
 fetch that caches the distance, and the next command prints one dim line if there is one to
-print. No timer, no daemon, no latency added to a command, and nothing to say when you are
-offline. `rig.json` turns it off or changes the interval for everyone
+print — on stderr, so piping a command's output somewhere does not swallow it. No timer, no
+daemon, no latency added to a command, and nothing to say when you are offline. `rig.json` turns it off or changes the interval for everyone
 (`"freshness": { "enabled": true, "everyHours": 24 }`); `rig.local.json` overrides it for
 one machine.
 
