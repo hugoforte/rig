@@ -1649,40 +1649,47 @@ cmds.prompt = ({ positional }) => {
 // Fast-forwards one of the two checkouts an installation is made of. Never merges and never
 // rebases: a diverged tree is yours to sort out, and moving it silently is how a commit gets
 // lost. A tree that cannot move is reported, not fatal — the other one still updates.
+// `clean` is reported separately from `status`: a tree with nothing to update is not the
+// same as a tree that is safe to commit into, and `rig update` migrates on the strength of
+// it. A local-only data root reaches 'current' without the question ever being asked.
 function updateCheckout (label, root) {
   const state = checkoutState(root)
-  if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return { status: 'current' } }
-  if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return { status: 'failed' } }
-  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current' } }
+  if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return { status: 'current', clean: false } }
+  if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return { status: 'failed', clean: false } }
   // Only tracked changes are counted. An untracked scratch file stops a fast-forward only
   // when the merge would overwrite it, and git says so itself in that case — refusing on any
   // untracked file means one stray file wedges the installation, and for the data root the
   // advice that follows would `git add -A` it and manufacture the divergence being avoided.
   const modified = git(root, 'status', '--porcelain', '--untracked-files=no').out.split('\n').filter(Boolean)
+  // Two different questions. `modified` is what stops a fast-forward. `clean` is what
+  // `commitDataRoot` would sweep up, and that is `git add -A` — untracked files included,
+  // so an unfinished note nobody staged makes the tree unsafe to migrate in.
+  const clean = state.dirty === 0
+  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
   if (modified.length) {
     const how = label === 'data root' ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
     warn(`${label}: ${modified.length} uncommitted change(s) — not updated${how}`)
-    return { status: 'failed' }
+    return { status: 'failed', clean }
   }
   const fetched = gitFetch(root)
-  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return { status: 'failed' } }
+  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return { status: 'failed', clean } }
   const from = git(root, 'rev-parse', 'HEAD').out
   const fetchedState = checkoutState(root)
-  if (fetchedState.behind === null) { warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed' } }
-  if (fetchedState.behind === 0) { ok(`${label}: already up to date`); return { status: 'current', from } }
+  if (fetchedState.behind === null) { warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean } }
+  if (fetchedState.behind === 0) { ok(`${label}: already up to date`); return { status: 'current', from, clean } }
   const ff = git(root, 'merge', '--ff-only', '@{u}')
   if (ff.code !== 0) {
     // Divergence is only one reason a fast-forward fails. For the others — a lock, a file in
     // the way — git's own words are the actionable part, and "rebase it by hand" is not.
     if (fetchedState.ahead) warn(`${label}: ${fetchedState.behind} behind and ${fetchedState.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`)
     else warn(`${label}: could not fast-forward ${fetchedState.behind} commit(s) (${firstLine(ff.err) || 'no detail from git'}) — not updated`)
-    return { status: 'failed' }
+    return { status: 'failed', clean }
   }
   ok(`${label}: fast-forwarded ${fetchedState.behind} commit(s)`)
   const arrived = git(root, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out.split('\n').filter(Boolean)
   for (const line of arrived.slice(0, 20)) say(`  ${C.dim(line)}`)
   if (arrived.length > 20) say(`  ${C.dim(`… and ${arrived.length - 20} more`)}`)
-  return { status: 'moved', from }
+  return { status: 'moved', from, clean }
 }
 
 cmds.update = ({ flags }) => {
@@ -1722,7 +1729,7 @@ cmds.update = ({ flags }) => {
   else {
     const data = updateCheckout('data root', root)
     if (data.status === 'failed') problems++
-    else dataRootClean = true
+    dataRootClean = data.clean
   }
 
   if (exists(repoConfigFile())) {
@@ -1847,7 +1854,7 @@ cmds.doctor = () => {
       ? `${dataRoot()} missing — check dataRoot in rig.local.json`
       : 'is inside the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
   })
-  if (split && exists(dataRoot())) {
+  if (split && exists(dataRoot()) && gv.code === 0) {
     const state = checkoutState(dataRoot())
     check('data root is a git checkout of its own', state.repo === 'own', {
       bad: state.repo === 'nested'
@@ -1925,8 +1932,11 @@ cmds.doctor = () => {
   if (drafts.length) say(`${C.yellow('!')} ${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.map(d => d.repo).join(', ')}`)
 
   const drive = cfg.workRoot.slice(0, 2)
-  const df = run('powershell', ['-NoProfile', '-Command',
-    `(Get-PSDrive ${drive[0]}).Free`])
+  // Probed before it is used: `run` dies on a command that is not there, and a missing
+  // optional tool must not cost doctor the verdict line that comes after it.
+  const df = onPath('powershell')
+    ? run('powershell', ['-NoProfile', '-Command', `(Get-PSDrive ${drive[0]}).Free`])
+    : { code: 1, out: '' }
   if (df.code === 0 && df.out) {
     const freeGb = Math.round(Number(df.out) / 1e9)
     check(`disk on ${drive}`, freeGb > 20,
