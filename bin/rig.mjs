@@ -181,7 +181,14 @@ const repoConfigJson = () => (exists(repoConfigFile()) ? readJson(repoConfigFile
 // means. `linked` is the copy running from a work's worktree — its git dir sits under the
 // main checkout's, which is how git itself tells the two apart.
 function toolState () {
-  if (git(RIG_ROOT, 'rev-parse', '--git-dir').code !== 0) return { repo: false }
+  // Ambient work on behalf of a command that has already run: no environment problem found
+  // here is this function's to report. `git` missing at all makes `git()` die, and doctor
+  // must live long enough to say so itself.
+  if (run('git', ['--version']).code !== 0) return { repo: false }
+  const top = git(RIG_ROOT, 'rev-parse', '--show-toplevel')
+  if (top.code !== 0) return { repo: false }
+  // A rig checked out *inside* another repo would otherwise report that repo's distance.
+  if (!sameDir(top.out, RIG_ROOT)) return { repo: true, nested: true }
   const gitDir = git(RIG_ROOT, 'rev-parse', '--absolute-git-dir').out
   const commonDir = path.resolve(RIG_ROOT, git(RIG_ROOT, 'rev-parse', '--git-common-dir').out)
   const branch = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'HEAD')
@@ -204,23 +211,48 @@ const freshnessCacheFile = cfg => path.join(cfg.workRoot, '.rig', 'freshness.jso
 const readFreshness = cfg => {
   try { return readJson(freshnessCacheFile(cfg)) } catch { return null }   // absent or half-written: measure again
 }
-// A cache nobody asked for must not turn every command into a complaint on a machine whose
-// work root is read-only, so a failed write is dropped and the next run measures again.
+// Written through a temp file and renamed: two commands can end at once, and a half-written
+// cache reads as due, which would put the refresh back in a loop. A cache nobody asked for
+// must not turn every command into a complaint on a machine whose work root is read-only, so
+// a failed write is dropped and the next run measures again — and it never creates the work
+// root, which is a thing `rig doctor` checks for and `rig init` makes.
 const writeFreshness = (cfg, measured) => {
-  try { writeJson(freshnessCacheFile(cfg), measured) } catch { /* disposable by design */ }
+  if (!exists(cfg.workRoot)) return
+  const file = freshnessCacheFile(cfg)
+  const tmp = `${file}.${process.pid}.tmp`
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(tmp, JSON.stringify(measured, null, 2) + '\n')
+    fs.renameSync(tmp, file)
+  } catch {
+    try { fs.rmSync(tmp, { force: true }) } catch { /* nothing left to try */ }
+  }
+}
+
+// A commit count, or null when git could not answer. Never 0 for "we do not know": a green
+// "up to date" on the strength of a failed command is the kind of quiet wrong answer this
+// whole feature exists to prevent.
+function countCommits (dir, range) {
+  const r = git(dir, 'rev-list', '--count', range)
+  if (r.code !== 0) return null
+  const n = Number(r.out)
+  return Number.isFinite(n) ? n : null
 }
 
 // Distance from the upstream *as last fetched* — the caller decides whether to fetch first.
+// `behind: null` means unmeasurable, and reads as "nothing to say" everywhere downstream.
 const measureFreshness = state => ({
   sha: state.head,
   remote: state.upstream,
-  behind: Number(git(RIG_ROOT, 'rev-list', '--count', 'HEAD..@{u}').out) || 0,
+  behind: countCommits(RIG_ROOT, 'HEAD..@{u}'),
   checkedAt: new Date().toISOString(),
 })
 
 // Spawns the refresh and returns: the fetch outlives this process, writes the cache, and the
 // *next* command reads it. Detached with no stdio of its own — inheriting the parent's would
-// keep a piped `rig prompt` from ever closing.
+// keep a piped `rig prompt` from ever closing. The child never arms another (see
+// `freshnessEpilogue`); an unreachable remote is the ordinary case, and a chain of detached
+// processes retrying it forever is not something a user would ever see to stop.
 function refreshFreshnessInBackground () {
   try {
     spawn(process.execPath, [fileURLToPath(import.meta.url), 'freshness-refresh'],
@@ -229,20 +261,30 @@ function refreshFreshnessInBackground () {
 }
 
 // The end of every command: one dim line read from the cache — never a fetch, so it cannot
-// add latency or hang — and then, at most once per configured interval, the refresh that
-// makes the next run's line true.
+// add latency — and then, at most once per configured interval, the refresh that makes the
+// next run's line true. Runs outside the command's own error handling, so nothing in here may
+// throw: a freshness check has no business turning a command that worked into a stack trace.
 function freshnessEpilogue (command) {
-  let cfg
-  try { cfg = config() } catch { return }   // a config too broken to read is the command's problem, not this one's
-  if (!cfg.freshness.enabled) return
-  const state = toolState()
-  if (skipReason(state)) return
-  const cache = readFreshness(cfg)
-  if (announces(command, { enabled: cfg.freshness.enabled, tty: process.stdout.isTTY })) {
-    const line = staleLine(cache, state.head)
+  // The refresh is the check. If it armed another, a remote nobody can reach would spawn a
+  // chain of detached processes with no one to stop it.
+  if (command === 'freshness-refresh') return
+  try {
+    const cfg = config()
+    if (!cfg.freshness.enabled) return
+    // Cheap first: most runs have nothing to say and nothing to do, and toolState costs six
+    // git spawns.
+    const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
+    if (head.code !== 0) return
+    const cache = readFreshness(cfg)
+    const due = dueForRefresh(cache, cfg.freshness.everyHours)
+    const line = announces(command, { enabled: cfg.freshness.enabled, tty: process.stdout.isTTY })
+      ? staleLine(cache, head.out)
+      : null
+    if (!due && !line) return
+    if (skipReason(toolState())) return
     if (line) say(C.dim(`· ${line}`))
-  }
-  if (dueForRefresh(cache, cfg.freshness.everyHours)) refreshFreshnessInBackground()
+    if (due) refreshFreshnessInBackground()
+  } catch { /* ambient: a command that has already finished must not fail because of this */ }
 }
 
 // Commands that write records. The distinction drives the write gate — an old rig must not
@@ -814,8 +856,8 @@ function checkoutState (root) {
     repo: 'own',
     branch: branch.code === 0 ? branch.out : null,
     upstream,
-    ahead: upstream ? Number(git(root, 'rev-list', '--count', '@{u}..HEAD').out) : 0,
-    behind: upstream ? Number(git(root, 'rev-list', '--count', 'HEAD..@{u}').out) : 0,
+    ahead: upstream ? countCommits(root, '@{u}..HEAD') : 0,
+    behind: upstream ? countCommits(root, 'HEAD..@{u}') : 0,
     dirty: git(root, 'status', '--porcelain').out.split('\n').filter(Boolean).length,
   }
 }
@@ -908,7 +950,9 @@ The data root for [rig](https://github.com/hugoforte/rig): the repo catalogue, t
 rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records commit straight to \`main\`; rig reads the working tree, so a record on a branch is invisible until merged.
 `)
   }
-  if (!exists(path.join(target, 'rig.json'))) writeJson(path.join(target, 'rig.json'), { orgs: [], tracker: {} })
+  // Stamped at birth: a data root this rig just created is in this rig's record format, and
+  // must not greet its owner with a pending migration.
+  if (!exists(path.join(target, 'rig.json'))) writeJson(path.join(target, 'rig.json'), { orgs: [], tracker: {}, writtenBy: version() })
   // Every mutating command will `git add -A` here and push, so the hard guards against
   // a secret landing beside a context doc go in before the first commit.
   if (!exists(path.join(target, '.gitignore'))) {
@@ -1014,7 +1058,7 @@ cmds.init = ({ flags }) => {
   const repoCfg = path.join(targetDataRoot, 'rig.json')
   let repoJson = exists(repoCfg) ? readJson(repoCfg) : null
   if (typeof flags.orgs === 'string' || typeof flags.tracker === 'string') {
-    const next = repoJson || { orgs: [], tracker: {} }
+    const next = repoJson || { orgs: [], tracker: {}, writtenBy: version() }
     if (typeof flags.orgs === 'string') {
       const added = flags.orgs.split(',').map(s => s.trim()).filter(Boolean)
       next.orgs = [...new Set([...(next.orgs || []), ...added])]
@@ -1533,24 +1577,26 @@ cmds.prompt = ({ positional }) => {
 // lost. A tree that cannot move is reported, not fatal — the other one still updates.
 function updateCheckout (label, root) {
   const state = checkoutState(root)
-  if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return }
-  if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return }
-  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return }
-  if (state.dirty) { warn(`${label}: ${state.dirty} uncommitted change(s) — not updated${label === 'data root' ? ', run `rig save`' : ''}`); return }
+  if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return false }
+  if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return false }
+  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return false }
+  if (state.dirty) { warn(`${label}: ${state.dirty} uncommitted change(s) — not updated${label === 'data root' ? ', run `rig save`' : ''}`); return false }
   const fetched = git(root, 'fetch', '-q')
-  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return }
+  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return false }
   const from = git(root, 'rev-parse', 'HEAD').out
   const fetchedState = checkoutState(root)
-  if (!fetchedState.behind) { ok(`${label}: already up to date`); return }
+  if (fetchedState.behind === null) { warn(`${label}: could not measure the distance from its upstream — not updated`); return false }
+  if (fetchedState.behind === 0) { ok(`${label}: already up to date`); return false }
   const ff = git(root, 'merge', '--ff-only', '@{u}')
   if (ff.code !== 0) {
     warn(`${label}: ${fetchedState.behind} commit(s) behind but the branch has diverged — not updated; merge or rebase it by hand in ${root}`)
-    return
+    return false
   }
   ok(`${label}: fast-forwarded ${fetchedState.behind} commit(s)`)
   for (const line of git(root, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out.split('\n').filter(Boolean)) {
     say(`  ${C.dim(line)}`)
   }
+  return true
 }
 
 cmds.update = () => {
@@ -1558,7 +1604,16 @@ cmds.update = () => {
   const tool = toolState()
   if (tool.linked) {
     warn(`this is the copy in a worktree (${RIG_ROOT}) — updating it would move your work's branch, not the installation. Run \`rig update\` from the installed checkout.`)
-  } else updateCheckout('tool', RIG_ROOT)
+  } else if (updateCheckout('tool', RIG_ROOT) && !process.env.RIG_UPDATE_RESTARTED) {
+    // This process is running the code that was here a moment ago: its migration list, its
+    // doctor checks and its version are all the old ones. Hand the rest of the update to what
+    // just arrived. RIG_UPDATE_RESTARTED makes that exactly one hop.
+    say(`${C.dim('·')} ${C.dim('the tool moved — continuing with the code that just arrived')}`)
+    const again = spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin', 'rig.mjs'), 'update'],
+      { stdio: 'inherit', env: { ...process.env, RIG_UPDATE_RESTARTED: '1' } })
+    process.exitCode = again.status ?? 1
+    return
+  }
 
   const root = dataRoot()
   if (insideDir(root, RIG_ROOT)) warn('data root is inside the tool checkout — not set up; run `rig prompt setup`')
@@ -1590,7 +1645,15 @@ cmds['freshness-refresh'] = () => {
   const cfg = config()
   const state = toolState()
   if (skipReason(state)) return
-  if (git(RIG_ROOT, 'fetch', '-q').code !== 0) return
+  // No terminal to prompt on: a fetch that stopped for credentials would leave one stuck
+  // process behind per command.
+  const fetched = run('git', ['-C', RIG_ROOT, 'fetch', '-q'], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+  // A failed check is still a check: stamping it means an unreachable remote is retried once
+  // per interval rather than at the end of every command.
+  if (fetched.code !== 0) {
+    writeFreshness(cfg, { sha: state.head, remote: state.upstream, behind: null, checkedAt: new Date().toISOString() })
+    return
+  }
   writeFreshness(cfg, measureFreshness(state))
 }
 
@@ -1624,10 +1687,14 @@ cmds.doctor = () => {
     } else {
       const measured = measureFreshness(tool)
       writeFreshness(cfg, measured)
-      check('installed rig', measured.behind === 0, {
-        ok: `up to date with ${tool.upstream}`,
-        bad: `${measured.behind} commit(s) behind ${tool.upstream} — run \`rig update\``,
-      })
+      if (measured.behind === null) {
+        say(`${C.dim('·')} ${C.dim(`freshness not checked — git could not measure the distance from ${tool.upstream}`)}`)
+      } else {
+        check('installed rig', measured.behind === 0, {
+          ok: `up to date with ${tool.upstream}`,
+          bad: `${measured.behind} commit(s) behind ${tool.upstream} — run \`rig update\``,
+        })
+      }
     }
   }
 
@@ -1809,8 +1876,9 @@ if (isMain) {
   }
   currentCommand = cmdName
   try {
+    const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
     if (MUTATING.has(cmdName)) prepareDataRoot()
-    await cmd(parseArgs(rest))
+    await cmd(args)
   } catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
     console.error(`${C.red('✗')} ${e.message}`)

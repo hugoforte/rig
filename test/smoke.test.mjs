@@ -94,7 +94,9 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   // Every mutating command will `git add -A` here and push; the hard guards come first.
   assert.match(fs.readFileSync(path.join(dataRoot, '.gitignore'), 'utf8'), /^\*\.env$/m)
   assert.equal(lastCommit(dataRoot), 'rig init: rig.json', 'the org-level half is committed by init itself')
-  assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')), { orgs: ['acme'], tracker: { acme: { kind: 'none' } } })
+  assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')),
+    { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' },
+    'a data root rig just created is stamped with the format it writes, not one behind')
   const local = readJson(path.join(tool, 'rig.local.json'))
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
@@ -539,18 +541,21 @@ test('the real global git config was never touched', () => {
   assert.equal(r.stdout.trim(), 'true')
 })
 
-test('a mutating command says the data root is in an older record format', () => {
-  const r = rig(['save', '--work', 't7', '-m', 'a note'])
-  assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /record format 0, this rig writes 1/)
-})
+test('a data root from before stamping is warned about, then migrated by update', () => {
+  const file = path.join(dataRoot, 'rig.json')
+  const { writtenBy, ...unstamped } = readJson(file)   // as a rig from before this check left it
+  assert.equal(writtenBy, '1.0.0')
+  fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
 
-test('update migrates the data root, stamps what wrote it, and commits that itself', () => {
-  const r = rig(['update'])
-  assert.match(r.out, /migrated: stamp the data root/)
-  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, '1.0.0')
+  const warned = rig(['save', '--work', 't7', '-m', 'a note'])
+  assert.equal(warned.code, 0, warned.out)
+  assert.match(warned.out, /record format 0, this rig writes 1/)
+
+  const updated = rig(['update'])
+  assert.match(updated.out, /migrated: stamp the data root/)
+  assert.equal(readJson(file).writtenBy, '1.0.0')
   assert.equal(dirty(dataRoot), '', 'the migration is committed, not left in the tree')
-  assert.match(r.out, /record format 1, last written by rig 1\.0\.0/, 'the doctor checks run inline')
+  assert.match(updated.out, /record format 1, last written by rig 1\.0\.0/, 'the doctor checks run inline')
 })
 
 test('a second update migrates nothing', () => {

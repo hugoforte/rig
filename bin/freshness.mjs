@@ -2,8 +2,10 @@
 //
 // The check rides on your own usage — no timer, no hook, no daemon. A command ends by
 // spawning a detached refresh that fetches and writes a cache; the *next* command reads
-// that cache and prints one dim line. One run of lag, in exchange for never adding latency
-// to a command and never hanging on a machine with no network. `rig doctor` is the
+// that cache and prints one dim line. One run of lag, in exchange for a command that never
+// waits on a fetch: the fetch that can be slow, prompt for credentials or fail outright
+// happens in a process nobody is waiting for, and a failed check is stamped so an unreachable
+// remote is retried once per interval rather than after every command. `rig doctor` is the
 // exception: it fetches live, because a health check you asked for should answer about now.
 //
 // Everything here is a decision about state someone else gathered — no git, no fs — so the
@@ -22,6 +24,7 @@ export const QUIET_COMMANDS = new Set(['prompt', 'help', 'doctor', 'update', 'fr
 // against the default branch and warn on every command for the life of the work.
 export function skipReason (state) {
   if (!state?.repo) return 'the tool is not a git checkout'
+  if (state.nested) return 'the tool is a directory inside another checkout'
   if (state.linked) return 'the tool is running from a linked worktree'
   if (!state.branch) return 'the tool checkout is on a detached HEAD'
   if (state.defaultBranch && state.branch !== state.defaultBranch) {
