@@ -1495,18 +1495,21 @@ cmds.detach = ({ flags, positional }) => {
 
 function repoState (cfg, entry, branch) {
   const s = { repo: entry.repo, missing: !exists(entry.path), dirty: 0, ahead: 0, behind: 0, pr: null }
-  if (s.missing) return s
-  s.dirty = git(entry.path, 'status', '--porcelain').out.split('\n').filter(Boolean).length
-  const up = git(entry.path, 'rev-parse', '--abbrev-ref', '@{u}')
-  const ref = up.code === 0 ? '@{u}' : `refs/remotes/origin/${entry.base}`
-  const counts = git(entry.path, 'rev-list', '--left-right', '--count', `${ref}...HEAD`)
-  if (counts.code === 0) {
-    const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-    s.behind = behind || 0
-    s.ahead = ahead || 0
+  if (!s.missing) {
+    s.dirty = git(entry.path, 'status', '--porcelain').out.split('\n').filter(Boolean).length
+    const up = git(entry.path, 'rev-parse', '--abbrev-ref', '@{u}')
+    const ref = up.code === 0 ? '@{u}' : `refs/remotes/origin/${entry.base}`
+    const counts = git(entry.path, 'rev-list', '--left-right', '--count', `${ref}...HEAD`)
+    if (counts.code === 0) {
+      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
+      s.behind = behind || 0
+      s.ahead = ahead || 0
+    }
   }
-  // One repo GitHub cannot answer for must not take the whole listing down; the caller
-  // shows the state as unknown, and `close` treats unknown as a blocker.
+  // The lookup only needs org/repo/branch, so it runs even with the worktree missing — a repo
+  // whose folder is gone can still have an open PR. One repo GitHub cannot answer for must not
+  // take the whole listing down; the caller shows the state as unknown, and `close` treats
+  // unknown as a blocker.
   s.prError = trackerFailure(() => { s.pr = github().prForBranch(entry.org, entry.repo, branch) })
   return s
 }
@@ -1621,11 +1624,12 @@ cmds.close = ({ flags }) => {
   const blockers = []
   const states = []
   for (const r of work.repos) {
-    const s = repoState(cfg, r, work.branch)   // handles a missing worktree itself
+    const s = repoState(cfg, r, work.branch)
     states.push(s)
-    if (s.missing) continue
-    if (s.dirty) blockers.push(`${r.repo}: ${s.dirty} uncommitted change(s)`)
-    if (s.ahead) blockers.push(`${r.repo}: ${s.ahead} unpushed commit(s)`)
+    if (!s.missing) {
+      if (s.dirty) blockers.push(`${r.repo}: ${s.dirty} uncommitted change(s)`)
+      if (s.ahead) blockers.push(`${r.repo}: ${s.ahead} unpushed commit(s)`)
+    }
     if (s.pr && s.pr.state === 'OPEN') blockers.push(`${r.repo}: PR #${s.pr.number} still open`)
     if (s.prError) blockers.push(`${r.repo}: PR state unknown (${s.prError})`)
   }

@@ -557,6 +557,26 @@ test('when gh cannot answer, status and list say the PR state is unknown, and cl
   setGithub(state)
 })
 
+test('close refuses on an open PR even when the repo\'s worktree folder is already gone', () => {
+  const state = github()
+  state.repos['acme/billing'].prs[0].state = 'OPEN'
+  setGithub(state)
+  const billing = path.join(workRoot, 'old', 'billing')
+  fs.rmSync(billing, { recursive: true, force: true })
+
+  const r = rig(['close', '--work', 'old'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: PR #12 still open/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 'old', 'work.json')).closedAt, undefined, 'not closed')
+
+  // Recreate the worktree so the later close-and-teardown test still exercises that path.
+  fs.mkdirSync(billing, { recursive: true })
+  const g = gitIn(billing, 'init', '-q', '-b', 'main')
+  assert.equal(g.status, 0, g.stderr)
+  state.repos['acme/billing'].prs[0].state = 'MERGED'
+  setGithub(state)
+})
+
 test('close with every PR merged comments on the GitHub ticket and closes it', () => {
   const r = rig(['close', '--work', 'old'])
   assert.equal(r.code, 0, r.out)
