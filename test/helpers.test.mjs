@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -175,4 +175,27 @@ test('nextStatusAfterAttach: planning moves to in-progress on the first repo, no
 test('nextStatusAfterAttach: any other status is left alone', () => {
   assert.equal(nextStatusAfterAttach({ status: 'designed', repos: [] }), 'designed')
   assert.equal(nextStatusAfterAttach({ status: 'closed', repos: [] }), 'closed')
+})
+
+test('countCommits: a range git cannot answer is unknown, never zero', () => {
+  // The invariant the whole freshness feature rests on. `Number(…) || 0` here reports a green
+  // "up to date" on the strength of a command that did not run, and three callers downstream
+  // lose their "could not measure" branch at the same time.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-count-'))
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
+  const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
+  try {
+    const repo = path.join(tmp, 'repo'); fs.mkdirSync(repo)
+    assert.equal(git(repo, 'init', '-q', '-b', 'main').status, 0)
+    fs.writeFileSync(path.join(repo, 'a.md'), 'one\n')
+    assert.equal(git(repo, 'add', '-A').status, 0)
+    assert.equal(git(repo, '-c', 'user.email=t@e.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'one').status, 0)
+
+    assert.equal(countCommits(repo, 'HEAD..HEAD'), 0, 'a range git can answer is a number')
+    assert.equal(countCommits(repo, 'refs/remotes/origin/gone..HEAD'), null, 'a ref that is not there is unknown')
+    assert.equal(countCommits(path.join(tmp, 'not-a-repo'), 'HEAD..HEAD'), null)
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
 })

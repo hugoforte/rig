@@ -400,6 +400,27 @@ test('with an upstream, a mutating command pushes, rebasing over what others pus
   assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
 })
 
+test('a mutating command fast-forwards a data root another machine moved', () => {
+  // The correctness half of this feature: rig pushed the data root but never pulled it, so a
+  // second machine read stale records and wrote on top of them. Nothing else reaches the
+  // plain behind-and-clean path — the tests either side of this one are behind *and* dirty,
+  // or behind *and* ahead, which take different branches.
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, 'FROM-THE-OTHER-MACHINE.md'), 'written elsewhere')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', 'the other machine moved ahead').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+
+  const landed = path.join(dataRoot, 'FROM-THE-OTHER-MACHINE.md')
+  assert.equal(fs.existsSync(landed), false, 'not here yet')
+
+  const r = rig(['save', '--work', 't7', '-m', 'after the other machine moved'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
+  assert.ok(fs.existsSync(landed), 'and the command ran against the updated tree, not the stale one')
+})
+
 test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
   const remote = path.join(tmp, 'rig-data-remote.git')
   const other = path.join(tmp, 'other-machine')

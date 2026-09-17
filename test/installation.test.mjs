@@ -137,6 +137,46 @@ test('update fast-forwards the installation, names what arrived, and hands over 
   assert.match(r.out, /installed rig .*up to date/, 'the doctor checks ran, from the new code')
 })
 
+test('update hands over to the code that arrived, not the code that started it', () => {
+  // Asserting the announcement is not enough: remove the hop but keep the message and this
+  // process carries on, holding the migration list that was on disk before the fetch. Only
+  // the arrived code knows about the migration pushed below.
+  const clone = path.join(tmp, 'push-migration')
+  assert.equal(git(tmp, 'clone', '-q', origin, clone).status, 0)
+  const versionFile = path.join(clone, 'bin', 'version.mjs')
+  const before = fs.readFileSync(versionFile, 'utf8')
+  assert.match(before, /^\]$/m, 'the marker the test appends to still exists')
+  // Appended, not prepended: a migration's position in the list *is* its major.
+  fs.writeFileSync(versionFile, before.replace(/^\]$/m,
+    "  { name: 'a migration that arrived with the update' },\n]"))
+  const pkgFile = path.join(clone, 'package.json')
+  fs.writeFileSync(pkgFile, fs.readFileSync(pkgFile, 'utf8').replace(/"version": "\d+/, '"version": "2'))
+  assert.equal(git(clone, 'add', '-A').status, 0)
+  assert.equal(git(clone, 'commit', '-q', '-m', 'a release that adds a migration').status, 0)
+  assert.equal(git(clone, 'push', '-q').status, 0)
+
+  const r = rig(['update'])
+  assert.match(r.out, /migrated: a migration that arrived with the update/,
+    'the migration list that ran came from the code the update fetched')
+  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, '2.0.0',
+    'and the stamp moved to the format that arrived')
+})
+
+test('a command that needs no git still finishes on a machine with no git on PATH', () => {
+  // The freshness epilogue runs outside `main`'s error handling and calls git, and `run`
+  // throws when git is absent. Without the epilogue's own guard, `rig help` ends in a stack
+  // trace on a machine that never had git.
+  const noGit = { ...env }
+  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
+  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
+  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'help'],
+    { encoding: 'utf8', env: noGit })
+  const out = strip(r.stdout + r.stderr)
+  assert.equal(r.status, 0, out)
+  assert.match(out, /cross-repo work harness/, 'the command itself answered')
+  assert.doesNotMatch(out, /not found on PATH/, 'and nothing leaked out of the epilogue')
+})
+
 test('update refuses a tool checkout with uncommitted changes, and still updates the data root', () => {
   pushToOrigin('another machine, commit 2')
   fs.appendFileSync(path.join(install, 'bin', 'rig.mjs'), '\n// local hack\n')

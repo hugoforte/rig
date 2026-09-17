@@ -1704,8 +1704,11 @@ cmds.update = ({ flags }) => {
       say(`${C.dim('·')} ${C.dim('the tool moved — continuing with the code that just arrived')}`)
       const again = spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin', 'rig.mjs'), 'update', '--restarted'],
         { stdio: 'inherit' })
-      if (again.status !== 0) {
-        warn(`the update landed, but the rig that arrived did not run — \`git -C ${RIG_ROOT} reset --hard ${moved.from}\` puts the previous one back`)
+      // A non-zero exit here is usually the doctor checks reporting problems, which is a
+      // healthy update. It means a broken release only when the arrived code cannot run at
+      // all — so ask it for the one command that needs nothing, and believe that instead.
+      if (again.status !== 0 && run(process.execPath, [path.join(RIG_ROOT, 'bin', 'rig.mjs'), 'help']).code !== 0) {
+        warn(`the update landed, but the rig that arrived does not run — \`git -C ${RIG_ROOT} reset --hard ${moved.from}\` puts the previous one back`)
       }
       process.exitCode = again.status ?? 1
       return
@@ -1978,7 +1981,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 // Pure helpers, importable by tests. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
