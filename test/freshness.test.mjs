@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { QUIET_COMMANDS, skipReason, dueForRefresh, staleLine, announces } from '../bin/freshness.mjs'
 
-const onMain = { repo: true, linked: false, branch: 'main', defaultBranch: 'main', upstream: true }
+// Shaped like what `toolState` actually returns: `branch`, `defaultBranch` and `upstream` are
+// strings or null, never booleans.
+const onMain = { repo: true, linked: false, branch: 'main', defaultBranch: 'main', upstream: 'origin/main' }
 
 test('a checkout on its default branch with an upstream is judged', () => {
   assert.equal(skipReason(onMain), null)
@@ -16,10 +18,17 @@ test('a feature branch is not behind the default branch, it is elsewhere', () =>
   assert.match(skipReason({ ...onMain, branch: 'feat/x' }), /on feat\/x, not main/)
 })
 
+test('a default branch the tool could not confirm never vetoes', () => {
+  // `toolState` passes null when `origin/HEAD` names a branch that no longer exists, which
+  // is what a renamed default leaves behind. Without this the check switched off for good.
+  assert.equal(skipReason({ ...onMain, branch: 'main', defaultBranch: null }), null)
+  assert.equal(skipReason({ ...onMain, branch: 'master', defaultBranch: null }), null)
+})
+
 test('a detached HEAD, an unversioned tree and a remoteless checkout are all skipped', () => {
   assert.match(skipReason({ ...onMain, branch: null }), /detached HEAD/)
   assert.match(skipReason({ repo: false }), /not a git checkout/)
-  assert.match(skipReason({ ...onMain, upstream: false }), /no upstream/)
+  assert.match(skipReason({ ...onMain, upstream: null }), /no upstream/)
 })
 
 test('a refresh is due once the interval has passed', () => {

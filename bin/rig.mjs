@@ -47,6 +47,10 @@ function run (cmd, args, opts = {}) {
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
 
+// Is the command on PATH at all? `run` dies when it is not, which is right for every caller
+// that needs it — except the ones whose whole job is to report that it is missing.
+const onPath = cmd => !spawnSync(cmd, ['--version'], { encoding: 'utf8', windowsHide: true }).error
+
 function must (cmd, args, opts = {}) {
   const r = run(cmd, args, opts)
   if (r.code !== 0) die(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
@@ -194,9 +198,10 @@ const repoConfigJson = () => (exists(repoConfigFile()) ? readJson(repoConfigFile
 // main checkout's, which is how git itself tells the two apart.
 function toolState () {
   // Ambient work on behalf of a command that has already run: no environment problem found
-  // here is this function's to report. `git` missing at all makes `git()` die, and doctor
-  // must live long enough to say so itself.
-  if (run('git', ['--version']).code !== 0) return { repo: false }
+  // here is this function's to report. So the probe must not be `run`, which dies when git is
+  // absent — doctor calls this before it reaches its own `git` check, and has to live long
+  // enough to make it.
+  if (!onPath('git')) return { repo: false }
   const top = git(RIG_ROOT, 'rev-parse', '--show-toplevel')
   if (top.code !== 0) return { repo: false }
   // A rig checked out *inside* another repo would otherwise report that repo's distance.
@@ -204,7 +209,13 @@ function toolState () {
   const gitDir = git(RIG_ROOT, 'rev-parse', '--absolute-git-dir').out
   const commonDir = path.resolve(RIG_ROOT, git(RIG_ROOT, 'rev-parse', '--git-common-dir').out)
   const branch = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'HEAD')
+  // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the remote
+  // renames its default branch the ref names one that no longer exists, so it is believed
+  // only when the branch it points at is still there.
   const originHead = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
+  const defaultBranch = originHead.code === 0 ? originHead.out.replace(/^origin\//, '') : null
+  const defaultBranchLives = defaultBranch !== null &&
+    git(RIG_ROOT, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${defaultBranch}`).code === 0
   const upstream = git(RIG_ROOT, 'rev-parse', '--abbrev-ref', '@{u}')
   // On an unborn HEAD git exits 128 and echoes the token `HEAD`, which would be printed as
   // though it were a sha and stamped into the cache as one.
@@ -213,7 +224,7 @@ function toolState () {
     repo: true,
     linked: !sameDir(gitDir, commonDir),
     branch: branch.code === 0 ? branch.out : null,
-    defaultBranch: originHead.code === 0 ? originHead.out.replace(/^origin\//, '') : null,
+    defaultBranch: defaultBranchLives ? defaultBranch : null,
     upstream: upstream.code === 0 ? upstream.out : null,
     head: head.code === 0 ? head.out : null,
   }
@@ -1775,6 +1786,12 @@ cmds.doctor = () => {
     else { warn(`${label}${detail.bad ? ` — ${detail.bad}` : ''}`); problems++ }
   }
 
+  // The two things everything below needs, reported before anything that needs them: doctor
+  // used to reach `toolState` first and die there when git was absent, saying nothing at all.
+  check('node', true, { ok: process.version })
+  const gv = onPath('git') ? run('git', ['--version']) : { code: 1, out: '' }
+  check('git', gv.code === 0, { ok: gv.out, bad: 'not on PATH' })
+
   const tool = toolState()
   say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${tool.head ? ` (${tool.head.slice(0, 7)})` : ''}`)}`)
   // The one command that fetches before answering: a health check you asked for should
@@ -1799,9 +1816,6 @@ cmds.doctor = () => {
     }
   }
 
-  check('node', true, { ok: process.version })
-  const gv = run('git', ['--version'])
-  check('git', gv.code === 0, { ok: gv.out })
   const auth = github().auth()
   check('gh authenticated', auth === 'ok',
     { bad: auth === 'missing' ? 'gh not on PATH' : 'PR state and org resolution will not work' })
@@ -1809,12 +1823,16 @@ cmds.doctor = () => {
     check('twg present', jira().present(), { bad: 'Jira ticket creation, fetch and write-back will not work' })
   }
 
-  const lp = run('git', ['config', '--global', 'core.longpaths'])
-  check('core.longpaths', lp.out === 'true',
-    { bad: 'run `rig init`; deep node_modules paths will break without it' })
+  // Skipped rather than attempted without git: doctor is the command you run *because*
+  // something is wrong, so it has to reach the end and report everything it can.
+  if (gv.code === 0) {
+    const lp = run('git', ['config', '--global', 'core.longpaths'])
+    check('core.longpaths', lp.out === 'true',
+      { bad: 'run `rig init`; deep node_modules paths will break without it' })
 
-  const sym = run('git', ['config', '--get', 'core.symlinks'])
-  if (sym.out === 'false') say(`${C.dim('·')} ${C.dim('core.symlinks=false — by design, rig never symlinks')}`)
+    const sym = run('git', ['config', '--get', 'core.symlinks'])
+    if (sym.out === 'false') say(`${C.dim('·')} ${C.dim('core.symlinks=false — by design, rig never symlinks')}`)
+  }
 
   check('config file', exists(LOCAL_CONFIG), { bad: `${LOCAL_CONFIG} missing — run \`rig init\`` })
   check('work root', exists(cfg.workRoot), { ok: cfg.workRoot, bad: `${cfg.workRoot} missing` })
