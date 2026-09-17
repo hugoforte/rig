@@ -130,6 +130,21 @@ rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
 
+## Staying up to date
+
+An installation is a checkout nothing pulls. `rig doctor` fetches and reports the version,
+how far the tool checkout is behind its remote, and any pending record migrations; ordinary
+commands print one dim line from a cache a detached fetch wrote after the previous run, and
+never fetch on your time. `rig update` fast-forwards the tool checkout and the data root —
+independently, fast-forward only, whichever is clean — runs pending migrations, prints what
+arrived and ends in the doctor checks.
+
+The **major version is the record format** (`docs/adr/0002-…`): a rig older than the data
+root refuses mutating commands and still answers read-only ones. Mutating commands
+fast-forward the data root before they read it, so a second machine no longer works from
+stale records. The copy of rig inside a work's `rig` worktree is never judged for
+freshness — it is on a feature branch by design.
+
 ## Closing
 
 ```bash

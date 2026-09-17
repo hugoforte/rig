@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, dataRootState,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -36,21 +36,25 @@ test('parseArgs: an unknown short flag fails rather than swallowing a positional
   assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
 })
 
-test('dataRootState: a plain directory, a checkout of its own, and a directory nested in another repo', () => {
+test('checkoutState: a plain directory, a checkout of its own, and a directory nested in another repo', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-state-'))
   const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
   const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
   try {
     const plain = path.join(tmp, 'plain'); fs.mkdirSync(plain)
-    assert.equal(dataRootState(plain).repo, 'none')
+    assert.equal(checkoutState(plain).repo, 'none')
 
     const own = path.join(tmp, 'own'); fs.mkdirSync(own)
     assert.equal(git(own, 'init', '-q', '-b', 'main').status, 0)
-    assert.deepEqual(dataRootState(own), { repo: 'own', branch: 'main', upstream: false, ahead: 0 })
+    assert.deepEqual(checkoutState(own),
+      { repo: 'own', branch: 'main', upstream: false, ahead: 0, behind: 0, dirty: 0 })
+
+    fs.writeFileSync(path.join(own, 'untracked.md'), 'not committed\n')
+    assert.equal(checkoutState(own).dirty, 1, 'an uncommitted change is what stops an update')
 
     const nested = path.join(own, 'notes', 'rig-data'); fs.mkdirSync(nested, { recursive: true })
-    const state = dataRootState(nested)
+    const state = checkoutState(nested)
     assert.equal(state.repo, 'nested')
     // git prints the long real path; the temp dir may be an 8.3 short name (CI on Windows).
     assert.equal(fs.realpathSync.native(state.top).toLowerCase(), fs.realpathSync.native(own).toLowerCase())

@@ -45,6 +45,27 @@ node D:\rig\bin\rig.mjs init --data-repo owner/rig-data --email you@work.example
 
 Zero dependencies — Node 18+ and `git`, plus `gh` for PR state and org resolution and, for a Jira-tracked org, `twg` for ticket create/fetch/write-back.
 
+## Staying up to date
+
+An installation is a checkout, and nothing pulls it for you. rig keeps track of how far
+behind it is and brings it forward on request:
+
+```bash
+rig update     # fast-forward the tool checkout and the data root, migrate, then the doctor checks
+rig doctor     # fetches and reports: version, distance from the remote, pending migrations
+```
+
+Between those, the check rides on your own usage: a command ends by spawning a detached
+fetch that caches the distance, and the next command prints one dim line if there is one to
+print. No timer, no daemon, no latency added to a command, and nothing to say when you are
+offline. `rig.json` turns it off or changes the interval for everyone
+(`"freshness": { "enabled": true, "everyHours": 24 }`); `rig.local.json` overrides it for
+one machine.
+
+The major version is the record format, so rig can tell whether it may safely write into a
+data root another machine has already moved on: an older rig refuses to write and still
+reads. See [docs/adr/0002](docs/adr/0002-the-major-version-is-the-record-format.md).
+
 ## Tests
 
 ```

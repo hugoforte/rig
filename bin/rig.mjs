@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // rig — cross-repo work harness. Zero dependencies by design; see DESIGN.md §2.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
+import { MAJOR, toolVersion, dataMajor, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
+import { DEFAULT_FRESHNESS, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -153,6 +155,9 @@ function config () {
   delete local.orgs
   const cfg = Object.assign({}, DEFAULT_CONFIG, repo, local)
   cfg.mirrorRoot = cfg.mirrorRoot || path.join(cfg.workRoot, '.mirrors')
+  // Policy lives in the data root so it travels to every machine; a machine that wants to
+  // handle updates its own way overrides one key locally, rather than the whole object.
+  cfg.freshness = Object.assign({}, DEFAULT_FRESHNESS, repo.freshness, local.freshness)
   cfg.localOrgsIgnored = localOrgsIgnored
   return cfg
 }
@@ -163,6 +168,124 @@ const recordFile = id => path.join(recordDir(id), 'work.json')
 const contextFile = id => path.join(recordDir(id), 'context.md')
 const planFile = id => path.join(recordDir(id), 'rollout-testing-plan.md')
 const mirrorPath = (cfg, org, repo) => path.join(cfg.mirrorRoot, org, `${repo}.git`)
+
+// ----------------------------------------------------- version & freshness
+
+const packageFile = path.join(RIG_ROOT, 'package.json')
+const version = () => toolVersion(exists(packageFile) ? readJson(packageFile) : {})
+// rig.json as it sits on disk. `config()` merges it with the machine's file; the record
+// format is a property of the data root alone, so the gate reads it unmerged.
+const repoConfigJson = () => (exists(repoConfigFile()) ? readJson(repoConfigFile()) : {})
+
+// What the tool checkout is, as far as freshness goes; freshness.mjs decides what that
+// means. `linked` is the copy running from a work's worktree — its git dir sits under the
+// main checkout's, which is how git itself tells the two apart.
+function toolState () {
+  if (git(RIG_ROOT, 'rev-parse', '--git-dir').code !== 0) return { repo: false }
+  const gitDir = git(RIG_ROOT, 'rev-parse', '--absolute-git-dir').out
+  const commonDir = path.resolve(RIG_ROOT, git(RIG_ROOT, 'rev-parse', '--git-common-dir').out)
+  const branch = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'HEAD')
+  const originHead = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
+  const upstream = git(RIG_ROOT, 'rev-parse', '--abbrev-ref', '@{u}')
+  return {
+    repo: true,
+    linked: !sameDir(gitDir, commonDir),
+    branch: branch.code === 0 ? branch.out : null,
+    defaultBranch: originHead.code === 0 ? originHead.out.replace(/^origin\//, '') : null,
+    upstream: upstream.code === 0 ? upstream.out : null,
+    head: git(RIG_ROOT, 'rev-parse', 'HEAD').out,
+  }
+}
+
+// Disposable state, so it lives with the other disposable state rather than in the config
+// file the user owns: rig must not rewrite rig.local.json on a schedule, and a half-written
+// config is a worse failure than a missing cache.
+const freshnessCacheFile = cfg => path.join(cfg.workRoot, '.rig', 'freshness.json')
+const readFreshness = cfg => {
+  try { return readJson(freshnessCacheFile(cfg)) } catch { return null }   // absent or half-written: measure again
+}
+// A cache nobody asked for must not turn every command into a complaint on a machine whose
+// work root is read-only, so a failed write is dropped and the next run measures again.
+const writeFreshness = (cfg, measured) => {
+  try { writeJson(freshnessCacheFile(cfg), measured) } catch { /* disposable by design */ }
+}
+
+// Distance from the upstream *as last fetched* — the caller decides whether to fetch first.
+const measureFreshness = state => ({
+  sha: state.head,
+  remote: state.upstream,
+  behind: Number(git(RIG_ROOT, 'rev-list', '--count', 'HEAD..@{u}').out) || 0,
+  checkedAt: new Date().toISOString(),
+})
+
+// Spawns the refresh and returns: the fetch outlives this process, writes the cache, and the
+// *next* command reads it. Detached with no stdio of its own — inheriting the parent's would
+// keep a piped `rig prompt` from ever closing.
+function refreshFreshnessInBackground () {
+  try {
+    spawn(process.execPath, [fileURLToPath(import.meta.url), 'freshness-refresh'],
+      { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+  } catch { /* a refresh that will not spawn is not worth a word to the user */ }
+}
+
+// The end of every command: one dim line read from the cache — never a fetch, so it cannot
+// add latency or hang — and then, at most once per configured interval, the refresh that
+// makes the next run's line true.
+function freshnessEpilogue (command) {
+  let cfg
+  try { cfg = config() } catch { return }   // a config too broken to read is the command's problem, not this one's
+  if (!cfg.freshness.enabled) return
+  const state = toolState()
+  if (skipReason(state)) return
+  const cache = readFreshness(cfg)
+  if (announces(command, { enabled: cfg.freshness.enabled, tty: process.stdout.isTTY })) {
+    const line = staleLine(cache, state.head)
+    if (line) say(C.dim(`· ${line}`))
+  }
+  if (dueForRefresh(cache, cfg.freshness.everyHours)) refreshFreshnessInBackground()
+}
+
+// Commands that write records. The distinction drives the write gate — an old rig must not
+// write a record format it has never seen — and the sync below.
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close'])
+
+// Before a mutating command reads anything. rig pushes the data root but never pulled it, so
+// a second machine read stale records and wrote on top of them. Fast-forward only: a data
+// root with commits of its own is left for `commitDataRoot`'s rebase at the end. Then the
+// gate, which holds whether or not there is a remote to sync with.
+function prepareDataRoot () {
+  const root = dataRoot()
+  if (exists(root) && !insideDir(root, RIG_ROOT)) {
+    const before = checkoutState(root)
+    if (before.repo === 'own' && before.branch && before.upstream) {
+      const fetched = git(root, 'fetch', '-q')
+      if (fetched.code !== 0) {
+        say(C.dim(`· data root: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — working from what is here`))
+      } else {
+        const state = checkoutState(root)
+        if (state.behind && state.ahead) {
+          warn(`data root: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
+        } else if (state.behind && state.dirty) {
+          warn(`data root: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
+        } else if (state.behind) {
+          const ff = git(root, 'merge', '--ff-only', '@{u}')
+          if (ff.code !== 0) warn(`data root: could not fast-forward (${firstLine(ff.err) || 'no detail from git'})`)
+          else say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
+        }
+      }
+    }
+  }
+  const cfgJson = repoConfigJson()
+  if (writesBlocked(cfgJson)) {
+    die(`this rig writes record format ${MAJOR}, but ${root} is at ${dataMajor(cfgJson)} — run \`rig update\`. Read-only commands (list, status, catalog, doctor) still work.`)
+  }
+  if (exists(repoConfigFile())) {
+    const pending = pendingMigrations(cfgJson)
+    if (pending.length) {
+      warn(`${root} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
+    }
+  }
+}
 
 // --------------------------------------------------------------- work lookup
 
@@ -676,10 +799,12 @@ function regenerate (cfg, work) {
 // ------------------------------------------------------ data root commits
 
 // How the data root stands as a git checkout, read once for both the commit below and
-// `doctor`: `repo` is 'none' (not versioned), 'nested' (a directory inside some other
-// checkout, whose top is `top` — `git add -A` there would stage that whole checkout) or
-// 'own'; `branch` is null on a detached HEAD; `ahead` counts commits the upstream lacks.
-function dataRootState (root) {
+// The three questions asked of either checkout an installation is made of — the data root
+// and the tool itself. `repo` is 'none' (not versioned), 'nested' (a directory inside some
+// other checkout, whose top is `top` — `git add -A` there would stage all of it) or 'own';
+// `branch` is null on a detached HEAD; `ahead` and `behind` are measured against the
+// upstream as last fetched, so a caller that wants them current fetches first.
+function checkoutState (root) {
   const top = git(root, 'rev-parse', '--show-toplevel')
   if (top.code !== 0) return { repo: 'none' }
   if (!sameDir(top.out, root)) return { repo: 'nested', top: top.out }
@@ -690,6 +815,8 @@ function dataRootState (root) {
     branch: branch.code === 0 ? branch.out : null,
     upstream,
     ahead: upstream ? Number(git(root, 'rev-list', '--count', '@{u}..HEAD').out) : 0,
+    behind: upstream ? Number(git(root, 'rev-list', '--count', 'HEAD..@{u}').out) : 0,
+    dirty: git(root, 'status', '--porcelain').out.split('\n').filter(Boolean).length,
   }
 }
 
@@ -706,7 +833,7 @@ function dataRootState (root) {
 function commitDataRoot (message) {
   const root = dataRoot()
   if (insideDir(root, RIG_ROOT)) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
-  const state = dataRootState(root)
+  const state = checkoutState(root)
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
 
@@ -1401,6 +1528,72 @@ cmds.prompt = ({ positional }) => {
   process.stdout.write(readText(f))
 }
 
+// Fast-forwards one of the two checkouts an installation is made of. Never merges and never
+// rebases: a diverged tree is yours to sort out, and moving it silently is how a commit gets
+// lost. A tree that cannot move is reported, not fatal — the other one still updates.
+function updateCheckout (label, root) {
+  const state = checkoutState(root)
+  if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return }
+  if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return }
+  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return }
+  if (state.dirty) { warn(`${label}: ${state.dirty} uncommitted change(s) — not updated${label === 'data root' ? ', run `rig save`' : ''}`); return }
+  const fetched = git(root, 'fetch', '-q')
+  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return }
+  const from = git(root, 'rev-parse', 'HEAD').out
+  const fetchedState = checkoutState(root)
+  if (!fetchedState.behind) { ok(`${label}: already up to date`); return }
+  const ff = git(root, 'merge', '--ff-only', '@{u}')
+  if (ff.code !== 0) {
+    warn(`${label}: ${fetchedState.behind} commit(s) behind but the branch has diverged — not updated; merge or rebase it by hand in ${root}`)
+    return
+  }
+  ok(`${label}: fast-forwarded ${fetchedState.behind} commit(s)`)
+  for (const line of git(root, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out.split('\n').filter(Boolean)) {
+    say(`  ${C.dim(line)}`)
+  }
+}
+
+cmds.update = () => {
+  const cfg = config()
+  const tool = toolState()
+  if (tool.linked) {
+    warn(`this is the copy in a worktree (${RIG_ROOT}) — updating it would move your work's branch, not the installation. Run \`rig update\` from the installed checkout.`)
+  } else updateCheckout('tool', RIG_ROOT)
+
+  const root = dataRoot()
+  if (insideDir(root, RIG_ROOT)) warn('data root is inside the tool checkout — not set up; run `rig prompt setup`')
+  else if (!exists(root)) warn(`data root ${root} is missing — check dataRoot in rig.local.json`)
+  else updateCheckout('data root', root)
+
+  if (exists(repoConfigFile())) {
+    const { config: migrated, ran } = applyMigrations(repoConfigJson(), version())
+    if (ran.length) {
+      writeJson(repoConfigFile(), migrated)
+      for (const name of ran) ok(`migrated: ${name}`)
+      // Committed here rather than through `main`, because the doctor checks run below and a
+      // health verdict must not report the data root dirty with the change just made.
+      commitDataRoot(`rig update: record format ${MAJOR}`)
+    }
+  }
+
+  // The cache describes a checkout that may have just moved.
+  const moved = toolState()
+  if (!skipReason(moved)) writeFreshness(cfg, measureFreshness(moved))
+
+  say('')
+  cmds.doctor({ flags: {}, positional: [] })
+}
+
+// Hidden: the detached child spawned at the end of a command. Fetches, measures, writes the
+// cache, says nothing to anyone — the next command is what speaks.
+cmds['freshness-refresh'] = () => {
+  const cfg = config()
+  const state = toolState()
+  if (skipReason(state)) return
+  if (git(RIG_ROOT, 'fetch', '-q').code !== 0) return
+  writeFreshness(cfg, measureFreshness(state))
+}
+
 cmds.doctor = () => {
   if (!exists(LOCAL_CONFIG)) {
     warn(`not set up — no ${LOCAL_CONFIG}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`)
@@ -1416,6 +1609,26 @@ cmds.doctor = () => {
   const check = (label, good, detail = {}) => {
     if (good) ok(`${label}${detail.ok ? ` ${C.dim(detail.ok)}` : ''}`)
     else { warn(`${label}${detail.bad ? ` — ${detail.bad}` : ''}`); problems++ }
+  }
+
+  const tool = toolState()
+  say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${tool.head ? ` (${tool.head.slice(0, 7)})` : ''}`)}`)
+  // The one command that fetches before answering: a health check you asked for should
+  // report now, not what the cache last saw.
+  const skipped = skipReason(tool)
+  if (skipped) say(`${C.dim('·')} ${C.dim(`freshness not checked — ${skipped}`)}`)
+  else {
+    const fetched = git(RIG_ROOT, 'fetch', '-q')
+    if (fetched.code !== 0) {
+      say(`${C.dim('·')} ${C.dim(`freshness not checked — could not fetch (${firstLine(fetched.err) || 'no detail from git'})`)}`)
+    } else {
+      const measured = measureFreshness(tool)
+      writeFreshness(cfg, measured)
+      check('rig is up to date', measured.behind === 0, {
+        ok: `with ${tool.upstream}`,
+        bad: `${measured.behind} commit(s) behind ${tool.upstream} — run \`rig update\``,
+      })
+    }
   }
 
   check('node', true, { ok: process.version })
@@ -1446,7 +1659,7 @@ cmds.doctor = () => {
       : 'is inside the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
   })
   if (split && exists(dataRoot())) {
-    const state = dataRootState(dataRoot())
+    const state = checkoutState(dataRoot())
     check('data root is a git checkout of its own', state.repo === 'own', {
       bad: state.repo === 'nested'
         ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
@@ -1460,12 +1673,29 @@ cmds.doctor = () => {
       else if (!state.upstream) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
       else if (state.ahead) warn(`data root has ${state.ahead} unpushed commit(s)`)
       else if (!dirty) ok('data root is committed and pushed')
+      // Measured against the last fetch, which a mutating command does for itself.
+      if (state.behind) warn(`data root is ${state.behind} commit(s) behind origin — \`rig update\` fast-forwards it`)
     }
   }
   check('rig.json', exists(repoConfigFile()),
     { ok: repoConfigFile(), bad: `missing in ${dataRoot()} — not set up; run \`rig prompt setup\`` })
   if (exists(repoConfigFile()) && !cfg.orgs.length) {
     warn('rig.json has no orgs — not set up; run `rig prompt setup`'); problems++
+  }
+  // Reported, never run: doctor does not mutate, which is what makes it the command you can
+  // always run to ask a question without answering it.
+  if (exists(repoConfigFile())) {
+    const written = repoConfigJson()
+    if (writesBlocked(written)) {
+      warn(`data root is at record format ${dataMajor(written)}, this rig writes ${MAJOR} — mutating commands refuse until this rig is updated`); problems++
+    } else {
+      const pending = pendingMigrations(written)
+      if (pending.length) {
+        warn(`${pending.length} pending migration(s) — run \`rig update\`: ${pending.map(m => m.name).join('; ')}`); problems++
+      } else {
+        say(`${C.dim('·')} ${C.dim(`record format ${MAJOR}, last written by rig ${written.writtenBy}`)}`)
+      }
+    }
   }
 
   for (const org of cfg.orgs) {
@@ -1543,11 +1773,16 @@ cmds.help = () => {
                                   --designed records the "design agreed" gate
   rig close [--force]             safety-checked teardown
   rig doctor                      environment + consistency checks
+  rig update                      fast-forward the tool checkout and the data root,
+                                  run pending record migrations, then the doctor checks
   rig prompt [name]               print an agent prompt
 
 Commands that act on "the current work" find it by walking up from the cwd,
 or take --work <id>. Every command that changes a work ends by committing the
-whole data root, and pushing it when it has an upstream.`)
+whole data root, and pushing it when it has an upstream.
+
+rig ${version()} — the major is the record format; \`rig doctor\` reports how far
+this installation is behind its remote, \`rig update\` brings it forward.`)
 }
 
 // --------------------------------------------------------------------- main
@@ -1555,7 +1790,7 @@ whole data root, and pushing it when it has an upstream.`)
 // Pure helpers, importable by tests. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, dataRootState,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
@@ -1574,6 +1809,7 @@ if (isMain) {
   }
   currentCommand = cmdName
   try {
+    if (MUTATING.has(cmdName)) prepareDataRoot()
     await cmd(parseArgs(rest))
   } catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
@@ -1583,4 +1819,5 @@ if (isMain) {
     persistFakeTrackers()
   }
   if (pendingCommit) commitDataRoot(pendingCommit)
+  freshnessEpilogue(cmdName)
 }

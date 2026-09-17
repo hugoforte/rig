@@ -48,6 +48,18 @@ _Avoid_: phase, milestone
 The moment a gate is passed. Where rig commits and pushes the data root.
 _Avoid_: checkpoint, sync point
 
+**Installation**:
+One checkout of the tool on one machine, with its `rig.local.json`. Distinct from the tool (the repo) and from the data root.
+_Avoid_: copy, instance
+
+**Freshness**:
+How far an installation is behind the remote it was cloned from. Measured, cached, and reported — never acted on without asking.
+_Avoid_: staleness, drift (those name the problem, not the measure)
+
+**Migration**:
+A record-format change, carried by a major version and run by `rig update`. Record-only and idempotent: it rewrites the data root and never touches a worktree.
+_Avoid_: upgrade, schema change
+
 **Save**:
 Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.
 _Avoid_: check in, sync, snapshot
