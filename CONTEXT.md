@@ -48,17 +48,37 @@ _Avoid_: phase, milestone
 The moment a gate is passed. Where rig commits and pushes the data root.
 _Avoid_: checkpoint, sync point
 
+**Tool**:
+The rig repo itself, as distinct from any checkout of it. The thing a release is a release of.
+_Avoid_: rig (when the checkout is meant), binary
+
 **Installation**:
 One checkout of the tool on one machine, with its `rig.local.json`. Distinct from the tool (the repo) and from the data root.
 _Avoid_: copy, instance
+
+**Work root**:
+The disposable tree worktrees are assembled under, with the mirrors and caches beside them. Machine-owned; nothing in it is durable.
+_Avoid_: workspace, scratch
 
 **Freshness**:
 How far an installation is behind the remote it was cloned from. Measured, cached, and reported — never acted on without asking.
 _Avoid_: staleness, drift (those name the problem, not the measure)
 
+**Refresh**:
+The detached process a command leaves behind to measure freshness. It writes a cache; the next command reads it. The refresh never speaks.
+_Avoid_: check, poll, background job
+
+**Record format**:
+The shape of the records in the data root. The major version is this number and nothing else, derived from the migrations list.
+_Avoid_: schema, version (when the format is meant)
+
 **Migration**:
 A record-format change, carried by a major version and run by `rig update`. Record-only and idempotent: it rewrites the data root and never touches a worktree.
 _Avoid_: upgrade, schema change
+
+**Write gate**:
+The refusal that stops a rig writing a record format it has never seen. Mutating commands refuse; read-only ones carry on.
+_Avoid_: lock, block, version check
 
 **Save**:
 Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.

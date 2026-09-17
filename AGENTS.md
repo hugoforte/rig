@@ -136,15 +136,17 @@ An installation is a checkout nothing pulls. `rig doctor` fetches and reports th
 how far the tool checkout is behind its remote, and any pending record migrations; ordinary
 commands print one dim line from a cache a detached fetch wrote after the previous run, and
 never fetch on your time. That line goes to stderr, so it reaches you whether or not stdout
-is a terminal and never lands in a pipe someone is reading an answer out of. `rig update` fast-forwards the tool checkout and the data root —
-independently, fast-forward only, whichever is clean — runs pending migrations, prints what
-arrived and ends in the doctor checks.
+is a terminal, and never lands in a pipe someone is reading an answer out of. `rig update`
+fast-forwards the tool checkout and the data root — independently, fast-forward only,
+whichever is clean — then runs pending migrations if the data root is clean and current,
+prints what arrived, and ends in the doctor checks. It exits non-zero when it could not
+update what you asked it to.
 
 The **major version is the record format** (`docs/adr/0002-…`): a rig older than the data
 root refuses mutating commands and still answers read-only ones. Mutating commands
 fast-forward the data root before they read it, so a second machine no longer works from
-stale records. The copy of rig inside a work's `rig` worktree is never judged for
-freshness — it is on a feature branch by design.
+stale records. The copy of rig inside a work's `rig` worktree is never judged for freshness:
+it runs from a linked worktree, which is how git itself tells the two apart.
 
 ## Closing
 

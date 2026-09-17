@@ -52,8 +52,13 @@ take. From it:
   `attach`, `detach`, `plan`, `save`, `close`) refuse; read-only ones (`list`, `status`,
   `catalog`, `doctor`) carry on. Reading a newer record with an older rig is harmless, and a
   stale laptop can still answer "what work is open" on a plane.
-- data root major **<** tool major → migrations are pending. `rig update` runs them; `rig
-  doctor` reports them and never runs them.
+- data root major **<** tool major → migrations are pending. `rig update` runs them, once the
+  data root is clean and current — the migration commit stages the whole tree, so migrating a
+  dirty data root would publish whatever it was refused an update for, under a message
+  claiming to be a migration. `rig doctor` reports them and never runs them.
+- `writtenBy` present but unreadable → writes are refused, and rig says so naming the file.
+  Treating a stamp nobody can parse as "never migrated" would open the gate and then
+  overwrite the only evidence anything was wrong.
 
 **Migrations are record-only and idempotent.** Each rewrites files in the data root and
 never touches a worktree, which is why a work in progress survives one — the gate on an

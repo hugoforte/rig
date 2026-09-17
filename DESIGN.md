@@ -76,6 +76,18 @@ brief in" design) — both already authenticated on the machine.
 - **mirror** — a bare clone `rig` owns, from which worktrees are cut.
 - **data root** — where the catalogue, the work records and `rig.json` live. The tool's own
   checkout by default; a separate private repo when the tool is public (§3).
+- **tool** — the rig repo itself, as distinct from any checkout of it.
+- **installation** — one checkout of the tool on one machine, with its `rig.local.json`.
+  What goes stale, and what `rig update` brings forward.
+- **work root** — the disposable tree the worktrees are assembled under. Machine-owned;
+  nothing in it is durable.
+- **freshness** — how far an installation is behind the remote it was cloned from. Measured
+  in the background, cached, reported; never acted on without asking.
+- **refresh** — the detached process a command leaves behind to measure freshness. It writes
+  a cache; the *next* command reads it.
+- **record format** — the shape of the records in the data root. The major version is this
+  number and nothing else (ADR-0002).
+- **write gate** — the refusal that stops a rig writing a record format it has never seen.
 
 ---
 
@@ -188,6 +200,7 @@ rig plan                    scaffold rollout-testing-plan.md
 rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate
 rig close                   safety-checked teardown
 rig doctor                  environment + consistency checks
+rig update                  fast-forward the tool and the data root, migrate, then doctor
 rig prompt <name>           print an agent prompt to stdout
 ```
 
@@ -460,3 +473,8 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 42 | Every mutating command commits the whole data root and pushes it when it has an upstream — event-based (decision 20 stands), announced in one line, never prompting, never dying (the work is already done; a git failure warns and waits for the next command); fetch and rebase first, and on conflict abort and say so rather than leave the data root mid-rebase. The commit is owned by dispatch: a command registers what it is committing as, and `main` commits on success or on a reported failure |
 | 43 | `rig save [-m] [--designed]` is the explicit commit for edits made outside rig, chiefly the context doc; `--designed` is the only way a work reaches status `designed` |
 | 44 | Writing a work record, syncing its context doc header and regenerating its folder is one operation (`saveWork`); no caller composes the three, and `doctor` reads the folder's owned entries from the same place `regenerate` writes them |
+| 45 | An installation knows its own freshness, and the check rides on usage: a command ends by spawning a detached fetch that writes a cache, and the *next* command reads it. No timer, no daemon, no latency on the command that pays for it (decision 20 stands). `rig doctor` is the one exception and fetches live, because a health check you asked for should answer about now |
+| 46 | One semver, and the major **is** the record format, derived as `MIGRATIONS.length` so it cannot be forgotten (ADR-0002). A rig whose major is below the data root's refuses mutating commands and still answers read-only ones. The stamp (`writtenBy`) is written by `applyMigrations` whenever a migration runs, never by an individual migration — a stamp only migration 1 knows how to write stops moving after migration 1 |
+| 47 | Migrations are record-only and idempotent, so open work survives one; the gate on an update is the migration, not whether anything is open. A migration may carry only a hook rig can run, and is refused rather than reported as applied when it carries anything else |
+| 48 | The data root is fast-forwarded at the **start** of every mutating command, not at the end: what was unsafe was the *read*, and `commitDataRoot` already protects the push. Fast-forward or leave alone — never merge, never rebase behind your back. A failed fetch backs off instead of costing a connect timeout on every command |
+| 49 | The freshness line goes to **stderr** and is not gated on a TTY. An agent or CI job shelling out to rig is the audience that most needs telling, and stderr is what keeps it out of a pipe someone is reading an answer from |
