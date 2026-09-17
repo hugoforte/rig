@@ -39,7 +39,7 @@ const ok = s => console.log(`${C.green('✓')} ${s}`)
 const die = msg => { throw new RigError(msg) }
 
 function run (cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts })
+  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, ...opts })
   if (r.error) die(`${cmd} not found on PATH (${r.error.message})`)
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
@@ -253,10 +253,16 @@ const measureFreshness = state => ({
 // keep a piped `rig prompt` from ever closing. The child never arms another (see
 // `freshnessEpilogue`); an unreachable remote is the ordinary case, and a chain of detached
 // processes retrying it forever is not something a user would ever see to stop.
+//
+// `cwd` is the tool root, which is the only tree the child touches: a process's cwd is an
+// open directory handle on Windows, so a child left sitting in the caller's worktree is one
+// `rig close` cannot remove. `windowsHide` on every `git` call the child makes is what keeps
+// it fast — `detached` means DETACHED_PROCESS, so a console-less child allocates a console
+// host per spawn unless told not to, and the six in `toolState` alone cost twenty seconds.
 function refreshFreshnessInBackground () {
   try {
     spawn(process.execPath, [fileURLToPath(import.meta.url), 'freshness-refresh'],
-      { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      { cwd: RIG_ROOT, detached: true, stdio: 'ignore', windowsHide: true }).unref()
   } catch { /* a refresh that will not spawn is not worth a word to the user */ }
 }
 
