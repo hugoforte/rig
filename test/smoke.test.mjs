@@ -579,6 +579,29 @@ test('a data root from before stamping is warned about, then migrated by update'
   assert.match(updated.out, /record format 1, stamped by rig 1\.0\.0/, 'the doctor checks run inline')
 })
 
+test('update does not migrate over a dirty data root that has no upstream', () => {
+  // The guard used to key on `updateCheckout` not reporting failure, and a data root with no
+  // upstream reports 'current' before cleanliness is ever asked about — so the migration
+  // commit staged the user's half-written notes under a "record format" message.
+  const file = path.join(dataRoot, 'rig.json')
+  const cfg = readJson(file)
+  delete cfg.writtenBy
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + String.fromCharCode(10))
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'back to an unstamped data root').status, 0)
+  fs.writeFileSync(path.join(dataRoot, 'HALF-WRITTEN.md'), 'not ready to share')
+
+  const r = rig(['update'])
+  assert.match(r.out, /migration\(s\) pending, not run/)
+  assert.doesNotMatch(r.out, /migrated:/, 'nothing ran')
+  assert.equal(readJson(file).writtenBy, undefined, 'and the stamp did not move')
+  assert.match(dirty(dataRoot), /HALF-WRITTEN/, 'the unfinished file is still the users own to deal with')
+  assert.doesNotMatch(lastCommit(dataRoot), /record format/)
+
+  fs.rmSync(path.join(dataRoot, 'HALF-WRITTEN.md'))
+  assert.match(rig(['update']).out, /migrated: stamp the data root/, 'it migrates once the tree is clean')
+  assert.ok(readJson(file).writtenBy, 'and the stamp moves')
+})
+
 test('a second update migrates nothing', () => {
   const r = rig(['update'])
   assert.doesNotMatch(r.out, /migrated:/)

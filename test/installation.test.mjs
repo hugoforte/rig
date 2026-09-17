@@ -177,6 +177,21 @@ test('a command that needs no git still finishes on a machine with no git on PAT
   assert.doesNotMatch(out, /not found on PATH/, 'and nothing leaked out of the epilogue')
 })
 
+test('doctor reaches its verdict on a machine with no git on PATH', () => {
+  // doctor is the command you run *because* something is broken, so every git-dependent
+  // check is skipped rather than attempted. It used to die partway and lose everything
+  // after it — the record format, the identities, the verdict line.
+  const noGit = { ...env }
+  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
+  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
+  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'doctor'],
+    { encoding: 'utf8', env: noGit })
+  const out = strip(r.stdout + r.stderr)
+  assert.match(out, /git — not on PATH/, 'it says what is wrong')
+  assert.match(out, /thing\(s\) to look at|all clear/, 'and still reaches its verdict')
+  assert.doesNotMatch(out, /git not found on PATH \(spawnSync/, 'it did not die on the way')
+})
+
 test('update refuses a tool checkout with uncommitted changes, and still updates the data root', () => {
   pushToOrigin('another machine, commit 2')
   fs.appendFileSync(path.join(install, 'bin', 'rig.mjs'), '\n// local hack\n')
