@@ -12,6 +12,7 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { DEFAULT_FRESHNESS, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
+import { renderDash } from './dash.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -621,7 +622,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -1507,23 +1508,31 @@ function relativeAge (iso) {
   return `${Math.floor(mins / 1440)}d ago`
 }
 
-// The start of the work, as close to the truth as each source allows: the PR's earliest
-// commit when there is a PR — it outlives the branch, which GitHub deletes on merge — and
-// the branch itself when there is no PR but the worktree is still here. Answers
-// { at, error }: a lookup GitHub refused is not a work with no first commit, and a
-// consumer measuring cycle time must be able to tell those apart.
-function firstCommitAt (entry, pr) {
-  let error
-  if (pr) {
-    let at = null
-    error = trackerFailure(() => { at = github().prFirstCommitAt(entry.org, entry.repo, pr.number) })
-    if (at) return { at }
-  }
-  if (!exists(entry.path)) return { at: null, error }
+// When the work started, when it was first looked at, and when it was approved — one GitHub
+// call for all three, because a second call per repo is what makes a listing unusable.
+// The first commit comes from the PR rather than the branch, which GitHub deletes on merge;
+// with no PR the branch is still the answer, and the worktree is where it is read from.
+// `error` carries a refused lookup: a consumer measuring cycle time has to tell "GitHub would
+// not say" from "there is none", and a null that means both is how a work silently leaves
+// the numerator.
+function prTiming (entry, pr) {
+  if (!pr) return { firstCommitAt: branchFirstCommitAt(entry) }
+  let times = null
+  // `prTimeline` answers null for a PR gh could not read at all, which is not a PR nobody
+  // reviewed. Left as a plain null, that work leaves the review figures without a trace.
+  const error = trackerFailure(() => { times = github().prTimeline(entry.org, entry.repo, pr.number) }) ||
+    (times ? undefined : `GitHub would not answer for ${entry.org}/${entry.repo}#${pr.number}`)
+  if (!times) return { firstCommitAt: branchFirstCommitAt(entry), error }
+  return { ...times, firstCommitAt: times.firstCommitAt || branchFirstCommitAt(entry), error }
+}
+
+// The first commit this branch adds over its base, or null when the worktree is gone or git
+// cannot resolve the range. Never the base's own history.
+function branchFirstCommitAt (entry) {
+  if (!exists(entry.path)) return null
   const log = git(entry.path, 'log', '--reverse', '--format=%aI', `refs/remotes/origin/${entry.base}..HEAD`)
-  if (log.code !== 0) return { at: null, error }
-  const at = log.out.split('\n')[0].trim()
-  return at ? { at } : { at: null, error }
+  if (log.code !== 0) return null
+  return log.out.split('\n')[0].trim() || null
 }
 
 // The JSON listing: records as they are, plus the live fields a consumer cannot derive
@@ -1561,32 +1570,48 @@ function repoEntryJson (cfg, entry, branch, live) {
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else out.pr = s.pr
-  const first = firstCommitAt(entry, s.pr)
-  out.firstCommitAt = first.at
-  if (first.error) out.firstCommitAtUnknown = first.error
+  const timing = prTiming(entry, s.pr)
+  out.firstCommitAt = timing.firstCommitAt ?? null
+  // One refusal, two things left unknown: where the work started, and whether it was ever
+  // reviewed. Both are named, because a consumer counting either would otherwise count a
+  // refused lookup as a fact.
+  if (timing.error) {
+    if (!out.firstCommitAt) out.firstCommitAtUnknown = timing.error
+    if (out.pr) out.prTimelineUnknown = timing.error
+  }
+  // When it was first looked at and when it was approved belong to the PR, and are what
+  // separates the time a work spent with its author from the time it spent waiting.
+  if (out.pr) Object.assign(out.pr, {
+    firstReviewAt: timing.firstReviewAt ?? null,
+    approvedAt: timing.approvedAt ?? null,
+  })
   return out
 }
+
+// Every work, least recently touched first. ISO-8601 exists so that byte order is
+// chronological order; decorate once rather than recomputing the key inside the comparator.
+const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
+  .map(work => [activityAt(work), work])
+  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  .map(([, work]) => work)
+
+// The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
+// renders it; neither reads the records a second way.
+const listPayload = (cfg, live) => ({
+  rig: version(),
+  recordFormat: MAJOR,
+  generatedAt: new Date().toISOString(),
+  live,
+  works: worksByActivity(cfg).map(w => workJson(cfg, w, live)),
+})
 
 cmds.list = ({ flags }) => {
   const cfg = config()
   const live = flags.prs !== false && !flags.quick
-  // ISO-8601 exists so that byte order is chronological order; decorate once rather than
-  // recomputing the key inside the comparator.
-  const works = listWorkIds().map(id => loadWork(cfg, id))
-    .map(work => [activityAt(work), work])
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([, work]) => work)
 
-  if (flags.json) {
-    return say(JSON.stringify({
-      rig: version(),
-      recordFormat: MAJOR,
-      generatedAt: new Date().toISOString(),
-      live,
-      works: works.map(w => workJson(cfg, w, live)),
-    }, null, 2))
-  }
+  if (flags.json) return say(JSON.stringify(listPayload(cfg, live), null, 2))
 
+  const works = worksByActivity(cfg)
   if (!works.length) return say('no works yet — `rig new <id> --title "..."`')
   for (const work of works) {
     const id = work.id
@@ -1622,6 +1647,52 @@ cmds.list = ({ flags }) => {
     }
     say('')
   }
+}
+
+// `--since 14d` or `--since 2026-09-01`. A window nobody can parse is worth dying over: a
+// dashboard that quietly showed everything when you asked for a fortnight would be read as
+// a fortnight.
+function sinceFlag (value) {
+  if (!value || value === true) return null
+  const days = /^(\d+)d$/.exec(String(value))
+  if (days) return new Date(Date.now() - Number(days[1]) * 86400000).toISOString()
+  // A full date, and only a full date. `new Date` reads "7" as the year 2001 and "2026-9" as
+  // September, so trusting it turns `--since 7` — the obvious slip for `7d` — into a window
+  // that shows everything to someone who asked for a week.
+  const at = /^\d{4}-\d{2}-\d{2}([T ]|$)/.test(String(value)) ? new Date(value) : new Date(NaN)
+  if (Number.isNaN(+at)) die(`--since wants a number of days like 14d, or a date like 2026-09-01 — not "${value}"`)
+  return at.toISOString()
+}
+
+const OPENERS = { win32: ['cmd', ['/c', 'start', '']], darwin: ['open', []] }
+
+cmds.dash = ({ flags }) => {
+  const from = typeof flags.from === 'string' ? flags.from : null
+  const opts = { org: typeof flags.org === 'string' ? flags.org : null, since: sinceFlag(flags.since) }
+  // `--from` renders a payload captured earlier (`rig list --json > x.json`). The live path
+  // is one GitHub round trip per repo; iterating on the page must not cost that every time.
+  // A capture interrupted halfway is a likely input, and deserves its filename back rather
+  // than a JSON parser's stack trace.
+  let payload
+  if (!from) payload = listPayload(config(), true)
+  else if (!exists(from)) die(`no such payload file: ${from}`)
+  else try { payload = readJson(from) } catch (e) { die(`${from} is not a rig payload: ${e.message}`) }
+
+  // A directory of rig's own under the temp root, so the filename can stay stable — a
+  // browser tab reloads onto the new page — without writing to a name anyone else could have
+  // got there first. Never the data root: this is a rendering of a moment, not knowledge.
+  const dir = path.join(os.tmpdir(), 'rig-dash')
+  fs.mkdirSync(dir, { recursive: true })
+  const out = path.join(dir, 'dash.html')
+  writeText(out, renderDash(payload, opts))
+  ok(`dashboard at ${out}`)
+  if (flags['no-open']) return
+
+  const [cmd, args] = OPENERS[process.platform] || ['xdg-open', []]
+  // Opening it is a convenience; the path above is the deliverable. A machine with no opener
+  // on PATH must not turn a rendered page into a failed command.
+  const r = onPath(cmd) ? run(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
+  if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
 cmds.status = ({ flags }) => {
@@ -2101,6 +2172,9 @@ cmds.help = () => {
   rig list [--json] [--quick]     every work, least recently touched first
        --json                      the records plus live PR timestamps, for a consumer
        --quick                     skip the git and GitHub lookups
+  rig dash [--org o] [--since w]  render throughput and cycle time as one HTML page
+       [--from payload.json]       render a payload captured earlier, instead of looking up
+       [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
   rig setup [repo...]             run the catalogue's setup commands
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
@@ -2127,7 +2201,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  activityAt, relativeAge, firstCommitAt,
+  activityAt, relativeAge, prTiming, branchFirstCommitAt, sinceFlag,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 
