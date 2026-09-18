@@ -9,16 +9,17 @@ how to *use* it.
 
 | | |
 |---|---|
-| `D:\rig` (this repo) | **The tool.** Committed, generic, public. |
+| `C:\rig` (this repo) | **The tool.** Committed, generic, public. |
 | the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named by `dataRoot` in `rig.local.json` — never this one. `rig doctor` prints which. |
-| `D:\w` | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
+| `C:\w` (the work root) | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
 
-Never put durable prose in `D:\w`. Never put anything that names a real org, repo or
+Never put durable prose in the work root. Never put anything that names a real org, repo or
 system in this repo — that is what the data root is for. Never put machine-specific paths
 or secrets in either committed repo.
 
 ## First run
 
+Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH.
 `rig doctor` says "not set up" until there is a data root — separate from this checkout —
 with a `rig.json` in it. Run the setup interview; its first question is where the knowledge
 lives:
@@ -75,10 +76,10 @@ rig attach orders-web
 
 ## Rules that matter
 
-1. **Never `git worktree add` inside `D:\w`.** Use `rig attach`. rig owns that tree and
-   `rig doctor` fails on strays. Outside `D:\w` — your old clone directory, say — do
+1. **Never `git worktree add` inside the work root.** Use `rig attach`. rig owns that tree and
+   `rig doctor` fails on strays. Outside it — your old clone directory, say — do
    whatever you like; rig neither models nor touches it.
-2. **Never edit a generated file.** `D:\w\<work>\AGENTS.md` is regenerated on every mutating
+2. **Never edit a generated file.** `C:\w\<work>\AGENTS.md` is regenerated on every mutating
    command. The context doc in `<data root>/work/<id>/context.md` is the only place prose
    lives.
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state — all of
@@ -132,21 +133,17 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 
 ## Staying up to date
 
-An installation is a checkout nothing pulls. `rig doctor` fetches and reports the version,
-how far the tool checkout is behind its remote, and any pending record migrations; ordinary
-commands print one dim line from a cache a detached fetch wrote after the previous run, and
-never fetch on your time. That line goes to stderr, so it reaches you whether or not stdout
-is a terminal, and never lands in a pipe someone is reading an answer out of. `rig update`
-fast-forwards the tool checkout and the data root — independently, fast-forward only,
-whichever is clean — then runs pending migrations if the data root is clean and current,
-prints what arrived, and ends in the doctor checks. It exits non-zero when it could not
-update what you asked it to.
+A dim line on stderr — `rig is N commits behind … — rig update` — is addressed to you. Run
+`rig update` from the installed checkout; the copy inside a work's `rig` worktree refuses,
+because updating it would move the work's branch. `update` fast-forwards only, exits non-zero
+when it could not do what was asked, and ends in the doctor checks.
 
-The **major version is the record format** (`docs/adr/0002-the-major-version-is-the-record-format.md`): a rig older than the data
-root refuses mutating commands and still answers read-only ones. Mutating commands
-fast-forward the data root before they read it, so a second machine no longer works from
-stale records. The copy of rig inside a work's `rig` worktree is never judged for freshness:
-it runs from a linked worktree, which is how git itself tells the two apart.
+A mutating command that dies with "run `rig update`" hit the **write gate**: the data root is
+at a newer record format than this rig (the major version *is* the record format,
+`docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
+`status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
+before they read it, so a second machine never works from stale records. How the check is
+measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
 ## Closing
 
