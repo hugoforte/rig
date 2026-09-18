@@ -630,6 +630,36 @@ function identityFor (cfg, org) {
   return cfg.identities?.[org] || null
 }
 
+// Any one mirror for the org, as a place to ask git what it would commit with. The layout is
+// <mirror root>/<org>/<repo>.git and every mirror carries the org's remote URL — which is what
+// a `hasconfig:remote.*.url` conditional include matches on — so any of them answers for the
+// whole org.
+function anyMirrorFor (cfg, org) {
+  if (!cfg.mirrorRoot) return null
+  const dir = path.join(cfg.mirrorRoot, org)
+  try {
+    const hit = fs.readdirSync(dir).find(e => e.endsWith('.git'))
+    return hit ? path.join(dir, hit) : null
+  } catch { return null }
+}
+
+// The address rig will actually commit with for an org, and where it comes from. rig cannot
+// know which address is *correct* for an org — only which one git will use — so callers report
+// this rather than warning about it. The one state worth a warning is git having no answer.
+//
+//   rig      `identities` in rig.local.json; rig writes it onto the worktree itself
+//   git      git's own resolution, which a conditional include can make org-specific
+//   none     git has no user.email anywhere — nothing can commit
+//   unknown  no mirror for this org yet, so there is nothing to ask git about
+function effectiveIdentity (cfg, org) {
+  const configured = identityFor(cfg, org)
+  if (configured) return { email: configured, source: 'rig' }
+  const mirror = anyMirrorFor(cfg, org)
+  if (!mirror) return { email: null, source: 'unknown' }
+  const r = git(mirror, 'config', 'user.email')
+  return r.code === 0 && r.out ? { email: r.out, source: 'git' } : { email: null, source: 'none' }
+}
+
 function copySecrets (cfg, repo, dest) {
   const spec = cfg.secrets?.[repo]
   if (!spec) return { copied: 0, registered: false }
@@ -1226,7 +1256,7 @@ cmds.init = ({ flags }) => {
     say('or `rig init --orgs a,b --tracker a=github:owner/repo,b=jira:KEY` directly.')
     say('')
   }
-  const missing = orgs.filter(o => !identityFor(cfg, o))
+  const missing = orgs.filter(o => !effectiveIdentity(cfg, o).email)
   if (missing.length) {
     say(`Still to do in ${LOCAL_CONFIG}:`)
     say(`  identities — commit email for ${missing.join(', ')} (or re-run \`rig init --email you@work\`)`)
@@ -1364,12 +1394,16 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
       `refs/remotes/origin/${base}`])
   }
 
-  const email = identityFor(cfg, org)
-  if (email) {
-    gitMust(dest, 'config', 'user.email', email)
-    step(`identity ${email}`)
+  const configured = identityFor(cfg, org)
+  if (configured) {
+    gitMust(dest, 'config', 'user.email', configured)
+    step(`identity ${configured}`)
   } else {
-    warn(`no identity configured for org "${org}" — commits will use your global user.email`)
+    // No override to write, so report what git resolves in this very worktree rather than
+    // assuming the global address: a conditional include on the remote URL answers per-org.
+    const resolved = git(dest, 'config', 'user.email')
+    if (resolved.code === 0 && resolved.out) step(`identity ${resolved.out} — from git, not rig`)
+    else warn(`no identity for org "${org}" — git has no user.email to commit with`)
   }
 
   const sec = copySecrets(cfg, repo, dest)
@@ -1917,8 +1951,14 @@ cmds.doctor = () => {
   }
 
   for (const org of cfg.orgs) {
-    check(`identity for ${org}`, !!identityFor(cfg, org),
-      { ok: identityFor(cfg, org), bad: 'commits will use your global user.email' })
+    const id = effectiveIdentity(cfg, org)
+    if (id.source === 'unknown') {
+      say(`${C.dim('·')} ${C.dim(`identity for ${org}: no mirror yet — git decides once one is cloned`)}`)
+    } else {
+      check(`identity for ${org}`, !!id.email,
+        { ok: `${id.email}${id.source === 'git' ? ' — from git, not rig' : ''}`,
+          bad: 'git has no user.email to commit with' })
+    }
     const t = cfg.tracker?.[org]
     const desc = t?.kind ? `${t.kind}${t.repo ? ' ' + t.repo : ''}${t.project ? ' ' + t.project : ''}` : 'none — `rig new --ticket` unavailable (rig.json)'
     say(`${C.dim('·')} ${C.dim(`tracker for ${org}: ${desc}`)}`)
@@ -2012,7 +2052,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
