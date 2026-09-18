@@ -7,6 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
+  SPAWN_DEFAULTS, REFRESH_SPAWN,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -198,4 +199,21 @@ test('countCommits: a range git cannot answer is unknown, never zero', () => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
+})
+
+// These two assert options rather than behaviour, deliberately. Each field is a contract with
+// the operating system whose only symptom is cost, and the cost does not show on an idle
+// machine — the refresh that took forty seconds under load and hung a desktop finished inside
+// its deadline when nothing else was running, so the behavioural test went green on exactly
+// the machines that were fine. A wrong option here is not a refactor; it is the regression.
+test('every child rig spawns is hidden, so a console-less child pays for no console', () => {
+  assert.equal(SPAWN_DEFAULTS.windowsHide, true,
+    'DETACHED_PROCESS has no console; without this each git call allocates a console host')
+})
+
+test('the freshness refresh is detached, silent, rooted in the tool, and hidden', () => {
+  assert.equal(REFRESH_SPAWN.detached, true, 'the fetch has to outlive the command that armed it')
+  assert.equal(REFRESH_SPAWN.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
+  assert.equal(REFRESH_SPAWN.windowsHide, true, 'see above; this is the one that hung a machine')
+  assert.ok(REFRESH_SPAWN.cwd, 'a child sitting in a worktree is one `rig close` cannot remove')
 })

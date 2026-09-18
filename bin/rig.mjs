@@ -41,15 +41,22 @@ const ok = s => console.log(`${C.green('✓')} ${s}`)
 
 const die = msg => { throw new RigError(msg) }
 
+// `windowsHide` is not cosmetic here and is not an internal choice: the freshness refresh is
+// spawned DETACHED_PROCESS, so it has no console, and without this every `git` it runs
+// allocates a console host — seconds each, a refresh that never finishes inside its deadline,
+// and an orphan per command that buries the desktop in windows. A test asserts it, because
+// the behavioural symptom only shows on a machine already under load.
+const SPAWN_DEFAULTS = { encoding: 'utf8', windowsHide: true }
+
 function run (cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, ...opts })
+  const r = spawnSync(cmd, args, { ...SPAWN_DEFAULTS, ...opts })
   if (r.error) die(`${cmd} not found on PATH (${r.error.message})`)
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
 
 // Is the command on PATH at all? `run` dies when it is not, which is right for every caller
 // that needs it — except the ones whose whole job is to report that it is missing.
-const onPath = cmd => !spawnSync(cmd, ['--version'], { encoding: 'utf8', windowsHide: true }).error
+const onPath = cmd => !spawnSync(cmd, ['--version'], SPAWN_DEFAULTS).error
 
 function must (cmd, args, opts = {}) {
   const r = run(cmd, args, opts)
@@ -291,10 +298,17 @@ const measureFreshness = state => ({
 // `rig close` cannot remove. `windowsHide` on every `git` call the child makes is what keeps
 // it fast — `detached` means DETACHED_PROCESS, so a console-less child allocates a console
 // host per spawn unless told not to, and the six in `toolState` alone cost twenty seconds.
+// Asserted by a test rather than left to a comment: every field is load-bearing, and each
+// failure it prevents is invisible until it is expensive. `detached` lets the fetch outlive
+// the command; `stdio: 'ignore'` stops a piped `rig prompt` hanging on a child holding the
+// pipe; `cwd` keeps the child out of a worktree `rig close` must remove; `windowsHide` is why
+// the child is not paying for a console per git call.
+const REFRESH_SPAWN = { cwd: RIG_ROOT, detached: true, stdio: 'ignore', windowsHide: true }
+
 function refreshFreshnessInBackground () {
   try {
     spawn(process.execPath, [fileURLToPath(import.meta.url), 'freshness-refresh'],
-      { cwd: RIG_ROOT, detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      REFRESH_SPAWN).unref()
   } catch { /* a refresh that will not spawn is not worth a word to the user */ }
 }
 
@@ -1992,6 +2006,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
+  SPAWN_DEFAULTS, REFRESH_SPAWN,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
