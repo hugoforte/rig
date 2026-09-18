@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, branchFirstCommitAt, sinceFlag,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -322,6 +322,17 @@ test('prTiming: a lookup GitHub refused is an error, never a work with no first 
       { number: 12, state: 'MERGED' })
     assert.equal(answer.firstCommitAt, null)
     assert.match(answer.error, /gh not found on PATH/)
+
+    // terminalPr is the narrow shape a MERGED pr is stored in (`rig close`, `rig backfill`):
+    // the same refusal turns into "nothing to store", never a record built from guesses —
+    // the no-negative-caching half of the contract. Reusing this test's GitHub, rather than
+    // pointing `RIG_FAKE_GITHUB` at a second fixture: the adapter rig.mjs picks is resolved
+    // once and memoized for the life of the process, so a second in-process fixture in this
+    // file would be silently ignored.
+    const { record, error } = terminalPr({ org: 'acme', repo: 'billing', base: 'main', path: path.join(tmp, 'gone') },
+      { number: 12, url: 'u', state: 'MERGED', openedAt: 'o', mergedAt: 'm' })
+    assert.equal(record, undefined)
+    assert.match(error, /gh not found on PATH/)
   } finally {
     delete process.env.RIG_FAKE_GITHUB
     fs.rmSync(tmp, { recursive: true, force: true })

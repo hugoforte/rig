@@ -195,6 +195,11 @@ export function summarize (payload, { org: only, since } = {}) {
     // A payload with no `live` key is one this page knows nothing about, and must not claim
     // was read from GitHub.
     live: payload.live === true,
+    // A `--quick` payload can still carry real PR data — `repoEntryJson` emits a stored
+    // record (`recorded: true`) with no lookup, `--quick` included. "Nothing here is live"
+    // would be false for that payload, so the header needs to tell the two `!live` cases
+    // apart; read straight off the payload, since `reduceWork` does not keep the flag.
+    recorded: (payload.works || []).some(w => (w.repos || []).some(r => r.pr?.recorded)),
     rig: payload.rig,
     only,
     since,
@@ -356,7 +361,9 @@ export function renderDash (payload, opts = {}) {
   const scope = s.only ? `${s.only}` : 'every org, each on its own'
   const stale = s.live
     ? `PR state was read from GitHub at ${esc(s.generatedAt)}. It is right as of then and not after.`
-    : 'Generated with <code>--quick</code>: no PR state was looked up, so nothing here is live.'
+    : s.recorded
+      ? 'Generated with <code>--quick</code>: merged work is read from the records, which cannot change; nothing in flight was looked up.'
+      : 'Generated with <code>--quick</code>: no PR state was looked up, so nothing here is live.'
 
   return `<!doctype html>
 <meta charset="utf-8">

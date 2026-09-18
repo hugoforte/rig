@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MAJOR } from '../bin/version.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 let tmp, origin, install, dataRoot, workRoot, env
@@ -263,7 +264,10 @@ test('update hands over to the code that arrived, not the code that started it',
   fs.writeFileSync(versionFile, before.replace(/^\]$/m,
     "  { name: 'a migration that arrived with the update' },\n]"))
   const pkgFile = path.join(clone, 'package.json')
-  fs.writeFileSync(pkgFile, fs.readFileSync(pkgFile, 'utf8').replace(/"version": "\d+/, '"version": "2'))
+  // The clone now carries one migration more than this checkout, so its derived major is
+  // one past MAJOR — package.json's own major has to agree, or the version test in that
+  // clone would fail before `update` ever runs.
+  fs.writeFileSync(pkgFile, fs.readFileSync(pkgFile, 'utf8').replace(/"version": "\d+/, `"version": "${MAJOR + 1}`))
   assert.equal(git(clone, 'add', '-A').status, 0)
   assert.equal(git(clone, 'commit', '-q', '-m', 'a release that adds a migration').status, 0)
   assert.equal(git(clone, 'push', '-q').status, 0)

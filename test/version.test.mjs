@@ -43,9 +43,22 @@ test('migration 1 stamps the version and leaves everything else alone', () => {
   assert.deepEqual(config.tracker, before.tracker)
 })
 
+test('migration 2 is additive too: offline, no hook, and only the major moves', () => {
+  // `repos[].pr` needs no `config` transform — absence already means "not yet known", which
+  // is what `rig backfill` looks for — so this migration's only effect is the stamp.
+  assert.equal('config' in MIGRATIONS[1], false)
+  assert.equal(unrunnableHook(MIGRATIONS[1]), null)
+  const before = { orgs: ['acme'], tracker: { acme: { kind: 'github' } }, writtenBy: '1.4.0' }
+  const { config, ran } = applyMigrations(before, '2.0.0')
+  assert.deepEqual(ran, [MIGRATIONS[1].name], 'a data root already at 1 has only migration 2 pending')
+  assert.equal(config.writtenBy, '2.0.0')
+  assert.deepEqual(config.orgs, before.orgs)
+  assert.deepEqual(config.tracker, before.tracker)
+})
+
 test('migrating twice changes nothing the second time', () => {
-  const once = applyMigrations({ orgs: [] }, '1.0.0').config
-  const twice = applyMigrations(once, '1.0.0')
+  const once = applyMigrations({ orgs: [] }, `${MAJOR}.0.0`).config
+  const twice = applyMigrations(once, `${MAJOR}.0.0`)
   assert.deepEqual(twice.ran, [])
   assert.deepEqual(twice.config, once)
 })

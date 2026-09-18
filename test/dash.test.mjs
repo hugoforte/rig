@@ -202,6 +202,14 @@ test('renderDash: a --quick payload says nothing in it is live', () => {
   assert.doesNotMatch(html, /read from GitHub at/)
 })
 
+test('renderDash: a --quick payload carrying a recorded PR does not say nothing here is live', () => {
+  const recordedWork = work({ repos: [repo({ pr: pr({ recorded: true }) })] })
+  const html = renderDash(payload([recordedWork], { live: false }))
+  assert.match(html, /merged work is read from the records, which cannot change/)
+  assert.doesNotMatch(html, /nothing here is live/)
+  assert.doesNotMatch(html, /read from GitHub at/, 'still not claimed to be live')
+})
+
 test('renderDash: a payload that never said it was live is not claimed to be', () => {
   const { live: _dropped, ...noClaim } = payload([work()])
   assert.doesNotMatch(renderDash(noClaim), /read from GitHub at/)
@@ -238,4 +246,21 @@ test('summarize: a window bounds what was merged, and says nothing about what is
   assert.equal(inside.merged, 1)
   assert.equal(outside.merged, 0, 'the merge fell outside the window')
   assert.equal(outside.inFlight, 1, 'and the open work is still open, whatever the window')
+})
+
+test('reduceWork: a recorded PR counts as merged, exactly as a freshly looked-up one does', () => {
+  // The shape `repoEntryJson` emits for a stored record. `state` is not in the record — only
+  // a merged PR is ever recorded — so the reader puts it back, and this is what asserts it
+  // did: without it, every closed work reads as in flight and leaves the cycle-time figures.
+  const recorded = reduceWork(work({
+    repos: [repo({
+      firstCommitAt: '2026-03-01T09:00:00Z',
+      pr: { number: 12, state: 'MERGED', url: 'u', openedAt: '2026-03-02T09:00:00Z',
+        firstReviewAt: null, approvedAt: null, mergedAt: '2026-03-03T09:00:00Z', recorded: true },
+    })],
+  }))
+  assert.equal(recorded.merged, true)
+  assert.equal(recorded.mergedAt, '2026-03-03T09:00:00Z')
+  assert.equal(recorded.cycleHours, 48)
+  assert.deepEqual(recorded, reduceWork(work()), 'a record and a lookup reduce identically')
 })

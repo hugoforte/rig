@@ -88,7 +88,10 @@ rig attach orders-web
    shown in the context doc header) is the one exception: it is a **decision**, not
    something git or `gh` can answer, so rig records it in `work.json` at each gate
    (`rig new`, the first `rig attach`, `rig save --designed`, `rig close`) instead of
-   deriving it.
+   deriving it. A merged PR's terminal facts (`number`, `url`, `openedAt`, `firstCommitAt`,
+   `firstReviewAt`, `approvedAt`, `mergedAt`) are the other exception, recorded by `rig close`
+   and `rig backfill` once a PR is `MERGED` — a terminal fact cannot go stale the way branch
+   or PR state can, which is what makes storing it a different act from storing state.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
    your head — that is the only moment the knowledge is cheap.
