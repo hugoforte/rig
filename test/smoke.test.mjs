@@ -633,6 +633,18 @@ test('dash reads the works itself when given no payload', () => {
   assert.match(r.out, /dashboard at .+rig-dash.dash\.html/)
 })
 
+test('dash --quick looks nothing up, and still renders what is recorded', () => {
+  // The flag was parsed and then never read, so the only symptom was a page that took as
+  // long as the live one. With gh gone, a dash that reaches for it cannot quietly succeed.
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  const r = rig(['dash', '--quick', '--no-open'])
+  assert.equal(r.code, 0, r.out)
+  const html = fs.readFileSync(/dashboard at (.+)$/m.exec(strip(r.out))[1].trim(), 'utf8')
+  assert.match(html, /no PR state was looked up|read from the records/, 'the page says nothing was looked up')
+  setGithub(state)
+})
+
 test('dash dies on a window it cannot parse rather than showing everything', () => {
   const captured = path.join(tmp, 'window-payload.json')
   fs.writeFileSync(captured, rig(['list', '--json', '--quick']).stdout)
