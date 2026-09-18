@@ -4,7 +4,9 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { versionFromTag, bumpFor, expectedVersion, checkVersion, releaseVerdict } from '../bin/release.mjs'
+import {
+  versionFromTag, bumpFor, expectedVersion, checkVersion, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
+} from '../bin/release.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
@@ -154,4 +156,67 @@ test('the verdict prints what the merge workflow reads, on stdout, alone', () =>
   const r = run('verdict', '--tag', `v${pkg.version}`)
   assert.equal(r.status, 0, r.stderr)
   assert.deepEqual(JSON.parse(r.stdout), { release: false, tag: null, previousTag: `v${pkg.version}`, version: pkg.version })
+})
+
+// ---------------------------------------------------------------- the release itself
+
+test('the notes are the merged PR descriptions, oldest first, under their titles', () => {
+  const notes = releaseNotes({
+    tag: 'v1.2.0',
+    previousTag: 'v1.1.0',
+    repo: 'hugoforte/rig',
+    pulls: [
+      { number: 34, title: 'Name the release', url: 'https://github.com/hugoforte/rig/pull/34', body: 'Why it was needed.' },
+      { number: 33, title: 'Fix the probe', url: 'https://github.com/hugoforte/rig/pull/33', body: 'One line.' },
+    ],
+  })
+  assert.match(notes, /## Fix the probe \(\[#33\]\(https:\/\/github.com\/hugoforte\/rig\/pull\/33\)\)/)
+  assert.ok(notes.indexOf('Fix the probe') < notes.indexOf('Name the release'), 'oldest first')
+  assert.match(notes, /Why it was needed\./)
+})
+
+test('the notes end in the comparison with the release they follow', () => {
+  const notes = releaseNotes({ tag: 'v1.2.0', previousTag: 'v1.1.0', repo: 'hugoforte/rig', pulls: [] })
+  assert.match(notes, /compare\/v1\.1\.0\.\.\.v1\.2\.0/)
+})
+
+test('a first release compares against nothing and says so', () => {
+  const notes = releaseNotes({ tag: 'v1.0.0', previousTag: null, repo: 'hugoforte/rig', pulls: [] })
+  assert.doesNotMatch(notes, /compare/)
+  assert.match(notes, /commits\/v1\.0\.0/)
+})
+
+test('a range no pull request carried still produces notes, saying that', () => {
+  const notes = releaseNotes({ tag: 'v1.2.0', previousTag: 'v1.1.0', repo: 'hugoforte/rig', pulls: [] })
+  assert.match(notes, /no pull request/i)
+})
+
+test('the agent attribution footer is not release notes', () => {
+  const body = 'The real description.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n'
+  const notes = releaseNotes({ tag: 'v1.2.0', previousTag: 'v1.1.0', repo: 'hugoforte/rig', pulls: [{ number: 1, title: 'A', url: 'u', body }] })
+  assert.match(notes, /The real description\./)
+  assert.doesNotMatch(notes, /Generated with/)
+})
+
+test('a describe names the release the checkout is on and how far past it', () => {
+  assert.deepEqual(parseDescribe('v1.1.0-0-gabc1234'), { tag: 'v1.1.0', distance: 0 })
+  assert.deepEqual(parseDescribe('v1.1.0-3-gabc1234'), { tag: 'v1.1.0', distance: 3 })
+})
+
+test('anything git did not describe as a release names nothing', () => {
+  for (const junk of ['', null, 'fatal: no names found', 'v1.1.0']) assert.equal(parseDescribe(junk), null)
+})
+
+test('a checkout standing on a release is named by it, not by a sha', () => {
+  assert.equal(releaseMark({ describe: 'v1.1.0-0-gabc1234', head: 'abc1234def' }), 'v1.1.0')
+})
+
+test('a checkout past a release says how far past, and still names the commit', () => {
+  assert.equal(releaseMark({ describe: 'v1.1.0-3-gabc1234', head: 'abc1234def' }), '3 past v1.1.0, abc1234')
+  assert.equal(releaseMark({ describe: 'v1.1.0-1-gabc1234', head: 'abc1234def' }), '1 past v1.1.0, abc1234')
+})
+
+test('a checkout with no release in its history is named by its commit, as before', () => {
+  assert.equal(releaseMark({ describe: null, head: 'abc1234def' }), 'abc1234')
+  assert.equal(releaseMark({ describe: null, head: null }), null)
 })

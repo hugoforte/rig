@@ -83,3 +83,11 @@ _Avoid_: lock, block, version check
 **Save**:
 Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.
 _Avoid_: check in, sync, snapshot
+
+**Release**:
+A version of the tool, tagged `v1.2.3` and published with notes assembled from the pull requests it contains. What a checkout is named by when it stands on one.
+_Avoid_: version (when the published thing is meant), build, tag (that is how a release is recorded)
+
+**Bump**:
+The size of the version move a pull request asks for: minor, patch, or none. Read from the branch prefix, overridden by a `release:` label. The major is never a bump — it is derived from the migrations.
+_Avoid_: increment, version change

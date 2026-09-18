@@ -128,10 +128,57 @@ export function releaseVerdict ({ pkgVersion, latestTag }) {
   }
 }
 
+// ------------------------------------------------------------------------- the notes
+//
+// The body of a release is the descriptions of the pull requests that made it: already
+// written, already reviewed, and already saying why. Assembling them beats writing a
+// changelog entry by hand for the same reason the bump is computed rather than remembered.
+
+// What an agent signs at the end of a PR description. It belongs to the PR, not the release.
+const ATTRIBUTION = /^[ \t]*(🤖 Generated with \[Claude Code\].*|Co-authored-by:.*)$/gmi
+
+const descriptionOf = body => String(body ?? '').replace(/\r/g, '').replace(ATTRIBUTION, '').trim()
+
+export function releaseNotes ({ tag, previousTag, repo, pulls = [] }) {
+  // Oldest first: a release reads as the order things happened in, not the order an API
+  // handed them back.
+  const sections = [...pulls].sort((a, b) => a.number - b.number)
+    .map(p => `## ${p.title} ([#${p.number}](${p.url}))\n\n${descriptionOf(p.body)}`.trim())
+  const body = sections.length
+    ? sections.join('\n\n')
+    : 'No pull request carried the commits in this release.'
+  const changelog = previousTag
+    ? `https://github.com/${repo}/compare/${previousTag}...${tag}`
+    : `https://github.com/${repo}/commits/${tag}`
+  return `${body}\n\n**Full changelog**: ${changelog}\n`
+}
+
+// -------------------------------------------------------------- what a checkout is on
+//
+// `git describe --long` against the release tags, so a checkout can be named by the release
+// it stands on rather than by a sha nobody can place. `--long` is the point: it reports the
+// distance even when the tag is exact, so one call answers both halves.
+
+export function parseDescribe (out) {
+  const m = /^(v\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+$/.exec(String(out ?? '').trim())
+  return m ? { tag: m[1], distance: Number(m[2]) } : null
+}
+
+// How to name this checkout: the release, the distance past it, or — with no release in its
+// history at all — the commit, which is all rig could say before there were releases.
+export function releaseMark ({ describe, head }) {
+  const at = parseDescribe(describe)
+  const sha = head ? String(head).slice(0, 7) : null
+  if (!at) return sha
+  if (at.distance === 0) return at.tag
+  return sha ? `${at.distance} past ${at.tag}, ${sha}` : `${at.distance} past ${at.tag}`
+}
+
 // ------------------------------------------------------------------ the workflow's seam
 //
-// `check` is the PR's required status check; `verdict` is what the merge workflow reads to
-// decide whether to tag. Both take the gathered state as flags and read `package.json`
+// `check` is the PR's required status check, `verdict` is what the merge workflow reads to
+// decide whether to tag, and `notes` turns the pull requests it gathered into a release
+// body. All three take the gathered state as flags or stdin and read `package.json`
 // themselves, so a workflow step is one line and every rule above stays pure.
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -157,7 +204,14 @@ function main (argv) {
     console.log(JSON.stringify({ release: v.release, tag: v.tag, previousTag: v.previousTag, version: pkgVersion }))
     return v.ok ? 0 : 1
   }
-  console.error('usage: node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0')
+  if (command === 'notes') {
+    // The pull requests arrive on stdin as the JSON array the workflow assembled, because a
+    // release's worth of descriptions is far past what a command line holds.
+    const pulls = JSON.parse(fs.readFileSync(0, 'utf8') || '[]')
+    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls }))
+    return 0
+  }
+  console.error('usage: node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name < pulls.json')
   return 2
 }
 
