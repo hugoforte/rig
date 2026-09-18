@@ -271,7 +271,7 @@ test('update hands over to the code that arrived, not the code that started it',
   const r = rig(['update'])
   assert.match(r.out, /migrated: a migration that arrived with the update/,
     'the migration list that ran came from the code the update fetched')
-  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, '2.0.0',
+  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, readJson(pkgFile).version,
     'and the stamp moved to the format that arrived')
 })
 

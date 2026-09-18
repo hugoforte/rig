@@ -18,8 +18,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { MAJOR, toolVersion } from '../bin/version.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// What this tool stamps a data root with. Derived, because releases move the minor and a
+// hardcoded stamp would fail on the next one.
+const VERSION = toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')))
 let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
@@ -95,7 +99,7 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.match(fs.readFileSync(path.join(dataRoot, '.gitignore'), 'utf8'), /^\*\.env$/m)
   assert.equal(lastCommit(dataRoot), 'rig init: rig.json', 'the org-level half is committed by init itself')
   assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')),
-    { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' },
+    { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: VERSION },
     'a data root rig just created is stamped with the format it writes, not one behind')
   const local = readJson(path.join(tool, 'rig.local.json'))
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
@@ -603,7 +607,7 @@ test('doctor reports a pending migration, and never runs it', () => {
   const file = path.join(dataRoot, 'rig.json')
   const stamped = fs.readFileSync(file, 'utf8')
   const { writtenBy, ...unstamped } = readJson(file)
-  assert.equal(writtenBy, '1.0.0')
+  assert.equal(writtenBy, VERSION)
   fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
   try {
     const r = rig(['doctor'])
@@ -617,7 +621,7 @@ test('doctor reports a pending migration, and never runs it', () => {
 test('a data root from before stamping is warned about, then migrated by update', () => {
   const file = path.join(dataRoot, 'rig.json')
   const { writtenBy, ...unstamped } = readJson(file)   // as a rig from before this check left it
-  assert.equal(writtenBy, '1.0.0')
+  assert.equal(writtenBy, VERSION)
   fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
 
   const warned = rig(['save', '--work', 't7', '-m', 'a note'])
@@ -626,9 +630,9 @@ test('a data root from before stamping is warned about, then migrated by update'
 
   const updated = rig(['update'])
   assert.match(updated.out, /migrated: stamp the data root/)
-  assert.equal(readJson(file).writtenBy, '1.0.0')
+  assert.equal(readJson(file).writtenBy, VERSION)
   assert.equal(dirty(dataRoot), '', 'the migration is committed, not left in the tree')
-  assert.match(updated.out, /record format 1, stamped by rig 1\.0\.0/, 'the doctor checks run inline')
+  assert.match(updated.out, new RegExp(`record format ${MAJOR}, stamped by rig ${VERSION}`), 'the doctor checks run inline')
 })
 
 test('update does not migrate over a dirty data root that has no upstream', () => {
