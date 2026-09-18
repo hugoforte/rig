@@ -219,8 +219,10 @@ const bar = (n, max) => `<span class="bar" style="width:${max ? Math.max(2, Math
 
 const statCells = s => `<td class="n">${s.n}</td><td>${duration(s.median)}</td><td>${duration(s.p90)}</td>`
 
-const table = (head, rows) => rows.length
-  ? `<table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
+// `stats` tables size to their content, so a count and its median sit beside the label they
+// belong to instead of at opposite edges of the page.
+const table = (head, rows, cls = '') => rows.length
+  ? `<table class="${cls}"><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
   : '<p class="empty">Nothing to show yet.</p>'
 
 function orgSection (o) {
@@ -236,7 +238,7 @@ function orgSection (o) {
 
   const works = n => `${n} work${n === 1 ? '' : 's'}`
   const lede = [
-    `<p class="lede"><strong>${o.merged}</strong> merged · ${o.inFlight} in flight`,
+    `<p class="lede"><span class="count">${o.merged}</span> merged · ${o.inFlight} in flight`,
     o.unknown ? ` · <span class="warn">${o.unknown} with a lookup GitHub refused</span>` : '',
     `<br>work opened → last PR merged: <strong>${duration(o.lead.median)}</strong> median, `,
     `${duration(o.lead.p90)} p90, over ${works(o.lead.n)}`,
@@ -258,42 +260,95 @@ function orgSection (o) {
   <h3>Cycle time by type</h3>
   <p class="note">Split because a lockfile bump and a feature are both “a work”. One median
   across both is an artifact of what got counted.</p>
-  ${table(['Type', 'n', 'Median', 'p90'], types)}
+  ${table(['Type', 'n', 'Median', 'p90'], types, 'stats')}
 
   <h3>Where the time went</h3>
   <p class="note">Measured inside each pull request, not across a work — so a cross-repo work
   contributes one row per PR. Only the stretches GitHub can date: a PR nobody reviewed has no
   review row at all, which is why the counts differ.</p>
-  ${table(['Phase', 'n', 'Median', 'p90'], phases)}
+  ${table(['Phase', 'n', 'Median', 'p90'], phases, 'stats')}
 
   <h3>Repos per work</h3>
-  ${table(['Span', 'n'], spreadRows)}
+  ${table(['Span', 'n'], spreadRows, 'stats')}
 
   <h3>Most recently merged</h3>
   ${table(['Work', 'Type', 'Merged', 'Cycle'], recent)}
 </section>`
 }
 
+// Dark by default — a page opened from a file:// URL with no stated preference should look
+// like the terminal it was asked for from, not like a printout. The light variant is the
+// override, for the one machine whose OS says so.
 const STYLE = `
-:root { color-scheme: light dark; --edge: #8883; --dim: #8888; --bar: #4a90d9; }
-body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 62rem; padding: 2rem 1.25rem 4rem; }
-h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
-h2 { margin: 2.5rem 0 .25rem; font-size: 1.25rem; border-bottom: 2px solid var(--edge); padding-bottom: .25rem; }
-h3 { margin: 1.75rem 0 .35rem; font-size: .95rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
-table { border-collapse: collapse; width: 100%; margin: .25rem 0 0; }
-th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--edge); }
-thead th { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); border-bottom-width: 2px; }
+:root {
+  color-scheme: dark;
+  --bg: #12201a; --panel: #18291f; --raise: #1e3a2b; --edge: #2b4634;
+  --text: #e6efe8; --dim: #8ba795;
+  --accent: #e0559a; --good: #3ec98a; --amber: #e8b93a; --link: #6aa9e0;
+  --bar-from: #2f8f68; --bar-to: #3ec98a;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #fbfdfb; --panel: #f2f6f3; --raise: #e7efe9; --edge: #d3e0d7;
+    --text: #16241c; --dim: #5d7767;
+    --accent: #b5246c; --good: #1d7d55; --amber: #9a6f00; --link: #2a6aa8;
+    --bar-from: #7fd0aa; --bar-to: #2f8f68;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--text);
+  margin: 0 auto; max-width: 64rem; padding: 2.5rem 1.5rem 5rem;
+  -webkit-font-smoothing: antialiased;
+}
+h1 { margin: 0; font-size: 1.5rem; font-weight: 600; letter-spacing: -.01em; }
+h1 .tag {
+  display: inline-block; margin-right: .5rem; padding: .1rem .45rem; vertical-align: .12em;
+  border-radius: 5px; background: var(--accent); color: #fff;
+  font: 600 .7rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .04em;
+}
+h2 {
+  margin: 0 0 .1rem; font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em;
+  display: flex; align-items: center; gap: .5rem;
+}
+h2::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--accent); flex: none; }
+h3 {
+  margin: 1.6rem 0 .3rem; font-size: .7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .09em; color: var(--dim);
+}
+section { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 1.25rem 1.4rem 1.5rem; margin-top: 1.25rem; }
+table { border-collapse: collapse; width: 100%; margin: .2rem 0 0; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .38rem .55rem; border-bottom: 1px solid var(--edge); }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover th, tbody tr:hover td { background: var(--raise); }
+tbody tr:first-child th { border-top-left-radius: 7px; } tbody tr:first-child td:last-child { border-top-right-radius: 7px; }
+thead th {
+  font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--dim); border-bottom-color: var(--edge);
+}
 tbody th { font-weight: 500; }
-td.n { width: 4rem; }
-td.barcell { width: 60%; }
-.bar { display: block; height: .7rem; background: var(--bar); border-radius: 2px; }
-.lede { margin: .5rem 0 0; }
-.note, .empty, .caveats { color: var(--dim); font-size: .85rem; }
-.note { margin: .2rem 0 .4rem; }
-.warn { color: #c0392b; }
-header.meta { border: 1px solid var(--edge); border-radius: 6px; padding: .75rem 1rem; margin-top: 1rem; }
-header.meta p { margin: .3rem 0; font-size: .85rem; }
-.caveats li { margin: .2rem 0; }
+td.n { width: 3.5rem; }
+table.stats { width: auto; min-width: min(30rem, 100%); }
+table.stats th:not(:first-child), table.stats td { text-align: right; }
+table.stats td, table.stats thead th:not(:first-child) { padding-left: 1.6rem; }
+td.barcell { width: 58%; }
+.bar { display: block; height: .55rem; border-radius: 999px; background: linear-gradient(90deg, var(--bar-from), var(--bar-to)); }
+.lede { margin: .5rem 0 0; color: var(--dim); font-size: .92rem; }
+.lede strong { color: var(--text); font-size: 1.05rem; font-weight: 600; }
+.lede .count { color: var(--good); font-weight: 600; }
+.note, .empty, .caveats { color: var(--dim); font-size: .82rem; }
+.note { margin: .15rem 0 .5rem; }
+.warn { color: var(--amber); }
+code { background: var(--raise); border: 1px solid var(--edge); border-radius: 5px; padding: .05rem .3rem; font: .85em ui-monospace, SFMono-Regular, Consolas, monospace; }
+header.meta { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 1rem 1.25rem; margin-top: 1.1rem; }
+header.meta p { margin: .35rem 0; font-size: .82rem; color: var(--dim); }
+header.meta p:first-child { color: var(--text); }
+header.meta strong { color: var(--link); font-weight: 500; }
+header.meta em { font-style: normal; color: var(--text); }
+.caveats { padding-left: 1.1rem; margin: .3rem 0 0; }
+.caveats li { margin: .35rem 0; }
 `
 
 export function renderDash (payload, opts = {}) {
@@ -307,11 +362,11 @@ export function renderDash (payload, opts = {}) {
 <meta charset="utf-8">
 <title>rig — throughput and cycle time</title>
 <style>${STYLE}</style>
-<h1>Throughput and cycle time</h1>
+<h1><span class="tag">rig</span>Throughput and cycle time</h1>
 <header class="meta">
   <p>Generated <strong>${esc(s.generatedAt)}</strong> by rig ${esc(s.rig || '')} · scope: ${esc(scope)}${s.since ? ` · merged since ${esc(s.since)}` : ''}</p>
   <p>${stale}</p>
-  <p><strong>Two clocks.</strong> <em>Work opened → merged</em> starts when <code>rig new</code>
+  <p><em>Two clocks.</em> <em>Work opened → merged</em> starts when <code>rig new</code>
   ran, which is when the work was decided on and where its design time sits. <em>First commit →
   merged</em> starts when code first existed. Where the two are close, the work was committed
   as soon as it was started; where they differ, the difference is the thinking.</p>
