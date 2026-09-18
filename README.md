@@ -17,7 +17,7 @@ rig close
 - `gh`, logged in (`gh auth login`). rig uses it to find repos, read PR state and open issues.
 - `twg` on PATH, only for an org whose tickets live in Jira. GitHub-only setups never need it.
 
-`rig doctor` checks all of these once rig is installed. Windows is the first-class platform; Linux and macOS run the same code and the same tests.
+No need to verify them by hand: `rig doctor` checks all of these once rig is installed. Windows is the first-class platform; Linux and macOS run the same code and the same tests.
 
 ## Install
 
@@ -41,14 +41,14 @@ rig doctor
 `init` creates the data root as a git checkout with a first commit, writes `rig.local.json` in the clone beside `package.json` (gitignored: the paths, your identity per org), creates the work root, and sets `core.longpaths` so deep `node_modules` paths do not break. `your-org` is a GitHub org or user; `--tracker your-org=none` means no ticket system yet. Re-running `init` is safe. `doctor` should come back clean.
 
 ```powershell
-rig new my-first-work --title "Trying rig"
+rig new my-first-work --title "Trying rig"     # no prompt; a brief may be piped in
 cd C:\w\my-first-work
-rig attach some-repo
+rig attach some-repo                           # any repo in your org
 rig attach another-repo
 rig status
 ```
 
-`new` records the work in the data root and makes `C:\w\my-first-work`; a brief can be piped in on stdin, and at an interactive prompt none is expected. Commands that act on a work find it from the folder you are in, or take `--work my-first-work` from anywhere. Each `attach` finds the repo in your org through `gh`, clones a bare mirror once, cuts a worktree on the work's branch, and drafts a catalogue entry — flagged with a `!` — for a repo it has not seen; leave those for now. `status` shows every worktree, its branch, and how far it is from its base — all derived live, none of it written down.
+`new` records the work in the data root and makes `C:\w\my-first-work`. Commands that act on a work find it from the folder you are in, or take `--work my-first-work` from anywhere. Each `attach` finds the repo in your org through `gh`, clones a bare mirror once, cuts a worktree on the work's branch, and for a repo it has not seen drafts a catalogue entry, asking with a `!` that you correct it while the repo is fresh in your head. A first run can come back to that. `status` shows every worktree, its branch, and how far it is from its base — all derived live, none of it written down.
 
 The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` marks the design agreed. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees, keeping the record.
 
