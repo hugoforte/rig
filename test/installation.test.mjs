@@ -305,6 +305,22 @@ test('doctor reaches its verdict on a machine with no git on PATH', () => {
   assert.doesNotMatch(out, /git not found on PATH \(spawnSync/, 'it did not die on the way')
 })
 
+test('doctor reaches its verdict on a machine with neither free-space probe', () => {
+  // Free space is probed through PowerShell on Windows and `df` everywhere else. With
+  // neither on PATH the check is dropped, not attempted: `run` dies on a command that is
+  // not there, and this probe is the last check doctor makes, so dying here cost Linux and
+  // macOS the verdict line and a clean exit (hugoforte/rig#7).
+  const bare = { ...env }
+  for (const k of Object.keys(bare)) if (k.toLowerCase() === 'path') delete bare[k]
+  bare.PATH = path.dirname(process.execPath)
+  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'doctor'],
+    { encoding: 'utf8', env: bare })
+  const out = strip(r.stdout + r.stderr)
+  assert.doesNotMatch(out, /disk on/, 'a check it cannot make is dropped')
+  assert.doesNotMatch(out, /not found on PATH \(spawnSync/, 'and it did not die making it')
+  assert.match(out, /thing\(s\) to look at|all clear/, 'the verdict still lands')
+})
+
 test('update refuses a tool checkout with uncommitted changes, and still updates the data root', () => {
   pushToOrigin('another machine, commit 2')
   fs.appendFileSync(path.join(install, 'bin', 'rig.mjs'), '\n// local hack\n')

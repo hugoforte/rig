@@ -586,11 +586,16 @@ test('close with every PR merged comments on the GitHub ticket and closes it', (
   assert.match(issue.comments[0], /^Closed by `rig close`\.\n\n- billing: https:\/\/github\.com\/acme\/billing\/pull\/12\n/)
 })
 
-test('doctor after setup reports the data root state', () => {
+test('doctor after setup reports the data root state, and says so in its exit code', () => {
   const r = rig(['doctor'])
   assert.match(r.out, /data root is a git checkout/)
   assert.doesNotMatch(r.out, /uncommitted change/, 'every mutating command committed as it went')
   assert.match(r.out, /no upstream — local only/)
+  // Everything above a check has already printed by the time that check dies, so the exit
+  // code is the only thing that catches a crash on the way down — `doctor` used to die on
+  // the free-space probe and this test never noticed. Free space is the host's business and
+  // not this run's, so a genuinely full disk is the one complaint allowed to stand.
+  assert.equal(r.code, /only \d+ GB free/.test(r.out) ? 1 : 0, r.out)
 })
 
 test('the real global git config was never touched', () => {
