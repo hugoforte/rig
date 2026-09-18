@@ -1687,11 +1687,16 @@ cmds.dash = ({ flags }) => {
   const from = typeof flags.from === 'string' ? flags.from : null
   const opts = { org: typeof flags.org === 'string' ? flags.org : null, since: sinceFlag(flags.since) }
   // `--from` renders a payload captured earlier (`rig list --json > x.json`). The live path
-  // is one GitHub round trip per repo; iterating on the page must not cost that every time.
-  // A capture interrupted halfway is a likely input, and deserves its filename back rather
-  // than a JSON parser's stack trace.
+  // is one GitHub round trip per repo whose PR is not yet recorded; iterating on the page must
+  // not cost that every time. A capture interrupted halfway is a likely input, and deserves
+  // its filename back rather than a JSON parser's stack trace.
+  //
+  // `--quick` means the same here as it does for `list`: look nothing up. Since the terminal
+  // facts are recorded (decision 60) that still renders every closed work in full, with no
+  // GitHub call — which is the form to use in front of other people, and the one that works
+  // with no network.
   let payload
-  if (!from) payload = listPayload(config(), true)
+  if (!from) payload = listPayload(config(), !flags.quick)
   else if (!exists(from)) die(`no such payload file: ${from}`)
   else try { payload = readJson(from) } catch (e) { die(`${from} is not a rig payload: ${e.message}`) }
 
@@ -2258,6 +2263,7 @@ cmds.help = () => {
        --quick                     skip the git and GitHub lookups
   rig dash [--org o] [--since w]  render throughput and cycle time as one HTML page
        [--from payload.json]       render a payload captured earlier, instead of looking up
+       [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
   rig setup [repo...]             run the catalogue's setup commands
