@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
