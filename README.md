@@ -124,4 +124,4 @@ node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels release:none
 node --test
 ```
 
-Unit tests for the helpers and the GitHub and Jira adapters, an installation suite for freshness and updates, and one smoke test that copies the tool to a temp directory and runs it end to end with in-memory `gh` and `twg` (`RIG_FAKE_GITHUB`, `RIG_FAKE_TWG`). CI runs the same on Linux and Windows. [DESIGN.md](./DESIGN.md) holds the reasoning and the decision log, including the post-mortem of the tool this one replaced.
+Unit tests for the helpers and the GitHub and Jira adapters, an installation suite for freshness and updates, and smoke tests that copy the tool to a temp directory and run it end to end with in-memory `gh` and `twg` (`RIG_FAKE_GITHUB`, `RIG_FAKE_TWG`). Mirrors and worktrees are tested against real git: `RIG_FAKE_REMOTES` names a directory of bare repos, so `attach`, `detach`, `close` and `status` run on real clones, fetches and worktrees without a network. CI runs the same on Linux and Windows. [DESIGN.md](./DESIGN.md) holds the reasoning and the decision log, including the post-mortem of the tool this one replaced.

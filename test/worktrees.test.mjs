@@ -5,7 +5,7 @@
 //
 // One temp tree, shared, and the tests run in order — each leaves the mirrors and
 // worktrees where the next one expects them.
-import { test, before, after } from 'node:test'
+import { test, before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -15,8 +15,10 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from '../bin/worktrees
 import { RigError } from '../bin/errors.mjs'
 
 let tmp, remotesDir, mirrorRoot, workRoot, env
-// What the module narrated, newest last, cleared by `said()` so each test reads its own.
-let steps, warnings
+// What the module narrated, newest last. Reset before every test, so `said()` only ever
+// reads — a test that narrates without asserting cannot then weaken the next one.
+let steps = []
+let warnings = []
 
 // `run` is spawnSync-shaped, the way rig.mjs passes it in.
 const run = (cmd, args) => {
@@ -38,8 +40,9 @@ const trees = () => worktrees({
   step: s => steps.push(s),
   warn: s => warnings.push(s),
 })
-const said = () => { const was = { steps, warnings }; steps = []; warnings = []; return was }
+const said = () => ({ steps: steps.join('\n'), warnings: warnings.join('\n') })
 const mirrorOf = (org, repo) => path.join(mirrorRoot, org, `${repo}.git`)
+const remoteOf = (org, repo) => path.join(remotesDir, org, `${repo}.git`)
 const workDir = (work, repo) => path.join(workRoot, work, repo)
 
 // A bare repo standing in for `https://github.com/<org>/<repo>.git`, with one commit on
@@ -51,7 +54,7 @@ const publish = (org, repo, branch = 'main') => {
   fs.writeFileSync(path.join(seed, 'README.md'), `# ${repo}\n`)
   gitMust(seed, 'add', '-A')
   gitMust(seed, 'commit', '-q', '-m', `${repo}: first`)
-  const bare = mirrorOf(org, repo).replace(mirrorRoot, remotesDir)
+  const bare = remoteOf(org, repo)
   fs.mkdirSync(path.dirname(bare), { recursive: true })
   assert.equal(run('git', ['clone', '-q', '--bare', seed, bare]).code, 0)
   gitMust(seed, 'remote', 'add', 'origin', bare)
@@ -77,8 +80,9 @@ before(() => {
   env.GIT_CONFIG_NOSYSTEM = '1'
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig worktrees'
   env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'worktrees@example.invalid'
-  said()
 })
+
+beforeEach(() => { steps = []; warnings = [] })
 
 after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
 
@@ -95,29 +99,29 @@ test('cut mirrors the repo on first use and cuts a worktree on the work branch',
   assert.equal(gitMust(dest, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/t1')
   assert.ok(fs.existsSync(path.join(dest, 'README.md')), 'the remote\'s content is there')
   const { steps: narrated } = said()
-  assert.match(narrated.join('\n'), /mirroring acme\/billing \(first use\)/)
-  assert.match(narrated.join('\n'), /worktree billing → feat\/t1 \(base main\)/)
+  assert.match(narrated, /mirroring acme\/billing \(first use\)/)
+  assert.match(narrated, /worktree billing → feat\/t1 \(base main\)/)
 })
 
 test('the mirror is bare, rig-owned, and keeps remote branches out of its own refs', () => {
   const mirror = mirrorOf('acme', 'billing')
   assert.equal(gitMust(mirror, 'rev-parse', '--is-bare-repository'), 'true')
   assert.equal(gitMust(mirror, 'config', 'remote.origin.fetch'), '+refs/heads/*:refs/remotes/origin/*')
-  assert.equal(gitMust(mirror, 'rev-parse', '--verify', 'refs/remotes/origin/main').length, 40)
+  assert.equal(gitMust(mirror, 'rev-parse', '--verify', 'refs/remotes/origin/main'),
+    gitMust(path.join(tmp, 'seed', 'acme-billing'), 'rev-parse', 'HEAD'),
+    'the mirror holds what the remote calls main')
 })
 
 test('the base is the repo\'s own remote HEAD, not a global default', () => {
   publish('acme', 'orders', 'trunk')
   const { base } = trees().cut({ org: 'acme', repo: 'orders', branch: 'feat/t1', dest: workDir('t1', 'orders') })
   assert.equal(base, 'trunk')
-  said()
 })
 
 test('cut refuses rather than cutting a second worktree over a directory that exists', () => {
   assert.throws(
     () => trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/t9', dest: workDir('t1', 'billing') }),
     e => e instanceof RigError && /already exists/.test(e.message))
-  said()
 })
 
 test('a fresh worktree is clean and level with its base', () => {
@@ -144,8 +148,8 @@ test('every cut fetches, so a later worktree sees what the remote gained', () =>
 
   assert.match(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), /someone else pushed/)
   const { steps: narrated } = said()
-  assert.match(narrated.join('\n'), /fetching acme\/billing/)
-  assert.doesNotMatch(narrated.join('\n'), /mirroring/, 'the mirror is made once, not per cut')
+  assert.match(narrated, /fetching acme\/billing/)
+  assert.doesNotMatch(narrated, /mirroring/, 'the mirror is made once, not per cut')
   // And the fetch moved the shared mirror's idea of main, so the earlier worktree is behind.
   assert.deepEqual(trees().state({ dir: workDir('t1', 'billing'), base: 'main' }),
     { missing: false, dirty: 0, ahead: 1, behind: 1 })
@@ -171,7 +175,7 @@ test('a branch already on the remote is checked out and tracked, loudly, not cre
   assert.equal(gitMust(dest, 'rev-parse', '--abbrev-ref', '@{u}'), 'origin/feat/theirs')
   assert.match(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), /their work/)
   const { warnings: complained } = said()
-  assert.match(complained.join('\n'), /branch feat\/theirs already exists on acme\/billing — checking it out \(not creating\)/)
+  assert.match(complained, /branch feat\/theirs already exists on acme\/billing — checking it out \(not creating\)/)
 })
 
 test('state reports a worktree whose directory is gone, without asking git anything', () => {
@@ -206,28 +210,32 @@ test('anyMirror finds a mirror to ask git about an org, and answers nothing for 
 })
 
 test('the base falls back to a conventional branch when the remote never says what HEAD is', () => {
-  const seed = publish('acme', 'shipping')
+  publish('acme', 'shipping')
   // A remote whose HEAD points at a branch that does not exist: `remote set-head -a` has
   // nothing to copy, so nothing ever writes refs/remotes/origin/HEAD in the mirror.
-  gitMust(seed, 'push', '-q', 'origin', 'main')
-  gitMust(path.join(remotesDir, 'acme', 'shipping.git'), 'symbolic-ref', 'HEAD', 'refs/heads/nope')
+  gitMust(remoteOf('acme', 'shipping'), 'symbolic-ref', 'HEAD', 'refs/heads/nope')
 
   const { base } = trees().cut({ org: 'acme', repo: 'shipping', branch: 'feat/t4', dest: workDir('t4', 'shipping') })
   assert.equal(base, 'main')
   assert.notEqual(git(mirrorOf('acme', 'shipping'), 'symbolic-ref', 'refs/remotes/origin/HEAD').code, 0,
     'the mirror was never told what the remote calls HEAD')
-  said()
 })
 
 test('a repo with no branches at all fails by name instead of guessing a base', () => {
-  const bare = path.join(remotesDir, 'acme', 'empty.git')
+  const bare = remoteOf('acme', 'empty')
   fs.mkdirSync(path.dirname(bare), { recursive: true })
   assert.equal(run('git', ['init', '-q', '--bare', bare]).code, 0)
 
   assert.throws(
     () => trees().cut({ org: 'acme', repo: 'empty', branch: 'feat/t5', dest: workDir('t5', 'empty') }),
     e => e instanceof RigError && /cannot determine the remote HEAD of acme\/empty/.test(e.message))
-  said()
+})
+
+test('a repo with no remote to clone from fails on the clone, in git\'s own words', () => {
+  assert.throws(
+    () => trees().cut({ org: 'acme', repo: 'imaginary', branch: 'feat/t7', dest: workDir('t7', 'imaginary') }),
+    e => e instanceof RigError && /git clone --bare/.test(e.message))
+  assert.ok(!fs.existsSync(mirrorOf('acme', 'imaginary')), 'no half-made mirror left behind')
 })
 
 test('an unreachable remote warns and works from what the mirror already has', () => {
@@ -237,5 +245,10 @@ test('an unreachable remote warns and works from what the mirror already has', (
   assert.equal(base, 'trunk')
   assert.ok(fs.existsSync(path.join(workDir('t6', 'orders'), 'README.md')))
   const { warnings: complained } = said()
-  assert.match(complained.join('\n'), /fetch failed for acme\/orders/)
+  assert.match(complained, /fetch failed for acme\/orders/)
+})
+
+test('remove answers git\'s reason when there is no mirror to remove the worktree from', () => {
+  const failed = trees().remove({ org: 'nobody', repo: 'nothing', dir: workDir('t8', 'nothing') })
+  assert.ok(failed, 'a removal that could not happen is reported, never reported as done')
 })

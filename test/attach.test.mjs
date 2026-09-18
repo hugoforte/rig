@@ -158,12 +158,14 @@ test('status reads each worktree live: clean, then the change, then the commit',
 test('status says so when a worktree has been deleted out from under the work', () => {
   fs.rmSync(worktree('orders'), { recursive: true, force: true })
   const out = rig(['status', '--work', 't1']).out
-  assert.match(out, /MISSING/)
-  assert.doesNotMatch(out, /orders \(acme, base trunk\)[\s\S]*?changes/, 'nothing is asked of a tree that is gone')
+  // The whole orders block: its path, marked missing, and then straight to the PR line —
+  // nothing is asked of a tree that is gone.
+  assert.match(out, /orders \(acme, base trunk\)\n {2}path {4}\S[^\n]*MISSING\n {2}pr {6}/)
 })
 
 test('detach removes the worktree and the record, and prunes the mirror', () => {
-  // `git worktree remove` refuses a directory that is already gone; put it back first.
+  // The directory is already gone (the test above deleted it) and `git worktree remove`
+  // refuses that; --force is what carries it through to the prune.
   assert.equal(rig(['detach', 'orders', '--work', 't1', '--force']).code, 0)
   assert.equal(record().repos.length, 1)
   assert.doesNotMatch(gitMust(mirrorOf('orders'), 'worktree', 'list'), /t1/)

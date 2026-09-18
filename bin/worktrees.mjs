@@ -127,7 +127,6 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // mirror carries the org's remote URL — which is what a `hasconfig:remote.*.url`
     // conditional include matches on — so any of them answers for the whole org.
     anyMirror (org) {
-      if (!mirrorRoot) return null
       const dir = path.join(mirrorRoot, org)
       try {
         const hit = fs.readdirSync(dir).find(e => e.endsWith('.git'))
