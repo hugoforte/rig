@@ -22,7 +22,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { MAJOR, toolVersion } from '../bin/version.mjs'
+import { MAJOR, MIGRATIONS, toolVersion } from '../bin/version.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // What this tool stamps a data root with. Derived, because releases move the minor and a
@@ -702,6 +702,31 @@ test('close with every PR merged comments on the GitHub ticket and closes it', (
   assert.match(issue.comments[0], /^Closed by `rig close`\.\n\n- billing: https:\/\/github\.com\/acme\/billing\/pull\/12\n/)
 })
 
+test('close recorded the merged PR\'s terminal facts before saving, and a record needs no lookup to read back', () => {
+  const saved = readJson(path.join(dataRoot, 'work', 'old', 'work.json'))
+  const stored = saved.repos[0].pr
+  assert.equal(stored.number, 12)
+  assert.equal(stored.url, 'https://github.com/acme/billing/pull/12')
+  assert.equal(stored.openedAt, '2026-01-02T00:00:00Z')
+  assert.equal(stored.mergedAt, '2026-01-03T00:00:00Z')
+  assert.equal(stored.firstCommitAt, '2026-01-01T09:00:00Z')
+  assert.deepEqual(Object.keys(stored).sort(),
+    ['approvedAt', 'firstCommitAt', 'firstReviewAt', 'mergedAt', 'number', 'openedAt', 'url'].sort(),
+    'only terminal facts — never state, dirty, or ahead/behind')
+
+  // gh unreachable: a stored record needs no lookup, live or `--quick` alike.
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  for (const args of [['list', '--json', '--quick'], ['list', '--json']]) {
+    const billing = JSON.parse(rig(args).stdout).works.find(w => w.id === 'old').repos[0]
+    assert.equal(billing.pr.recorded, true)
+    assert.equal(billing.pr.mergedAt, '2026-01-03T00:00:00Z')
+    assert.equal(billing.firstCommitAt, '2026-01-01T09:00:00Z')
+    assert.ok(!('prUnknown' in billing), 'a stored record has nothing left to refuse')
+  }
+  setGithub(state)
+})
+
 test('doctor after setup reports the data root state, and says so in its exit code', () => {
   const r = rig(['doctor'])
   assert.match(r.out, /data root is a git checkout/)
@@ -741,7 +766,7 @@ test('doctor reports a pending migration, and never runs it', () => {
   fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
   try {
     const r = rig(['doctor'])
-    assert.match(r.out, /1 pending migration\(s\) — run `rig update`: stamp the data root/)
+    assert.match(r.out, new RegExp(`${MIGRATIONS.length} pending migration\\(s\\) — run \`rig update\`: stamp the data root`))
     assert.equal(readJson(file).writtenBy, undefined, 'reported, not run')
   } finally {
     fs.writeFileSync(file, stamped)
@@ -756,7 +781,7 @@ test('a data root from before stamping is warned about, then migrated by update'
 
   const warned = rig(['save', '--work', 't7', '-m', 'a note'])
   assert.equal(warned.code, 0, warned.out)
-  assert.match(warned.out, /record format 0, this rig writes 1/)
+  assert.match(warned.out, new RegExp(`record format 0, this rig writes ${MAJOR}`))
 
   const updated = rig(['update'])
   assert.match(updated.out, /migrated: stamp the data root/)
@@ -791,7 +816,7 @@ test('update does not migrate over a dirty data root that has no upstream', () =
 test('a second update migrates nothing', () => {
   const r = rig(['update'])
   assert.doesNotMatch(r.out, /migrated:/)
-  assert.match(r.out, /record format 1/)
+  assert.match(r.out, new RegExp(`record format ${MAJOR}`))
 })
 
 test('a rig older than the data root refuses to write, and still reads', () => {
@@ -801,7 +826,7 @@ test('a rig older than the data root refuses to write, and still reads', () => {
 
   const blocked = rig(['save', '--work', 't7', '-m', 'from an older rig'])
   assert.equal(blocked.code, 1, blocked.out)
-  assert.match(blocked.out, /writes record format 1/)
+  assert.match(blocked.out, new RegExp(`writes record format ${MAJOR}`))
   assert.match(blocked.out, /is at 99/)
 
   const listed = rig(['list', '--quick'])
@@ -810,4 +835,167 @@ test('a rig older than the data root refuses to write, and still reads', () => {
 
   fs.writeFileSync(file, JSON.stringify(saved, null, 2) + '\n')
   assert.equal(rig(['save', '--work', 't7', '-m', 'restored']).code, 0)
+})
+
+// `rig backfill` reads every work.json directly, so a work for it needs no work-root
+// folder at all — planted the same way the "old-shaped record" test above plants one.
+const plantWork = (id, record) => {
+  const dir = path.join(dataRoot, 'work', id)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'work.json'), JSON.stringify(record, null, 2))
+}
+
+test('rig backfill fills a merged PR\'s terminal facts, and leaves an unmerged one alone', () => {
+  const state = github()
+  state.repos['acme/checkout'] = {
+    prs: [{
+      branch: 'feat/t8', number: 20, state: 'MERGED', url: 'https://github.com/acme/checkout/pull/20',
+      openedAt: '2026-02-01T00:00:00Z', mergedAt: '2026-02-05T00:00:00Z',
+      commits: ['2026-01-30T09:00:00Z'],
+      reviews: [{ state: 'APPROVED', submittedAt: '2026-02-04T00:00:00Z' }],
+    }],
+  }
+  state.repos['acme/ledger'] = {
+    prs: [{
+      branch: 'feat/t8', number: 21, state: 'OPEN', url: 'https://github.com/acme/ledger/pull/21',
+      openedAt: '2026-02-01T00:00:00Z', mergedAt: null, commits: ['2026-02-01T09:00:00Z'],
+    }],
+  }
+  setGithub(state)
+
+  plantWork('t8', {
+    id: 't8', title: 'Backfill work', tickets: [], ticketsDeclined: true, type: 'feat',
+    branch: 'feat/t8', status: 'closed',
+    repos: [
+      { repo: 'checkout', org: 'acme', base: 'main', attachedAt: '2026-02-01T00:00:00.000Z' },
+      { repo: 'ledger', org: 'acme', base: 'main', attachedAt: '2026-02-01T00:00:00.000Z' },
+    ],
+    createdAt: '2026-02-01T00:00:00.000Z', closedAt: '2026-02-05T01:00:00.000Z',
+  })
+
+  const record = path.join(dataRoot, 'work', 't8', 'work.json')
+  const r = rig(['backfill', '--work', 't8'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /recorded PR #20/)
+  assert.match(r.out, /backfilled 1 PR record\(s\) across 1 work\(s\)/)
+
+  const saved = readJson(record)
+  assert.deepEqual(Object.keys(saved.repos[0].pr).sort(),
+    ['approvedAt', 'firstCommitAt', 'firstReviewAt', 'mergedAt', 'number', 'openedAt', 'url'].sort(),
+    'only terminal facts stored, never state or dirty/ahead/behind')
+  assert.equal(saved.repos[0].pr.number, 20)
+  assert.equal(saved.repos[0].pr.firstCommitAt, '2026-01-30T09:00:00Z')
+  assert.equal(saved.repos[0].pr.approvedAt, '2026-02-04T00:00:00Z')
+  assert.equal(saved.repos[1].pr, undefined, 'the open PR on ledger is not terminal yet — nothing to store')
+  assert.equal(lastCommit(dataRoot), 'rig backfill t8: 1 PR record(s) across 1 work(s)')
+})
+
+test('a second backfill run stores nothing, and says so', () => {
+  const before = lastCommit(dataRoot)
+  const r = rig(['backfill', '--work', 't8'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /nothing to backfill — every merged PR already has a stored record/)
+  assert.equal(lastCommit(dataRoot), before, 'nothing new to commit')
+  assert.equal(dirty(dataRoot), '')
+})
+
+test('--force refreshes an entry that is already stored; without it, a stored entry is left alone', () => {
+  const state = github()
+  // An earlier approval than the one already stored — proof that a refresh actually asked
+  // GitHub again, rather than recomputing from what was already on disk.
+  state.repos['acme/checkout'].prs[0].reviews.unshift({ state: 'APPROVED', submittedAt: '2026-02-03T00:00:00Z' })
+  setGithub(state)
+
+  const plain = rig(['backfill', '--work', 't8'])
+  assert.match(plain.out, /nothing to backfill/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].pr.approvedAt, '2026-02-04T00:00:00Z')
+
+  const forced = rig(['backfill', '--work', 't8', '--force'])
+  assert.equal(forced.code, 0, forced.out)
+  assert.match(forced.out, /refreshed PR #20/)
+  assert.match(forced.out, /backfilled 1 PR record\(s\)/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].pr.approvedAt, '2026-02-03T00:00:00Z')
+})
+
+test('backfill: a lookup GitHub refuses is reported and left unstored, never cached as unknown', () => {
+  const state = github()
+  state.repos['acme/warehouse'] = {
+    prs: [{
+      branch: 'feat/t9', number: 30, state: 'MERGED', url: 'https://github.com/acme/warehouse/pull/30',
+      openedAt: '2026-02-10T00:00:00Z', mergedAt: '2026-02-12T00:00:00Z', commits: ['2026-02-09T00:00:00Z'],
+    }],
+  }
+  setGithub(state)
+  plantWork('t9', {
+    id: 't9', title: 'Unresolvable at first', tickets: [], ticketsDeclined: true, type: 'feat',
+    branch: 'feat/t9', status: 'closed',
+    repos: [{ repo: 'warehouse', org: 'acme', base: 'main', attachedAt: '2026-02-10T00:00:00.000Z' }],
+    createdAt: '2026-02-10T00:00:00.000Z', closedAt: '2026-02-12T01:00:00.000Z',
+  })
+
+  setGithub({ ...state, auth: 'missing' })
+  let r = rig(['backfill', '--work', 't9'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /nothing to backfill/)
+  assert.match(r.out, /GitHub would not answer for 1, left unstored/)
+  assert.match(r.out, /t9\/warehouse: gh not found on PATH/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].pr, undefined,
+    'a refused lookup is not "no PR" — the next run gets a real try, not a cached guess')
+
+  setGithub(state)   // gh is back
+  r = rig(['backfill', '--work', 't9'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /backfilled 1 PR record\(s\)/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].pr.number, 30)
+})
+
+test('rig backfill with no --work scans every work in the data root', () => {
+  const state = github()
+  state.repos['acme/reporting'] = {
+    prs: [{
+      branch: 'feat/t10', number: 40, state: 'MERGED', url: 'https://github.com/acme/reporting/pull/40',
+      openedAt: '2026-02-15T00:00:00Z', mergedAt: '2026-02-16T00:00:00Z', commits: ['2026-02-14T00:00:00Z'],
+    }],
+  }
+  setGithub(state)
+  plantWork('t10', {
+    id: 't10', title: 'Scanned without --work', tickets: [], ticketsDeclined: true, type: 'feat',
+    branch: 'feat/t10', status: 'closed',
+    repos: [{ repo: 'reporting', org: 'acme', base: 'main', attachedAt: '2026-02-15T00:00:00.000Z' }],
+    createdAt: '2026-02-15T00:00:00.000Z', closedAt: '2026-02-16T01:00:00.000Z',
+  })
+
+  // Every other work in the data root already has whatever it will ever have stored, so the
+  // one new entry here is the only thing left to find without being told where to look.
+  const r = rig(['backfill'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /backfilled 1 PR record\(s\) across 1 work\(s\)/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't10', 'work.json')).repos[0].pr.number, 40)
+})
+
+test('acceptance: with gh unavailable, rig list --json still emits complete PR timestamps for backfilled work', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  for (const args of [['list', '--json', '--quick'], ['list', '--json']]) {
+    const r = rig(args)
+    assert.equal(r.code, 0, r.out)
+    const checkout = JSON.parse(r.stdout).works.find(w => w.id === 't8').repos.find(x => x.repo === 'checkout')
+    assert.equal(checkout.pr.recorded, true)
+    assert.equal(checkout.pr.number, 20)
+    assert.equal(checkout.pr.mergedAt, '2026-02-05T00:00:00Z')
+    assert.equal(checkout.pr.approvedAt, '2026-02-03T00:00:00Z')
+    assert.equal(checkout.firstCommitAt, '2026-01-30T09:00:00Z')
+    assert.equal(checkout.pr.state, 'MERGED', 'a record exists only for a merged PR, and says so')
+    assert.ok(!('prUnknown' in checkout), 'a stored record needs no GitHub call, so there is nothing to refuse')
+  }
+  // The point of the payload is the page. Rendering it is what proves the work did not
+  // quietly drop out of every figure on the way.
+  const page = rig(['dash', '--no-open'])
+  assert.equal(page.code, 0, page.out)
+  const html = fs.readFileSync(/dashboard at (.+)$/m.exec(strip(page.out))[1].trim(), 'utf8')
+  // t10 is backfilled, single-repo and merged. Before the reader put `state` back, a recorded
+  // PR reduced to "not merged" and every closed work left the figures as in flight instead.
+  assert.match(html, /<th>t10<\/th>/, 'a backfilled work appears among the merged')
+  assert.match(html, /count">3<\/span> merged · 0 in flight/, 'and none of them read as in flight')
+  setGithub(state)
 })

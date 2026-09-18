@@ -326,7 +326,7 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write gate — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close', 'backfill'])
 
 // Before a mutating command reads anything. rig pushes the data root but never pulled it, so
 // a second machine read stale records and wrote on top of them. Fast-forward only: a data
@@ -1491,6 +1491,33 @@ function prTiming (entry, pr) {
   return { ...times, firstCommitAt: times.firstCommitAt || branchFirstCommitAt(entry), error }
 }
 
+// The stored shape (AGENTS.md rule 3's narrow exception, DESIGN.md decision 60): a merged
+// PR's terminal facts, and nothing else — never `state`, dirty, or ahead/behind, which keep
+// moving after the record is written. `close` and `backfill` both reach a MERGED pr this way,
+// so there is exactly one place that decides what "terminal" means. An error here is the
+// caller's cue to store nothing (no negative caching): a rate limit is transient, and a record
+// saying "unknown forever" is worse than asking again next time.
+function terminalPr (entry, pr) {
+  // The one place that decides what terminal means, rather than each caller deciding again.
+  if (!pr || pr.state !== 'MERGED') return { error: `${entry.repo}: PR is ${pr ? pr.state.toLowerCase() : 'absent'}, not merged` }
+  const timing = prTiming(entry, pr)
+  if (timing.error) return { error: timing.error }
+  // Without the first commit there is no start line, and a record is what stops rig asking
+  // again — so an incomplete one would cache the missing half of every cycle time forever.
+  if (!timing.firstCommitAt) return { error: `${entry.repo}#${pr.number}: no first commit found, so there is nothing to measure from` }
+  return {
+    record: {
+      number: pr.number,
+      url: pr.url,
+      openedAt: pr.openedAt,
+      firstCommitAt: timing.firstCommitAt,
+      firstReviewAt: timing.firstReviewAt ?? null,
+      approvedAt: timing.approvedAt ?? null,
+      mergedAt: pr.mergedAt,
+    },
+  }
+}
+
 // The first commit this branch adds over its base, or null when the worktree is gone or git
 // cannot resolve the range. Never the base's own history.
 function branchFirstCommitAt (entry) {
@@ -1528,6 +1555,31 @@ function repoEntryJson (cfg, entry, branch, live) {
     base: entry.base,
     role: entry.role || '',
     attachedAt: entry.attachedAt || null,
+  }
+  // A stored `pr` is a merged PR's terminal facts (`rig backfill`, `rig close`) — recorded
+  // once and never re-asked, so this reads it back with no GitHub call at all, live or
+  // `--quick` alike. `recorded: true` says where it came from, so a consumer never mistakes
+  // it for a lookup that just happened.
+  // `state` is not stored — it is the thing that kept moving — but a record only ever exists
+  // for a merged PR, so the reader knows it without asking. Put back here, the payload is the
+  // same shape either way and no consumer has to learn that a recorded PR is a special case.
+  // Listed rather than spread, for the same reason the record above is.
+  if (entry.pr) {
+    out.pr = {
+      number: entry.pr.number,
+      state: 'MERGED',
+      url: entry.pr.url,
+      openedAt: entry.pr.openedAt,
+      firstReviewAt: entry.pr.firstReviewAt ?? null,
+      approvedAt: entry.pr.approvedAt ?? null,
+      mergedAt: entry.pr.mergedAt,
+      recorded: true,
+    }
+    out.firstCommitAt = entry.pr.firstCommitAt
+    // Local git state costs no GitHub call either, so a live listing still gets it — a
+    // record does not mean the worktree stopped being worth reporting on.
+    if (live) Object.assign(out, trees(cfg).state({ dir: entry.path, base: entry.base }))
+    return out
   }
   if (!live) return out
   const s = repoState(cfg, entry, branch)
@@ -1747,6 +1799,19 @@ cmds.close = ({ flags }) => {
     process.exitCode = 1
     return
   }
+  // Every PR left is terminal by now — blockers above already refused an open one — so this
+  // is the one moment to record it, before the worktree the branch fallback would read from
+  // is removed below. A record for a different PR number is re-taken: the branch carried a
+  // second PR after the first was recorded, and the newest is the one that finished the work.
+  work.repos.forEach((r, i) => {
+    const s = states[i]
+    if (!s.pr || s.pr.state !== 'MERGED' || r.pr?.number === s.pr.number) return
+    const { record, error } = terminalPr(r, s.pr)
+    if (record) r.pr = record
+    // Said out loud: a close that could not record looks identical to one that did, and the
+    // work is about to lose the worktree its first commit could have been read from.
+    else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
+  })
   for (const r of work.repos) {
     if (!exists(r.path)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force: !!flags.force })
@@ -1770,6 +1835,59 @@ cmds.close = ({ flags }) => {
   saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as closed
   ticketWriteBack(work, states)
   ok(`closed ${id} — context doc kept at ${contextFile(id)}`)
+}
+
+// Fills `repos[].pr` for merged PRs `close` never got the chance to record — a work closed
+// before the field existed, or one closed with `--force` past a lookup that failed at the
+// time. Its own command, not folded into `close` or `update`, because it is explicit,
+// resumable, and the one place that pays the cost of the lookups `repoEntryJson` is written
+// to never pay again (context.md, "rig backfill").
+//
+// Idempotent by construction: an entry already carrying `pr` is skipped, so a second run
+// finds nothing to do and says so — `--force` is the only way to re-ask. No negative
+// caching: an entry GitHub would not answer for is reported and left unstored, because a
+// rate limit is transient and a record saying "unknown forever" is worse than a retry.
+cmds.backfill = ({ flags }) => {
+  const cfg = config()
+  const ids = flags.work ? [flags.work] : listWorkIds()
+  let filled = 0
+  let touchedWorks = 0
+  const unresolved = []
+  for (const id of ids) {
+    const work = loadWork(cfg, id)
+    // Only a closed work is finished. A branch that is still open can carry a second PR
+    // (`bin/github.mjs` answers with the newest), and a record is what stops rig looking —
+    // so recording the first merge of a work still in progress would freeze the wrong one.
+    if (!work.closedAt) continue
+    let changed = false
+    for (const entry of work.repos) {
+      const already = !!entry.pr
+      if (already && !flags.force) continue
+      let pr = null
+      const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, work.branch) })
+      if (prError) { unresolved.push(`${id}/${entry.repo}: ${prError}`); continue }
+      if (!pr || pr.state !== 'MERGED') continue   // not terminal — nothing to store, nothing to report
+      const { record, error } = terminalPr(entry, pr)
+      if (error) { unresolved.push(`${id}/${entry.repo}: ${error}`); continue }
+      entry.pr = record
+      changed = true
+      filled++
+      step(`${id}/${entry.repo}: ${already ? 'refreshed' : 'recorded'} PR #${pr.number}`)
+    }
+    // Registered as soon as something is on disk, not at the end: a run interrupted after
+    // this work still has its records committed under their own message (decision 42).
+    if (changed) { touchedWorks++; saveWork(cfg, work); commitAs('', `${filled} PR record(s) so far`) }
+  }
+  if (filled) {
+    commitAs(flags.work || '', `${filled} PR record(s) across ${touchedWorks} work(s)`)
+    ok(`backfilled ${filled} PR record(s) across ${touchedWorks} work(s)`)
+  } else {
+    say('nothing to backfill — every merged PR already has a stored record')
+  }
+  if (unresolved.length) {
+    warn(`GitHub would not answer for ${unresolved.length}, left unstored (retry later):`)
+    for (const u of unresolved) say(`    ${C.red('•')} ${u}`)
+  }
 }
 
 cmds.catalog = ({ flags, positional }) => {
@@ -2148,6 +2266,11 @@ cmds.help = () => {
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
                                   --designed records the "design agreed" gate
   rig close [--force]             safety-checked teardown
+  rig backfill [--work <id>] [--force]
+                                  store each merged PR's terminal facts (number, url,
+                                  openedAt, firstCommitAt, firstReviewAt, approvedAt,
+                                  mergedAt) in work.json, so list/dash never re-ask GitHub
+                                  for them; --force refreshes what is already stored
   rig doctor                      environment + consistency checks
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
@@ -2167,7 +2290,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  activityAt, relativeAge, prTiming, branchFirstCommitAt, sinceFlag,
+  activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 
