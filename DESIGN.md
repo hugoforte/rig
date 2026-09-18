@@ -4,7 +4,20 @@ A cross-repo work harness. You describe a piece of work, it decides which repos 
 involved, assembles worktrees for them in one folder, and keeps the durable knowledge
 about that work in a repo you commit.
 
-Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split.
+Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split; versioning and freshness added 2026-09-17 as 1.0.0 (§5, decisions 45–49, ADR-0002).
+
+Vocabulary is [CONTEXT.md](./CONTEXT.md); this document uses it unchanged.
+
+1. [The problem, stated honestly](#1-the-problem-stated-honestly)
+2. [Shape](#2-shape)
+3. [On-disk layout](#3-on-disk-layout)
+4. [The catalogue](#4-the-catalogue)
+5. [Commands](#5-commands)
+6. [The repo interview](#6-the-repo-interview)
+7. [Documents](#7-documents)
+8. [Staying used](#8-staying-used)
+9. [Scope: in and out](#9-scope-in-and-out)
+10. [Decision log](#10-decision-log)
 
 ---
 
@@ -69,13 +82,7 @@ brief in" design) — both already authenticated on the machine.
 
 ### 2.1 Vocabulary
 
-- **work** — one cross-repo unit of effort. Covers tickets, multi-ticket efforts (two
-  tickets, one change), migrations, and spikes. Not called a "story": maintenance tickets
-  aren't stories, and not all work has a ticket.
-- **catalogue** — committed, hand-corrected knowledge about org repos.
-- **mirror** — a bare clone `rig` owns, from which worktrees are cut.
-- **data root** — where the catalogue, the work records and `rig.json` live. The tool's own
-  checkout by default; a separate private repo when the tool is public (§3).
+The terms this document leans on — work, catalogue, mirror, data root, tool, installation, work root, freshness, refresh, record format, write gate — are defined once, in [CONTEXT.md](./CONTEXT.md), with the synonyms each one displaces. A term used here means what it means there.
 
 ---
 
@@ -91,10 +98,11 @@ D:\rig\                          the tool. durable, committed, public
   bin/rig.mjs                    the CLI
   prompts/  templates/           markdown printed by `rig prompt`; doc scaffolds
   rig.local.json                 gitignored: machine paths, identities, secrets sources,
-                                 and `dataRoot` -> D:\rig-data
+                                 `dataRoot` -> D:\rig-data, and a freshness override
 
 D:\rig-data\                     the knowledge. durable, committed, private
-  rig.json                       org-level: orgs, tracker per org
+  rig.json                       org-level: orgs, tracker per org, freshness policy,
+                                 and `writtenBy` — the record-format stamp (ADR-0002)
   catalog/<org>/<repo>.md        repo knowledge
   work/<work-id>/
     context.md                   THE prose doc. Only copy.
@@ -102,6 +110,7 @@ D:\rig-data\                     the knowledge. durable, committed, private
 
 D:\w\                            disposable, gitignored, reconstructible
   .mirrors/<org>/<repo>.git      bare mirrors (a cache)
+  .rig/                          freshness and data-fetch caches (decision 45)
   PROJ-42-refund-double-charge/
     AGENTS.md                    GENERATED, regenerated on every mutation
     CLAUDE.md                    pointer
@@ -177,17 +186,20 @@ your head. The catalogue's value comes from those corrections, not from a writin
 ## 5. Commands
 
 ```
-rig init                    one-time setup; writes rig.local.json
-rig new <id> [--type]       create a work: interview, worktrees, context doc
+rig init                    one-time setup; writes rig.local.json, and rig.json in the data root
+rig new <id> [--type]       create a work: ticket decision, worktrees, context doc
+rig ticket <key>            record an existing ticket on the current work
 rig attach <repo>           add a repo to the current work
 rig detach <repo>           remove a repo from the current work
 rig list                    all works + staleness signals
 rig status                  live per-repo branch/ahead/behind/PR state (derived)
 rig setup <repo>            run the catalogue's setup commands
+rig catalog [repo]          the repo catalogue: index, or one entry
 rig plan                    scaffold rollout-testing-plan.md
 rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate
 rig close                   safety-checked teardown
 rig doctor                  environment + consistency checks
+rig update                  fast-forward the tool and the data root, migrate, then doctor
 rig prompt <name>           print an agent prompt to stdout
 ```
 
@@ -414,6 +426,8 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 
 ## 10. Decision log
 
+One line per decision, in the order they were made. The section each summarises carries the reasoning; a struck-through entry names what superseded it.
+
 | # | Decision |
 |---|----------|
 | 1 | Zero-dep Node CLI is the spine; agent layers are thin |
@@ -460,3 +474,8 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 | 42 | Every mutating command commits the whole data root and pushes it when it has an upstream — event-based (decision 20 stands), announced in one line, never prompting, never dying (the work is already done; a git failure warns and waits for the next command); fetch and rebase first, and on conflict abort and say so rather than leave the data root mid-rebase. The commit is owned by dispatch: a command registers what it is committing as, and `main` commits on success or on a reported failure |
 | 43 | `rig save [-m] [--designed]` is the explicit commit for edits made outside rig, chiefly the context doc; `--designed` is the only way a work reaches status `designed` |
 | 44 | Writing a work record, syncing its context doc header and regenerating its folder is one operation (`saveWork`); no caller composes the three, and `doctor` reads the folder's owned entries from the same place `regenerate` writes them |
+| 45 | An installation knows its own freshness, and the check rides on usage: a command ends by spawning a detached fetch that writes a cache, and the *next* command reads it. No timer, no daemon, no latency on the command that pays for it (decision 20 stands). `rig doctor` is the one exception and fetches live, because a health check you asked for should answer about now |
+| 46 | One semver, and the major **is** the record format, derived as `MIGRATIONS.length` so it cannot be forgotten (ADR-0002). A rig whose major is below the data root's refuses mutating commands and still answers read-only ones. The stamp (`writtenBy`) is written by `applyMigrations` whenever a migration runs, never by an individual migration — a stamp only migration 1 knows how to write stops moving after migration 1 |
+| 47 | Migrations are record-only and idempotent, so open work survives one; the gate on an update is the migration, not whether anything is open. A migration may carry only a hook rig can run, and is refused rather than reported as applied when it carries anything else |
+| 48 | The data root is fast-forwarded at the **start** of every mutating command, not at the end: what was unsafe was the *read*, and `commitDataRoot` already protects the push. Fast-forward or leave alone — never merge, never rebase behind your back. A failed fetch backs off instead of costing a connect timeout on every command |
+| 49 | The freshness line goes to **stderr** and is not gated on a TTY. An agent or CI job shelling out to rig is the audience that most needs telling, and stderr is what keeps it out of a pipe someone is reading an answer from |

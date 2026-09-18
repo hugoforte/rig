@@ -40,6 +40,7 @@ before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-smoke-'))
   tool = path.join(tmp, 'rig')
   for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(tool, d), { recursive: true })
+  fs.cpSync(path.join(SRC, 'package.json'), path.join(tool, 'package.json'))
   dataRoot = path.join(tmp, 'rig-data')
   workRoot = path.join(tmp, 'w')
 
@@ -93,7 +94,9 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   // Every mutating command will `git add -A` here and push; the hard guards come first.
   assert.match(fs.readFileSync(path.join(dataRoot, '.gitignore'), 'utf8'), /^\*\.env$/m)
   assert.equal(lastCommit(dataRoot), 'rig init: rig.json', 'the org-level half is committed by init itself')
-  assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')), { orgs: ['acme'], tracker: { acme: { kind: 'none' } } })
+  assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')),
+    { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' },
+    'a data root rig just created is stamped with the format it writes, not one behind')
   const local = readJson(path.join(tool, 'rig.local.json'))
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
@@ -397,6 +400,44 @@ test('with an upstream, a mutating command pushes, rebasing over what others pus
   assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
 })
 
+test('a mutating command fast-forwards a data root another machine moved', () => {
+  // The correctness half of this feature: rig pushed the data root but never pulled it, so a
+  // second machine read stale records and wrote on top of them. Nothing else reaches the
+  // plain behind-and-clean path — the tests either side of this one are behind *and* dirty,
+  // or behind *and* ahead, which take different branches.
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, 'FROM-THE-OTHER-MACHINE.md'), 'written elsewhere')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', 'the other machine moved ahead').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+
+  const landed = path.join(dataRoot, 'FROM-THE-OTHER-MACHINE.md')
+  assert.equal(fs.existsSync(landed), false, 'not here yet')
+
+  const r = rig(['save', '--work', 't7', '-m', 'after the other machine moved'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
+  assert.ok(fs.existsSync(landed), 'and the command ran against the updated tree, not the stale one')
+})
+
+test('doctor reports a data root that is behind origin, as of the last fetch', () => {
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, 'AGAIN.md'), 'moved again')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', 'the other machine moved again').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+  // doctor does not fetch the data root — a mutating command does — so it reports the
+  // distance as of the last fetch, which this stands in for.
+  assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  const r = rig(['doctor'])
+  assert.match(r.out, /data root is 1 commit\(s\) behind origin — `rig update` fast-forwards it/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'AGAIN.md')), 'reported, not fast-forwarded: doctor does not mutate')
+  // Left level with origin, which is what the tests that follow start from.
+  assert.equal(gitIn(dataRoot, 'merge', '-q', '--ff-only', '@{u}').status, 0)
+})
+
 test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
   const remote = path.join(tmp, 'rig-data-remote.git')
   const other = path.join(tmp, 'other-machine')
@@ -407,8 +448,16 @@ test('a rebase conflict is warned about, aborted, and leaves the data root clean
   assert.equal(gitIn(other, 'commit', '-q', '-am', 'conflicting edit').status, 0)
   assert.equal(gitIn(other, 'push', '-q').status, 0)
 
+  // A local commit as well, so the data root is behind *and* ahead: the fast-forward before
+  // a mutating command cannot straighten that out, and the rebase at the end meets the
+  // conflict. Behind alone no longer reaches this path — it is fast-forwarded first.
+  const localDoc = path.join(dataRoot, 'work', 't7', 'context.md')
+  fs.writeFileSync(localDoc, fs.readFileSync(localDoc, 'utf8').replace(/^Tickets: .*$/m, 'Tickets: LOCAL-9 · Status: In progress'))
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'local edit').status, 0)
+
   const r = rig(['ticket', 'PROJ-3', '--work', 't7'])
   assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1 behind and 1 ahead of origin/)
   assert.match(r.out, /conflict/)
   assert.match(r.out, /rebase aborted/)
   assert.equal(lastCommit(dataRoot), 'rig ticket t7: PROJ-3', 'the local commit is kept')
@@ -528,4 +577,83 @@ test('the real global git config was never touched', () => {
   // core.longpaths lands in the temp global config, proving the redirect held.
   const r = spawnSync('git', ['config', '--global', 'core.longpaths'], { encoding: 'utf8', env })
   assert.equal(r.stdout.trim(), 'true')
+})
+
+test('doctor reports a pending migration, and never runs it', () => {
+  const file = path.join(dataRoot, 'rig.json')
+  const stamped = fs.readFileSync(file, 'utf8')
+  const { writtenBy, ...unstamped } = readJson(file)
+  assert.equal(writtenBy, '1.0.0')
+  fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
+  try {
+    const r = rig(['doctor'])
+    assert.match(r.out, /1 pending migration\(s\) — run `rig update`: stamp the data root/)
+    assert.equal(readJson(file).writtenBy, undefined, 'reported, not run')
+  } finally {
+    fs.writeFileSync(file, stamped)
+  }
+})
+
+test('a data root from before stamping is warned about, then migrated by update', () => {
+  const file = path.join(dataRoot, 'rig.json')
+  const { writtenBy, ...unstamped } = readJson(file)   // as a rig from before this check left it
+  assert.equal(writtenBy, '1.0.0')
+  fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
+
+  const warned = rig(['save', '--work', 't7', '-m', 'a note'])
+  assert.equal(warned.code, 0, warned.out)
+  assert.match(warned.out, /record format 0, this rig writes 1/)
+
+  const updated = rig(['update'])
+  assert.match(updated.out, /migrated: stamp the data root/)
+  assert.equal(readJson(file).writtenBy, '1.0.0')
+  assert.equal(dirty(dataRoot), '', 'the migration is committed, not left in the tree')
+  assert.match(updated.out, /record format 1, stamped by rig 1\.0\.0/, 'the doctor checks run inline')
+})
+
+test('update does not migrate over a dirty data root that has no upstream', () => {
+  // The guard used to key on `updateCheckout` not reporting failure, and a data root with no
+  // upstream reports 'current' before cleanliness is ever asked about — so the migration
+  // commit staged the user's half-written notes under a "record format" message.
+  const file = path.join(dataRoot, 'rig.json')
+  const cfg = readJson(file)
+  delete cfg.writtenBy
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + String.fromCharCode(10))
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'back to an unstamped data root').status, 0)
+  fs.writeFileSync(path.join(dataRoot, 'HALF-WRITTEN.md'), 'not ready to share')
+
+  const r = rig(['update'])
+  assert.match(r.out, /migration\(s\) pending, not run/)
+  assert.doesNotMatch(r.out, /migrated:/, 'nothing ran')
+  assert.equal(readJson(file).writtenBy, undefined, 'and the stamp did not move')
+  assert.match(dirty(dataRoot), /HALF-WRITTEN/, 'the unfinished file is still the users own to deal with')
+  assert.doesNotMatch(lastCommit(dataRoot), /record format/)
+
+  fs.rmSync(path.join(dataRoot, 'HALF-WRITTEN.md'))
+  assert.match(rig(['update']).out, /migrated: stamp the data root/, 'it migrates once the tree is clean')
+  assert.ok(readJson(file).writtenBy, 'and the stamp moves')
+})
+
+test('a second update migrates nothing', () => {
+  const r = rig(['update'])
+  assert.doesNotMatch(r.out, /migrated:/)
+  assert.match(r.out, /record format 1/)
+})
+
+test('a rig older than the data root refuses to write, and still reads', () => {
+  const file = path.join(dataRoot, 'rig.json')
+  const saved = readJson(file)
+  fs.writeFileSync(file, JSON.stringify({ ...saved, writtenBy: '99.0.0' }, null, 2) + '\n')
+
+  const blocked = rig(['save', '--work', 't7', '-m', 'from an older rig'])
+  assert.equal(blocked.code, 1, blocked.out)
+  assert.match(blocked.out, /writes record format 1/)
+  assert.match(blocked.out, /is at 99/)
+
+  const listed = rig(['list', '--quick'])
+  assert.equal(listed.code, 0, listed.out)
+  assert.match(listed.out, /t7/, 'reading a newer data root is harmless')
+
+  fs.writeFileSync(file, JSON.stringify(saved, null, 2) + '\n')
+  assert.equal(rig(['save', '--work', 't7', '-m', 'restored']).code, 0)
 })
