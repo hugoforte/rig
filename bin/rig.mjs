@@ -59,6 +59,37 @@ function run (cmd, args, opts = {}) {
 // that needs it — except the ones whose whole job is to report that it is missing.
 const onPath = cmd => !spawnSync(cmd, ['--version'], SPAWN_DEFAULTS).error
 
+// `df -Pk`: a header line, then one line per filesystem — Filesystem, 1024-blocks, Used,
+// Available, Capacity, Mounted on. POSIX guarantees `-P` keeps each entry on a single line,
+// which is the whole reason for the flag; the mount point is the rest of the line, because
+// it is the one field allowed to contain spaces.
+function parseDf (out) {
+  const row = out.trim().split('\n').slice(1).pop()
+  const cols = row ? row.trim().split(/\s+/) : []
+  if (cols.length < 6) return null
+  const kb = Number(cols[3])
+  if (!Number.isFinite(kb)) return null
+  return { label: cols.slice(5).join(' '), bytes: kb * 1024 }
+}
+
+// Free space is the one check with no portable form: PowerShell on Windows, `df` on
+// everything POSIX. Returns null when this machine's probe is absent or says something
+// unreadable — a check rig cannot make is dropped, never fatal, which is what it used to be
+// (a `run` that died on a machine with no powershell, taking doctor's verdict with it).
+function freeSpace (dir) {
+  if (process.platform === 'win32') {
+    if (!onPath('powershell')) return null
+    const drive = dir.slice(0, 2)
+    const r = run('powershell', ['-NoProfile', '-Command', `(Get-PSDrive ${drive[0]}).Free`])
+    const bytes = Number(r.out)
+    if (r.code !== 0 || !r.out || !Number.isFinite(bytes)) return null
+    return { label: drive, bytes }
+  }
+  if (!onPath('df')) return null
+  const r = run('df', ['-Pk', dir])
+  return r.code === 0 ? parseDf(r.out) : null
+}
+
 function must (cmd, args, opts = {}) {
   const r = run(cmd, args, opts)
   if (r.code !== 0) die(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
@@ -2002,15 +2033,12 @@ cmds.doctor = () => {
   const drafts = loadCatalog().filter(e => e.draft)
   if (drafts.length) say(`${C.yellow('!')} ${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.map(d => d.repo).join(', ')}`)
 
-  const drive = cfg.workRoot.slice(0, 2)
-  // Probed before it is used: `run` dies on a command that is not there, and a missing
-  // optional tool must not cost doctor the verdict line that comes after it.
-  const df = onPath('powershell')
-    ? run('powershell', ['-NoProfile', '-Command', `(Get-PSDrive ${drive[0]}).Free`])
-    : { code: 1, out: '' }
-  if (df.code === 0 && df.out) {
-    const freeGb = Math.round(Number(df.out) / 1e9)
-    check(`disk on ${drive}`, freeGb > 20,
+  // The label comes from the probe, not from the path: a drive letter on Windows, the mount
+  // point the work root actually sits on anywhere else.
+  const disk = freeSpace(cfg.workRoot)
+  if (disk) {
+    const freeGb = Math.round(disk.bytes / 1e9)
+    check(`disk on ${disk.label}`, freeGb > 20,
       { ok: `${freeGb} GB free`, bad: `only ${freeGb} GB free` })
   }
 
@@ -2063,7 +2091,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a

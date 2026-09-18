@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -222,4 +222,37 @@ test('a fetch may never stop to ask for credentials', () => {
   // The refresh is detached with no terminal to answer on: a fetch that prompts is a stuck
   // process for every command that armed one. Same reasoning as the spawn options above.
   assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
+})
+
+// Free space has no portable probe, so `df -Pk` carries the whole check off Windows and its
+// output is the only part with anything to get wrong. The samples below are real output.
+test('parseDf: GNU df -Pk', () => {
+  const out = [
+    'Filesystem     1024-blocks     Used Available Capacity Mounted on',
+    '/dev/root         76026616 30988716  45021516      41% /',
+  ].join('\n')
+  assert.deepEqual(parseDf(out), { label: '/', bytes: 45021516 * 1024 })
+})
+
+test('parseDf: BSD df -Pk, as macOS answers', () => {
+  const out = [
+    'Filesystem 1024-blocks      Used Available Capacity  Mounted on',
+    '/dev/disk3s1s1  483816524  10012345 219876543    5%    /',
+  ].join('\n')
+  assert.equal(parseDf(out).bytes, 219876543 * 1024)
+})
+
+test('parseDf: a mount point with spaces is the rest of the line, not one column', () => {
+  const out = [
+    'Filesystem     1024-blocks     Used Available Capacity Mounted on',
+    '/dev/sdb1         41922560  1048576  40873984       3% /mnt/my disk',
+  ].join('\n')
+  assert.equal(parseDf(out).label, '/mnt/my disk')
+})
+
+test('parseDf: output it cannot read is null, so the check is dropped rather than wrong', () => {
+  assert.equal(parseDf(''), null, 'no rows at all')
+  assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on'), null, 'a header and nothing else')
+  assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 - - - - /'), null,
+    'columns that are not numbers')
 })
