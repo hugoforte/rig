@@ -3,25 +3,18 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
-import { DEFAULT_FRESHNESS, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
+import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-// Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
-// holds the catalogue, the work records and rig.json (committed, org-level: orgs,
-// tracker per org), and is set by `dataRoot` in rig.local.json (gitignored,
-// machine-level: roots, identities, secrets). Unset, it falls back to RIG_ROOT so an
-// old checkout keeps working — but that layout is "not set up": knowledge must not
-// live inside a public tool's tree.
-const LOCAL_CONFIG = path.join(RIG_ROOT, 'rig.local.json')
 
 // ---------------------------------------------------------------- primitives
 
@@ -129,37 +122,16 @@ const firstLine = s => (s || '').split('\n')[0]
 
 // ------------------------------------------------------------------- config
 
-// D:\ is the big drive on the machine this was built for; fall back to the
-// profile so `rig init` still works on a machine without one.
-const defaultWorkRoot = () => (exists('D:\\') ? 'D:\\w' : path.join(os.homedir(), 'w'))
-
-function readLocalConfig () {
-  if (!exists(LOCAL_CONFIG)) return {}
-  try { return readJson(LOCAL_CONFIG) } catch (e) { die(`${LOCAL_CONFIG} is not valid JSON: ${e.message}`) }
-}
-
-// Resolved on first use, not at load: `help` and `prompt` never read config, and a
-// broken rig.local.json should fail inside a command with the file named, not on import.
-let resolvedDataRoot
-function dataRoot () {
-  if (resolvedDataRoot === undefined) {
-    const { dataRoot: dr } = readLocalConfig()
-    resolvedDataRoot = dr ? path.resolve(RIG_ROOT, dr) : RIG_ROOT
-  }
-  return resolvedDataRoot
-}
-const repoConfigFile = () => path.join(dataRoot(), 'rig.json')
-// Paths compared as git sees them: real (8.3 short names on Windows expanded, links
-// followed) and case-folded, since git prints the long real path and NTFS ignores case.
-const realDir = p => {
-  try { return fs.realpathSync.native(p).toLowerCase() } catch { return path.resolve(p).toLowerCase() }
-}
-const sameDir = (a, b) => realDir(a) === realDir(b)
-const insideDir = (child, parent) => {
-  const c = realDir(child)
-  const p = realDir(parent)
-  return c === p || c.startsWith(p + path.sep)
-}
+// Where config lives, resolved on first use rather than at load: `help` and `prompt` never
+// read config, and a broken rig.local.json should fail inside a command with the file
+// named, not on import. `cmds.init` is the one thing that reassigns this, at its top, when
+// the data root is moving in the command that is running — bin/roots.mjs owns everything
+// else about the two files.
+let location
+const where = () => (location ??= locate(RIG_ROOT))
+const dataRoot = () => where().dataRoot
+const localConfigFile = () => where().localFile
+const repoConfigFile = () => where().orgFile
 
 // The tracker clients, each resolved on first use. Production shells to the real CLI.
 // With the matching RIG_FAKE_* env var naming a JSON file, the in-memory adapter runs
@@ -193,33 +165,7 @@ function trackerFailure (call) {
   }
 }
 
-const DEFAULT_CONFIG = {
-  workRoot: defaultWorkRoot(),
-  orgs: [],   // org-level; comes from rig.json in the data root
-  tracker: {},
-  identities: {},
-  secrets: {},
-}
-
-function config () {
-  const repo = exists(repoConfigFile()) ? readJson(repoConfigFile()) : {}
-  const local = readLocalConfig()
-  // Orgs are org-level and come from rig.json only; a stale copy in the local
-  // file (written by older versions of init) must not shadow it.
-  const localOrgsIgnored = 'orgs' in local
-  delete local.orgs
-  const cfg = Object.assign({}, DEFAULT_CONFIG, repo, local)
-  cfg.mirrorRoot = cfg.mirrorRoot || path.join(cfg.workRoot, '.mirrors')
-  // Policy lives in the data root so it travels to every machine; a machine that wants to
-  // handle updates its own way overrides one key locally, rather than the whole object.
-  cfg.freshness = Object.assign({}, DEFAULT_FRESHNESS, repo.freshness, local.freshness)
-  // A bad interval is the difference between one fetch a day and one at the end of every
-  // command, so it is corrected rather than believed.
-  const hours = Number(cfg.freshness.everyHours)
-  if (!Number.isFinite(hours) || hours <= 0) cfg.freshness.everyHours = DEFAULT_FRESHNESS.everyHours
-  cfg.localOrgsIgnored = localOrgsIgnored
-  return cfg
-}
+const config = () => load(where())
 
 const workDir = (cfg, id) => path.join(cfg.workRoot, id)
 const recordDir = id => path.join(dataRoot(),'work', id)
@@ -233,7 +179,7 @@ const packageFile = path.join(RIG_ROOT, 'package.json')
 const version = () => toolVersion(exists(packageFile) ? readJson(packageFile) : {})
 // rig.json as it sits on disk. `config()` merges it with the machine's file; the record
 // format is a property of the data root alone, so the gate reads it unmerged.
-const repoConfigJson = () => (exists(repoConfigFile()) ? readJson(repoConfigFile()) : {})
+const repoConfigJson = () => readOrg(where()) ?? {}
 
 // What the tool checkout is, as far as freshness goes; freshness.mjs decides what that
 // means. `linked` is the copy running from a work's worktree — its git dir sits under the
@@ -387,7 +333,7 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', '
 // gate, which holds whether or not there is a remote to sync with.
 function prepareDataRoot () {
   const root = dataRoot()
-  if (exists(root) && !insideDir(root, RIG_ROOT)) {
+  if (exists(root) && where().split) {
     const before = checkoutState(root)
     if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
       const fetched = gitFetch(root)
@@ -446,6 +392,18 @@ function checkWriteGate () {
       warn(`${root} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
     }
   }
+}
+
+// Runs the pending migrations over rig.json and writes the result. The one place a
+// migration lands on disk, through the same writer as every other rig.json.
+function writeOrgMigrations () {
+  let ran = []
+  writeOrg(where(), prev => {
+    const result = applyMigrations(prev ?? {}, version())
+    ran = result.ran
+    return result.config
+  })
+  return { ran }
 }
 
 // --------------------------------------------------------------- work lookup
@@ -995,7 +953,7 @@ function checkoutState (root) {
 // so the data root is never left mid-rebase.
 function commitDataRoot (message) {
   const root = dataRoot()
-  if (insideDir(root, RIG_ROOT)) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
+  if (!where().split) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
   const state = checkoutState(root)
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
@@ -1072,8 +1030,9 @@ rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records 
 `)
   }
   // Stamped at birth: a data root this rig just created is in this rig's record format, and
-  // must not greet its owner with a pending migration.
-  if (!exists(path.join(target, 'rig.json'))) writeJson(path.join(target, 'rig.json'), { orgs: [], tracker: {}, writtenBy: version() })
+  // must not greet its owner with a pending migration. Written through the same module as
+  // every other rig.json, at a location pointed at the target rather than at ours.
+  writeOrg(withDataRoot(where(), target), prev => prev ?? { orgs: [], tracker: {}, writtenBy: version() })
   // Every mutating command will `git add -A` here and push, so the hard guards against
   // a secret landing beside a context doc go in before the first commit.
   if (!exists(path.join(target, '.gitignore'))) {
@@ -1114,10 +1073,10 @@ function joinOrCreateDataRepo (spec) {
   const [owner, name] = spec.split('/')
   const target = path.join(path.dirname(RIG_ROOT), name)
 
-  const { dataRoot: current } = readLocalConfig()
-  const currentRoot = current ? path.resolve(RIG_ROOT, current) : RIG_ROOT
-  if (!sameDir(currentRoot, RIG_ROOT) && !sameDir(currentRoot, target)) {
-    die(`dataRoot is already ${currentRoot}. Switching data roots is deliberate: use --data-root.`)
+  // Already pointed somewhere else? Switching data roots is deliberate, not a side effect
+  // of joining a repo.
+  if (where().split && !sameDir(dataRoot(), target)) {
+    die(`dataRoot is already ${dataRoot()}. Switching data roots is deliberate: use --data-root.`)
   }
 
   if (exists(target)) {
@@ -1168,65 +1127,70 @@ cmds.init = ({ flags }) => {
     if (flags['data-root']) die('--data-repo and --data-root are alternatives; pass one')
     flags['data-root'] = joinOrCreateDataRepo(flags['data-repo'])
   }
-  // The data root may be changing in this very command, so resolve from the flag
-  // rather than the cached value.
-  const targetDataRoot = flags['data-root'] ? path.resolve(RIG_ROOT, flags['data-root']) : dataRoot()
-  const isSplit = !sameDir(targetDataRoot, RIG_ROOT)
+  // The data root is decided here, before anything reads config, and the location every
+  // helper below resolves against moves with it. This is the only reassignment there is:
+  // `init` used to poke the resolved root half-way through itself, which left everything
+  // after that line depending on a line you had to read the whole command to find.
+  const previousRoot = dataRoot()
+  if (flags['data-root']) location = withDataRoot(where(), path.resolve(RIG_ROOT, flags['data-root']))
+  const targetDataRoot = dataRoot()
+  const isSplit = where().split
   // A separate data root is always a git checkout with a first commit (local or not).
   if (isSplit) ensureDataRootCheckout(targetDataRoot)
 
   // rig.json is org-level and lives in the data root; --orgs adds, --tracker merges.
-  const repoCfg = path.join(targetDataRoot, 'rig.json')
-  let repoJson = exists(repoCfg) ? readJson(repoCfg) : null
+  let repoJson = readOrg(where())
   if (typeof flags.orgs === 'string' || typeof flags.tracker === 'string') {
     // `init` is the one writer outside the mutating set, and it hand-writes the very file
     // the gate is about — so it runs the gate itself. Not when it is creating the data root:
-    // there is nothing to judge, and `bootstrapDataRoot` stamps what this rig writes.
+    // there is nothing to judge, and the first commit stamps what this rig writes.
     if (repoJson) checkWriteGate()
-    const next = repoJson || { orgs: [], tracker: {}, writtenBy: version() }
-    if (typeof flags.orgs === 'string') {
-      const added = flags.orgs.split(',').map(s => s.trim()).filter(Boolean)
-      next.orgs = [...new Set([...(next.orgs || []), ...added])]
-    }
-    if (typeof flags.tracker === 'string') {
-      const parsed = parseTrackerFlag(flags.tracker)
-      const unknown = Object.keys(parsed).filter(o => !next.orgs.includes(o))
-      if (unknown.length) die(`--tracker names orgs not in --orgs / rig.json: ${unknown.join(', ')}`)
-      next.tracker = { ...(next.tracker || {}), ...parsed }
-    }
-    writeJson(repoCfg, next)
-    repoJson = next
-    ok(`wrote ${repoCfg}`)
+    repoJson = writeOrg(where(), prev => {
+      const next = prev || { orgs: [], tracker: {}, writtenBy: version() }
+      if (typeof flags.orgs === 'string') {
+        const added = flags.orgs.split(',').map(s => s.trim()).filter(Boolean)
+        next.orgs = [...new Set([...(next.orgs || []), ...added])]
+      }
+      if (typeof flags.tracker === 'string') {
+        const parsed = parseTrackerFlag(flags.tracker)
+        const unknown = Object.keys(parsed).filter(o => !next.orgs.includes(o))
+        if (unknown.length) die(`--tracker names orgs not in --orgs / rig.json: ${unknown.join(', ')}`)
+        next.tracker = { ...(next.tracker || {}), ...parsed }
+      }
+      return next
+    })
+    ok(`wrote ${repoConfigFile()}`)
     commitAs('', 'rig.json')
   }
   const orgs = repoJson?.orgs || []
   const email = typeof flags.email === 'string' ? flags.email : ''
 
-  if (!exists(LOCAL_CONFIG)) {
-    const workRoot = flags['work-root'] ? path.resolve(flags['work-root']) : defaultWorkRoot()
-    // Only the machine-level half goes here: roots, and an identity per org.
-    writeJson(LOCAL_CONFIG, {
-      workRoot,
-      ...(isSplit ? { dataRoot: targetDataRoot } : {}),
-      identities: Object.fromEntries(orgs.map(o => [o, email])),
-      secrets: {},
-    })
-    ok(`wrote ${LOCAL_CONFIG}`)
-  } else {
-    // Merge into the existing file: a new data root, and identities for orgs
-    // that have none yet. Nothing already set is touched.
-    const local = readLocalConfig()
-    const changes = []
-    const currentRoot = local.dataRoot ? path.resolve(RIG_ROOT, local.dataRoot) : RIG_ROOT
-    if (flags['data-root'] && !sameDir(currentRoot, targetDataRoot)) { local.dataRoot = targetDataRoot; changes.push('dataRoot') }
-    if (email) {
-      local.identities = local.identities || {}
-      for (const o of orgs) if (!local.identities[o]) { local.identities[o] = email; changes.push(`identity for ${o}`) }
+  // Only the machine-level half goes in rig.local.json: the roots, and an identity per org.
+  // An existing file is merged into — a new data root, and identities for orgs that have
+  // none yet — and nothing already set is touched.
+  let created = false
+  const changes = []
+  writeMachine(where(), prev => {
+    if (!prev) {
+      created = true
+      return {
+        workRoot: flags['work-root'] ? path.resolve(flags['work-root']) : config().workRoot,
+        ...(isSplit ? { dataRoot: targetDataRoot } : {}),
+        identities: Object.fromEntries(orgs.map(o => [o, email])),
+        secrets: {},
+      }
     }
-    if (changes.length) { writeJson(LOCAL_CONFIG, local); ok(`updated ${LOCAL_CONFIG}: ${changes.join(', ')}`) }
-    else say(`${LOCAL_CONFIG} already exists — nothing to change`)
-  }
-  resolvedDataRoot = targetDataRoot   // the rest of this command sees the new root
+    const next = { ...prev }
+    if (flags['data-root'] && !sameDir(previousRoot, targetDataRoot)) { next.dataRoot = targetDataRoot; changes.push('dataRoot') }
+    if (email) {
+      next.identities = { ...next.identities }
+      for (const o of orgs) if (!next.identities[o]) { next.identities[o] = email; changes.push(`identity for ${o}`) }
+    }
+    return next
+  })
+  if (created) ok(`wrote ${localConfigFile()}`)
+  else if (changes.length) ok(`updated ${localConfigFile()}: ${changes.join(', ')}`)
+  else say(`${localConfigFile()} already exists — nothing to change`)
 
   const cfg = config()
   for (const d of [cfg.workRoot, cfg.mirrorRoot, path.join(targetDataRoot, 'work')]) {
@@ -1263,7 +1227,7 @@ cmds.init = ({ flags }) => {
   }
   const missing = orgs.filter(o => !effectiveIdentity(cfg, o).email)
   if (missing.length) {
-    say(`Still to do in ${LOCAL_CONFIG}:`)
+    say(`Still to do in ${localConfigFile()}:`)
     say(`  identities — commit email for ${missing.join(', ')} (or re-run \`rig init --email you@work\`)`)
     say('  secrets    — per-repo .env sources, when a repo needs them')
     say('')
@@ -1915,7 +1879,7 @@ cmds.update = ({ flags }) => {
 
   const root = dataRoot()
   let dataRootReady = false
-  if (insideDir(root, RIG_ROOT)) { warn('data root is inside the tool checkout — not set up; run `rig prompt setup`'); problems++ }
+  if (!where().split) { warn('data root is inside the tool checkout — not set up; run `rig prompt setup`'); problems++ }
   else if (!exists(root)) { warn(`data root ${root} is missing — check dataRoot in rig.local.json`); problems++ }
   else {
     const data = updateCheckout('data root', root)
@@ -1935,8 +1899,7 @@ cmds.update = ({ flags }) => {
       warn(`${pending.length} migration(s) pending, not run — the data root has to be clean and current first`)
       problems++
     } else if (pending.length) {
-      const { config: migrated, ran } = applyMigrations(repoConfigJson(), version())
-      writeJson(repoConfigFile(), migrated)
+      const { ran } = writeOrgMigrations()
       for (const name of ran) ok(`migrated: ${name}`)
       // Committed here rather than through `main`, because the doctor checks run below and a
       // health verdict must not report the data root dirty with the change just made.
@@ -1975,15 +1938,17 @@ cmds['freshness-refresh'] = () => {
 }
 
 cmds.doctor = () => {
-  if (!exists(LOCAL_CONFIG)) {
-    warn(`not set up — no ${LOCAL_CONFIG}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`)
+  if (!exists(localConfigFile())) {
+    warn(`not set up — no ${localConfigFile()}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`)
     process.exitCode = 1
     return
   }
   const cfg = config()
   let problems = 0
-  if (cfg.localOrgsIgnored) {
-    warn(`${LOCAL_CONFIG} has an "orgs" key — ignored; orgs live in rig.json. Remove it.`); problems++
+  // Asked of the files, not carried on `cfg`: which keys the org half owns is bin/roots.mjs's
+  // to know, and a diagnostic riding on a config value had exactly one reader — this one.
+  for (const key of strayOrgKeys(where())) {
+    warn(`${localConfigFile()} has "${key}" — ignored; it lives in rig.json. Remove it.`); problems++
   }
   // detail.ok shows when the check passes, detail.bad when it fails.
   const check = (label, good, detail = {}) => {
@@ -2045,10 +2010,10 @@ cmds.doctor = () => {
     if (sym.out === 'false') say(`${C.dim('·')} ${C.dim('core.symlinks=false — by design, rig never symlinks')}`)
   }
 
-  check('config file', exists(LOCAL_CONFIG), { bad: `${LOCAL_CONFIG} missing — run \`rig init\`` })
+  check('config file', exists(localConfigFile()), { bad: `${localConfigFile()} missing — run \`rig init\`` })
   check('work root', exists(cfg.workRoot), { ok: cfg.workRoot, bad: `${cfg.workRoot} missing` })
   check('mirror root', exists(cfg.mirrorRoot), { ok: cfg.mirrorRoot, bad: `${cfg.mirrorRoot} missing` })
-  const split = !insideDir(dataRoot(), RIG_ROOT)
+  const split = where().split
   check('data root', split && exists(dataRoot()), {
     ok: dataRoot(),
     bad: split
