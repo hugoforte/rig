@@ -98,7 +98,9 @@ D:\rig\                          the tool. durable, committed, public
   bin/rig.mjs                    the CLI
   prompts/  templates/           markdown printed by `rig prompt`; doc scaffolds
   rig.local.json                 gitignored: machine paths, identities, secrets sources,
-                                 `dataRoot` -> D:\rig-data, and a freshness override
+                                 `dataRoot` -> D:\rig-data, and a freshness override.
+                                 `RIG_LOCAL_CONFIG` moves this file; nothing moves the
+                                 tool root, which is measured, not configured
 
 D:\rig-data\                     the knowledge. durable, committed, private
   rig.json                       org-level: orgs, tracker per org, freshness policy,
