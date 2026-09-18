@@ -1666,8 +1666,8 @@ cmds.prompt = ({ positional }) => {
 // rebases: a diverged tree is yours to sort out, and moving it silently is how a commit gets
 // lost. A tree that cannot move is reported, not fatal — the other one still updates.
 // `clean` is reported separately from `status`: a tree with nothing to update is not the
-// same as a tree that is safe to commit into, and `rig update` migrates on the strength of
-// it. A local-only data root reaches 'current' without the question ever being asked.
+// same as a tree that is safe to commit into, and `rig update` migrates only when it is
+// both. A local-only data root reaches 'current' without the question ever being asked.
 function updateCheckout (label, root) {
   const state = checkoutState(root)
   if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return { status: 'current', clean: false } }
@@ -1739,20 +1739,24 @@ cmds.update = ({ flags }) => {
   }
 
   const root = dataRoot()
-  let dataRootClean = false
+  let dataRootReady = false
   if (insideDir(root, RIG_ROOT)) { warn('data root is inside the tool checkout — not set up; run `rig prompt setup`'); problems++ }
   else if (!exists(root)) { warn(`data root ${root} is missing — check dataRoot in rig.local.json`); problems++ }
   else {
     const data = updateCheckout('data root', root)
     if (data.status === 'failed') problems++
-    dataRootClean = data.clean
+    // Clean and current, the two halves of "safe to migrate in".
+    dataRootReady = data.clean && data.status !== 'failed'
   }
 
   if (exists(repoConfigFile())) {
     const pending = pendingMigrations(repoConfigJson())
-    if (pending.length && !dataRootClean) {
-      // `commitDataRoot` stages the whole tree, so migrating now would publish whatever the
-      // data root was refused an update for — under a message claiming to be a migration.
+    if (pending.length && !dataRootReady) {
+      // `commitDataRoot` stages the whole tree, so migrating a dirty data root would publish
+      // whatever it was refused an update for — under a message claiming to be a migration.
+      // And it rebases onto origin before it pushes, so migrating a diverged or unfetchable
+      // one would replay the migration on top of records another machine may already have
+      // migrated (docs/adr/0002).
       warn(`${pending.length} migration(s) pending, not run — the data root has to be clean and current first`)
       problems++
     } else if (pending.length) {
