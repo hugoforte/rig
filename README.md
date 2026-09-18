@@ -92,6 +92,30 @@ Everything committed is worth keeping. Everything under the work root can be del
 
 Nothing pulls a checkout for you, so rig measures its own freshness — how far the checkout is behind its remote — and prints one dim line when it is behind. `rig doctor` fetches and reports; `rig update` fast-forwards the tool and the data root, runs pending record migrations, and never merges or rebases. The major version is the record format, so an older rig refuses to write into a data root a newer one has migrated, and still reads it — see [ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md).
 
+`rig doctor` also names the release a checkout stands on, and the distance past it when it is past one:
+
+```
+· rig 1.1.0 at C:\rig (v1.1.0)
+· rig 1.1.0 at C:\rig (3 past v1.1.0, abc1234)
+```
+
+## Releases
+
+Every merge to `main` is a release, or says why it is not. The version is decided on the pull request, not after it: a required check computes what the PR lands as and fails until `package.json` says so, naming the value to write. The merge then tags that commit and publishes the notes, which are the descriptions of the pull requests since the previous tag.
+
+| the PR | the bump |
+|---|---|
+| a `feat/…` branch — what `rig new --type feat` writes | minor |
+| a `fix/…` branch | patch |
+| a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
+| a migration added to `MIGRATIONS` | `MAJOR.0.0`, whatever the PR asked for |
+
+The major is never asked for; it is the record format ([ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md)). Why the bump lives in the PR rather than in a bot commit on `main` is [ADR 0003](docs/adr/0003-the-pr-carries-its-own-version.md).
+
+```
+node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels release:none
+```
+
 ## Contributing
 
 ```
