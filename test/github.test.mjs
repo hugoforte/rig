@@ -33,11 +33,29 @@ test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
 })
 
 test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
-  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","url":"https://github.com/acme/platform/pull/12"}]')
+  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
-    { number: 12, state: 'MERGED', url: 'https://github.com/acme/platform/pull/12' })
+    { number: 12, state: 'MERGED', url: 'https://github.com/acme/platform/pull/12',
+      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z' })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,url', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,url,createdAt,mergedAt', '--limit', '1'])
+})
+
+test('gh adapter: an open PR has no mergedAt', () => {
+  const { github } = canned(() => '[{"number":12,"state":"OPEN","url":"u","createdAt":"2026-01-02T00:00:00Z","mergedAt":null}]')
+  assert.equal(github.prForBranch('acme', 'platform', 'feat/x').mergedAt, null)
+})
+
+test('gh adapter: prFirstCommitAt asks the PR, not the branch, for its earliest commit', () => {
+  const { calls, github } = canned(() => '2026-01-01T09:00:00Z\n')
+  assert.equal(github.prFirstCommitAt('acme', 'platform', 12), '2026-01-01T09:00:00Z')
+  assert.deepEqual(calls[0], ['pr', 'view', '12', '--repo', 'acme/platform',
+    '--json', 'commits', '--jq', '[.commits[].authoredDate] | min'])
+})
+
+test('gh adapter: prFirstCommitAt is null when gh answers null or cannot answer', () => {
+  assert.equal(canned(() => 'null\n').github.prFirstCommitAt('acme', 'platform', 12), null)
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prFirstCommitAt('acme', 'platform', 12), null)
 })
 
 test('gh adapter: prForBranch is null when there is no PR', () => {
@@ -123,6 +141,12 @@ test('in-memory adapter: repo matches case-insensitively and returns the canonic
   const github = githubInMemory(world())
   assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
   assert.equal(github.repo('acme', 'nope'), null)
+})
+
+test('in-memory adapter: prFirstCommitAt answers the earliest commit on the PR', () => {
+  const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, state: 'OPEN', commits: ['2026-01-04T00:00:00Z', '2026-01-02T00:00:00Z'] }] } } }
+  assert.equal(githubInMemory(state).prFirstCommitAt('acme', 'platform', 12), '2026-01-02T00:00:00Z')
+  assert.equal(githubInMemory(state).prFirstCommitAt('acme', 'platform', 99), null)
 })
 
 test('in-memory adapter: prForBranch finds the PR by branch', () => {

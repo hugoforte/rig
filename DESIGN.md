@@ -191,7 +191,7 @@ rig new <id> [--type]       create a work: ticket decision, worktrees, context d
 rig ticket <key>            record an existing ticket on the current work
 rig attach <repo>           add a repo to the current work
 rig detach <repo>           remove a repo from the current work
-rig list                    all works + staleness signals
+rig list [--json]           all works + staleness signals, least recently touched first
 rig status                  live per-repo branch/ahead/behind/PR state (derived)
 rig setup <repo>            run the catalogue's setup commands
 rig catalog [repo]          the repo catalogue: index, or one entry
@@ -484,3 +484,5 @@ One line per decision, in the order they were made. The section each summarises 
 | 52 | Release notes are the merged PR descriptions since the previous tag, assembled by the workflow. History lives in GitHub releases, not a committed `CHANGELOG.md`, which the PR would have to write by hand — revisit when #16 publishes without a checkout |
 | 53 | `rig doctor` names the release a checkout stands on, or the distance past it. Freshness still measures `origin/main` (decision 45 stands): with a release per merge the tag and `main` track each other, and measuring against the tag would only hide unreleased commits |
 | 54 | A check `doctor` cannot make on this machine is **dropped, never fatal**: the probe is chosen by platform (`Get-PSDrive` through PowerShell on Windows, `df -Pk` on POSIX) and a missing or unreadable probe costs one line, not the verdict. Doctor is the command you run because something is already broken |
+| 55 | `rig list --json` is the one machine-readable surface, and every other reader of the works is a consumer of it rather than another command: a dashboard, a picker, a throughput figure. It carries the live timestamps a consumer cannot derive (`pr.openedAt`, `pr.mergedAt`, `firstCommitAt`) because the alternative — `createdAt` to `closedAt` — measures when teardown was remembered. The first commit is read from the PR, not the branch, which GitHub deletes on merge; under `--quick` every live field is **absent**, so "not looked up" never reads as "no PR" |
+| 56 | Works are ordered by last activity, computed from timestamps the record already holds (`createdAt`, every `attachedAt`, `closedAt`) — no stored sort key, no git call. Creation date alone would sort a long-running work as stale, and a date baked into the folder name would break the id-folder-worktree identity every command resolves through. Closing counts as activity, so a batch `rig close` lifts six old works to the tail at once — the tail is "the work in hand" only if you did not just tidy up |

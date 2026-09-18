@@ -7,7 +7,8 @@
 // The interface, and what each call may do:
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
-//   prForBranch(org, name, branch)      { number, state, url } for the newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, url, openedAt, mergedAt } newest PR, or null
+//   prFirstCommitAt(org, name, number)  ISO date of the PR's earliest commit, or null
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
@@ -15,9 +16,9 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, repoExists) answer null or false —
-// "not found" and "gh could not answer" look the same to them — and every other call
-// throws GithubError carrying gh's stderr.
+// but exits non-zero, the lookups (repo, prForBranch, prFirstCommitAt, repoExists) answer
+// null or false — "not found" and "gh could not answer" look the same to them — and every
+// other call throws GithubError carrying gh's stderr.
 //
 // createIssue, commentIssue and closeIssue are the tracker operations: what rig does to
 // a ticket. bin/jira.mjs presents the same operations for Jira under its own names.
@@ -47,12 +48,21 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     },
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,url', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,url,createdAt,mergedAt', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, url: pr.url } : null
+      return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
+    },
+    // The PR, not the branch, because a merged PR's branch is usually deleted — this is
+    // the only place the first commit of finished work can still be read.
+    prFirstCommitAt (org, name, number) {
+      const r = gh(['pr', 'view', String(number), '--repo', `${org}/${name}`,
+        '--json', 'commits', '--jq', '[.commits[].authoredDate] | min'])
+      if (r.code !== 0) return null
+      const out = firstLine(r.out)
+      return out && out !== 'null' ? out : null
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -112,7 +122,13 @@ export function githubInMemory (state) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, url: pr.url } : null
+      return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+    },
+    prFirstCommitAt (org, name, number) {
+      if (!answers()) return null
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      const dates = (pr?.commits || []).slice().sort()
+      return dates[0] || null
     },
     createIssue (spec, title, body) {
       write()
