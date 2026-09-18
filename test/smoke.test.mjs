@@ -27,9 +27,12 @@ const VERSION = toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.j
 let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
+// `out` is both streams, which is what almost every assertion here wants. `stdout` is kept
+// apart for the one caller that cares: `rig list --json` is a pipe, and everything rig says
+// for a human — the freshness line above all — has to stay off it.
 const rig = (args, input, envOverride = env) => {
   const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env: envOverride, input })
-  return { code: r.status, out: strip(r.stdout + r.stderr) }
+  return { code: r.status, out: strip(r.stdout + r.stderr), stdout: strip(r.stdout) }
 }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
@@ -528,7 +531,11 @@ test('an old-shaped record (jiraKeys, stored path) is read and migrated on save'
 test('status and list read the PR for the work branch from GitHub', () => {
   const state = github()
   state.repos['acme/billing'] = {
-    prs: [{ branch: 'feat/old', number: 12, state: 'MERGED', url: 'https://github.com/acme/billing/pull/12' }],
+    prs: [{
+      branch: 'feat/old', number: 12, state: 'MERGED', url: 'https://github.com/acme/billing/pull/12',
+      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z',
+      commits: ['2026-01-01T09:00:00Z', '2026-01-02T10:00:00Z'],
+    }],
   }
   setGithub(state)
   // A checkout where the worktree would be; rig only needs it to exist and be clean.
@@ -542,6 +549,64 @@ test('status and list read the PR for the work branch from GitHub', () => {
   r = rig(['list'])
   assert.match(r.out, /PR #12 merged/)
   assert.match(r.out, /safe to `rig close`/)
+})
+
+test('list --json carries the record plus the timestamps a consumer cannot derive', () => {
+  const r = rig(['list', '--json'])
+  assert.equal(r.code, 0, r.out)
+  const doc = JSON.parse(r.stdout)   // stdout is JSON and nothing else
+  assert.equal(doc.live, true)
+  const old = doc.works.find(w => w.id === 'old')
+  assert.deepEqual(old.tickets, ['acme/platform#3', 'PROJ-1'])
+  assert.equal(old.branch, 'feat/old')
+  assert.equal(old.createdAt, '2026-01-01T00:00:00.000Z')
+  const [billing] = old.repos
+  assert.equal(billing.pr.number, 12)
+  assert.equal(billing.pr.openedAt, '2026-01-02T00:00:00Z')
+  assert.equal(billing.pr.mergedAt, '2026-01-03T00:00:00Z')
+  // The start of the work: the PR's earliest commit, which outlives the merged branch.
+  assert.equal(billing.firstCommitAt, '2026-01-01T09:00:00Z')
+})
+
+test('list --json orders works by last activity, oldest first', () => {
+  const works = JSON.parse(rig(['list', '--json', '--quick']).stdout).works
+  const stamps = works.map(w => w.activityAt)
+  assert.deepEqual(stamps, [...stamps].sort(), 'activityAt ascending')
+  assert.ok(works.length > 1, 'more than one work to order')
+  // The sort key is the newest of the record's own timestamps, never a stored field.
+  const old = works.find(w => w.id === 'old')
+  assert.equal(old.activityAt, old.createdAt, 'no attach or close on this work')
+})
+
+test('list --json --quick omits the live fields rather than nulling them', () => {
+  const doc = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  assert.equal(doc.live, false)
+  const [billing] = doc.works.find(w => w.id === 'old').repos
+  assert.equal(billing.repo, 'billing')
+  assert.ok(!('pr' in billing), 'no PR key at all — "not looked up" is not "no PR"')
+  assert.ok(!('firstCommitAt' in billing))
+  assert.ok(!('dirty' in billing))
+})
+
+test('list --json says so when gh could not answer for a repo', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  const [billing] = JSON.parse(rig(['list', '--json']).stdout).works.find(w => w.id === 'old').repos
+  assert.ok(!('pr' in billing), 'unknown is not reported as no PR')
+  assert.match(billing.prUnknown, /gh not found on PATH/)
+  // No PR to read commits from, and the branch's base ref is not in this checkout: the
+  // start of the work is unknown too, and `prUnknown` is what says why.
+  assert.equal(billing.firstCommitAt, null)
+  setGithub(state)
+})
+
+test('list shows each work\'s status and how long since it was touched', () => {
+  const r = rig(['list', '--quick'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /old feat\/old\n {2}In progress · \d+[mhd] ago/)
+  // "just now" on a fast runner: the work was closed seconds ago, in an earlier test.
+  assert.match(r.out, /\n {2}Closed · (just now|\d+[mhd] ago)/, 'a closed work says so here, not next to the branch')
+  assert.ok(r.out.indexOf('old feat/old') < r.out.indexOf('t1 chore/'), 'least recently touched first')
 })
 
 test('when gh cannot answer, status and list say the PR state is unknown, and close refuses', () => {

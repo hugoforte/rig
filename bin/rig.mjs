@@ -636,7 +636,7 @@ const remoteHas = (mirror, branch) =>
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -1546,17 +1546,110 @@ function repoState (cfg, entry, branch) {
   return s
 }
 
+// The one ordering rule for works: least recently touched first, so the last line of
+// `rig list` is the work in hand. Every timestamp is already in the record — nothing is
+// stored for this, and neither git nor GitHub is asked to sort.
+const activityAt = work => [work.createdAt, work.closedAt, ...(work.repos || []).map(r => r.attachedAt)]
+  .filter(Boolean).sort().pop() || ''
+
+function relativeAge (iso) {
+  if (!iso) return 'undated'
+  const mins = Math.floor((Date.now() - new Date(iso)) / 60000)
+  if (!Number.isFinite(mins)) return 'undated'
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  if (mins < 2880) return `${Math.floor(mins / 60)}h ago`
+  return `${Math.floor(mins / 1440)}d ago`
+}
+
+// The start of the work, as close to the truth as each source allows: the PR's earliest
+// commit when there is a PR — it outlives the branch, which GitHub deletes on merge — and
+// the branch itself when there is no PR but the worktree is still here. Answers
+// { at, error }: a lookup GitHub refused is not a work with no first commit, and a
+// consumer measuring cycle time must be able to tell those apart.
+function firstCommitAt (entry, pr) {
+  let error
+  if (pr) {
+    let at = null
+    error = trackerFailure(() => { at = github().prFirstCommitAt(entry.org, entry.repo, pr.number) })
+    if (at) return { at }
+  }
+  if (!exists(entry.path)) return { at: null, error }
+  const log = git(entry.path, 'log', '--reverse', '--format=%aI', `refs/remotes/origin/${entry.base}..HEAD`)
+  if (log.code !== 0) return { at: null, error }
+  const at = log.out.split('\n')[0].trim()
+  return at ? { at } : { at: null, error }
+}
+
+// The JSON listing: records as they are, plus the live fields a consumer cannot derive
+// for itself. `closedAt` is when `rig close` ran, not when anything merged — `pr.mergedAt`
+// is the end of the work and `firstCommitAt` the start. Under --quick every live field is
+// absent rather than null, so a consumer can tell "not looked up" from "no PR".
+//
+// The fields are listed rather than spread, deliberately: `repos[].path` is derived from
+// this machine's work root (decision 37) and must not escape into a consumer's data.
+const workJson = (cfg, work, live) => ({
+  id: work.id,
+  title: work.title || '',
+  tickets: work.tickets || [],
+  ticketsDeclined: !!work.ticketsDeclined,
+  type: work.type || '',
+  branch: work.branch,
+  status: work.status || '',
+  createdAt: work.createdAt || null,
+  closedAt: work.closedAt || null,
+  activityAt: activityAt(work) || null,
+  repos: (work.repos || []).map(r => repoEntryJson(cfg, r, work.branch, live)),
+})
+
+function repoEntryJson (cfg, entry, branch, live) {
+  const out = {
+    repo: entry.repo,
+    org: entry.org,
+    base: entry.base,
+    role: entry.role || '',
+    attachedAt: entry.attachedAt || null,
+  }
+  if (!live) return out
+  const s = repoState(cfg, entry, branch)
+  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind })
+  // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
+  if (s.prError) out.prUnknown = s.prError
+  else out.pr = s.pr
+  const first = firstCommitAt(entry, s.pr)
+  out.firstCommitAt = first.at
+  if (first.error) out.firstCommitAtUnknown = first.error
+  return out
+}
+
 cmds.list = ({ flags }) => {
   const cfg = config()
-  const ids = listWorkIds()
-  if (!ids.length) return say('no works yet — `rig new <id> --title "..."`')
   const live = flags.prs !== false && !flags.quick
-  for (const id of ids) {
-    const work = loadWork(cfg, id)
+  // ISO-8601 exists so that byte order is chronological order; decorate once rather than
+  // recomputing the key inside the comparator.
+  const works = listWorkIds().map(id => loadWork(cfg, id))
+    .map(work => [activityAt(work), work])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, work]) => work)
+
+  if (flags.json) {
+    return say(JSON.stringify({
+      rig: version(),
+      recordFormat: MAJOR,
+      generatedAt: new Date().toISOString(),
+      live,
+      works: works.map(w => workJson(cfg, w, live)),
+    }, null, 2))
+  }
+
+  if (!works.length) return say('no works yet — `rig new <id> --title "..."`')
+  for (const work of works) {
+    const id = work.id
     const wd = workDir(cfg, id)
     const open = exists(wd)
-    const head = `${C.bold(id)} ${C.dim(work.branch)}${work.closedAt ? C.dim(' [closed]') : ''}`
+    const head = `${C.bold(id)} ${C.dim(work.branch)}`
     say(head)
+    say(`  ${C.dim(`${work.closedAt ? 'Closed' : statusLabel(work.status) || '—'} · ${relativeAge(activityAt(work))}`)}`)
     if (work.title) say(`  ${work.title}`)
     if (work.tickets?.length) say(`  ${C.dim(work.tickets.join(', '))}`)
     if (work.closedAt) {
@@ -2064,7 +2157,9 @@ cmds.help = () => {
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
-  rig list [--quick]              every work, with staleness signals
+  rig list [--json] [--quick]     every work, least recently touched first
+       --json                      the records plus live PR timestamps, for a consumer
+       --quick                     skip the git and GitHub lookups
   rig status                      live detail for the current work
   rig setup [repo...]             run the catalogue's setup commands
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
@@ -2091,6 +2186,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
+  activityAt, relativeAge, firstCommitAt,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 

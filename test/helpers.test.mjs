@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, firstCommitAt,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -255,4 +255,75 @@ test('parseDf: output it cannot read is null, so the check is dropped rather tha
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on'), null, 'a header and nothing else')
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 - - - - /'), null,
     'columns that are not numbers')
+})
+
+test('activityAt: the newest stamp the record already holds, whichever field it is on', () => {
+  const at = t => `2026-03-0${t}T00:00:00.000Z`
+  assert.equal(activityAt({ createdAt: at(1), repos: [{ attachedAt: at(2) }, { attachedAt: at(4) }] }), at(4),
+    'a repo attached later than the work was created')
+  assert.equal(activityAt({ createdAt: at(1), closedAt: at(5), repos: [{ attachedAt: at(4) }] }), at(5))
+  assert.equal(activityAt({ createdAt: at(3), repos: [] }), at(3), 'a work with no repos still sorts')
+  assert.equal(activityAt({ repos: [] }), '', 'a record with no stamps at all sorts first, and never throws')
+})
+
+test('relativeAge: buckets, and a stamp that is not one', () => {
+  const ago = mins => new Date(Date.now() - mins * 60000).toISOString()
+  assert.equal(relativeAge(ago(0)), 'just now')
+  assert.equal(relativeAge(ago(5)), '5m ago')
+  assert.equal(relativeAge(ago(150)), '2h ago')
+  assert.equal(relativeAge(ago(60 * 24 * 3)), '3d ago')
+  assert.equal(relativeAge(''), 'undated')
+  assert.equal(relativeAge('not a date'), 'undated')
+})
+
+test('firstCommitAt: with no PR, the first commit the branch adds over its base', () => {
+  // The state a throughput consumer meets constantly: work started, PR not opened yet.
+  // With a PR this reads GitHub instead, because the branch is gone once it merges.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-first-'))
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
+  const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
+  const commit = (dir, text) => {
+    fs.writeFileSync(path.join(dir, 'a.md'), `${text}\n`)
+    git(dir, 'add', '-A')
+    assert.equal(git(dir, '-c', 'user.email=t@e.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', text).status, 0)
+    return git(dir, 'log', '-1', '--format=%H %aI').stdout.trim().split(' ')
+  }
+  try {
+    const repo = path.join(tmp, 'repo'); fs.mkdirSync(repo)
+    assert.equal(git(repo, 'init', '-q', '-b', 'main').status, 0)
+    const [base] = commit(repo, 'base')
+    // What a fetched remote-tracking ref would be, without a remote to fetch from.
+    assert.equal(git(repo, 'update-ref', 'refs/remotes/origin/main', base).status, 0)
+    assert.equal(git(repo, 'checkout', '-q', '-b', 'feat/x').status, 0)
+    const [, firstDate] = commit(repo, 'the first commit of the work')
+    commit(repo, 'and a second')
+
+    assert.deepEqual(firstCommitAt({ path: repo, base: 'main' }, null), { at: firstDate },
+      'the first of the branch commits, not the last and not the base')
+    assert.deepEqual(firstCommitAt({ path: path.join(tmp, 'gone'), base: 'main' }, null), { at: null, error: undefined },
+      'a worktree that is not there is unknown, not an error')
+    assert.deepEqual(firstCommitAt({ path: repo, base: 'no-such-base' }, null), { at: null, error: undefined },
+      'a base git cannot resolve answers nothing rather than the whole history')
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('firstCommitAt: a lookup GitHub refused is an error, never a work with no first commit', () => {
+  // The whole point of the payload is measuring first commit to merge. A refused lookup
+  // reported as `null` would silently drop the work from the numerator.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-first-err-'))
+  try {
+    const stateFile = path.join(tmp, 'github.json')
+    fs.writeFileSync(stateFile, JSON.stringify({ auth: 'missing' }))
+    process.env.RIG_FAKE_GITHUB = stateFile
+    const answer = firstCommitAt({ org: 'acme', repo: 'billing', base: 'main', path: path.join(tmp, 'gone') },
+      { number: 12, state: 'MERGED' })
+    assert.equal(answer.at, null)
+    assert.match(answer.error, /gh not found on PATH/)
+  } finally {
+    delete process.env.RIG_FAKE_GITHUB
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
 })
