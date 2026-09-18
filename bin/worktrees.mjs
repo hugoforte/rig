@@ -63,7 +63,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   // answered — and when nothing answers, saying so beats guessing.
   function remoteHead (mirror, org, repo) {
     const r = git(mirror, 'symbolic-ref', ref('HEAD'))
-    if (r.code === 0 && r.out) return r.out.replace(`${ref('')}`, '')
+    if (r.code === 0 && r.out) return r.out.replace(ref(''), '')
     for (const b of ['main', 'master', 'develop']) {
       if (git(mirror, 'rev-parse', '--verify', ref(b)).code === 0) return b
     }
@@ -73,9 +73,10 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   const onRemote = (mirror, branch) => git(mirror, 'rev-parse', '--verify', ref(branch)).code === 0
 
   return {
-    // Cut the work's worktree for one repo. Answers the base it used, and whether the branch
-    // was already on the remote — which is what makes a work re-creatable on another machine,
-    // and is loud because silently checking out someone else's branch would not be.
+    // Cut the work's worktree for one repo. Answers the base it used, which is the one
+    // thing about the cut worth recording: it is what makes the work re-creatable on
+    // another machine. A branch already on the remote is checked out and tracked rather
+    // than created, loudly — silently taking over someone else's branch would not be.
     cut ({ org, repo, branch, dest }) {
       const mirror = fetched(org, repo)
       const base = remoteHead(mirror, org, repo)
@@ -83,11 +84,11 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (onRemote(mirror, branch)) {
         warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
         must('git', ['-C', mirror, 'worktree', 'add', '--track', '-b', branch, dest, ref(branch)])
-        return { base, existed: true }
+        return { base }
       }
       step(`worktree ${repo} → ${branch} (base ${base})`)
       must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)])
-      return { base, existed: false }
+      return { base }
     },
 
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which

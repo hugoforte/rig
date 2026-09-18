@@ -245,6 +245,18 @@ set within two weeks.
 A stale mirror silently branching you off a month-old `main` is a miserable bug. Hence
 fetch-on-attach.
 
+The whole lifecycle around a mirror — cut a worktree for a work, remove it, read its live
+state — is one module, `bin/worktrees.mjs`. A bare clone has no fetch refspec, so the module
+gives it one; everything that follows from that refspec, including the
+`refs/remotes/origin/` prefix, is known there and nowhere else. Callers speak in org, repo,
+branch and directory.
+
+Where a repo's remote lives is that module's own seam, with two adapters: `github.com` in
+production, and a directory of bare repos when `RIG_FAKE_REMOTES` names one. That is the
+same shape as decision 38's in-memory `gh`, and it is what makes `attach`, `detach`, `close`
+and `status` testable against real git — real clones, fetches, pushes and worktrees — with
+no network and no `gh`.
+
 ### 5.4 Post-create setup
 
 The catalogue carries `setup` commands. `rig attach` **prints them; it does not run them.**
@@ -486,3 +498,4 @@ One line per decision, in the order they were made. The section each summarises 
 | 54 | A check `doctor` cannot make on this machine is **dropped, never fatal**: the probe is chosen by platform (`Get-PSDrive` through PowerShell on Windows, `df -Pk` on POSIX) and a missing or unreadable probe costs one line, not the verdict. Doctor is the command you run because something is already broken |
 | 55 | `rig list --json` is the one machine-readable surface, and every other reader of the works is a consumer of it rather than another command: a dashboard, a picker, a throughput figure. It carries the live timestamps a consumer cannot derive (`pr.openedAt`, `pr.mergedAt`, `firstCommitAt`) because the alternative — `createdAt` to `closedAt` — measures when teardown was remembered. The first commit is read from the PR, not the branch, which GitHub deletes on merge; under `--quick` every live field is **absent**, so "not looked up" never reads as "no PR" |
 | 56 | Works are ordered by last activity, computed from timestamps the record already holds (`createdAt`, every `attachedAt`, `closedAt`) — no stored sort key, no git call. Creation date alone would sort a long-running work as stale, and a date baked into the folder name would break the id-folder-worktree identity every command resolves through. Closing counts as activity, so a batch `rig close` lifts six old works to the tail at once — the tail is "the work in hand" only if you did not just tidy up |
+| 57 | The mirror and worktree lifecycle is one module, `bin/worktrees.mjs`: cut a worktree for a work, remove it, read its live state, base = the repo's remote HEAD (decisions 4, 9 and 10 restated as its invariants). Where a repo's remote lives is its own seam — `github.com` in production, a directory of bare repos under `RIG_FAKE_REMOTES` in tests (decision 38's shape) — which is what makes `attach`, `detach`, `close` and `status` reachable from the test suite at all |
