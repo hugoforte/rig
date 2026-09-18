@@ -8,6 +8,10 @@ A harness that assembles one git worktree per repo for a piece of cross-repo wor
 One cross-repo unit of effort: a ticket, a multi-ticket change, a migration, or a spike. Identified by a local slug.
 _Avoid_: story, task, project
 
+**To rig** (verb):
+To set up a piece of work with rig: `rig new` to start the record, then `rig attach` per repo. A work is rigged; a repo is attached to one.
+_Avoid_: spin up, bootstrap, onboard
+
 **Catalogue**:
 Committed, hand-corrected knowledge about an org's repos, one file per repo.
 _Avoid_: inventory, registry
