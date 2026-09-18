@@ -604,7 +604,8 @@ test('list shows each work\'s status and how long since it was touched', () => {
   const r = rig(['list', '--quick'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /old feat\/old\n {2}In progress · \d+[mhd] ago/)
-  assert.match(r.out, /\n {2}Closed · \d+[mhd] ago/, 'a closed work says so here, not next to the branch')
+  // "just now" on a fast runner: the work was closed seconds ago, in an earlier test.
+  assert.match(r.out, /\n {2}Closed · (just now|\d+[mhd] ago)/, 'a closed work says so here, not next to the branch')
   assert.ok(r.out.indexOf('old feat/old') < r.out.indexOf('t1 chore/'), 'least recently touched first')
 })
 
