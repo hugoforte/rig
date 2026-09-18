@@ -1,6 +1,10 @@
 // Runs a temp copy of the tool as a subprocess against temp work and data roots.
-// RIG_ROOT follows the file's location, so the roots need no test-only hook; GitHub
-// is the one hook, below.
+//
+// The copy is for git alone: it has no `.git`, which is what keeps `rig update` and every
+// freshness path off the checkout these tests are running from (test/installation.test.mjs
+// is where a real installation with a remote is built, and says so). The machine config no
+// longer needs it — `RIG_LOCAL_CONFIG` puts rig.local.json in the temp dir, so nothing this
+// suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
 // new before close). node:test runs a file's tests serially by default; running a
@@ -24,7 +28,7 @@ const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // What this tool stamps a data root with. Derived, because releases move the minor and a
 // hardcoded stamp would fail on the next one.
 const VERSION = toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')))
-let tmp, tool, dataRoot, workRoot, env, githubStateFile, twgStateFile
+let tmp, tool, localConfig, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
 const strip = s => s.replace(/\x1b\[\d+m/g, '')
 // `out` is both streams, which is what almost every assertion here wants. `stdout` is kept
@@ -50,8 +54,12 @@ before(() => {
   fs.cpSync(path.join(SRC, 'package.json'), path.join(tool, 'package.json'))
   dataRoot = path.join(tmp, 'rig-data')
   workRoot = path.join(tmp, 'w')
+  localConfig = path.join(tmp, 'rig.local.json')
 
   env = { ...process.env }
+  // The machine half, moved out of the tool copy. `init` creates it here; until it does,
+  // there is no config at all, which is the state `doctor` is asked about first.
+  env.RIG_LOCAL_CONFIG = localConfig
   githubStateFile = path.join(tmp, 'github.json')
   env.RIG_FAKE_GITHUB = githubStateFile
   // No gh at all until a test needs GitHub; init's warning path runs first.
@@ -104,7 +112,7 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.deepEqual(readJson(path.join(dataRoot, 'rig.json')),
     { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: VERSION },
     'a data root rig just created is stamped with the format it writes, not one behind')
-  const local = readJson(path.join(tool, 'rig.local.json'))
+  const local = readJson(localConfig)
   assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
@@ -665,6 +673,19 @@ test('doctor after setup reports the data root state, and says so in its exit co
   // the free-space probe and this test never noticed. Free space is the host's business and
   // not this run's, so a genuinely full disk is the one complaint allowed to stand.
   assert.equal(r.code, /only \d+ GB free/.test(r.out) ? 1 : 0, r.out)
+})
+
+test('doctor names a key of the org half left behind in the machine file', () => {
+  // `orgs` and `tracker` were both written there by older versions of `init`, where a stale
+  // copy silently shadowed the committed answer. Now they are dropped from the merge and said
+  // out loud, so the file can be cleaned up.
+  const before = fs.readFileSync(localConfig, 'utf8')
+  fs.writeFileSync(localConfig, JSON.stringify({ ...readJson(localConfig), orgs: ['stale'], tracker: {} }, null, 2))
+  try {
+    const out = rig(['doctor']).out
+    assert.match(out, /has "orgs" — ignored; it lives in rig\.json/)
+    assert.match(out, /has "tracker" — ignored; it lives in rig\.json/)
+  } finally { fs.writeFileSync(localConfig, before) }
 })
 
 test('the real global git config was never touched', () => {
