@@ -338,3 +338,60 @@ test('the copy inside a linked worktree is never judged, and says so', () => {
   assert.match(updated.out, /copy in a worktree/)
   assert.doesNotMatch(updated.out, /fast-forwarded/)
 })
+
+// A data root with a remote of its own, as a second machine leaves it. `local` has one
+// commit that was never pushed; the remote has one that was never pulled.
+const divergedDataRoot = () => {
+  const stamp = Math.random().toString(36).slice(2, 8)
+  const remote = path.join(tmp, `data-origin-${stamp}.git`)
+  assert.equal(git(tmp, 'init', '-q', '--bare', '-b', 'main', remote).status, 0)
+  const local = path.join(tmp, `data-${stamp}`)
+  assert.equal(git(tmp, 'init', '-q', '-b', 'main', local).status, 0)
+  fs.writeFileSync(path.join(local, 'rig.json'),
+    JSON.stringify({ orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' }, null, 2) + '\n')
+  assert.equal(git(local, 'add', '-A').status, 0)
+  assert.equal(git(local, 'commit', '-q', '-m', 'rig.json').status, 0)
+  assert.equal(git(local, 'remote', 'add', 'origin', remote).status, 0)
+  assert.equal(git(local, 'push', '-q', '-u', 'origin', 'main').status, 0)
+
+  const theirs = path.join(tmp, `data-theirs-${stamp}`)
+  assert.equal(git(tmp, 'clone', '-q', remote, theirs).status, 0)
+  fs.writeFileSync(path.join(theirs, 'NOTES.md'), 'a record from the other machine\n')
+  assert.equal(git(theirs, 'add', '-A').status, 0)
+  assert.equal(git(theirs, 'commit', '-q', '-m', 'a record from the other machine').status, 0)
+  assert.equal(git(theirs, 'push', '-q').status, 0)
+
+  fs.writeFileSync(path.join(local, 'LOCAL.md'), 'a record of my own\n')
+  assert.equal(git(local, 'add', '-A').status, 0)
+  assert.equal(git(local, 'commit', '-q', '-m', 'a record of my own').status, 0)
+  return local
+}
+
+test('update leaves a pending migration alone while the data root is diverged', () => {
+  // The migration commit would land on the stale branch and be rebased onto origin by the
+  // next mutating command — replayed on top of a data root the other machine may already
+  // have migrated. ADR 0002: clean *and* current, and diverged is not current.
+  const diverged = divergedDataRoot()
+  withLocalConfig({ dataRoot: diverged }, () => {
+    const r = rig(['update'])
+    assert.match(r.out, /data root: 1 behind and 1 ahead of its upstream — not updated/)
+    assert.match(r.out, /migration\(s\) pending, not run — the data root has to be clean and current first/)
+    assert.doesNotMatch(r.out, /migrated:/)
+    assert.equal(readJson(path.join(diverged, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
+    assert.equal(git(diverged, 'log', '-1', '--format=%s').stdout.trim(), 'a record of my own',
+      'and nothing was committed on the stale branch')
+  })
+})
+
+test('update leaves a pending migration alone when it cannot tell whether the data root is current', () => {
+  // Offline, "current" is unknowable, and a migration committed blind is the diverged case
+  // waiting to happen the moment the remote is reachable again.
+  const unreachable = divergedDataRoot()
+  assert.equal(git(unreachable, 'remote', 'set-url', 'origin', path.join(tmp, 'nowhere.git')).status, 0)
+  withLocalConfig({ dataRoot: unreachable }, () => {
+    const r = rig(['update'])
+    assert.match(r.out, /data root: could not fetch .*— not updated/)
+    assert.match(r.out, /migration\(s\) pending, not run/)
+    assert.equal(readJson(path.join(unreachable, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
+  })
+})
