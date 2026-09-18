@@ -4,7 +4,20 @@ A cross-repo work harness. You describe a piece of work, it decides which repos 
 involved, assembles worktrees for them in one folder, and keeps the durable knowledge
 about that work in a repo you commit.
 
-Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split.
+Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split; versioning and freshness added 2026-09-17 as 1.0.0 (§5, decisions 45–49, ADR-0002).
+
+Vocabulary is [CONTEXT.md](./CONTEXT.md); this document uses it unchanged.
+
+1. [The problem, stated honestly](#1-the-problem-stated-honestly)
+2. [Shape](#2-shape)
+3. [On-disk layout](#3-on-disk-layout)
+4. [The catalogue](#4-the-catalogue)
+5. [Commands](#5-commands)
+6. [The repo interview](#6-the-repo-interview)
+7. [Documents](#7-documents)
+8. [Staying used](#8-staying-used)
+9. [Scope: in and out](#9-scope-in-and-out)
+10. [Decision log](#10-decision-log)
 
 ---
 
@@ -69,25 +82,7 @@ brief in" design) — both already authenticated on the machine.
 
 ### 2.1 Vocabulary
 
-- **work** — one cross-repo unit of effort. Covers tickets, multi-ticket efforts (two
-  tickets, one change), migrations, and spikes. Not called a "story": maintenance tickets
-  aren't stories, and not all work has a ticket.
-- **catalogue** — committed, hand-corrected knowledge about org repos.
-- **mirror** — a bare clone `rig` owns, from which worktrees are cut.
-- **data root** — where the catalogue, the work records and `rig.json` live. The tool's own
-  checkout by default; a separate private repo when the tool is public (§3).
-- **tool** — the rig repo itself, as distinct from any checkout of it.
-- **installation** — one checkout of the tool on one machine, with its `rig.local.json`.
-  What goes stale, and what `rig update` brings forward.
-- **work root** — the disposable tree the worktrees are assembled under. Machine-owned;
-  nothing in it is durable.
-- **freshness** — how far an installation is behind the remote it was cloned from. Measured
-  in the background, cached, reported; never acted on without asking.
-- **refresh** — the detached process a command leaves behind to measure freshness. It writes
-  a cache; the *next* command reads it.
-- **record format** — the shape of the records in the data root. The major version is this
-  number and nothing else (ADR-0002).
-- **write gate** — the refusal that stops a rig writing a record format it has never seen.
+The terms this document leans on — work, catalogue, mirror, data root, tool, installation, work root, freshness, refresh, record format, write gate — are defined once, in [CONTEXT.md](./CONTEXT.md), with the synonyms each one displaces. A term used here means what it means there.
 
 ---
 
@@ -430,6 +425,8 @@ fine and `rig` ignores them. It does not model, adopt, or clean up the legacy la
 ---
 
 ## 10. Decision log
+
+One line per decision, in the order they were made. The section each summarises carries the reasoning; a struck-through entry names what superseded it.
 
 | # | Decision |
 |---|----------|
