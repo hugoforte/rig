@@ -271,7 +271,7 @@ test('update hands over to the code that arrived, not the code that started it',
   const r = rig(['update'])
   assert.match(r.out, /migrated: a migration that arrived with the update/,
     'the migration list that ran came from the code the update fetched')
-  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, '2.0.0',
+  assert.equal(readJson(path.join(dataRoot, 'rig.json')).writtenBy, readJson(pkgFile).version,
     'and the stamp moved to the format that arrived')
 })
 
@@ -410,4 +410,22 @@ test('update leaves a pending migration alone when it cannot tell whether the da
     assert.match(r.out, /migration\(s\) pending, not run/)
     assert.equal(readJson(path.join(unreachable, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
   })
+})
+
+test('doctor names the release the installation stands on, and how far past it when it is past one', () => {
+  // The distance is the half that matters: a version and a sha name the same build twice,
+  // and neither says whether what is running was ever published.
+  assert.equal(git(install, 'tag', 'v9.9.9').status, 0)
+  try {
+    assert.match(rig(['doctor']).out, /rig \d+\.\d+\.\d+ at .* \(v9\.9\.9\)/)
+    assert.equal(git(install, 'commit', '-q', '--allow-empty', '-m', 'a commit past the release').status, 0)
+    assert.match(rig(['doctor']).out, /rig \d+\.\d+\.\d+ at .* \(1 past v9\.9\.9, [0-9a-f]{7}\)/)
+  } finally {
+    assert.equal(git(install, 'reset', '-q', '--hard', 'v9.9.9').status, 0)
+    assert.equal(git(install, 'tag', '-d', 'v9.9.9').status, 0)
+  }
+})
+
+test('doctor falls back to the commit when no release is in the history', () => {
+  assert.match(rig(['doctor']).out, /rig \d+\.\d+\.\d+ at .* \([0-9a-f]{7}\)/)
 })

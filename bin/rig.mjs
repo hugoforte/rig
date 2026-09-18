@@ -10,6 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { DEFAULT_FRESHNESS, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
+import { releaseMark } from './release.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Two roots. RIG_ROOT is this checkout: the tool. The data root (`dataRoot()` below)
@@ -1892,7 +1893,13 @@ cmds.doctor = () => {
   check('git', gv.code === 0, { ok: gv.out, bad: 'not on PATH' })
 
   const tool = toolState()
-  say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${tool.head ? ` (${tool.head.slice(0, 7)})` : ''}`)}`)
+  // Which *release* this is, when the checkout stands on one — a version and a sha name the
+  // same build twice and neither says whether it was ever published. The describe is asked
+  // for here and not in `toolState`, which runs in every command's epilogue and is already
+  // six spawns dear; doctor is the one caller that can afford a seventh.
+  const describe = gv.code === 0 ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
+  const mark = releaseMark({ describe, head: tool.head })
+  say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${mark ? ` (${mark})` : ''}`)}`)
   // The one command that fetches before answering: a health check you asked for should
   // report now, not what the cache last saw.
   const skipped = skipReason(tool)

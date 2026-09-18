@@ -167,3 +167,11 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Releases
+
+Working *on* rig rather than with it: your PR carries its own version. A required check
+computes what it lands as — `feat/` branch → minor, `fix/` → patch, a `release:` label
+overrides — and fails until `package.json` says it, naming the value to write. The merge
+tags it and publishes notes made of the PR descriptions, so write the description as the
+release note. README's "Releases" and `docs/adr/0003-the-pr-carries-its-own-version.md`.
