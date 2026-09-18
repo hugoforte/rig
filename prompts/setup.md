@@ -39,7 +39,7 @@ its tree is one `git add` from a leak. `doctor` reports that layout as not set u
 Propose the ones `gh` can see that look like work.
 
 **C. Tracker, per org** — *create and local only.* GitHub Issues (`owner/repo` that holds
-them), Jira (project key, upper case; rig never talks to Jira), or none.
+them), Jira (project key, upper case; rig reaches Jira through `twg`, which must be on PATH), or none.
 
 **D. Identity** — every path. The commit email for org repos, per machine. A personal org
 keeps the global default.
@@ -69,8 +69,9 @@ uncommitted or unpushed.
 
 ## Step 4: Check the org-level half landed
 
-`init` commits `rig.json` into the data root itself (`rig init: rig.json`) and pushes it
-when the data root has an upstream; the last line it prints says which. After **join**,
+`init` commits `rig.json` into the data root itself (`rig init: rig.json`), stamped with the
+record format it wrote (`writtenBy`), and pushes it when the data root has an upstream; the
+last line it prints says which. After **join**,
 nothing to commit. Nothing to do by hand unless that line warned.
 
 Re-run this prompt to add an org or change a tracker: `--orgs` adds (never removes),

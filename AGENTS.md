@@ -142,7 +142,7 @@ whichever is clean — then runs pending migrations if the data root is clean an
 prints what arrived, and ends in the doctor checks. It exits non-zero when it could not
 update what you asked it to.
 
-The **major version is the record format** (`docs/adr/0002-…`): a rig older than the data
+The **major version is the record format** (`docs/adr/0002-the-major-version-is-the-record-format.md`): a rig older than the data
 root refuses mutating commands and still answers read-only ones. Mutating commands
 fast-forward the data root before they read it, so a second machine no longer works from
 stale records. The copy of rig inside a work's `rig` worktree is never judged for freshness:

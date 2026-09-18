@@ -103,10 +103,11 @@ D:\rig\                          the tool. durable, committed, public
   bin/rig.mjs                    the CLI
   prompts/  templates/           markdown printed by `rig prompt`; doc scaffolds
   rig.local.json                 gitignored: machine paths, identities, secrets sources,
-                                 and `dataRoot` -> D:\rig-data
+                                 `dataRoot` -> D:\rig-data, and a freshness override
 
 D:\rig-data\                     the knowledge. durable, committed, private
-  rig.json                       org-level: orgs, tracker per org
+  rig.json                       org-level: orgs, tracker per org, freshness policy,
+                                 and `writtenBy` — the record-format stamp (ADR-0002)
   catalog/<org>/<repo>.md        repo knowledge
   work/<work-id>/
     context.md                   THE prose doc. Only copy.
@@ -114,6 +115,7 @@ D:\rig-data\                     the knowledge. durable, committed, private
 
 D:\w\                            disposable, gitignored, reconstructible
   .mirrors/<org>/<repo>.git      bare mirrors (a cache)
+  .rig/                          freshness and data-fetch caches (decision 45)
   PROJ-42-refund-double-charge/
     AGENTS.md                    GENERATED, regenerated on every mutation
     CLAUDE.md                    pointer
@@ -189,13 +191,15 @@ your head. The catalogue's value comes from those corrections, not from a writin
 ## 5. Commands
 
 ```
-rig init                    one-time setup; writes rig.local.json
-rig new <id> [--type]       create a work: interview, worktrees, context doc
+rig init                    one-time setup; writes rig.local.json, and rig.json in the data root
+rig new <id> [--type]       create a work: ticket decision, worktrees, context doc
+rig ticket <key>            record an existing ticket on the current work
 rig attach <repo>           add a repo to the current work
 rig detach <repo>           remove a repo from the current work
 rig list                    all works + staleness signals
 rig status                  live per-repo branch/ahead/behind/PR state (derived)
 rig setup <repo>            run the catalogue's setup commands
+rig catalog [repo]          the repo catalogue: index, or one entry
 rig plan                    scaffold rollout-testing-plan.md
 rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate
 rig close                   safety-checked teardown
