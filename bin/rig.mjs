@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
+import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { DEFAULT_FRESHNESS, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
@@ -224,7 +225,6 @@ const recordDir = id => path.join(dataRoot(),'work', id)
 const recordFile = id => path.join(recordDir(id), 'work.json')
 const contextFile = id => path.join(recordDir(id), 'context.md')
 const planFile = id => path.join(recordDir(id), 'rollout-testing-plan.md')
-const mirrorPath = (cfg, org, repo) => path.join(cfg.mirrorRoot, org, `${repo}.git`)
 
 // ----------------------------------------------------- version & freshness
 
@@ -600,36 +600,21 @@ TODO: what this repo actually is, its gotchas, and the expensive-to-rediscover f
   return true
 }
 
-// ------------------------------------------------------------------ mirrors
+// ------------------------------------------------- mirrors and worktrees
 
-function ensureMirror (cfg, org, repo) {
-  const mp = mirrorPath(cfg, org, repo)
-  if (!exists(mp)) {
-    step(`mirroring ${org}/${repo} (first use)`)
-    fs.mkdirSync(path.dirname(mp), { recursive: true })
-    must('git', ['clone', '--bare', `https://github.com/${org}/${repo}.git`, mp])
-    // A --bare clone has no fetch refspec; give it one so remote branches land
-    // in refs/remotes/origin/* and never collide with our work branches.
-    gitMust(mp, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')
-  }
-  step(`fetching ${org}/${repo}`)
-  const f = git(mp, 'fetch', '--prune', 'origin')
-  if (f.code !== 0) warn(`fetch failed for ${org}/${repo}: ${f.err.split('\n')[0]}`)
-  git(mp, 'remote', 'set-head', 'origin', '-a')
-  return mp
-}
-
-function defaultBranch (mirror) {
-  const r = git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')
-  if (r.code === 0 && r.out) return r.out.replace('refs/remotes/origin/', '')
-  for (const b of ['main', 'master', 'develop']) {
-    if (git(mirror, 'rev-parse', '--verify', `refs/remotes/origin/${b}`).code === 0) return b
-  }
-  die(`cannot determine default branch for ${mirror}`)
-}
-
-const remoteHas = (mirror, branch) =>
-  git(mirror, 'rev-parse', '--verify', `refs/remotes/origin/${branch}`).code === 0
+// bin/worktrees.mjs owns the whole mirror and worktree lifecycle; rig only chooses where a
+// repo's remote lives. Production is github.com; RIG_FAKE_REMOTES names a directory of bare
+// repos instead, which is how the tests attach a real repo with no network — the same hook
+// shape as RIG_FAKE_GITHUB and RIG_FAKE_TWG. Built per call rather than memoised: it is a
+// handful of closures over `cfg`, and `effectiveIdentity` is asked about configs that are
+// not this machine's.
+const trees = cfg => worktrees({
+  mirrorRoot: cfg.mirrorRoot,
+  remotes: process.env.RIG_FAKE_REMOTES ? remotesInDirectory(process.env.RIG_FAKE_REMOTES) : remotesOnGitHub(),
+  run,
+  step,
+  warn,
+})
 
 // ------------------------------------------------------------------ helpers
 
@@ -662,19 +647,6 @@ function identityFor (cfg, org) {
   return cfg.identities?.[org] || null
 }
 
-// Any one mirror for the org, as a place to ask git what it would commit with. The layout is
-// <mirror root>/<org>/<repo>.git and every mirror carries the org's remote URL — which is what
-// a `hasconfig:remote.*.url` conditional include matches on — so any of them answers for the
-// whole org.
-function anyMirrorFor (cfg, org) {
-  if (!cfg.mirrorRoot) return null
-  const dir = path.join(cfg.mirrorRoot, org)
-  try {
-    const hit = fs.readdirSync(dir).find(e => e.endsWith('.git'))
-    return hit ? path.join(dir, hit) : null
-  } catch { return null }
-}
-
 // The address rig will actually commit with for an org, and where it comes from. rig cannot
 // know which address is *correct* for an org — only which one git will use — so callers report
 // this rather than warning about it. The one state worth a warning is git having no answer.
@@ -686,7 +658,7 @@ function anyMirrorFor (cfg, org) {
 function effectiveIdentity (cfg, org) {
   const configured = identityFor(cfg, org)
   if (configured) return { email: configured, source: 'rig' }
-  const mirror = anyMirrorFor(cfg, org)
+  const mirror = trees(cfg).anyMirror(org)
   if (!mirror) return { email: null, source: 'unknown' }
   const r = git(mirror, 'config', 'user.email')
   return r.code === 0 && r.out ? { email: r.out, source: 'git' } : { email: null, source: 'none' }
@@ -1411,20 +1383,8 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
     return
   }
   const { org, repo, language } = resolveOrg(cfg, repoName)
-  const mirror = ensureMirror(cfg, org, repo)
-  const base = defaultBranch(mirror)
   const dest = path.join(workDir(cfg, work.id), repo)
-  if (exists(dest)) die(`${dest} already exists`)
-
-  if (remoteHas(mirror, work.branch)) {
-    warn(`branch ${work.branch} already exists on ${org}/${repo} — checking it out (not creating)`)
-    must('git', ['-C', mirror, 'worktree', 'add', '--track', '-b', work.branch, dest,
-      `refs/remotes/origin/${work.branch}`])
-  } else {
-    step(`worktree ${repo} → ${work.branch} (base ${base})`)
-    must('git', ['-C', mirror, 'worktree', 'add', '-b', work.branch, dest,
-      `refs/remotes/origin/${base}`])
-  }
+  const { base } = trees(cfg).cut({ org, repo, branch: work.branch, dest })
 
   const configured = identityFor(cfg, org)
   if (configured) {
@@ -1509,15 +1469,11 @@ cmds.detach = ({ flags, positional }) => {
   const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
   if (!entry) die(`${name} is not attached to ${id}`)
 
-  const dirty = git(entry.path, 'status', '--porcelain').out
+  const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
 
-  const mirror = mirrorPath(cfg, entry.org, entry.repo)
-  const args = ['-C', mirror, 'worktree', 'remove', entry.path]
-  if (flags.force) args.push('--force')
-  const r = run('git', args)
-  if (r.code !== 0) die(r.err || r.out)
-  git(mirror, 'worktree', 'prune')
+  const failed = trees(cfg).remove({ org: entry.org, repo: entry.repo, dir: entry.path, force: !!flags.force })
+  if (failed) die(failed)
 
   work.repos = work.repos.filter(r => r !== entry)
   commitAs(id, entry.repo)
@@ -1526,18 +1482,7 @@ cmds.detach = ({ flags, positional }) => {
 }
 
 function repoState (cfg, entry, branch) {
-  const s = { repo: entry.repo, missing: !exists(entry.path), dirty: 0, ahead: 0, behind: 0, pr: null }
-  if (!s.missing) {
-    s.dirty = git(entry.path, 'status', '--porcelain').out.split('\n').filter(Boolean).length
-    const up = git(entry.path, 'rev-parse', '--abbrev-ref', '@{u}')
-    const ref = up.code === 0 ? '@{u}' : `refs/remotes/origin/${entry.base}`
-    const counts = git(entry.path, 'rev-list', '--left-right', '--count', `${ref}...HEAD`)
-    if (counts.code === 0) {
-      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-      s.behind = behind || 0
-      s.ahead = ahead || 0
-    }
-  }
+  const s = { repo: entry.repo, pr: null, ...trees(cfg).state({ dir: entry.path, base: entry.base }) }
   // The lookup only needs org/repo/branch, so it runs even with the worktree missing — a repo
   // whose folder is gone can still have an open PR. One repo GitHub cannot answer for must not
   // take the whole listing down; the caller shows the state as unknown, and `close` treats
@@ -1768,13 +1713,9 @@ cmds.close = ({ flags }) => {
   }
   for (const r of work.repos) {
     if (!exists(r.path)) continue
-    const mirror = mirrorPath(cfg, r.org, r.repo)
-    const args = ['-C', mirror, 'worktree', 'remove', r.path]
-    if (flags.force) args.push('--force')
-    const res = run('git', args)
-    if (res.code !== 0) warn(`${r.repo}: ${res.err || res.out}`)
+    const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force: !!flags.force })
+    if (failed) warn(`${r.repo}: ${failed}`)
     else step(`removed worktree ${r.repo}`)
-    git(mirror, 'worktree', 'prune')
   }
   commitAs(id)
   const wd = workDir(cfg, id)
