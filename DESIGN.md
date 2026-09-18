@@ -4,7 +4,7 @@ A cross-repo work harness. You describe a piece of work, it decides which repos 
 involved, assembles worktrees for them in one folder, and keeps the durable knowledge
 about that work in a repo you commit.
 
-Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split; versioning and freshness added 2026-09-17 as 1.0.0 (§5, decisions 45–49, ADR-0002).
+Status: design agreed and built 2026-09-14; §3 updated the same day for the tool/data split; versioning and freshness added 2026-09-17 as 1.0.0 (§5, decisions 45–49, ADR-0002); releases automated 2026-09-18 as 1.1.0 (decisions 50–53, ADR-0003).
 
 Vocabulary is [CONTEXT.md](./CONTEXT.md); this document uses it unchanged.
 
@@ -479,3 +479,7 @@ One line per decision, in the order they were made. The section each summarises 
 | 47 | Migrations are record-only and idempotent, so open work survives one; the gate on an update is the migration, not whether anything is open. A migration may carry only a hook rig can run, and is refused rather than reported as applied when it carries anything else |
 | 48 | The data root is fast-forwarded at the **start** of every mutating command, not at the end: what was unsafe was the *read*, and `commitDataRoot` already protects the push. Fast-forward or leave alone — never merge, never rebase behind your back. A failed fetch backs off instead of costing a connect timeout on every command |
 | 49 | The freshness line goes to **stderr** and is not gated on a TTY. An agent or CI job shelling out to rig is the audience that most needs telling, and stderr is what keeps it out of a pipe someone is reading an answer from |
+| 50 | The PR carries its own version (ADR-0003): a required check fails until `package.json` says what the PR lands as, and the merge only tags it. A bot that bumped on `main` would need a bypass actor cut into its ruleset, and would put a second commit on `main` per PR — which every installation then measures itself behind, by decision 45 |
+| 51 | The bump is read off what rig already writes: `feat/` → minor, `fix/` → patch, with a `release:minor\|patch\|none` label as the override. The major is never asked for — a PR that adds a migration lands as `MAJOR.0.0` however it is labelled (ADR-0002 stands) |
+| 52 | Release notes are the merged PR descriptions since the previous tag, assembled by the workflow. History lives in GitHub releases, not a committed `CHANGELOG.md`, which the PR would have to write by hand — revisit when #16 publishes without a checkout |
+| 53 | `rig doctor` names the release a checkout stands on, or the distance past it. Freshness still measures `origin/main` (decision 45 stands): with a release per merge the tag and `main` track each other, and measuring against the tag would only hide unreleased commits |
