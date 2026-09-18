@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, firstCommitAt,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, branchFirstCommitAt, sinceFlag,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -276,7 +276,7 @@ test('relativeAge: buckets, and a stamp that is not one', () => {
   assert.equal(relativeAge('not a date'), 'undated')
 })
 
-test('firstCommitAt: with no PR, the first commit the branch adds over its base', () => {
+test('branchFirstCommitAt: the first commit the branch adds over its base', () => {
   // The state a throughput consumer meets constantly: work started, PR not opened yet.
   // With a PR this reads GitHub instead, because the branch is gone once it merges.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-first-'))
@@ -299,18 +299,18 @@ test('firstCommitAt: with no PR, the first commit the branch adds over its base'
     const [, firstDate] = commit(repo, 'the first commit of the work')
     commit(repo, 'and a second')
 
-    assert.deepEqual(firstCommitAt({ path: repo, base: 'main' }, null), { at: firstDate },
+    assert.equal(branchFirstCommitAt({ path: repo, base: 'main' }), firstDate,
       'the first of the branch commits, not the last and not the base')
-    assert.deepEqual(firstCommitAt({ path: path.join(tmp, 'gone'), base: 'main' }, null), { at: null, error: undefined },
+    assert.equal(branchFirstCommitAt({ path: path.join(tmp, 'gone'), base: 'main' }), null,
       'a worktree that is not there is unknown, not an error')
-    assert.deepEqual(firstCommitAt({ path: repo, base: 'no-such-base' }, null), { at: null, error: undefined },
+    assert.equal(branchFirstCommitAt({ path: repo, base: 'no-such-base' }), null,
       'a base git cannot resolve answers nothing rather than the whole history')
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })
 
-test('firstCommitAt: a lookup GitHub refused is an error, never a work with no first commit', () => {
+test('prTiming: a lookup GitHub refused is an error, never a work with no first commit', () => {
   // The whole point of the payload is measuring first commit to merge. A refused lookup
   // reported as `null` would silently drop the work from the numerator.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-first-err-'))
@@ -318,12 +318,25 @@ test('firstCommitAt: a lookup GitHub refused is an error, never a work with no f
     const stateFile = path.join(tmp, 'github.json')
     fs.writeFileSync(stateFile, JSON.stringify({ auth: 'missing' }))
     process.env.RIG_FAKE_GITHUB = stateFile
-    const answer = firstCommitAt({ org: 'acme', repo: 'billing', base: 'main', path: path.join(tmp, 'gone') },
+    const answer = prTiming({ org: 'acme', repo: 'billing', base: 'main', path: path.join(tmp, 'gone') },
       { number: 12, state: 'MERGED' })
-    assert.equal(answer.at, null)
+    assert.equal(answer.firstCommitAt, null)
     assert.match(answer.error, /gh not found on PATH/)
   } finally {
     delete process.env.RIG_FAKE_GITHUB
     fs.rmSync(tmp, { recursive: true, force: true })
   }
+})
+
+test('sinceFlag: a number of days, an ISO date, or a loud failure', () => {
+  const days = new Date(sinceFlag('14d'))
+  assert.ok(Math.abs((Date.now() - days) / 86400000 - 14) < 0.01, 'fourteen days back')
+  assert.equal(sinceFlag('2026-03-01'), new Date('2026-03-01').toISOString())
+  assert.equal(sinceFlag(undefined), null, 'no window asked for')
+  assert.equal(sinceFlag(true), null, '--since with nothing after it is not a window')
+  // A window nobody can parse, silently ignored, shows everything to someone who asked for
+  // a fortnight — and they have no way to tell.
+  assert.throws(() => sinceFlag('last tuesday'), /a number of days like 14d, or a date/)
+  // `new Date('7')` is the year 2001, so the obvious slip for `7d` would otherwise pass.
+  assert.throws(() => sinceFlag('7'), /a number of days like 14d, or a date/)
 })

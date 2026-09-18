@@ -8,7 +8,7 @@
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
 //   prForBranch(org, name, branch)      { number, state, url, openedAt, mergedAt } newest PR, or null
-//   prFirstCommitAt(org, name, number)  ISO date of the PR's earliest commit, or null
+//   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
@@ -16,7 +16,7 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, prFirstCommitAt, repoExists) answer
+// but exits non-zero, the lookups (repo, prForBranch, prTimeline, repoExists) answer
 // null or false — "not found" and "gh could not answer" look the same to them — and every
 // other call throws GithubError carrying gh's stderr.
 //
@@ -28,6 +28,14 @@ import { jsonCliHelpers, cliRunner } from './cli.mjs'
 
 export class GithubError extends TrackerError {}
 const { fail, firstLine, parseJson } = jsonCliHelpers(GithubError)
+
+// `min` of an empty list is null, which is what "never reviewed" should read as. A review
+// still being written has no `submittedAt`, and must not count as the first look.
+const PR_TIMELINE_JQ = [
+  '{ firstCommitAt: ([.commits[].authoredDate] | min)',
+  ', firstReviewAt: ([.reviews[] | select(.submittedAt != null) | .submittedAt] | min)',
+  ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
+].join('')
 
 const spawnGh = args => spawnSync('gh', args, { encoding: 'utf8' })
 
@@ -55,14 +63,17 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
-    // The PR, not the branch, because a merged PR's branch is usually deleted — this is
-    // the only place the first commit of finished work can still be read.
-    prFirstCommitAt (org, name, number) {
+    // The PR, not the branch, because a merged PR's branch is usually deleted — this is the
+    // only place the first commit of finished work can still be read. Commits and reviews
+    // come back in one call: a second round trip per repo is what makes a listing unusable.
+    // `jq` reduces before parsing, because review bodies are the bulk of the answer and
+    // nothing here wants them.
+    prTimeline (org, name, number) {
       const r = gh(['pr', 'view', String(number), '--repo', `${org}/${name}`,
-        '--json', 'commits', '--jq', '[.commits[].authoredDate] | min'])
-      if (r.code !== 0) return null
-      const out = firstLine(r.out)
-      return out && out !== 'null' ? out : null
+        '--json', 'commits,reviews', '--jq', PR_TIMELINE_JQ])
+      if (r.code !== 0 || !r.out) return null
+      const t = parseJson(r.out, 'gh pr view')
+      return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -124,11 +135,17 @@ export function githubInMemory (state) {
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
       return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
     },
-    prFirstCommitAt (org, name, number) {
+    prTimeline (org, name, number) {
       if (!answers()) return null
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
-      const dates = (pr?.commits || []).slice().sort()
-      return dates[0] || null
+      if (!pr) return null
+      const earliest = dates => dates.filter(Boolean).slice().sort()[0] || null
+      const reviews = pr.reviews || []
+      return {
+        firstCommitAt: earliest(pr.commits || []),
+        firstReviewAt: earliest(reviews.map(r => r.submittedAt)),
+        approvedAt: earliest(reviews.filter(r => r.state === 'APPROVED').map(r => r.submittedAt)),
+      }
     },
     createIssue (spec, title, body) {
       write()

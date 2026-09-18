@@ -46,16 +46,19 @@ test('gh adapter: an open PR has no mergedAt', () => {
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x').mergedAt, null)
 })
 
-test('gh adapter: prFirstCommitAt asks the PR, not the branch, for its earliest commit', () => {
-  const { calls, github } = canned(() => '2026-01-01T09:00:00Z\n')
-  assert.equal(github.prFirstCommitAt('acme', 'platform', 12), '2026-01-01T09:00:00Z')
-  assert.deepEqual(calls[0], ['pr', 'view', '12', '--repo', 'acme/platform',
-    '--json', 'commits', '--jq', '[.commits[].authoredDate] | min'])
+test('gh adapter: prTimeline asks the PR, not the branch, and takes commits and reviews in one call', () => {
+  const { calls, github } = canned(() =>
+    '{"firstCommitAt":"2026-01-01T09:00:00Z","firstReviewAt":"2026-01-02T10:00:00Z","approvedAt":null}')
+  assert.deepEqual(github.prTimeline('acme', 'platform', 12),
+    { firstCommitAt: '2026-01-01T09:00:00Z', firstReviewAt: '2026-01-02T10:00:00Z', approvedAt: null })
+  assert.equal(calls.length, 1, 'one round trip, not one per field')
+  assert.deepEqual(calls[0].slice(0, 7), ['pr', 'view', '12', '--repo', 'acme/platform', '--json', 'commits,reviews'])
+  assert.match(calls[0][8], /select\(\.submittedAt != null\)/, 'a review still being written is not a first look')
 })
 
-test('gh adapter: prFirstCommitAt is null when gh answers null or cannot answer', () => {
-  assert.equal(canned(() => 'null\n').github.prFirstCommitAt('acme', 'platform', 12), null)
-  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prFirstCommitAt('acme', 'platform', 12), null)
+test('gh adapter: prTimeline is null when gh cannot answer', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prTimeline('acme', 'platform', 12), null)
+  assert.equal(canned(() => '').github.prTimeline('acme', 'platform', 12), null)
 })
 
 test('gh adapter: prForBranch is null when there is no PR', () => {
@@ -143,10 +146,28 @@ test('in-memory adapter: repo matches case-insensitively and returns the canonic
   assert.equal(github.repo('acme', 'nope'), null)
 })
 
-test('in-memory adapter: prFirstCommitAt answers the earliest commit on the PR', () => {
-  const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, state: 'OPEN', commits: ['2026-01-04T00:00:00Z', '2026-01-02T00:00:00Z'] }] } } }
-  assert.equal(githubInMemory(state).prFirstCommitAt('acme', 'platform', 12), '2026-01-02T00:00:00Z')
-  assert.equal(githubInMemory(state).prFirstCommitAt('acme', 'platform', 99), null)
+test('in-memory adapter: prTimeline answers the earliest commit, first look and approval', () => {
+  const state = { repos: { 'acme/platform': { prs: [{
+    branch: 'feat/x', number: 12, state: 'OPEN',
+    commits: ['2026-01-04T00:00:00Z', '2026-01-02T00:00:00Z'],
+    reviews: [
+      { state: 'APPROVED', submittedAt: '2026-01-06T00:00:00Z' },
+      { state: 'COMMENTED', submittedAt: '2026-01-05T00:00:00Z' },
+      { state: 'PENDING', submittedAt: null },
+    ],
+  }] } } }
+  assert.deepEqual(githubInMemory(state).prTimeline('acme', 'platform', 12), {
+    firstCommitAt: '2026-01-02T00:00:00Z',
+    firstReviewAt: '2026-01-05T00:00:00Z',
+    approvedAt: '2026-01-06T00:00:00Z',
+  })
+  assert.equal(githubInMemory(state).prTimeline('acme', 'platform', 99), null, 'no such PR')
+})
+
+test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and nothing else', () => {
+  const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, commits: ['2026-01-02T00:00:00Z'] }] } } }
+  assert.deepEqual(githubInMemory(state).prTimeline('acme', 'platform', 12),
+    { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
 })
 
 test('in-memory adapter: prForBranch finds the PR by branch', () => {

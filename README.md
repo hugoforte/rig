@@ -68,7 +68,14 @@ rig init --data-repo your-org/rig-data --email you@work.example
 
 The same flag creates the repo when it does not exist yet, with `--orgs` and `--tracker` for the org-level half.
 
-**Reading the works back out.** `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely.
+**Reading the works back out.** `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely.
+
+**Showing the work.** `rig dash` renders the same payload as one self-contained HTML page — merged per week, cycle time by type, where the time went, repos per work — writes it to a temp file and opens it. It is never committed and never written to the data root: it is a rendering of state that was true a moment ago, and it says at the top when that moment was. Orgs are never summed into one figure, every statistic carries its `n`, and the page says "since rig" rather than claiming a before-and-after it has no data for. `--from payload.json` renders a capture instead of looking everything up again.
+
+```powershell
+rig list --json > payload.json   # once
+rig dash --from payload.json --org your-org --since 30d
+```
 
 **Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`.
 

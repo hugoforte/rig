@@ -600,6 +600,45 @@ test('list --json says so when gh could not answer for a repo', () => {
   setGithub(state)
 })
 
+test('dash renders the captured payload, and writes nothing into the data root', () => {
+  const captured = path.join(tmp, 'payload.json')
+  fs.writeFileSync(captured, rig(['list', '--json']).stdout)
+  const before = gitIn(dataRoot, 'status', '--porcelain').stdout
+
+  const r = rig(['dash', '--from', captured, '--no-open'])
+  assert.equal(r.code, 0, r.out)
+  const out = /dashboard at (.+)$/m.exec(strip(r.out))?.[1].trim()
+  assert.ok(out && fs.existsSync(out), `a file at ${out}`)
+  const html = fs.readFileSync(out, 'utf8')
+  assert.match(html, /<h2>acme<\/h2>/, 'the org that owns the works')
+  assert.match(html, /Generated <strong>/, 'when it was true')
+  assert.doesNotMatch(html, /<script/i)
+
+  assert.equal(gitIn(dataRoot, 'status', '--porcelain').stdout, before, 'the data root is untouched')
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'dash.html')), 'and nothing was written into it')
+})
+
+test('dash reads the works itself when given no payload', () => {
+  const r = rig(['dash', '--no-open'])
+  assert.equal(r.code, 0, r.out)
+  // A directory of rig's own under the temp root, so the filename can stay stable.
+  assert.match(r.out, /dashboard at .+rig-dash.dash\.html/)
+})
+
+test('dash dies on a window it cannot parse rather than showing everything', () => {
+  const captured = path.join(tmp, 'window-payload.json')
+  fs.writeFileSync(captured, rig(['list', '--json', '--quick']).stdout)
+  const r = rig(['dash', '--from', captured, '--no-open', '--since', 'last tuesday'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--since wants a number of days like 14d/)
+})
+
+test('dash says which payload file it could not find', () => {
+  const r = rig(['dash', '--from', path.join(tmp, 'nope.json'), '--no-open'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /no such payload file/)
+})
+
 test('list shows each work\'s status and how long since it was touched', () => {
   const r = rig(['list', '--quick'])
   assert.equal(r.code, 0, r.out)
