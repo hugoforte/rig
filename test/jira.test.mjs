@@ -38,6 +38,68 @@ test('twg adapter: getIssue fails loudly on a JSON shape it cannot read', () => 
   assert.throws(() => twg.getIssue('KTLO-1'), /could not read summary\/description/)
 })
 
+// The shape a real `twg jira workitem KEY -o json` returns, which the guessed shapes above
+// did not cover: `data` is an array of workitems, and `description` is ADF, not a string.
+// See hugoforte/rig#22 — the fetch failed outright on the first ticket that had one.
+test('twg adapter: getIssue reads a workitem returned as an array under data', () => {
+  const { twg } = canned(() => JSON.stringify({ data: [{ key: 'KTLO-1455', summary: 'Import Payabli tokens', description: 'Plain enough' }] }))
+  assert.deepEqual(twg.getIssue('KTLO-1455'), { title: 'Import Payabli tokens', body: 'Plain enough' })
+})
+
+test('twg adapter: getIssue flattens an ADF description to plain text', () => {
+  const { twg } = canned(() => JSON.stringify({
+    data: [{
+      summary: 'A bug',
+      description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Steps to reproduce' }] }] },
+    }],
+  }))
+  assert.equal(twg.getIssue('KTLO-42').body, 'Steps to reproduce')
+})
+
+test('twg adapter: getIssue keeps the summary when the description is an empty ADF doc', () => {
+  const { twg } = canned(() => JSON.stringify({ data: [{ summary: 'A bug', description: { type: 'doc', version: 1, content: [] } }] }))
+  assert.deepEqual(twg.getIssue('KTLO-42'), { title: 'A bug', body: '' })
+})
+
+test('twg adapter: getIssue keeps the summary when there is no description at all', () => {
+  const { twg } = canned(() => JSON.stringify({ data: [{ summary: 'A bug' }] }))
+  assert.deepEqual(twg.getIssue('KTLO-42'), { title: 'A bug', body: '' })
+})
+
+test('twg adapter: getIssue reads the description when there is no summary', () => {
+  const { twg } = canned(() => JSON.stringify({ data: [{ description: 'Just a body' }] }))
+  assert.deepEqual(twg.getIssue('KTLO-42'), { title: '', body: 'Just a body' })
+})
+
+// KTLO-1455's description was exactly this: one embedCard and nothing else. A card carries
+// its URL in attrs and has no text child, so dropping it would leave an empty brief.
+test('twg adapter: getIssue reads a card-only ADF description as its URL', () => {
+  const { twg } = canned(() => JSON.stringify({
+    data: [{ summary: 'Import Payabli tokens', description: { type: 'doc', version: 1, content: [{ type: 'embedCard', attrs: { url: 'https://example.atlassian.net/wiki/spaces/X/pages/1' } }] } }],
+  }))
+  assert.equal(twg.getIssue('KTLO-1455').body, 'https://example.atlassian.net/wiki/spaces/X/pages/1')
+})
+
+test('twg adapter: getIssue keeps a link\'s target alongside its text', () => {
+  const { twg } = canned(() => JSON.stringify({
+    data: [{ summary: 'S', description: { type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'see ' },
+      { type: 'text', text: 'the design', marks: [{ type: 'link', attrs: { href: 'https://example.com/d' } }] },
+    ] }] } }],
+  }))
+  assert.equal(twg.getIssue('KTLO-42').body, 'see the design (https://example.com/d)')
+})
+
+test('twg adapter: getIssue separates ADF paragraphs with a blank line', () => {
+  const { twg } = canned(() => JSON.stringify({
+    data: [{ summary: 'S', description: { type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'First.' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Second.' }] },
+    ] } }],
+  }))
+  assert.equal(twg.getIssue('KTLO-42').body, 'First.\n\nSecond.')
+})
+
 test('twg adapter: createIssue passes summary, description and fields, and reads the new key', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-43' } }))
   const key = twg.createIssue({
