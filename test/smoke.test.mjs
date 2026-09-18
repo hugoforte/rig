@@ -421,6 +421,23 @@ test('a mutating command fast-forwards a data root another machine moved', () =>
   assert.ok(fs.existsSync(landed), 'and the command ran against the updated tree, not the stale one')
 })
 
+test('doctor reports a data root that is behind origin, as of the last fetch', () => {
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, 'AGAIN.md'), 'moved again')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', 'the other machine moved again').status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+  // doctor does not fetch the data root — a mutating command does — so it reports the
+  // distance as of the last fetch, which this stands in for.
+  assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  const r = rig(['doctor'])
+  assert.match(r.out, /data root is 1 commit\(s\) behind origin — `rig update` fast-forwards it/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'AGAIN.md')), 'reported, not fast-forwarded: doctor does not mutate')
+  // Left level with origin, which is what the tests that follow start from.
+  assert.equal(gitIn(dataRoot, 'merge', '-q', '--ff-only', '@{u}').status, 0)
+})
+
 test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
   const remote = path.join(tmp, 'rig-data-remote.git')
   const other = path.join(tmp, 'other-machine')
@@ -560,6 +577,21 @@ test('the real global git config was never touched', () => {
   // core.longpaths lands in the temp global config, proving the redirect held.
   const r = spawnSync('git', ['config', '--global', 'core.longpaths'], { encoding: 'utf8', env })
   assert.equal(r.stdout.trim(), 'true')
+})
+
+test('doctor reports a pending migration, and never runs it', () => {
+  const file = path.join(dataRoot, 'rig.json')
+  const stamped = fs.readFileSync(file, 'utf8')
+  const { writtenBy, ...unstamped } = readJson(file)
+  assert.equal(writtenBy, '1.0.0')
+  fs.writeFileSync(file, JSON.stringify(unstamped, null, 2) + '\n')
+  try {
+    const r = rig(['doctor'])
+    assert.match(r.out, /1 pending migration\(s\) — run `rig update`: stamp the data root/)
+    assert.equal(readJson(file).writtenBy, undefined, 'reported, not run')
+  } finally {
+    fs.writeFileSync(file, stamped)
+  }
 })
 
 test('a data root from before stamping is warned about, then migrated by update', () => {

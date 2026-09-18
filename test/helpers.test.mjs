@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -216,4 +216,10 @@ test('the freshness refresh is detached, silent, rooted in the tool, and hidden'
   assert.equal(REFRESH_SPAWN.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
   assert.equal(REFRESH_SPAWN.windowsHide, true, 'see above; this is the one that hung a machine')
   assert.ok(REFRESH_SPAWN.cwd, 'a child sitting in a worktree is one `rig close` cannot remove')
+})
+
+test('a fetch may never stop to ask for credentials', () => {
+  // The refresh is detached with no terminal to answer on: a fetch that prompts is a stuck
+  // process for every command that armed one. Same reasoning as the spawn options above.
+  assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
 })

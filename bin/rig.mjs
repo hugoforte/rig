@@ -68,8 +68,10 @@ const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 // A plain fetch of a whole remote, and it may never prompt: a fetch that stops for
 // credentials hangs a command someone is watching, or — in the detached refresh, which has
 // no terminal to answer on — leaves a stuck process behind for every command that armed one.
-const gitFetch = dir => run('git', ['-C', dir, 'fetch', '-q'],
-  { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+// Asserted by a test as an option, like the spawn options: the only symptom of dropping it
+// is a hang, on a machine whose remote happens to want credentials.
+const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
+const gitFetch = dir => run('git', ['-C', dir, 'fetch', '-q'], { env: { ...process.env, ...FETCH_ENV } })
 const gitMust = (dir, ...args) => must('git', ['-C', dir, ...args])
 
 function readStdin () {
@@ -2006,7 +2008,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
