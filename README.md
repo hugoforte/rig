@@ -21,6 +21,22 @@ No need to verify them by hand: `rig doctor` checks all of these once rig is ins
 
 ## Install
 
+One line. Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/hugoforte/rig/main/install.ps1 | iex
+```
+
+Linux, macOS, or Git Bash:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hugoforte/rig/main/install.sh | sh
+```
+
+The script clones rig — `C:\rig` on Windows, `~/rig` elsewhere — runs `npm install -g` on the clone, and ends with `rig help` so you can see it worked. Run it again over a checkout that already exists and it changes nothing: no fetch, no reset, no `rig update`. It never runs `rig init` — setting rig up is the next section's deliberate step. To install somewhere else, save the script instead of piping it, and pass the path: `.\install.ps1 D:\rig`, `sh install.sh /opt/rig`.
+
+Or the three commands it runs, by hand:
+
 ```powershell
 gh repo clone hugoforte/rig C:\rig
 npm install -g C:\rig
