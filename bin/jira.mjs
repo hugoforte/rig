@@ -2,13 +2,15 @@
 // client (docs/adr/0001-jira-via-twg.md supersedes DESIGN.md decisions 29 and 33): its
 // site and auth come from twg's own config, and rig calls nothing else.
 //
-// ASSUMPTION, flagged for whoever runs this first against a real site: the JSON shapes
-// parsed below (getIssue, createIssue, fieldMetadata, activeSprintId) are inferred from
-// `twg --help` and the "Teamwork Graph" GraphQL shape hinted at by its `--agent-fields`
-// example (`data.items.key`), not from a live response — twg was deliberately not
-// exercised against real Jira data while building this. Each parser fails loudly with
-// the raw output when its guess is wrong, so a bad shape surfaces on first use rather
-// than silently misreading a ticket.
+// ASSUMPTION, still standing for createIssue, fieldMetadata and activeSprintId: their JSON
+// shapes are inferred from `twg --help` and the "Teamwork Graph" GraphQL shape hinted at by
+// its `--agent-fields` example (`data.items.key`), not from a live response. Each parser
+// fails loudly with the raw output when its guess is wrong, so a bad shape surfaces on first
+// use rather than silently misreading a ticket.
+//
+// getIssue has had that first use, and the guess was wrong twice over (hugoforte/rig#22):
+// `data` comes back as an array of workitems, and `description` as an ADF node tree rather
+// than a string. It now reads either shape and flattens ADF; the rest await the same test.
 //
 // The interface:
 //   present()                                    is `twg` on PATH? never throws
@@ -27,6 +29,51 @@ const { fail, parseJson } = jsonCliHelpers(JiraError)
 
 const spawnTwg = args => spawnSync('twg', args, { encoding: 'utf8' })
 
+// Where a workitem's fields sit in twg's JSON. A real `jira workitem KEY -o json` returns
+// `data` as an array of workitems carrying their fields directly; the `data.fields`/`fields`
+// shapes this module originally guessed at are kept, since nothing has ruled them out. Null
+// when no shape has either field — the one case worth failing on, because a workitem with a
+// summary and no description is ordinary, not broken (hugoforte/rig#22).
+function workitemFields (body) {
+  const item = Array.isArray(body.data) ? body.data[0] : body.data
+  for (const shape of [item?.fields, item, body.fields]) {
+    if (shape && (shape.summary !== undefined || shape.description !== undefined)) return shape
+  }
+  return null
+}
+
+// Block nodes that end a line of prose. Everything else either carries text, carries a URL
+// (the card nodes), or is a container to recurse through (`doc`, `bulletList`, `table`).
+const ADF_BLOCKS = new Set(['paragraph', 'heading', 'codeBlock', 'blockquote', 'rule', 'panel'])
+
+// Atlassian Document Format flattened to plain text. A Jira description arrives as a node
+// tree, not the string this module first assumed, and rig only ever shows it as prose — so
+// flatten it rather than model it. A plain string passes through unchanged, which is what a
+// summary is and what a site serving wiki-markup descriptions would give.
+function adfToText (node) {
+  if (node == null) return ''
+  if (typeof node === 'string') return node
+  if (Array.isArray(node)) return node.map(adfToText).join('')
+  switch (node.type) {
+    case 'text': {
+      const href = node.marks?.find(m => m.type === 'link')?.attrs?.href
+      return href && href !== node.text ? `${node.text} (${href})` : (node.text || '')
+    }
+    case 'hardBreak': return '\n'
+    case 'emoji': return node.attrs?.shortName || node.attrs?.text || ''
+    case 'mention': return node.attrs?.text || ''
+    // A card is the whole of its node: the URL is the only text there is to keep, and a
+    // description that is nothing but one card is a real shape (KTLO-1455 was exactly that).
+    case 'inlineCard': case 'blockCard': case 'embedCard': return node.attrs?.url || ''
+  }
+  const inner = adfToText(node.content)
+  if (node.type === 'listItem') return `- ${inner.trim()}\n`
+  return ADF_BLOCKS.has(node.type) ? `${inner}\n\n` : inner
+}
+
+// Blocks each end in a blank line, so nesting them leaves runs of them behind.
+const tidy = text => text.replace(/\n{3,}/g, '\n\n').trim()
+
 export function twgViaCli ({ exec = spawnTwg } = {}) {
   const { must } = cliRunner('twg', exec, fail)
 
@@ -36,12 +83,9 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     },
     getIssue (key) {
       const out = must(['jira', 'workitem', key, '-o', 'json', '--fields', 'summary,description'])
-      const body = parseJson(out, 'twg jira workitem')
-      const fields = body.data?.fields || body.fields
-      if (!fields || (fields.summary === undefined && fields.description === undefined)) {
-        fail(`could not read summary/description from twg's JSON:\n${out}`)
-      }
-      return { title: fields.summary || '', body: fields.description || '' }
+      const fields = workitemFields(parseJson(out, 'twg jira workitem'))
+      if (!fields) fail(`could not read summary/description from twg's JSON:\n${out}`)
+      return { title: tidy(adfToText(fields.summary)), body: tidy(adfToText(fields.description)) }
     },
     createIssue ({ project, type, summary, description, assignee, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
