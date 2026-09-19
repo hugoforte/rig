@@ -131,7 +131,6 @@ const writeText = (p, v) => {
   fs.mkdirSync(path.dirname(p), { recursive: true })
   fs.writeFileSync(p, v)
 }
-const firstLine = s => (s || '').split('\n')[0]
 
 // ------------------------------------------------------------------- config
 
@@ -1143,8 +1142,8 @@ rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records 
 *.pfx
 `)
   }
-  must('git', ['-C', target, 'add', '-A'])
-  must('git', ['-C', target, 'commit', '-q', '-m', 'Initialise rig data root'])
+  const first = co.commitAll(target, 'Initialise rig data root')
+  if (first.outcome !== 'committed') die(`could not make the first commit in ${target}: ${first.error || 'there was nothing to commit'}`)
   return true
 }
 
