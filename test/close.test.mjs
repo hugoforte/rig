@@ -16,7 +16,7 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { makeInstall, readJson } from './harness.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, git, gitMust, cleanup } = makeInstall({
   prefix: 'rig-close-',
@@ -148,6 +148,45 @@ test('a work with nothing attached closes, and `list` said so before it did', ()
   assert.doesNotMatch(rig(['list']).out, /empty[\s\S]*?nothing outstanding/,
     'a work with no repos is not offered up as finished')
   assert.equal(rig(['close', '--work', 'empty']).code, 0)
+})
+
+// `close` asks the stack whether a slice is still up for review and `list` does not, because
+// a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
+// `list` has to stop at what it measured: the two works below differ only in whether a stage
+// was declared, and nothing here cuts a branch or opens a pull request — the hedge is read off
+// the record, which is what makes it free.
+const closeVerdictFor = (out, id) => strip(out).split(/\n(?=\S)/).find(b => b.startsWith(`${id} `))
+
+test('`list` hedges its close verdict on a work that has stages, and not on one that has none', () => {
+  for (const id of ['plain', 'stacked']) {
+    assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
+    assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  }
+  assert.equal(rig(['stage', 'feat/stacked-one', '--delivers', 'the schema', '--work', 'stacked']).code, 0)
+
+  const out = rig(['list']).out
+  assert.match(closeVerdictFor(out, 'stacked'),
+    /nothing outstanding, but nothing merged either — `rig close` would not refuse \(stages not checked\)/)
+  assert.doesNotMatch(closeVerdictFor(out, 'plain'), /stages not checked/,
+    'a work with no stages reads exactly as it always did')
+})
+
+test('and it hedges the merged verdict the same way, which is the one that reads as a recommendation', () => {
+  const state = github()
+  for (const [i, id] of ['plain', 'stacked'].entries()) {
+    state.repos['acme/billing'].prs.push({
+      branch: `feat/${id}-work`, number: 30 + i, state: 'MERGED',
+      url: `https://github.com/acme/billing/pull/${30 + i}`,
+      openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T01:00:00Z', commits: [],
+    })
+  }
+  setGithub(state)
+
+  const out = rig(['list']).out
+  assert.match(closeVerdictFor(out, 'stacked'),
+    /all PRs merged, nothing uncommitted — safe to `rig close` \(stages not checked\)/)
+  assert.match(closeVerdictFor(out, 'plain'),
+    /all PRs merged, nothing uncommitted — safe to `rig close`\n/)
 })
 
 // ------------------------------------------------- abandoning
@@ -760,6 +799,42 @@ test('and a forced close is not then reported as a contradiction', () => {
   // Scoped to this work: the shared installation carries other works with contradictions of
   // their own, which is the point of `doctor` running over all of them.
   assert.doesNotMatch(rig(['doctor']).out, /forced: closed, but/)
+})
+
+// The work branch landed and a slice of it did not — the one shape where the work's *own*
+// ticket has something to answer for that its own pull request cannot say. Both tests below
+// run against this fixture, which is why it is built in the first.
+
+test('`rig next` does not offer to close a work it has just said has a slice up for review', () => {
+  assert.equal(rig(['new', 'forced-ticket', '--title', 'Forced ticket work', '--type', 'feat', '--key', 'acme/billing#9']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'forced-ticket']).code, 0)
+  seedIssue(9, 'Forced ticket work')
+
+  const dest = worktree('forced-ticket', 'billing')
+  assert.equal(rig(['stage', 'feat/forced-ticket-one', '--delivers', 'the schema', '--cut', '--work', 'forced-ticket'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/forced-ticket-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/forced-ticket-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/forced-ticket-one', number: 52, state: 'OPEN', base: 'feat/forced-ticket-work', url: 'https://github.com/acme/billing/pull/52', mergedAt: null })
+  seedPr({ branch: 'feat/forced-ticket-work', number: 53, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/53', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const r = rig(['next', '--work', 'forced-ticket'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /feat\/forced-ticket-one.*up for review/)
+  assert.doesNotMatch(r.out, /rig close/, 'a command that would refuse is not an offer')
+})
+
+test('and forcing the close past it leaves the work ticket open, naming the slice and the force', () => {
+  assert.equal(rig(['close', '--work', 'forced-ticket']).code, 1, 'it refuses first')
+  const c = rig(['close', '--force', '--work', 'forced-ticket'])
+  assert.equal(c.code, 0, c.out)
+
+  assert.equal(issueNumbered(9).state, 'OPEN', 'the work branch landed, but a slice of it did not')
+  const comment = issueNumbered(9).comments[0]
+  assert.match(comment, /billing: stage feat\/forced-ticket-one still has PR #52 open/)
+  assert.match(comment, /^Closed by `rig close --force`\. The blockers were overridden deliberately\./,
+    'a work torn down past an open PR must not read like one that had nothing to get past')
 })
 
 // ------------------------------------------------- opening the pull request

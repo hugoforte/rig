@@ -143,7 +143,11 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('landing', `${merged.length} of ${repos.length} merged — still out: ${left}`))
   }
 
-  if (phase === 'landing' && !dirty.length) {
+  // A slice still up for review is a refusal `close` makes, so offering it here would be a
+  // command that fails and a second answer one line under the stage offer that just named the
+  // slice. The stack was in hand the whole time; this asks it. Silence rather than a warning,
+  // because the stage offer above has already said what is next.
+  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open)) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
 
