@@ -473,7 +473,7 @@ test('a stage whose pull request lands outside the stack is shown as such, not a
   // slice of this work's stack, so its position in the list is the order it was declared in.
   const state = github()
   state.repos['acme/billing'].prs.push(
-    { branch: 'feat/adrift-two', number: 40, state: 'OPEN', url: 'https://github.com/acme/billing/pull/40', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+    { branch: 'feat/adrift-two', number: 90, state: 'OPEN', url: 'https://github.com/acme/billing/pull/90', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
   )
   setGithub(state)
 
@@ -494,31 +494,31 @@ test('a stack under review, every pull request pointing at the work branch, is a
   // moment its slices are up for review: the live PR base wins over git, so every stage names
   // the work branch and the chain walk can only ever reach one of them. Nothing is wrong here,
   // and nothing may be said — this is the case the first cut of this feature fired on.
-  assert.equal(rig(['new', 'stacked', '--title', 'Stacked work', '--type', 'feat', '--no-ticket']).code, 0)
-  assert.equal(rig(['attach', 'billing', '--work', 'stacked']).code, 0)
+  assert.equal(rig(['new', 'instack', '--title', 'Instack work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'instack']).code, 0)
   for (const [n, what] of [['one', 'the schema'], ['two', 'the endpoints'], ['three', 'the UI']]) {
-    assert.equal(rig(['stage', `feat/stacked-${n}`, '--delivers', what, '--work', 'stacked']).code, 0)
+    assert.equal(rig(['stage', `feat/instack-${n}`, '--delivers', what, '--work', 'instack']).code, 0)
   }
 
-  const opts = { work: 'stacked', repo: 'billing', back: 'feat/stacked-work' }
-  cutStage({ ...opts, branch: 'feat/stacked-one', from: 'feat/stacked-work', message: 'the schema' })
-  cutStage({ ...opts, branch: 'feat/stacked-two', from: 'feat/stacked-one', message: 'the endpoints' })
-  cutStage({ ...opts, branch: 'feat/stacked-three', from: 'feat/stacked-two', message: 'the UI' })
+  const opts = { work: 'instack', repo: 'billing', back: 'feat/instack-work' }
+  cutStage({ ...opts, branch: 'feat/instack-one', from: 'feat/instack-work', message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/instack-two', from: 'feat/instack-one', message: 'the endpoints' })
+  cutStage({ ...opts, branch: 'feat/instack-three', from: 'feat/instack-two', message: 'the UI' })
 
   const state = github()
   state.repos['acme/billing'].prs.push(
     ...['one', 'two', 'three'].map((n, i) => ({
-      branch: `feat/stacked-${n}`, number: 30 + i, state: 'OPEN', url: `https://github.com/acme/billing/pull/${30 + i}`,
-      base: 'feat/stacked-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [],
+      branch: `feat/instack-${n}`, number: 92 + i, state: 'OPEN', url: `https://github.com/acme/billing/pull/${92 + i}`,
+      base: 'feat/instack-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [],
     })),
   )
   setGithub(state)
 
-  const out = rig(['stage', '--work', 'stacked']).out
+  const out = rig(['stage', '--work', 'instack']).out
   assert.doesNotMatch(out, /Outside the stack/, 'the convention is not a fault')
-  assert.equal(rig(['plan', '--work', 'stacked']).code, 0)
-  assert.doesNotMatch(fs.readFileSync(planFile('stacked'), 'utf8'), /Outside the stack/)
-  assert.doesNotMatch(rig(['next', '--work', 'stacked']).out, /outside the stack/)
+  assert.equal(rig(['plan', '--work', 'instack']).code, 0)
+  assert.doesNotMatch(fs.readFileSync(planFile('instack'), 'utf8'), /Outside the stack/)
+  assert.doesNotMatch(rig(['next', '--work', 'instack']).out, /outside the stack/)
 })
 
 test('and rig next, which claims a position too, says when the stage is outside the stack', () => {
@@ -532,7 +532,7 @@ test('and rig next, which claims a position too, says when the stage is outside 
 
   const state = github()
   state.repos['acme/billing'].prs.push(
-    { branch: 'feat/lone-one', number: 41, state: 'OPEN', url: 'https://github.com/acme/billing/pull/41', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+    { branch: 'feat/lone-one', number: 91, state: 'OPEN', url: 'https://github.com/acme/billing/pull/91', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
   )
   setGithub(state)
 
