@@ -16,7 +16,7 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { makeInstall, readJson } from './harness.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, git, gitMust, cleanup } = makeInstall({
   prefix: 'rig-close-',
@@ -148,6 +148,45 @@ test('a work with nothing attached closes, and `list` said so before it did', ()
   assert.doesNotMatch(rig(['list']).out, /empty[\s\S]*?nothing outstanding/,
     'a work with no repos is not offered up as finished')
   assert.equal(rig(['close', '--work', 'empty']).code, 0)
+})
+
+// `close` asks the stack whether a slice is still up for review and `list` does not, because
+// a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
+// `list` has to stop at what it measured: the two works below differ only in whether a stage
+// was declared, and nothing here cuts a branch or opens a pull request — the hedge is read off
+// the record, which is what makes it free.
+const closeVerdictFor = (out, id) => strip(out).split(/\n(?=\S)/).find(b => b.startsWith(`${id} `))
+
+test('`list` hedges its close verdict on a work that has stages, and not on one that has none', () => {
+  for (const id of ['plain', 'stacked']) {
+    assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
+    assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  }
+  assert.equal(rig(['stage', 'feat/stacked-one', '--delivers', 'the schema', '--work', 'stacked']).code, 0)
+
+  const out = rig(['list']).out
+  assert.match(closeVerdictFor(out, 'stacked'),
+    /nothing outstanding, but nothing merged either — `rig close` would not refuse \(stages not checked\)/)
+  assert.doesNotMatch(closeVerdictFor(out, 'plain'), /stages not checked/,
+    'a work with no stages reads exactly as it always did')
+})
+
+test('and it hedges the merged verdict the same way, which is the one that reads as a recommendation', () => {
+  const state = github()
+  for (const [i, id] of ['plain', 'stacked'].entries()) {
+    state.repos['acme/billing'].prs.push({
+      branch: `feat/${id}-work`, number: 30 + i, state: 'MERGED',
+      url: `https://github.com/acme/billing/pull/${30 + i}`,
+      openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T01:00:00Z', commits: [],
+    })
+  }
+  setGithub(state)
+
+  const out = rig(['list']).out
+  assert.match(closeVerdictFor(out, 'stacked'),
+    /all PRs merged, nothing uncommitted — safe to `rig close` \(stages not checked\)/)
+  assert.match(closeVerdictFor(out, 'plain'),
+    /all PRs merged, nothing uncommitted — safe to `rig close`\n/)
 })
 
 // ------------------------------------------------- abandoning

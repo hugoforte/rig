@@ -936,7 +936,10 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   // written back either way.
   if (!githubKeys.length && !jiraKeys.length) return stageWriteBack(work, stages, { abandoned })
 
-  const { done: merged, reason, repos } = workState(work, states)
+  // The same stack `close` refused on, so the comment that explains a forced close can name
+  // the slice that never landed. Without it `workState` reached a second, kinder verdict here
+  // than the one the operator just forced past, and `reasonFor`'s slice line was unreachable.
+  const { done: merged, reason, repos } = workState(work, states, { stages })
   const prs = repos.filter(v => v.pr).map(v => `- ${v.repo}: ${v.pr.url}`)
   // An abandoned work never closes its ticket, whatever the PRs say: stopping is a decision
   // about this attempt, and whether the *problem* is still worth solving is not rig's to
@@ -1877,13 +1880,19 @@ cmds.list = ({ flags }) => {
       if (baseMoved(states[i])) bits.push(C.yellow(`base ${baseLabel(states[i])}`))
       say(`  ${v.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
     })
+    // `close` asks the stack whether a slice is still up for review; `list` does not, because
+    // reading it is a git pass and a GitHub call per stage per work, which is not what a
+    // listing is (decision 77). So on a work that has stages the verdict says what it
+    // measured and no more — the same rule `--quick` and `prUnknown` already follow. The
+    // record alone answers this, so a work with no stages costs nothing and reads unchanged.
+    const unchecked = work.stages.length ? ' (stages not checked)' : ''
     if (live && verdict.done) {
-      say(`  ${C.green('→ all PRs merged, nothing uncommitted — safe to `rig close`')}`)
+      say(`  ${C.green(`→ all PRs merged, nothing uncommitted — safe to \`rig close\`${unchecked}`)}`)
     } else if (live && verdict.safeToClose && verdict.repos.length) {
       // The disagreement #2 was filed for: `list` used to stay silent here while `close`
       // would have closed the work without a murmur. Said plainly instead, and not as a
       // recommendation — nothing landed, so this is not finished work.
-      say(`  ${C.dim('→ nothing outstanding, but nothing merged either — `rig close` would not refuse')}`)
+      say(`  ${C.dim(`→ nothing outstanding, but nothing merged either — \`rig close\` would not refuse${unchecked}`)}`)
     }
     say('')
   }
