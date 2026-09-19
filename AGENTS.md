@@ -226,6 +226,29 @@ at a newer record format than this rig (the major version *is* the record format
 before they read it, so a second machine never works from stale records. How the check is
 measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
+## The rollout plan
+
+```bash
+rig plan             # scaffold it, deploy order already rendered from the stack
+rig plan --refresh   # re-render that table when the stack has moved
+```
+
+The file is **part generated and part prose**, and the split is the point.
+
+Between the `rig:deploy-order` markers is rig's: the deploy-order table, rendered from the
+stage list with live PR state, rewritten whole. **Never edit inside the markers** — the next
+refresh overwrites it, which is exactly what stops that table going stale.
+
+Everything around it is yours, and it is the part that earns the document: *why* the order is
+mandatory, the rejection window between deploys, the per-tenant configuration prerequisites,
+the UAT matrix, the verification queries, the rollback. Those are judgements nothing can
+derive, and a refresh never touches them.
+
+**Something has to read it back.** That is the standard this whole epic uses to decide whether
+an artifact deserves to exist, and the rollout plan failed it for its entire existence — `rig
+plan` wrote the file and nothing ever looked again. Now `rig next` compares the rendered table
+to the live stack and offers `rig plan --refresh` when they disagree.
+
 ## Opening the pull requests
 
 ```bash

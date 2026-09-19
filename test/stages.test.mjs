@@ -4,7 +4,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { stageOrder, stageState, stackOf, nextStage, stageBranchProblem } from '../bin/stages.mjs'
+import {
+  stageOrder, stageState, stackOf, nextStage, stageBranchProblem,
+  stageTable, renderPlanRegion, refreshedPlan, planIsStale, PLAN_MARK,
+} from '../bin/stages.mjs'
 
 const work = (over = {}) => ({ id: 'w', branch: 'feat/work', repos: [], stages: [], ...over })
 const stage = (branch, delivers = '') => ({ branch, delivers })
@@ -162,4 +165,52 @@ test('and it has to be one git would accept', () => {
   assert.match(stageBranchProblem(work(), 'feat/two words'), /not a valid branch name/)
   assert.match(stageBranchProblem(work(), 'feat/a..b'), /not a valid branch name/)
   assert.equal(stageBranchProblem(work(), 'feat/fine'), null)
+})
+
+// ---------------------------------------------------------------- the rollout plan's table
+
+const twoStages = () => stackOf(
+  work({ stages: [stage('feat/one', 'the schema'), stage('feat/two', 'the endpoints')] }),
+  [on('a', 'feat/one', 'feat/work', merged(1)), on('a', 'feat/two', 'feat/one', open(2))],
+)
+
+test('the deploy-order table is rendered from the stack, in stack order', () => {
+  const t = stageTable(twoStages())
+  assert.match(t, /\| 1 \| `feat\/one` \| the schema \| a \| #1 \| landed \|/)
+  assert.match(t, /\| 2 \| `feat\/two` \| the endpoints \| a \| #2 \| up for review \|/)
+})
+
+test('a work with no stages renders a line saying so, not an empty table', () => {
+  // An empty table with one blank row is literally how the last attempt at this tool died.
+  const region = renderPlanRegion([])
+  assert.doesNotMatch(region, /\| 1 \|/)
+  assert.match(region, /No stages declared/)
+})
+
+test('refreshing rewrites the region and leaves every word around it alone', () => {
+  const prose = 'The order is mandatory because the validation lands first.'
+  const before = `# Plan\n\n## The PRs\n\n${renderPlanRegion([])}\n\n## Why\n\n${prose}\n`
+  const after = refreshedPlan(before, twoStages())
+  assert.match(after, /feat\/one/)
+  assert.match(after, new RegExp(prose.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the prose is what earns the document')
+  assert.match(after, /## Why/)
+})
+
+test('a plan with no markers is refused rather than having a table put back somewhere arbitrary', () => {
+  assert.equal(refreshedPlan('# Plan\n\nno markers here\n', twoStages()), null)
+})
+
+test('stale is the read-back: the rendered table disagreeing with the live stack', () => {
+  const fresh = `x\n${renderPlanRegion(twoStages())}\ny\n`
+  assert.equal(planIsStale(fresh, twoStages()), false)
+  assert.equal(planIsStale(fresh, []), true, 'the stack moved and the document did not')
+})
+
+test('a plan with no region is not stale — there is nothing to be stale against', () => {
+  assert.equal(planIsStale('# Plan\n\nno markers\n', twoStages()), false)
+})
+
+test('the markers say what they are and how to rewrite them', () => {
+  assert.match(PLAN_MARK.open, /generated/)
+  assert.match(PLAN_MARK.open, /rig plan --refresh/)
 })
