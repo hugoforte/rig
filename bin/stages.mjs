@@ -118,6 +118,56 @@ const groupByRepo = perRepo => {
 // is what makes the work branch's own PR the thing that is available next.
 export const nextStage = stack => stack.find(s => !s.landed) || null
 
+// The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the
+// rollout plan (`rig plan`) — because the whole complaint against the rollout plan was that
+// its table was typed by hand, and two generators would be two tables that disagree.
+export function stageTable (stack) {
+  const where = st => st.landed ? 'landed' : st.open ? 'up for review' : st.started ? 'in progress' : 'not started'
+  const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
+  return [
+    '| Order | Stage | Delivers | Repos | PR | State |',
+    '|------:|-------|----------|-------|----|-------|',
+    ...stack.map((st, i) => `| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${st.repos.join(', ') || '—'} | ${prs(st)} | ${where(st)} |`),
+  ].join('\n')
+}
+
+// The region of the rollout plan rig owns. Everything outside these markers is yours — the
+// prose that earns the document, which is *why* the order is mandatory, the rejection window,
+// the per-tenant prerequisites, the verification queries and the rollback. Everything inside is
+// rendered from the stack and rewritten whole, because a table of derived state maintained by
+// hand is the thing this whole epic exists to stop.
+export const PLAN_MARK = {
+  open: '<!-- rig:deploy-order — generated. `rig plan --refresh` rewrites it; edit the prose around it. -->',
+  close: '<!-- /rig:deploy-order -->',
+}
+
+const planRegion = () => new RegExp(`${escapeRe(PLAN_MARK.open)}[\\s\\S]*?${escapeRe(PLAN_MARK.close)}`, 'm')
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+export const renderPlanRegion = stack => [
+  PLAN_MARK.open,
+  stack.length ? stageTable(stack) : '_No stages declared — `rig stage <branch> --delivers "..."` records one._',
+  PLAN_MARK.close,
+].join('\n')
+
+// The plan with its generated region brought up to date, or null when the file has no region
+// to rewrite — a plan written before this existed, or one someone deleted the markers from.
+// Null rather than an append: putting a table back somewhere arbitrary in a document someone
+// has been editing is worse than saying the markers are gone.
+export function refreshedPlan (text, stack) {
+  const re = planRegion()
+  if (!re.test(text)) return null
+  return text.replace(re, renderPlanRegion(stack))
+}
+
+// Does the plan's rendered table still say what the stack says? This is the read-back the whole
+// epic is tested against: an artifact nothing reads is how v1 ended up with a dead table
+// containing one blank row, and `rig plan` failed that test for its entire existence.
+export function planIsStale (text, stack) {
+  const found = planRegion().exec(text)
+  return found ? found[0].trim() !== renderPlanRegion(stack).trim() : false
+}
+
 // A branch name a stage can actually be carried on. The work's own branch is refused because
 // a stage stacked on itself is the one shape the chain walk cannot represent — and because it
 // would make the work branch its own slice, which is not what a slice is.

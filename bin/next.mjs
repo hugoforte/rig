@@ -41,13 +41,14 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //                  plus `pushed` from the worktree state
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
+//   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, stack = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -114,6 +115,13 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // derived from the repo count and nothing anybody declared.
   if (entries.length >= 3 && !planExists) {
     out.push(offer('landing', `${entries.length} repos means deploy order matters — a rollout plan is worth having`, 'rig plan'))
+  }
+
+  // The read-back. An artifact nothing reads is how v1 ended up with a dead table containing
+  // one blank row, and the rollout plan failed that test for its whole existence: `rig plan`
+  // wrote it and nothing ever looked again. This is the something that looks.
+  if (planStale) {
+    out.push(offer('landing', 'the rollout plan\'s deploy order no longer matches the stack', 'rig plan --refresh'))
   }
 
   const merged = repos.filter(r => r.merged)

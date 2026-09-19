@@ -16,7 +16,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { stackOf, nextStage, stageBranchProblem } from './stages.mjs'
+import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -639,7 +639,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'run', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -2010,6 +2010,7 @@ cmds.next = ({ flags }) => {
     // The scaffolded stub, still standing where the design should be.
     directionTodo: /^## Direction$[\s\S]*?^_TODO_$/m.test(doc),
     planExists: exists(planFile(work.id)),
+    planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), work.stages.length ? stackOf(work, branchRows(cfg, work)) : []),
     // The stack costs one PR lookup per branch, and `rig next` is a command you ran on
     // purpose — the one place that can afford to know where you are in it.
     stack: work.stages.length ? stackOf(work, branchRows(cfg, work)) : [],
@@ -2052,15 +2053,9 @@ function prBody (work, stack) {
   const direction = directionProse(work.id)
   if (direction) lines.push('## Direction', '', direction, '')
 
-  if (stack.length) {
-    lines.push('## Stages', '')
-    lines.push('| | stage | delivers | |', '|---|---|---|---|')
-    for (const [i, st] of stack.entries()) {
-      const where = st.landed ? 'landed' : st.open ? 'up for review' : st.started ? 'in progress' : 'not started'
-      lines.push(`| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${where} |`)
-    }
-    lines.push('')
-  }
+  // The same renderer the rollout plan uses. Two generators would be two tables that disagree,
+  // and a table that disagrees with itself is how this document got its reputation.
+  if (stack.length) lines.push('## Stages', '', stageTable(stack), '')
 
   lines.push(`Context doc: ${contextDocRef(work.id)}`)
   return lines.join('\n')
@@ -2179,16 +2174,48 @@ cmds.stage = ({ flags, positional }) => {
   }
 }
 
+// The rollout plan, part generated and part prose.
+//
+// It used to be entirely prose that nothing read back — `rig plan` wrote the file and
+// `regenerate` checked only that it *existed*, to add one pointer line. Its first table was a
+// hand-maintained list of stages, which is the concept #62 now models properly and the exact
+// shape decision 3 forbids.
+//
+// So the table is rig's, between markers, rewritten whole from the stack. Everything around it
+// is yours, and it is the part that earns the document: *why* the order is mandatory, the
+// rejection window between deploys, the per-tenant configuration prerequisites, the
+// verification queries, the rollback. Those are judgements nothing can derive.
+//
+// The standard the whole epic uses to decide whether an artifact deserves to exist is
+// **something has to read it back**. `--refresh` is that: it re-renders the region in place,
+// and `rig next` offers it when the rendered table and the live stack disagree.
 cmds.plan = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
-  if (exists(planFile(id)) && !flags.force) die(`${planFile(id)} already exists`)
+  const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+
+  if (flags.refresh) {
+    if (!exists(planFile(id))) die(`${planFile(id)} does not exist — \`rig plan\` writes it first`)
+    const before = readText(planFile(id))
+    const after = refreshedPlan(before, stack)
+    if (after === null) {
+      die(`${planFile(id)} has no \`rig:deploy-order\` region to refresh — it was written before the table was generated, or the markers were removed. Paste them back around the table, or rewrite the file with \`rig plan --force\`.`)
+    }
+    if (after === before) return ok(`${planFile(id)} is already up to date with the stack`)
+    writeText(planFile(id), after)
+    commitAs(id)
+    saveWork(cfg, work)
+    return ok(`refreshed the deploy order in ${planFile(id)}`)
+  }
+
+  if (exists(planFile(id)) && !flags.force) die(`${planFile(id)} already exists — \`rig plan --refresh\` brings its deploy order up to date`)
   const tpl = readText(path.join(RIG_ROOT, 'templates', 'rollout-testing-plan.md'))
   writeText(planFile(id), tpl
     .replace(/\{\{ID\}\}/g, id)
     .replace(/\{\{TITLE\}\}/g, work.title || id)
     .replace(/\{\{KEYS\}\}/g, work.tickets.join(', ') || id)
+    .replace(/\{\{DEPLOY_ORDER\}\}/g, renderPlanRegion(stack))
     .replace(/\{\{DATE\}\}/g, new Date().toISOString().slice(0, 10)))
   commitAs(id)
   saveWork(cfg, work)   // the generated AGENTS.md gains its "Rollout plan" line
@@ -2721,7 +2748,8 @@ cmds.help = () => {
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
-  rig plan                        scaffold the rollout & testing plan
+  rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
+                                  re-renders its deploy order from the stack
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
                                   --designed records the "design agreed" gate
   rig close [--force]             safety-checked teardown
