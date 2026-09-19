@@ -226,6 +226,23 @@ at a newer record format than this rig (the major version *is* the record format
 before they read it, so a second machine never works from stale records. How the check is
 measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
+## Opening the pull requests
+
+```bash
+rig pr        # one PR per repo, work branch to the base it was cut from
+```
+
+The body is assembled from what the record already holds: the title, the tickets, the
+**Direction** section of the context doc lifted verbatim, and the stage table rendered from the
+stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
+hand-maintained the moment something renders it.
+
+**Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
+repo that already has an open PR is reported, not duplicated.
+
+rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
+it touches, and rig would have to guess which of the stack you meant.
+
 ## Closing
 
 ```bash

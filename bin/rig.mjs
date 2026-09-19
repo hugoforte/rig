@@ -2027,6 +2027,82 @@ cmds.next = ({ flags }) => {
   }
 }
 
+// The Direction section of the context doc, which is where the design was agreed and written
+// down. Lifted verbatim into a PR body rather than summarised: a summary is a second copy that
+// starts drifting the moment either is edited, and the reviewer wants the reasoning that was
+// actually agreed, not rig's paraphrase of it.
+function directionProse (id) {
+  if (!exists(contextFile(id))) return ''
+  const m = /^## Direction\s*$([\s\S]*?)(?=^## |\Z)/m.exec(readText(contextFile(id)))
+  if (!m) return ''
+  // The scaffolded stub says nothing, and an empty section in a PR body is worse than none.
+  const body = m[1].replace(/^\s*<!--[\s\S]*?-->\s*$/gm, '').trim()
+  return body === '_TODO_' ? '' : body
+}
+
+// The PR body rig writes: what the work is, the ticket, what was decided, and what landed in
+// which order. Everything in it is already recorded somewhere — the point is that it is
+// assembled rather than retyped, and that the stage table is rendered from the stack rather
+// than hand-maintained, which is the whole complaint against the rollout plan.
+function prBody (work, stack) {
+  const lines = []
+  if (work.title) lines.push(work.title, '')
+  if (work.tickets?.length) lines.push(`Tickets: ${work.tickets.join(', ')}`, '')
+
+  const direction = directionProse(work.id)
+  if (direction) lines.push('## Direction', '', direction, '')
+
+  if (stack.length) {
+    lines.push('## Stages', '')
+    lines.push('| | stage | delivers | |', '|---|---|---|---|')
+    for (const [i, st] of stack.entries()) {
+      const where = st.landed ? 'landed' : st.open ? 'up for review' : st.started ? 'in progress' : 'not started'
+      lines.push(`| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${where} |`)
+    }
+    lines.push('')
+  }
+
+  lines.push(`Context doc: ${contextDocRef(work.id)}`)
+  return lines.join('\n')
+}
+
+// One PR per repo, work branch → base branch. rig has read PR state everywhere since it
+// existed — `list`, `status`, `close`, `dash`, `workstate` — and had never opened one, which
+// made review the phase it was most obviously absent from. The PR is also the one artifact rig
+// is best placed to write, because it already holds everything the body needs.
+//
+// **Not a gate.** A command you run when the stages are in, consistent with the epic's
+// principle that rig never adds a stop. And idempotent like everything else: a repo that
+// already has an open PR is reported, not duplicated — "already open" is a thing to say, not
+// an error to raise.
+cmds.pr = ({ flags }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  if (!work.repos.length) die(`${work.id} has no repos attached — there is nothing to open a PR on`)
+  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
+
+  const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+  const body = prBody(work, stack)
+  const title = work.title || work.id
+
+  for (const entry of work.repos) {
+    const state = repoState(cfg, entry, work.branch)
+    if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
+    if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
+    if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
+    if (!state.pushed) { warn(`${entry.repo}: ${work.branch} is not on the remote yet — push it first`); continue }
+
+    // The base is the one this repo's work branch was cut from. A stage's PR is not rig's to
+    // open: a stage is reviewed on its own, in the repo it touches, and rig would have to
+    // guess which of the stack you meant.
+    const base = workBranch(entry, work)?.base || entry.base
+    let made = null
+    const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, title, body }) })
+    if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
+    ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
+  }
+}
+
 // Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
 // row each. The base is read live (decision 63) because the base is what says where a stage
 // sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
@@ -2638,6 +2714,7 @@ cmds.help = () => {
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
+  rig pr                          open one PR per repo, work branch to base branch
   rig stage [branch]              the stack, in branch order; with a branch, declare one
        --delivers "..."            the one line of prose a stage carries
   rig setup [repo...]             run the catalogue's setup commands
