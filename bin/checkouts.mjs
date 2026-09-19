@@ -16,6 +16,7 @@
 // `run(cmd, args, opts)` is spawnSync-shaped and injected, the way `worktrees.mjs` takes
 // it — one spawn in the tool rather than one per module, and a runner a test can stand in
 // for when it needs git to answer something real git will not produce on demand.
+import fs from 'node:fs'
 import path from 'node:path'
 import { sameDir } from './roots.mjs'
 
@@ -40,7 +41,11 @@ export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
 //   upstream      the tracking branch's *name*, never a boolean
 //   ahead/behind  against the upstream as last fetched — a caller that wants them current
 //                 fetches first. 0 with no upstream; null when git could not answer
-//   dirty         what `git add -A` would stage: what makes a tree unsafe to commit into
+//   dirty         entries `git status --porcelain` reports, untracked included — the
+//                 tree `git add -A` would sweep up, and what makes one unsafe to commit
+//                 into. An untracked *directory* is one entry however many files sit
+//                 under it, so this is "is there anything here" with a number beside it
+//                 rather than a file count
 //   modified      tracked changes only: what actually stops a fast-forward
 const UNREAD = Object.freeze({
   repo: 'none', top: null, linked: false, branch: null, defaultBranch: null,
@@ -116,8 +121,12 @@ export function checkouts ({ run }) {
   function identify (dir) {
     const state = identity(dir)
     if (state.repo !== 'own') return state
-    const gitDir = git(dir, 'rev-parse', '--absolute-git-dir').out
-    const commonDir = path.resolve(dir, git(dir, 'rev-parse', '--git-common-dir').out)
+    // Both answers are needed to compare them, and a git that does not know either option
+    // answers neither. Reading that as "linked" would switch the freshness check off for
+    // good, blaming a worktree the user is not in.
+    const gitDir = git(dir, 'rev-parse', '--absolute-git-dir')
+    const commonDir = git(dir, 'rev-parse', '--git-common-dir')
+    const comparable = gitDir.code === 0 && commonDir.code === 0 && gitDir.out && commonDir.out
     // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the
     // remote renames its default branch the ref names one that no longer exists, so it is
     // believed only when the branch it points at is still there.
@@ -130,7 +139,7 @@ export function checkouts ({ run }) {
     const head = git(dir, 'rev-parse', 'HEAD')
     return {
       ...state,
-      linked: !sameDir(gitDir, commonDir),
+      linked: comparable ? !sameDir(gitDir.out, path.resolve(dir, commonDir.out)) : false,
       defaultBranch: lives ? named : null,
       head: head.code === 0 ? head.out : null,
     }
@@ -167,13 +176,18 @@ export function checkouts ({ run }) {
     if (state.repo !== 'own') return { outcome: 'not-a-checkout', state }
     if (!state.branch) return { outcome: 'detached', state }
     if (!state.upstream) return { outcome: 'no-upstream', state }
-    // A tree git would not read is as good a reason not to move as a distance it would not
-    // measure: both mean the answer that follows would be a guess.
-    if (state.behind === null || state.modified === null) return { outcome: 'unmeasurable', state }
+    if (state.behind === null) return { outcome: 'unmeasurable', state }
     if (state.behind === 0) return { outcome: 'current', state }
     if (state.ahead) return { outcome: 'diverged', state }
+    // `modified` is null when git could not read the tree at all — a corrupt index, say —
+    // and that is not a tree with changes in it. Saying so would be a guess worded as a
+    // finding; the merge below is where git refuses, and its refusal says what is actually
+    // wrong. Same reasoning as the untracked file a merge would overwrite.
     if (state.modified) return { outcome: 'blocked', state }
     const from = git(dir, 'rev-parse', 'HEAD').out
+    // `--ff-only` is the headline promise and the last line of it: `ahead` above is a
+    // count, a count git could not make is null, and this is what then stands between a
+    // distance nobody could measure and a merge commit nobody asked for.
     const ff = git(dir, 'merge', '--ff-only', '@{u}')
     // Divergence is only one reason a fast-forward fails — a lock, a file in the way — and
     // for those git's own words are the actionable part.
@@ -181,7 +195,8 @@ export function checkouts ({ run }) {
     return { outcome: 'moved', state, from }
   }
 
-  // What arrived, newest last, for a caller that has just moved this checkout.
+  // What arrived, **newest first** — `git log`'s own order, which is the order a caller
+  // printing the first few of them wants them in.
   const arrived = (dir, from) => lines(git(dir, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out)
 
   const shortHead = dir => git(dir, 'rev-parse', '--short', 'HEAD').out || null
@@ -198,7 +213,11 @@ export function checkouts ({ run }) {
   function commitAll (dir, message) {
     const add = git(dir, 'add', '-A')
     if (add.code !== 0) return { outcome: 'stage-failed', hash: null, error: firstLine(add.err) }
-    const staged = git(dir, 'diff', '--cached', '--quiet').code !== 0
+    // 0 is "nothing staged", 1 is "something is", and anything above that is git failing
+    // to say — which must not read as the "something is" that goes on to commit.
+    const diff = git(dir, 'diff', '--cached', '--quiet')
+    if (diff.code > 1) return { outcome: 'stage-failed', hash: null, error: firstLine(diff.err) || 'git could not say what is staged' }
+    const staged = diff.code === 1
     if (staged) {
       const commit = git(dir, 'commit', '-q', '-m', message)
       if (commit.code !== 0) return { outcome: 'commit-failed', hash: null, error: firstLine(commit.err || commit.out) }
@@ -206,19 +225,40 @@ export function checkouts ({ run }) {
     return { outcome: staged ? 'committed' : 'nothing', hash: shortHead(dir) }
   }
 
+  // Is a rebase in progress in this checkout? Asked of git rather than assumed from a
+  // path: a linked worktree's rebase state lives in its own git dir, not in `.git`.
+  function rebaseUnderway (dir) {
+    for (const name of ['rebase-merge', 'rebase-apply']) {
+      const p = git(dir, 'rev-parse', '--git-path', name)
+      if (p.code === 0 && p.out && fs.existsSync(path.resolve(dir, p.out))) return true
+    }
+    return false
+  }
+
   // Ours on top of theirs, then pushed. The rebase is what makes two machines committing
   // to one data root work at all; the abort is what stops a conflict leaving a tree
   // mid-rebase for someone to find later.
   //
-  //   pushed · fetch-failed · conflict (aborted, tree left as it was)
+  //   pushed · fetch-failed · underway (someone else's rebase, left alone)
+  //   · refused (the rebase never started; nothing was changed)
+  //   · conflict (ours, aborted, tree left as it was)
   //   · conflict-stuck (the abort failed too) · push-failed
+  //
+  // **The abort only ever undoes a rebase this started.** `git rebase` fails for reasons
+  // that are not conflicts, and a rebase already in progress is one of them — aborting
+  // *that* throws away work nobody asked to lose, including the commit the caller just
+  // made, which ends up reachable only from the reflog. So a rebase already underway is
+  // reported and left alone, and a rebase that never started is `refused` in git's own
+  // words rather than called a conflict.
   //
   // `hash` is HEAD after the rebase rewrote it, which is not what it was before.
   function pushRebasing (dir) {
     const fetched = fetch(dir)
     if (!fetched.ok) return { outcome: 'fetch-failed', hash: null, error: fetched.error }
+    if (rebaseUnderway(dir)) return { outcome: 'underway', hash: null }
     const rebase = git(dir, 'rebase', '-q', '@{u}')
     if (rebase.code !== 0) {
+      if (!rebaseUnderway(dir)) return { outcome: 'refused', hash: null, error: firstLine(rebase.err) || 'no detail from git' }
       const abort = git(dir, 'rebase', '--abort')
       return { outcome: abort.code === 0 ? 'conflict' : 'conflict-stuck', hash: null, error: firstLine(rebase.err) }
     }

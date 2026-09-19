@@ -1,11 +1,12 @@
 // The two checkouts an installation owns, against real git. The module's seam is the
 // runner it is handed, so these tests hand it one that spawns git for real — local bare
 // remotes in a temp tree, no network, no `gh`, and no CLI subprocess. A fake runner
-// appears only where real git will not produce the answer on demand: an unmeasurable
-// distance, a refused `git add`, and a rebase whose abort fails too.
+// appears five times, and only where standing the state up for real would prove less than
+// it costs: the spawn options `fetch` is given, an unmeasurable distance, a `git status`
+// that fails, a refused `git add`, and a rebase whose abort fails too.
 //
-// One temp tree, shared, and the tests run in order — each leaves the checkouts where the
-// next one expects them.
+// One temp tree, shared. Every checkout a test reads is made by that test or in `before`,
+// so no test depends on another having run first — `--test-name-pattern` has to work.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -58,6 +59,8 @@ const pushFromElsewhere = (bare, file, message) => {
   gitMust(theirs, 'push', '-q')
 }
 
+let plain, own, unborn
+
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-checkouts-'))
   env = { ...process.env }
@@ -69,21 +72,34 @@ before(() => {
   Object.assign(env, sandbox)
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig checkouts'
   env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'checkouts@example.invalid'
+
+  // The three checkouts with no remote in them, made once: a directory git knows nothing
+  // about, a checkout of its own with a commit, and one whose HEAD was never born.
+  plain = path.join(tmp, 'plain')
+  fs.mkdirSync(plain)
+  own = path.join(tmp, 'own')
+  fs.mkdirSync(own)
+  gitMust(own, 'init', '-q', '-b', 'main')
+  fs.writeFileSync(path.join(own, 'README.md'), '# own\n')
+  gitMust(own, 'add', '-A')
+  gitMust(own, 'commit', '-q', '-m', 'first')
+  unborn = path.join(tmp, 'unborn')
+  fs.mkdirSync(unborn)
+  gitMust(unborn, 'init', '-q', '-b', 'main')
 })
 
 after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
 
 test('a directory git cannot answer for reads as unversioned, in the same shape', () => {
-  const plain = path.join(tmp, 'plain')
-  fs.mkdirSync(plain)
+  // `repo` is asserted against the literal and not only against `unreadable()`: three
+  // callers word 'none' and 'nested' differently, and comparing the shape to itself would
+  // pin them agreeing rather than what they agree on.
+  assert.equal(c().describe(plain).repo, 'none')
   assert.deepEqual(c().describe(plain), unreadable())
   assert.deepEqual(c().identify(plain), unreadable())
 })
 
 test('a directory inside another checkout is nested, and says whose', () => {
-  const own = path.join(tmp, 'own')
-  fs.mkdirSync(own)
-  gitMust(own, 'init', '-q', '-b', 'main')
   const nested = path.join(own, 'notes', 'rig-data')
   fs.mkdirSync(nested, { recursive: true })
 
@@ -94,14 +110,23 @@ test('a directory inside another checkout is nested, and says whose', () => {
 })
 
 test('a checkout of its own with no upstream is level with nothing, not unknown', () => {
-  const state = c().describe(path.join(tmp, 'own'))
+  const state = c().describe(own)
   assert.equal(state.repo, 'own')
   assert.equal(state.branch, 'main')
   assert.equal(state.upstream, null)
   assert.deepEqual([state.ahead, state.behind, state.dirty, state.modified], [0, 0, 0, 0])
 })
 
-test('dirty is what `git add -A` would stage; modified is what stops a fast-forward', () => {
+test('an unborn HEAD has a branch, no head, and nowhere to go', () => {
+  // `git rev-parse HEAD` exits 128 here and prints the token `HEAD` on stdout, which
+  // without the guard is stamped into the freshness cache as though it were a sha.
+  assert.equal(c().identify(unborn).head, null)
+  assert.equal(c().identify(unborn).branch, 'main')
+  assert.equal(c().describe(unborn).dirty, 0)
+  assert.equal(c().fastForward(unborn).outcome, 'no-upstream')
+})
+
+test('dirty counts what `git status` reports; modified is what stops a fast-forward', () => {
   const { local } = cloned('counts')
   fs.writeFileSync(path.join(local, 'scratch.md'), 'never staged\n')
   assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 0],
@@ -111,6 +136,14 @@ test('dirty is what `git add -A` would stage; modified is what stops a fast-forw
   assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [2, 1])
   gitMust(local, 'checkout', '-q', '--', 'README.md')
   fs.rmSync(path.join(local, 'scratch.md'))
+
+  // An untracked *directory* is one entry, whatever is under it — which is why `dirty` is
+  // "is there anything here" with a number beside it and not a file count.
+  fs.mkdirSync(path.join(local, 'notes', 'deep'), { recursive: true })
+  fs.writeFileSync(path.join(local, 'notes', 'a.md'), 'one\n')
+  fs.writeFileSync(path.join(local, 'notes', 'deep', 'b.md'), 'two\n')
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 0])
+  fs.rmSync(path.join(local, 'notes'), { recursive: true })
 })
 
 test('the upstream is its name, and distance is measured as last fetched', () => {
@@ -194,17 +227,55 @@ test('a checkout level with its upstream is current, and nothing moves', () => {
   assert.equal(r.state.behind, 0)
 })
 
+test('ahead of its upstream and behind nothing is current, not diverged', () => {
+  // The ordinary state of a data root with unpushed commits, and the one that decides
+  // whether `current` or `diverged` is asked first: reading it as diverged would make
+  // `rig update` report a failure and refuse the migrations behind it.
+  const { local } = cloned('ahead')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  gitMust(local, 'add', '-A')
+  gitMust(local, 'commit', '-q', '-m', 'a record of my own')
+
+  const r = c().fastForward(local)
+  assert.equal(r.outcome, 'current')
+  assert.deepEqual([r.state.ahead, r.state.behind], [1, 0])
+})
+
 test('behind and clean is the whole point: it moves, and says what arrived', () => {
   const { bare, local } = cloned('moving')
   pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
+  pushFromElsewhere(bare, 'ALSO.md', 'and a second one')
   assert.equal(c().fetch(local).ok, true)
 
   const r = c().fastForward(local)
   assert.equal(r.outcome, 'moved')
-  assert.equal(r.state.behind, 1)
+  assert.equal(r.state.behind, 2)
+  // Newest first, which is `git log`'s order and the order the caller truncates from.
   assert.deepEqual(c().arrived(local, r.from).map(l => l.replace(/^\S+ /, '')),
-    ['a record from the other machine'])
+    ['and a second one', 'a record from the other machine'])
   assert.ok(fs.existsSync(path.join(local, 'THEIRS.md')))
+})
+
+test('the merge is --ff-only, which is what holds when the count that would have caught it is null', () => {
+  // `diverged` is decided from `ahead`, and a count git could not make is null — so the
+  // last thing between a diverged checkout and a merge commit nobody asked for is the
+  // flag. Real git throughout, with the one count that decides it knocked out.
+  const { bare, local } = cloned('ffonly')
+  pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  gitMust(local, 'add', '-A')
+  gitMust(local, 'commit', '-q', '-m', 'a record of my own')
+  assert.equal(c().fetch(local).ok, true)
+  const blind = (cmd, args) => args.includes('@{u}..HEAD')
+    ? { code: 1, out: '', err: 'fatal: bad revision' }
+    : run(cmd, args)
+
+  const r = checkouts({ run: blind }).fastForward(local)
+  assert.equal(r.state.ahead, null, 'nothing could tell it was diverged')
+  assert.equal(r.outcome, 'failed')
+  assert.match(r.error, /fast-forward/i, 'git refused, in its own words')
+  assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'a record of my own')
+  assert.equal(gitMust(local, 'rev-list', '--count', '--merges', 'HEAD'), '0', 'no merge commit')
 })
 
 test('an untracked file does not block a fast-forward', () => {
@@ -269,13 +340,17 @@ test('nothing to fast-forward from, and nowhere to do it', () => {
   assert.equal(c().fastForward(local).outcome, 'detached')
 })
 
-test('a tree git could not read is not a clean tree', () => {
-  // `rig update` migrates on `dirty === 0`, so reading a failed `git status` as "nothing to
-  // commit" would migrate a data root it could not see into. Same rule as the counts: null.
+test('a tree git could not read is not a clean tree, and not a blocked one either', () => {
+  // `rig update` migrates on `dirty === 0`, so reading a failed `git status` as "nothing
+  // to commit" would migrate a data root it could not see into: the counts are null.
+  // But null is not "there are changes in the way" either — saying that would be a guess
+  // worded as a finding, so the merge runs and git says what is actually wrong.
   const unreadableTree = (cmd, args) => {
     if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
     if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
     if (args.includes('symbolic-ref')) return { code: 0, out: 'main', err: '' }
+    if (args.includes('merge')) return { code: 128, out: '', err: 'fatal: .git/index: index file smaller than expected' }
+    if (args.includes('@{u}..HEAD')) return { code: 0, out: '0', err: '' }
     if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
     if (args.includes('rev-list')) return { code: 0, out: '1', err: '' }
     return { code: 1, out: '', err: '' }
@@ -283,8 +358,9 @@ test('a tree git could not read is not a clean tree', () => {
   const state = checkouts({ run: unreadableTree }).describe('anywhere')
   assert.deepEqual([state.dirty, state.modified], [null, null])
   assert.equal(state.behind, 1, 'the distance was measurable; the tree was not')
-  assert.equal(checkouts({ run: unreadableTree }).fastForward('anywhere').outcome, 'unmeasurable',
-    'and a checkout whose tree nobody could read is not one to move')
+  const r = checkouts({ run: unreadableTree }).fastForward('anywhere')
+  assert.equal(r.outcome, 'failed')
+  assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
 
 test('a distance git could not measure is not a reason to move anything', () => {
@@ -342,12 +418,27 @@ test('a commit git refuses answers git\'s reason, and the change is still there'
 test('a stage git refuses is its own outcome, and nothing is committed', () => {
   // `git add` failing is what a permission problem or a lock looks like; real git will not
   // produce one on demand, and the caller's advice ("commit it by hand") turns on it.
-  const refuses = (cmd, args) => args.includes('add')
-    ? { code: 128, out: '', err: 'fatal: Unable to create index.lock: File exists.' }
-    : { code: 0, out: '', err: '' }
+  const seen = []
+  const refuses = (cmd, args) => {
+    seen.push(args.join(' '))
+    return args.includes('add')
+      ? { code: 128, out: '', err: 'fatal: Unable to create index.lock: File exists.' }
+      : { code: 0, out: '', err: '' }
+  }
   const r = checkouts({ run: refuses }).commitAll('anywhere', 'rig save: blocked')
   assert.equal(r.outcome, 'stage-failed')
   assert.match(r.error, /index\.lock/)
+  assert.equal(seen.some(c => c.includes('commit')), false, 'and it stopped there')
+})
+
+test('a `git diff --cached` that failed says nothing about what is staged', () => {
+  // Exit 1 is "something is staged" and exit 0 is "nothing is"; above that git is failing
+  // to say, and reading that as "something is" commits on the strength of an error.
+  const broken = (cmd, args) => args.includes('--cached')
+    ? { code: 129, out: '', err: 'fatal: unknown option' }
+    : { code: 0, out: '', err: '' }
+  const r = checkouts({ run: broken }).commitAll('anywhere', 'rig save: unknowable')
+  assert.equal(r.outcome, 'stage-failed')
 })
 
 test('pushRebasing puts ours on top of theirs and pushes the result', () => {
@@ -377,12 +468,50 @@ test('a conflict aborts the rebase rather than leaving the tree mid-rebase', () 
   assert.equal(run('git', ['-C', bare, 'log', '-1', '--format=%s']).out, 'their line', 'nothing pushed')
 })
 
+test('a rebase already in progress is left alone, commit and all', () => {
+  // The one that used to lose work: `git rebase` fails because a rebase is already
+  // underway, the abort succeeds, and it takes the user's rebase *and* the commit rig
+  // just made with it — reachable afterwards only from the reflog.
+  const { local } = cloned('midrebase')
+  gitMust(local, 'checkout', '-q', '-b', 'side')
+  fs.writeFileSync(path.join(local, 'README.md'), 'the side line\n')
+  gitMust(local, 'commit', '-q', '-am', 'the side line')
+  gitMust(local, 'checkout', '-q', 'main')
+  fs.writeFileSync(path.join(local, 'README.md'), 'the main line\n')
+  gitMust(local, 'commit', '-q', '-am', 'the main line')
+  assert.notEqual(run('git', ['-C', local, 'rebase', 'side']).code, 0, 'left mid-rebase, as a user would')
+  const wedged = gitMust(local, 'rev-parse', 'HEAD')
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'underway')
+  assert.equal(gitMust(local, 'rev-parse', 'HEAD'), wedged, 'nothing was moved')
+  assert.equal(run('git', ['-C', local, 'rebase', '--abort']).code, 0, 'their rebase is still there to abort')
+})
+
+test('a rebase that never starts is refused, not called a conflict', () => {
+  // No upstream to rebase onto: git declines before anything happens, and there is
+  // nothing to abort. Calling this a conflict would send the reader looking for one.
+  const { local } = cloned('nostart')
+  gitMust(local, 'checkout', '-q', '-b', 'sidebranch')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  assert.equal(c().commitAll(local, 'rig save: sideways').outcome, 'committed')
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'refused')
+  assert.ok(r.error)
+  assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: sideways', 'the commit is still there')
+})
+
 test('a conflict whose abort also fails is a different answer', () => {
-  // The state that needs sorting out by hand, and the one real git will not stage for us.
+  // The state that needs sorting out by hand, and the one real git will not stage for us:
+  // the rebase this started conflicted, and the abort failed too. The fake answers the
+  // in-progress probe the way git would — nothing there before, something there after.
+  let started = false
   const stuck = (cmd, args) => {
     if (args.includes('fetch')) return { code: 0, out: '', err: '' }
+    if (args.includes('--git-path')) return { code: 0, out: started ? tmp : path.join(tmp, 'no-rebase-here'), err: '' }
     if (args.includes('rebase') && args.includes('--abort')) return { code: 1, out: '', err: 'fatal: could not abort' }
-    if (args.includes('rebase')) return { code: 1, out: '', err: 'CONFLICT (content): Merge conflict' }
+    if (args.includes('rebase')) { started = true; return { code: 1, out: '', err: 'CONFLICT (content): Merge conflict' } }
     return { code: 0, out: '', err: '' }
   }
   const r = checkouts({ run: stuck }).pushRebasing('anywhere')

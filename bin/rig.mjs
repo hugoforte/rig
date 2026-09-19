@@ -280,8 +280,8 @@ function freshnessEpilogue (command) {
   try {
     const cfg = config()
     if (!cfg.freshness.enabled) return
-    // Cheap first: most runs have nothing to say and nothing to do, and toolState costs six
-    // git spawns.
+    // Cheap first: most runs have nothing to say and nothing to do, and `toolState` costs
+    // eight git spawns.
     const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
     if (head.code !== 0) return
     const cache = readFreshness(cfg)
@@ -1080,6 +1080,9 @@ function commitDataRoot (message) {
 
   const sent = co.pushRebasing(root)
   if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error}) — nothing pushed`); return }
+  // Someone's rebase, and not rig's to finish or to throw away.
+  if (sent.outcome === 'underway') { warn(`data root: ${committed}, but a rebase is already in progress in ${root} — finish or abort it, then \`rig save\`; nothing pushed`); return }
+  if (sent.outcome === 'refused') { warn(`data root: ${committed}, but the rebase onto origin would not start (${sent.error}) — nothing pushed, nothing changed`); return }
   if (sent.outcome === 'conflict-stuck') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`); return }
   if (sent.outcome === 'conflict') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`); return }
   // `sent.hash` is HEAD as the rebase left it, which is not what was committed above.
@@ -2528,6 +2531,10 @@ cmds.prompt = ({ positional }) => {
 // `clean` is reported separately from `status`: a tree with nothing to update is not the
 // same as a tree that is safe to commit into, and `rig update` migrates only when it is
 // both. A local-only data root reaches 'current' without the question ever being asked.
+// What to do about changes in the way, which is the one thing the two checkouts differ on:
+// the data root is committed by rig, and the tool checkout is yours.
+const how = (label, root) => label === 'data root' ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
+
 function updateCheckout (label, root) {
   const state = co.describe(root)
   if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return { status: 'current', clean: false } }
@@ -2541,24 +2548,40 @@ function updateCheckout (label, root) {
   // command that should say what is in the way rather than go quiet because there happened
   // to be nothing to bring down anyway.
   if (state.modified) {
-    const how = label === 'data root' ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
-    warn(`${label}: ${state.modified} uncommitted change(s) — not updated${how}`)
+    warn(`${label}: ${state.modified} uncommitted change(s) — not updated${how(label, root)}`)
     return { status: 'failed', clean }
   }
   const fetched = co.fetch(root)
   if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error}) — not updated`); return { status: 'failed', clean } }
+  // Every outcome, named. The three that look impossible here — this checkout was read a
+  // few lines ago — are reachable all the same: a fetch that prunes a renamed default
+  // branch takes the upstream with it, and a catch-all would report that as a
+  // fast-forward failure with no words in it and exit 1 on a checkout that is fine.
   const moved = co.fastForward(root)
   const behind = moved.state.behind
-  if (moved.outcome === 'unmeasurable') { warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean } }
-  if (moved.outcome === 'current') { ok(`${label}: already up to date`); return { status: 'current', clean } }
-  // Divergence is only one reason a fast-forward does not happen. For the others — a lock,
-  // a file in the way — git's own words are the actionable part, and "rebase it by hand"
-  // is not.
-  if (moved.outcome === 'diverged') { warn(`${label}: ${behind} behind and ${moved.state.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`); return { status: 'failed', clean } }
-  // `blocked` needs saying separately: only `failed` carries git's words, and the check
-  // above this fetch is what normally catches a tree with changes in it.
-  if (moved.outcome === 'blocked') { warn(`${label}: ${moved.state.modified} uncommitted change(s) — not updated`); return { status: 'failed', clean } }
-  if (moved.outcome !== 'moved') { warn(`${label}: could not fast-forward ${behind} commit(s) (${moved.error || 'no detail from git'}) — not updated`); return { status: 'failed', clean } }
+  switch (moved.outcome) {
+    case 'moved': break
+    case 'current':
+      ok(`${label}: already up to date`); return { status: 'current', clean }
+    case 'no-upstream': case 'detached': case 'not-a-checkout':
+      say(`${C.dim('·')} ${C.dim(`${label}: nothing to update from`)}`); return { status: 'current', clean }
+    case 'unmeasurable':
+      warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean }
+    // Divergence is only one reason a fast-forward does not happen. For the others — a
+    // lock, a file in the way — git's own words are the actionable part, and "rebase it
+    // by hand" is not.
+    case 'diverged':
+      warn(`${label}: ${behind} behind and ${moved.state.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`)
+      return { status: 'failed', clean }
+    // Reachable only when the tree changes during the fetch, and it gets the same advice
+    // as the check before it rather than a quieter version of the same news.
+    case 'blocked':
+      warn(`${label}: ${moved.state.modified} uncommitted change(s) — not updated${how(label, root)}`)
+      return { status: 'failed', clean }
+    default:
+      warn(`${label}: could not fast-forward ${behind} commit(s) (${moved.error || 'no detail from git'}) — not updated`)
+      return { status: 'failed', clean }
+  }
   ok(`${label}: fast-forwarded ${behind} commit(s)`)
   const arrived = co.arrived(root, moved.from)
   for (const line of arrived.slice(0, 20)) say(`  ${C.dim(line)}`)
@@ -2685,7 +2708,7 @@ cmds.doctor = () => {
   // Which *release* this is, when the checkout stands on one — a version and a sha name the
   // same build twice and neither says whether it was ever published. The describe is asked
   // for here and not in `toolState`, which runs in every command's epilogue and is already
-  // six spawns dear; doctor is the one caller that can afford a seventh.
+  // eight spawns dear; doctor is the one caller that can afford a ninth.
   const describe = gv.code === 0 ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
   const mark = releaseMark({ describe, head: tool.head })
   say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${mark ? ` (${mark})` : ''}`)}`)
@@ -2748,12 +2771,16 @@ cmds.doctor = () => {
     })
     if (state.repo === 'own') {
       // rig commits after its own commands; an edit made outside rig waits for `rig save`.
+      // `dirty` is null when git could not read the tree, which is neither clean nor a
+      // count — a green tick on the strength of a command that failed is the one thing
+      // this check must never print.
       const dirty = state.dirty
-      if (dirty) warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`)
+      if (dirty === null) { warn(`data root: git could not read the working tree — \`git -C ${dataRoot()} status\` says why`); problems++ }
+      else if (dirty) warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`)
       if (!state.branch) { warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'); problems++ }
       else if (!state.upstream) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
       else if (state.ahead) warn(`data root has ${state.ahead} unpushed commit(s)`)
-      else if (!dirty) ok('data root is committed and pushed')
+      else if (dirty === 0) ok('data root is committed and pushed')
       // Measured against the last fetch, which a mutating command does for itself.
       if (state.behind) { warn(`data root is ${state.behind} commit(s) behind origin — \`rig update\` fast-forwards it`); problems++ }
     }
