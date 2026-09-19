@@ -703,6 +703,42 @@ test('and a forced close is not then reported as a contradiction', () => {
   assert.doesNotMatch(rig(['doctor']).out, /forced: closed, but/)
 })
 
+// The work branch landed and a slice of it did not — the one shape where the work's *own*
+// ticket has something to answer for that its own pull request cannot say. Both tests below
+// run against this fixture, which is why it is built in the first.
+
+test('`rig next` does not offer to close a work it has just said has a slice up for review', () => {
+  assert.equal(rig(['new', 'forced-ticket', '--title', 'Forced ticket work', '--type', 'feat', '--key', 'acme/billing#9']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'forced-ticket']).code, 0)
+  seedIssue(9, 'Forced ticket work')
+
+  const dest = worktree('forced-ticket', 'billing')
+  assert.equal(rig(['stage', 'feat/forced-ticket-one', '--delivers', 'the schema', '--cut', '--work', 'forced-ticket'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/forced-ticket-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/forced-ticket-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/forced-ticket-one', number: 52, state: 'OPEN', base: 'feat/forced-ticket-work', url: 'https://github.com/acme/billing/pull/52', mergedAt: null })
+  seedPr({ branch: 'feat/forced-ticket-work', number: 53, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/53', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const r = rig(['next', '--work', 'forced-ticket'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /feat\/forced-ticket-one.*up for review/)
+  assert.doesNotMatch(r.out, /rig close/, 'a command that would refuse is not an offer')
+})
+
+test('and forcing the close past it leaves the work ticket open, naming the slice and the force', () => {
+  assert.equal(rig(['close', '--work', 'forced-ticket']).code, 1, 'it refuses first')
+  const c = rig(['close', '--force', '--work', 'forced-ticket'])
+  assert.equal(c.code, 0, c.out)
+
+  assert.equal(issueNumbered(9).state, 'OPEN', 'the work branch landed, but a slice of it did not')
+  const comment = issueNumbered(9).comments[0]
+  assert.match(comment, /billing: stage feat\/forced-ticket-one still has PR #52 open/)
+  assert.match(comment, /^Closed by `rig close --force`\. The blockers were overridden deliberately\./,
+    'a work torn down past an open PR must not read like one that had nothing to get past')
+})
+
 // ------------------------------------------------- opening the pull request
 
 // Review is the phase rig was most obviously absent from: it has read PR state everywhere
