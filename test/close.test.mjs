@@ -231,3 +231,56 @@ test('doctor reports a contradiction as an error, not a warning', () => {
   assert.match(r.out, /given-up: abandoned, but no `closedAt`/)
   assert.match(r.out, /should not be possible; please file an issue/)
 })
+
+// ------------------------------------------------- what now
+
+test('next points a fresh work at the repo interview, then at the design gate', () => {
+  assert.equal(rig(['new', 'what-now', '--title', 'What now', '--type', 'feat', '--no-ticket']).code, 0)
+  let r = rig(['next', '--work', 'what-now'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /Planning/)
+  assert.match(r.out, /nothing is attached yet/)
+  assert.match(r.out, /rig prompt select-repos/)
+
+  assert.equal(rig(['attach', 'billing', '--work', 'what-now']).code, 0)
+  r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /Direction is still `_TODO_`/, 'the scaffolded stub is read, not guessed at')
+  assert.match(r.out, /rig save -m "design agreed" --designed/)
+})
+
+test('and stops offering the gate once it has been recorded', () => {
+  assert.equal(rig(['save', '--work', 'what-now', '--designed']).code, 0)
+  const r = rig(['next', '--work', 'what-now'])
+  assert.doesNotMatch(r.out, /design gate/)
+  assert.match(r.out, /yours to write/, 'nothing is written yet, and rig is not the tool that writes it')
+})
+
+test('a pushed branch with no PR is offered one; an unpushed one is offered a push', () => {
+  const dest = worktree('what-now', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'some work\n')
+  gitMust(dest, 'commit', '-qam', 'some work')
+
+  let r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /commits that are not pushed/)
+  assert.doesNotMatch(r.out, /no PR open/, 'one branch state, one offer')
+
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /billing is pushed with no PR open/)
+})
+
+test('a closed work has nothing to suggest, and says so rather than inventing something', () => {
+  const r = rig(['next', '--work', 'squashed'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /nothing — this work is done/)
+})
+
+test('next never reproaches, whatever state it is handed', () => {
+  // The guardrail, from the outside: `rig next` only ever offers. A warning belongs in
+  // `doctor`, and only for a contradiction.
+  for (const id of ['what-now', 'squashed', 'given-up']) {
+    const out = rig(['next', '--work', id]).out
+    assert.doesNotMatch(out, /should have|you failed|must |required/i, `"${out}" reproaches`)
+    assert.doesNotMatch(out, /^!/m, 'no warnings')
+  }
+})

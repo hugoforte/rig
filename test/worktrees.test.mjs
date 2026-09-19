@@ -126,7 +126,7 @@ test('cut refuses rather than cutting a second worktree over a directory that ex
 
 test('a fresh worktree is clean and level with its base', () => {
   assert.deepEqual(trees().state({ dir: workDir('t1', 'billing'), base: 'main' }),
-    { missing: false, dirty: 0, ahead: 0, behind: 0 })
+    { missing: false, pushed: false, dirty: 0, ahead: 0, behind: 0 })
 })
 
 test('state counts uncommitted changes, then the commits they became', () => {
@@ -138,7 +138,7 @@ test('state counts uncommitted changes, then the commits they became', () => {
   gitMust(dest, 'add', '-A')
   gitMust(dest, 'commit', '-q', '-m', 'work in progress')
   assert.deepEqual(trees().state({ dir: dest, base: 'main' }),
-    { missing: false, dirty: 0, ahead: 1, behind: 0 })
+    { missing: false, pushed: false, dirty: 0, ahead: 1, behind: 0 })
 })
 
 test('every cut fetches, so a later worktree sees what the remote gained', () => {
@@ -152,7 +152,20 @@ test('every cut fetches, so a later worktree sees what the remote gained', () =>
   assert.doesNotMatch(narrated, /mirroring/, 'the mirror is made once, not per cut')
   // And the fetch moved the shared mirror's idea of main, so the earlier worktree is behind.
   assert.deepEqual(trees().state({ dir: workDir('t1', 'billing'), base: 'main' }),
-    { missing: false, dirty: 0, ahead: 1, behind: 1 })
+    { missing: false, pushed: false, dirty: 0, ahead: 1, behind: 1 })
+})
+
+test('pushed asks whether the branch reached the remote, never whether it has an upstream', () => {
+  // Cutting a branch from `refs/remotes/origin/main` makes git set tracking to *main*, so
+  // `@{u}` resolves from the moment `rig attach` runs and says nothing about who pushed.
+  // `rig next` leans on this to tell "nothing written yet" from "waiting for a PR".
+  const dest = workDir('t1', 'billing')
+  assert.equal(git(dest, 'rev-parse', '--abbrev-ref', '@{u}').code, 0, 'an upstream exists either way')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).pushed, false)
+
+  gitMust(dest, 'push', '-q', 'origin', 'HEAD:refs/heads/feat/t1')
+  gitMust(mirrorOf('acme', 'billing'), 'fetch', '-q', '--prune', 'origin')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).pushed, true)
 })
 
 test('state measures against the recorded base when the branch has no upstream', () => {
@@ -160,7 +173,7 @@ test('state measures against the recorded base when the branch has no upstream',
   gitMust(dest, 'branch', '--unset-upstream')
   assert.notEqual(git(dest, 'rev-parse', '--abbrev-ref', '@{u}').code, 0, 'no upstream to lean on')
   assert.deepEqual(trees().state({ dir: dest, base: 'main' }),
-    { missing: false, dirty: 0, ahead: 1, behind: 1 })
+    { missing: false, pushed: false, dirty: 0, ahead: 1, behind: 1 })
 })
 
 test('state measures against the live base when the PR was repointed at another branch', () => {
@@ -172,9 +185,9 @@ test('state measures against the live base when the PR was repointed at another 
   gitMust(mirrorOf('acme', 'billing'), 'fetch', '-q', '--prune', 'origin')
 
   assert.deepEqual(trees().state({ dir: dest, base: 'feat/lower', recordedBase: 'main' }),
-    { missing: false, dirty: 0, ahead: 0, behind: 0 })
+    { missing: false, pushed: false, dirty: 0, ahead: 0, behind: 0 })
   assert.deepEqual(trees().state({ dir: dest, base: 'main', recordedBase: 'main' }),
-    { missing: false, dirty: 0, ahead: 1, behind: 1 }, 'the record alone still measures from main')
+    { missing: false, pushed: false, dirty: 0, ahead: 1, behind: 1 }, 'the record alone still measures from main')
 })
 
 test('state falls back to the recorded base when the live base is not in the mirror', () => {
@@ -183,7 +196,7 @@ test('state falls back to the recorded base when the live base is not in the mir
   // read into a blocker at `rig close`.
   const dest = workDir('t1', 'billing')
   assert.deepEqual(trees().state({ dir: dest, base: 'feat/never-fetched', recordedBase: 'main' }),
-    { missing: false, dirty: 0, ahead: 1, behind: 1 })
+    { missing: false, pushed: false, dirty: 0, ahead: 1, behind: 1 })
 })
 
 test('a distance git could not measure answers null with the reason, never a confident zero', () => {
