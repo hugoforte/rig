@@ -234,6 +234,7 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
   assert.match(r.out, /customfield_10058\s+3/)
   assert.match(r.out, /customfield_10020\s+7/, 'sprint "active" resolved through the board')
   assert.match(r.out, /customfield_10755\s+\["10755"\]/, 'component name resolved to its id')
+  assert.match(r.out, /more detail/, 'the whole brief is previewed, not its first paragraph')
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't5')), 'dry-run creates nothing')
   assert.deepEqual(twg().issues, {}, 'dry-run never calls createIssue')
 })
@@ -247,7 +248,8 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
   assert.deepEqual(record.tickets, ['PROJ-1'])
   const issue = twg().issues['PROJ-1']
   assert.equal(issue.title, 'Jira ticketed work')
-  assert.equal(issue.body, 'the jira brief')
+  // The whole brief and a link back to the design (test/jira.test.mjs has the detail).
+  assert.equal(issue.body.split('\n\nThe design lives')[0], 'the jira brief\n\nmore detail')
   assert.equal(issue.assignee, 'me')
   assert.deepEqual(issue.fields, { customfield_10755: ['10755'], customfield_10058: 3, customfield_10020: 7 })
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)

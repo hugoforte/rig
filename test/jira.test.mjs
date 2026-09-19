@@ -3,10 +3,13 @@
 // twg; `twgInMemory` holds canned issues for tests. See docs/adr/0001-jira-via-twg.md
 // for why twg, and for the caveat that the JSON shapes below are inferred from
 // `twg --help`, not a live call, and may need adjustment on first real use.
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import { twgViaCli, twgInMemory } from '../bin/jira.mjs'
 import { resolveJiraFields } from '../bin/rig.mjs'
+import { makeInstall, readJson } from './harness.mjs'
 
 const canned = reply => {
   const calls = []
@@ -109,15 +112,24 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
   })
   assert.equal(key, 'KTLO-43')
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
-    '--summary', 'New work', '--description', 'The brief', '--assignee', 'me',
-    '--field', 'customfield_10020=7', '-o', 'json', '-y'])
+    '--summary', 'New work', '--description', 'The brief', '--description-format', 'markdown',
+    '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
+})
+
+// twg's --description-format defaults to html, so a multi-paragraph markdown brief sent
+// without this flag arrives as one run-on paragraph (hugoforte/rig#54).
+test('twg adapter: createIssue sends the description as markdown, never twg\'s default html', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
+  twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'First.\n\nSecond.', fields: {} })
+  assert.deepEqual(calls[0].slice(calls[0].indexOf('--description')),
+    ['--description', 'First.\n\nSecond.', '--description-format', 'markdown', '-o', 'json', '-y'])
 })
 
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
   twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
-    '--summary', 'S', '--description', 'D', '-o', 'json', '-y'])
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '-o', 'json', '-y'])
 })
 
 test('twg adapter: createIssue fails loudly when it cannot read the new key', () => {
@@ -126,10 +138,13 @@ test('twg adapter: createIssue fails loudly when it cannot read the new key', ()
     /could not read the new issue's key/)
 })
 
-test('twg adapter: commentIssue posts the body and surfaces twg\'s error', () => {
+// --body-format for the same reason as the description's: the close comment is a markdown
+// list of PR links, and twg would otherwise read it as html.
+test('twg adapter: commentIssue posts the body as markdown and surfaces twg\'s error', () => {
   const { calls, twg } = canned(() => '')
   twg.commentIssue('KTLO-42', 'Closed by rig close.')
-  assert.deepEqual(calls[0], ['jira', 'workitem', 'comment', 'create', '--issue-id', 'KTLO-42', '--body', 'Closed by rig close.'])
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'comment', 'create', '--issue-id', 'KTLO-42',
+    '--body', 'Closed by rig close.', '--body-format', 'markdown'])
   const failing = canned(() => ({ code: 1, err: 'HTTP 403: Forbidden' })).twg
   assert.throws(() => failing.commentIssue('KTLO-42', 'x'), /HTTP 403: Forbidden/)
 })
@@ -276,4 +291,65 @@ test('resolveJiraFields: create-metadata wins over the system set when both know
   // the project's component list (InfoManagerWeb) knows nothing about.
   const resolved = resolveJiraFields(twgInMemory(world()), ktlo({ components: ['Payments'] }, 'Task'), [])
   assert.deepEqual(resolved.fields, { customfield_10755: ['10755'] })
+})
+
+// ------------------------------------------------- what a created Jira ticket says
+//
+// End to end through the CLI, because the description is built from the work record and
+// the data root's remote (`contextDocRef`) — neither of which a direct call could supply
+// honestly. One temp installation (test/harness.mjs) with the in-memory twg adapter behind
+// RIG_FAKE_TWG; the real `twg` is never spawned. The two tests below share it and run in
+// order: the dry-run's preview is compared against what the create then sends.
+const install = makeInstall({ prefix: 'rig-jira-', twg: { present: true, issues: {}, fields: {}, boards: {} } })
+after(install.cleanup)
+
+const brief = [
+  'Refunds are charged twice when the gateway retries.',
+  '',
+  '## What happens',
+  '',
+  'The second paragraph — everything the old create dropped on the floor.',
+].join('\n')
+
+// The four spaces `--dry-run` indents the description block by, stripped back off. The
+// block is the last thing printed, and its blank lines are printed bare so that nothing
+// rig prints carries trailing whitespace.
+const previewedDescription = stdout => {
+  const lines = stdout.split(/\r?\n/)
+  const start = lines.findIndex(l => l.startsWith('  description'))
+  assert.notEqual(start, -1, `no description block in:\n${stdout}`)
+  const block = lines.slice(start + 1).map(l => l.startsWith('    ') ? l.slice(4) : l)
+  while (block.length && block.at(-1) === '') block.pop()
+  return block.join('\n')
+}
+
+test('rig new --ticket --dry-run previews the Jira description in full', () => {
+  let r = install.rig(['init', '--data-root', install.dataRoot, '--work-root', install.workRoot,
+    '--orgs', 'acme', '--tracker', 'acme=jira:PROJ', '--email', 'you@acme.example'])
+  assert.equal(r.code, 0, r.out)
+  // `type` has no CLI setter — org facts go straight into the data root's rig.json.
+  const rigJson = path.join(install.dataRoot, 'rig.json')
+  const cfg = readJson(rigJson)
+  cfg.tracker.acme = { kind: 'jira', project: 'PROJ', type: 'Task' }
+  fs.writeFileSync(rigJson, JSON.stringify(cfg, null, 2))
+
+  r = install.rig(['new', 'refunds', '--title', 'Refunds double-charge', '--ticket', '--org', 'acme', '--dry-run'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(previewedDescription(r.stdout), /dropped on the floor/, 'the whole brief, not its first paragraph')
+})
+
+test('a Jira ticket created by rig new --ticket carries the whole brief and the context-doc link', () => {
+  const preview = previewedDescription(
+    install.rig(['new', 'refunds', '--title', 'Refunds double-charge', '--ticket', '--org', 'acme', '--dry-run'],
+      { input: brief }).stdout)
+
+  const r = install.rig(['new', 'refunds', '--title', 'Refunds double-charge', '--ticket', '--org', 'acme'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  const issue = readJson(install.twgStateFile).issues['PROJ-1']
+  assert.equal(issue.title, 'Refunds double-charge')
+  assert.ok(issue.body.startsWith(brief), 'the brief goes in whole, verbatim, first')
+  assert.match(issue.body, /The design lives in the work record: \S*refunds\S*context\.md/)
+  assert.equal(preview, issue.body, '--dry-run previews exactly what the create sends')
 })

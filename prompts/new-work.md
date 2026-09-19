@@ -40,7 +40,8 @@ interview (`rig prompt select-repos`).
 ```
 
 Prints the issue title and thin body it would open. Present it; the ticket is just the
-brief's first paragraph plus a link to the context doc, so there is rarely much to adjust.
+brief's first paragraph plus a link to the context doc (see "The ticket body" below), so
+there is rarely much to adjust.
 
 **Tracker is Jira:**
 
@@ -48,9 +49,10 @@ brief's first paragraph plus a link to the context doc, so there is rarely much 
 <brief> | rig new <id> --title "<title>" --ticket --org <org> --dry-run
 ```
 
-Prints the resolved project, type, summary, description, assignee, and every field
-(sprint resolved through the org's active sprint, named fields like `components` resolved
-to their ids). Present this table. The user confirms, or gives overrides as
+Prints the resolved project, type, summary, assignee, every field (sprint resolved through
+the org's active sprint, named fields like `components` resolved to their ids), and last
+the description in full — the exact markdown the create sends, indented by four spaces.
+Present this table. The user confirms, or gives overrides as
 `--field name=value,name2=value2` — comma-separated `name=value` pairs; a value that
 itself contains a comma (multiple components, say) isn't expressible this way, so change
 `rig.json`'s default for that field instead.
@@ -72,14 +74,21 @@ rig new <id> --title "<title>" --no-ticket
 This records the decision (`Tickets: none (declined)` in the context doc) — distinct from
 a work nobody decided about, which `rig new` no longer allows to happen silently.
 
-## The GitHub ticket body
+## The ticket body
 
-One paragraph, and the link. Rig writes exactly this; match it if you ever open one by
+Same shape on both trackers; rig writes exactly this, so match it if you ever open one by
 hand:
 
-> <one paragraph: the problem, in the words of the brief>
+> <the brief>
 >
 > The design lives in the work record: <link to `work/<id>/context.md` on the default branch>
+>
+> Opened by `rig new <id> --ticket`.
+
+What differs is how much brief goes in. **GitHub** gets the first paragraph only: the
+issue is a pointer and the context doc is one click away for the same reader. **Jira**
+gets the whole brief, as markdown — a Jira reader may have no access to the data root the
+link points at, so the ticket has to stand on its own.
 
 ## After
 
