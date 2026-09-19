@@ -27,7 +27,7 @@ export const MIGRATIONS = [
   {
     // No hook: the format change *is* that the format is now recorded, and the stamp is
     // written by `applyMigrations` for every migration rather than by this one. Additive on
-    // purpose. This is the one major bump the write gate cannot protect: a rig from before
+    // purpose. This is the one major bump the write refusal cannot protect: a rig from before
     // this check has never heard of `writtenBy`, so when the first machine migrates, the
     // second does not refuse — that code is not in it. Adding a key and changing nothing
     // else means the old rig reads a field it ignores and stays correct.
@@ -57,7 +57,7 @@ export function toolVersion (pkg = {}) {
 
 // The major in a version rig wrote, 0 when there is no stamp at all, and `null` when there
 // is one rig could not have written. Null is not zero: guessing "never migrated" at a stamp
-// nobody can read would open the write gate and then overwrite the evidence on the next
+// nobody can read would slip past the write refusal and then overwrite the evidence on the next
 // `rig update`.
 export function majorOf (version) {
   if (version === undefined || version === null) return 0

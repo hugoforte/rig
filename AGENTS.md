@@ -141,7 +141,7 @@ A dim line on stderr — `rig is N commits behind … — rig update` — is add
 because updating it would move the work's branch. `update` fast-forwards only, exits non-zero
 when it could not do what was asked, and ends in the doctor checks.
 
-A mutating command that dies with "run `rig update`" hit the **write gate**: the data root is
+A mutating command that dies with "run `rig update`" hit the **write refusal**: the data root is
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
@@ -170,6 +170,13 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Principles
+
+Working *on* rig: **keep it refactorable, but don't factor it early** — two similar things
+are a coincidence, so wait for the third before naming the pattern. And **strong
+convictions, loosely held** — decide, write the reason down, and let evidence move you.
+Both are stated in full in DESIGN.md's "Principles".
 
 ### Releases
 

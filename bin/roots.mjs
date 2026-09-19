@@ -51,7 +51,7 @@ export const insideDir = (child, parent) => {
 }
 
 // Absent is `null`, not `{}`: "the file is not there yet" is a different answer from "the
-// file says nothing", and `init` and the write gate both need to tell them apart.
+// file says nothing", and `init` and the write refusal both need to tell them apart.
 function readJsonFile (file) {
   if (!fs.existsSync(file)) return null
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) }
@@ -117,7 +117,7 @@ export function load (location) {
 }
 
 // rig.json as it sits on disk, unmerged: the record format is a property of the data root
-// alone, so the write gate and the migrations ask this rather than `load`.
+// alone, so the write refusal and the migrations ask this rather than `load`.
 export const readOrg = location => readJsonFile(location.orgFile)
 
 // The two writers. `edit` is handed the file as it is — `null` when it does not exist yet,

@@ -41,12 +41,28 @@ The recorded decision that a work in a tracked org deliberately has no ticket. D
 _Avoid_: ticketless, none
 
 **Gate**:
-A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed, closed.
+A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed, closed. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
 _Avoid_: step, checkpoint, phase
 
+**Phase**:
+The part of the lifecycle a work is in now: planning, designing, building, reviewing, landing, and the terminal closed or abandoned. Always derived — from the repos attached, the branches, the PRs, and the gates recorded — and never stored, so it cannot go stale. Active phases are present participles; terminal ones are past.
+_Avoid_: stage (that is scope), status, step, state
+
+**Abandoned**:
+The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
+_Avoid_: cancelled, dropped, dead, stale
+
 **Stage**:
-A delivery slice of a work, such as backend, API, UI. Not modelled yet. Never used for a gate.
-_Avoid_: phase, milestone
+A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. Never used for a gate.
+_Avoid_: phase (that is lifecycle), slice, milestone, increment, child work
+
+**Work branch**:
+The branch a work's changes land on, cut from the base branch in every attached repo and sharing one name across them. Stages stack on it; one PR per repo takes it to the base branch at the end.
+_Avoid_: feature branch, integration branch, the work's base branch
+
+**Base branch**:
+What a branch was cut from and what its PR targets — a relation, not a name for any particular branch. The work branch's base is the repo's default branch; a stage's base is the branch below it in the stack.
+_Avoid_: parent branch, target, trunk
 
 **Agreement point**:
 The moment a gate is passed. Where rig commits and pushes the data root.
@@ -80,9 +96,9 @@ _Avoid_: schema, version (when the format is meant)
 A record-format change, carried by a major version and run by `rig update`. Record-only and idempotent: it rewrites the data root and never touches a worktree.
 _Avoid_: upgrade, schema change
 
-**Write gate**:
-The refusal that stops a rig writing a record format it has never seen. Mutating commands refuse; read-only ones carry on.
-_Avoid_: lock, block, version check
+**Write refusal**:
+The refusal that stops a rig writing a record format it has never seen. Mutating commands refuse; read-only ones carry on. Not a gate — nothing is asked, and the only way past it is `rig update`.
+_Avoid_: write gate, lock, block, version check
 
 **Save**:
 Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.
