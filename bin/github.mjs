@@ -9,6 +9,7 @@
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
 //   prForBranch(org, name, branch)      { number, state, base, url, openedAt, mergedAt } newest PR, or null
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
+//   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
@@ -78,6 +79,16 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       if (r.code !== 0 || !r.out) return null
       const t = parseJson(r.out, 'gh pr view')
       return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
+    },
+    // The one write rig makes to a pull request, and it makes it once: `rig pr` checks for
+    // an existing one first (idempotence is the caller's, because "already open" is a thing
+    // to report rather than an error to raise).
+    createPr (org, name, { branch, base, title, body }) {
+      const out = must(['pr', 'create', '--repo', `${org}/${name}`,
+        '--head', branch, '--base', base, '--title', title, '--body', body])
+      const url = /(https:\/\/\S*\/pull\/\d+)\s*$/.exec(out)?.[1]
+      if (!url) fail(`could not read the pull request URL from gh output:\n${out}`)
+      return { number: Number(/\/pull\/(\d+)$/.exec(url)[1]), url }
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -150,6 +161,18 @@ export function githubInMemory (state) {
         firstReviewAt: earliest(reviews.map(r => r.submittedAt)),
         approvedAt: earliest(reviews.filter(r => r.state === 'APPROVED').map(r => r.submittedAt)),
       }
+    },
+    createPr (org, name, { branch, base, title, body }) {
+      write()
+      const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      found.repo.prs = found.repo.prs || []
+      const number = Math.max(0, ...found.repo.prs.map(pr => pr.number)) + 1
+      const url = `https://github.com/${found.key}/pull/${number}`
+      found.repo.prs.push({
+        branch, base, number, url, title, body,
+        state: 'OPEN', openedAt: new Date().toISOString(), mergedAt: null, commits: [],
+      })
+      return { number, url }
     },
     createIssue (spec, title, body) {
       write()
