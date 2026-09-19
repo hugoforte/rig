@@ -163,6 +163,21 @@ test('state measures against the recorded base when the branch has no upstream',
     { missing: false, dirty: 0, ahead: 1, behind: 1 })
 })
 
+test('a distance git could not measure answers null with the reason, never a confident zero', () => {
+  // What a squash merge leaves behind: the upstream ref is gone with the deleted head
+  // branch, and the base it falls back to is not in the mirror either. Answering `0 ahead`
+  // there claims the branch has nothing outstanding, which is a different thing from
+  // nobody being able to tell.
+  const dest = workDir('t1', 'billing')
+  assert.notEqual(git(dest, 'rev-parse', '--abbrev-ref', '@{u}').code, 0, 'no upstream to lean on')
+
+  const s = trees().state({ dir: dest, base: 'gone' })
+  assert.equal(s.ahead, null)
+  assert.equal(s.behind, null)
+  assert.match(s.distanceUnknown, /gone/, 'git\'s own first line, naming the ref it could not resolve')
+  assert.equal(s.dirty, 0, 'what could be measured still is')
+})
+
 test('a branch already on the remote is checked out and tracked, loudly, not created', () => {
   const seed = path.join(tmp, 'seed', 'acme-billing')
   gitMust(seed, 'checkout', '-q', '-b', 'feat/theirs')
