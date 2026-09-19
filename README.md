@@ -90,6 +90,13 @@ rig init --data-repo your-org/rig-data --email you@work.example
 
 The same flag creates the repo when it does not exist yet, with `--orgs` and `--tracker` for the org-level half.
 
+**Checking a repo.** A catalogue entry carries a `check` beside its `setup` — the commands that verify that repo: its test run, its lint, its build. `rig check` prints them for every repo attached to the work, and `rig check <repo> --run` runs them in that repo's worktree and exits non-zero when one fails. Printed rather than run is the default for the same reason it is for `setup`: a check in a worktree nothing has installed yet fails for a reason that is not the code's. The catalogue holds the command and never the result, so there is nothing in it that can go stale — and a repo with no `check` yet is told which file to write one in.
+
+```powershell
+rig check                    # every attached repo, printed
+rig check billing --run      # run billing's
+```
+
 **Reading the works back out.** `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely — except a merged PR that has been recorded (below), which is read straight out of `work.json` and carries `recorded: true`, live or `--quick` alike.
 
 **Filling in the past.** A merged PR's `openedAt`, `firstCommitAt`, `firstReviewAt`, `approvedAt` and `mergedAt` are never going to be anything else, so `rig close` stores them in `work.json` as it closes, and `rig backfill [--work <id>] [--force]` fills in what closed before that field existed. After that, `rig list --json` — `--quick` included — and `rig dash` need no `gh` call for that repo ever again. Backfill only touches entries with no stored PR (`--force` refreshes what is already there), commits and pushes once at the end like every other mutating command, and prints separately what it filled and what GitHub would not answer for — nothing is cached as permanently unknown, because a rate limit is transient and a "never" written into a record is worse than asking again later.

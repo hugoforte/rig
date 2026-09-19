@@ -488,7 +488,7 @@ function listWorkIds () {
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
 
 // Minimal purpose-built frontmatter reader. Handles scalars and the one list
-// shape the catalogue uses (`talks_to:` / `setup:`). Not a general YAML parser.
+// shape the catalogue uses (`talks_to:` / `setup:` / `check:`). Not a general YAML parser.
 function parseFrontmatter (text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
   if (!m) return { data: {}, body: text }
@@ -536,6 +536,7 @@ function loadCatalog () {
         stack: data.stack || '',
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
         setup: Array.isArray(data.setup) ? data.setup : (data.setup ? [data.setup] : []),
+        check: Array.isArray(data.check) ? data.check : (data.check ? [data.check] : []),
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -572,6 +573,7 @@ stack: ${stack || 'unknown'}
 role: TODO — one line: what this repo is, in this org's terms
 talks_to: []
 setup: []
+check: []
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
@@ -603,7 +605,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'run', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -974,6 +976,7 @@ function regenerate (cfg, work) {
     // refusal costs a label, never the file.
     lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
+    if (c?.check?.length) lines.push(`- Check: ${c.check.map(s => `\`${s}\``).join(' · ')}`)
     lines.push('')
   }
   lines.push('## Rules in this folder')
@@ -1449,7 +1452,7 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   ok(`attached ${C.bold(repo)} at ${dest}`)
 
   if (cat?.setup?.length) {
-    if (setup) runSetup(dest, cat.setup)
+    if (setup) runCatalogCommands(dest, cat.setup, 'setup')
     else {
       say(`  ${C.dim('setup (not run — `rig setup ' + repo + '` or --setup):')}`)
       for (const s of cat.setup) say(`    ${s}`)
@@ -1876,11 +1879,13 @@ cmds.status = ({ flags }) => {
   })
 }
 
-function runSetup (dir, commands) {
+// The catalogue's commands for one repo, in that repo's worktree. `label` is the
+// frontmatter key they came from, so a failure names the thing that failed.
+function runCatalogCommands (dir, commands, label) {
   for (const c of commands) {
     step(`${c}  ${C.dim(`(in ${path.basename(dir)})`)}`)
     const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit' })
-    if (r.status !== 0) { warn(`setup command failed: ${c}`); return false }
+    if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
   return true
 }
@@ -1888,7 +1893,6 @@ function runSetup (dir, commands) {
 cmds.setup = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
-  const id = work.id
   const targets = positional.length
     ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
     : work.repos
@@ -1896,7 +1900,40 @@ cmds.setup = ({ flags, positional }) => {
   for (const r of targets) {
     const cat = findCatalog(r.repo)
     if (!cat?.setup?.length) { warn(`${r.repo}: no setup commands in the catalogue`); continue }
-    runSetup(r.path, cat.setup)
+    runCatalogCommands(r.path, cat.setup, 'setup')
+  }
+}
+
+// What verifies a repo — its test run, its lint, its build — printed rather than run,
+// which is decision 31's rule for `setup` holding for the same reason: a check in a
+// worktree nothing has set up yet fails for a reason that is not the code's, and a test
+// suite nobody asked for is slow at exactly the wrong moment. `--run` opts in.
+//
+// A repo with an empty `check` is told where to write one: the moment you went looking is
+// the moment that knowledge is cheap (AGENTS.md rule 4). Nothing about a run is recorded
+// anywhere — the catalogue holds the command, never a verdict (decision 3), so the only
+// place a failure lands is `--run`'s exit code, where the caller that asked can read it.
+cmds.check = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  // Repo selection reads like `setup`'s twice over on purpose: two are a coincidence, and
+  // the third is when it earns a name of its own.
+  const targets = positional.length
+    ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
+    : work.repos
+  if (!targets.length) die('no matching attached repos')
+  for (const r of targets) {
+    const cat = findCatalog(r.repo)
+    if (!cat?.check?.length) {
+      warn(`${r.repo}: no check commands in the catalogue — add \`check:\` to ${catalogFile(r.org, r.repo)}`)
+      continue
+    }
+    if (flags.run) {
+      if (!runCatalogCommands(r.path, cat.check, 'check')) process.exitCode = 1
+      continue
+    }
+    say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
+    for (const c of cat.check) say(`  ${c}`)
   }
 }
 
@@ -2465,6 +2502,8 @@ cmds.help = () => {
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
   rig setup [repo...]             run the catalogue's setup commands
+  rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
+                                  its build; --run runs them and exits non-zero on a failure
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig plan                        scaffold the rollout & testing plan
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
