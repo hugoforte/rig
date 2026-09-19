@@ -1,15 +1,15 @@
 // One throwaway rig installation in a temp directory, for the tests that drive the CLI as a
 // subprocess: the tool on disk, the roots it works on, an environment isolated from the
 // machine, and the runners the tests drive it with. What only one test file needs stays in
-// that file; what all three need lives here.
+// that file; what they all need lives here.
 //
-// The three call sites differ on how the tool is put on disk and what it may reach, and the
+// The call sites differ on how the tool is put on disk and what it may reach, and the
 // options carry the differences rather than flattening them:
 //
-// - test/smoke.test.mjs takes the default: a copy of the tool with no `.git`, which is what
-//   keeps `rig update` and every freshness path off the checkout the tests run from. With
-//   `localConfig` its rig.local.json moves out of the copy too, so nothing the suite writes
-//   lands beside the tool.
+// - test/smoke.test.mjs and test/jira.test.mjs take the default: a copy of the tool with no
+//   `.git`, which is what keeps `rig update` and every freshness path off the checkout the
+//   tests run from. With `localConfig` smoke's rig.local.json moves out of the copy too, so
+//   nothing that suite writes lands beside the tool.
 // - test/installation.test.mjs wants the opposite, and passes `checkout`: a real clone of
 //   the tool from a bare origin in the temp dir, which is the only way the freshness and
 //   update paths are reachable at all. The remote is a directory, so no test touches a

@@ -17,6 +17,9 @@
 //   getIssue(key)                                { title, body }
 //   createIssue({ project, type, summary, description, assignee, fields })   the new key
 //   commentIssue(key, body)
+// Both descriptions and comments are sent as **markdown**: twg's own default is HTML
+// (`--description-format`/`--body-format`, `twg --version` 1.1.0), and everything rig
+// writes — briefs, PR-link lists, the context-doc line — is markdown.
 //   fieldMetadata(project, type)                  [{ id, name }] for `--field` by name
 //   projectComponents(project)                    [{ id, name }] the project's components
 //   activeSprintId(boardId)                       the board's active sprint id, or null
@@ -88,9 +91,15 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       if (!fields) fail(`could not read summary/description from twg's JSON:\n${out}`)
       return { title: tidy(adfToText(fields.summary)), body: tidy(adfToText(fields.description)) }
     },
+    // `--description-format markdown` because twg's default is HTML: without it a brief's
+    // blank lines collapse into one run-on paragraph and anything angle-bracketed is eaten
+    // as a tag (hugoforte/rig#54). It is fixed, not a parameter — rig writes markdown and
+    // nothing else. Carrying the format here is also why the create needs no follow-up
+    // `update --description-format markdown`: the two-step in hugoforte/rig#53 exists for
+    // Components, which twg's create silently drops, not for the description.
     createIssue ({ project, type, summary, description, assignee, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
-        '--summary', summary, '--description', description]
+        '--summary', summary, '--description', description, '--description-format', 'markdown']
       if (assignee) args.push('--assignee', assignee)
       for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${value}`)
       args.push('-o', 'json', '-y')
@@ -101,7 +110,7 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       return key
     },
     commentIssue (key, body) {
-      must(['jira', 'workitem', 'comment', 'create', '--issue-id', key, '--body', body])
+      must(['jira', 'workitem', 'comment', 'create', '--issue-id', key, '--body', body, '--body-format', 'markdown'])
     },
     fieldMetadata (project, type) {
       const out = must(['jira', 'workitem', 'field', 'create-metadata', '--space', project, '--type', type, '-o', 'json'])

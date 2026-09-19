@@ -46,6 +46,24 @@ rig does three things with Jira, matching what it already does for GitHub:
   — moving it (e.g. KTLO's two hops through "To Do" and "Start working" to reach "In
   Progress") is org workflow, not rig's, and stays with the agent.
 
+Everything rig sends Jira as prose — the create's description, the close comment — is
+**markdown**, declared as such (`--description-format markdown`, `--body-format
+markdown`). twg's own default for both is HTML, which would collapse a brief's blank lines
+into one run-on paragraph and eat anything angle-bracketed, so the format is fixed in
+`bin/jira.mjs` rather than being a parameter: rig writes markdown and nothing else, and no
+ADF is ever built here. That the create carries the format is also why a Jira ticket gets
+its full description in **one** call — the create-thin-then-`update --description-format
+markdown` two-step in hugoforte/rig#53 is about Components, which twg's create silently
+drops, not about the description (hugoforte/rig#54).
+
+A Jira description is the **whole** brief plus the context-doc link, where a GitHub issue
+body is the brief's first paragraph plus the same link. Not an inconsistency: the GitHub
+issue and the context doc are read by the same person, one click apart (DESIGN.md §7.1),
+while a Jira ticket is read by a team that may have no access to the private data root the
+link points at — so it has to stand on its own. Jira's own description limit is 32,767
+characters and rig does not police it; a brief that long is not a thing `rig new` is
+handed, and twg's error surfaces loudly if one ever is.
+
 Per-org ticket config (`project`, `type`, `fields`, `board`) lives in `rig.json` in the
 data root, the same place `tracker.<org>.repo` already lives for GitHub — org facts,
 private, never hardcoded in this repo. There is no `rig init` flag for it (`--tracker`

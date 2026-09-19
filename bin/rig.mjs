@@ -810,21 +810,29 @@ function resolveJiraFields (jiraClient, t, overrides) {
   return { assignee, fields }
 }
 
+// A ticket body: the prose, then where the design lives, then what opened it. One shape
+// for both trackers — the context reference is `contextDocRef`'s and nobody invents a
+// second format (hugoforte/rig#54).
+const ticketBody = (work, prose) => [
+  prose, '', `The design lives in the work record: ${contextDocRef(work.id)}`,
+  '', `Opened by \`rig new ${work.id} --ticket\`.`,
+].join('\n')
+
 // Creates a ticket in the org's tracker, or previews it: `dryRun` prints what would be
 // created and returns null without calling out. GitHub: the issue is the ticket, the
-// context doc is the design (DESIGN.md §7.1) — a thin body with a link back to it.
+// context doc is the design (DESIGN.md §7.1) — a thin body, the brief's first paragraph,
+// with a link back to it.
 // Jira: `docs/adr/0001-jira-via-twg.md` (supersedes DESIGN.md decisions 29, 33).
 function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fieldOverrides = [] } = {}) {
   const t = trackerFor(cfg, orgFlag)
   const summary = work.title || work.id
-  const description = brief.split(/\n\s*\n/)[0] || summary
 
   if (t.kind === 'github') {
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
     if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
-    const body = [description, '', `The design lives in the work record: ${contextDocRef(work.id)}`,
-      '', `Opened by \`rig new ${work.id} --ticket\`.`].join('\n')
-    if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${description}`); return null }
+    const firstParagraph = brief.split(/\n\s*\n/)[0] || summary
+    const body = ticketBody(work, firstParagraph)
+    if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${firstParagraph}`); return null }
     step(`creating GitHub issue in ${t.repo}`)
     const n = github().createIssue(t.repo, summary, body)
     ok(`ticket ${t.repo}#${n}`)
@@ -834,12 +842,21 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
   if (t.kind === 'jira') {
     if (!t.project || !t.type) die(`tracker for ${t.org} is Jira but is missing "project" or "type" in rig.json`)
     const { assignee, fields } = resolveJiraFields(jira(), t, fieldOverrides)
+    // The whole brief, where GitHub gets one paragraph: a Jira ticket is read by a team
+    // that may have no access to the private data root the context link points at, so it
+    // has to stand on its own (hugoforte/rig#54). No truncation — Jira's own description
+    // limit is 32,767 characters, which a piped brief does not reach, and silently cutting
+    // the brief is the bug being fixed here; twg's error surfaces loudly if one ever does.
+    const description = ticketBody(work, brief.trim() || summary)
     if (dryRun) {
       say(`would create a ${t.type} in ${t.project}:`)
       say(`  summary      ${summary}`)
-      say(`  description  ${description}`)
       say(`  assignee     ${assignee || '_none_'}`)
       for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${JSON.stringify(value)}`)
+      // Last, and verbatim: it is many lines, and what is printed is exactly the markdown
+      // the real create sends — an indent that a reader can strip, not a summary of it.
+      say('  description  (markdown, as sent):')
+      for (const line of description.split('\n')) say(line ? `    ${line}` : '')
       return null
     }
     step(`creating Jira ${t.type} in ${t.project}`)
