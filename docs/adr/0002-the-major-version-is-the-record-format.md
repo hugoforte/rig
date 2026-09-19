@@ -69,6 +69,24 @@ happens). If a future migration genuinely must touch worktrees or branch names, 
 migration declares itself unsafe and asks for open works to be closed — the cost paid where
 it is earned, not on every update.
 
+**A migration is a format a data root can be *in*, not a changelog of shape edits.** Two
+record changes that ship in the same release are **one** migration, named for both. The rule
+follows from what the number is for: the major gates writes by comparing a tool against a
+stamp, so a major nothing was ever stamped with gates nothing. Counting shape edits instead
+would claim formats that are unreachable and leave holes in the published majors where no
+release exists — a `v2` and a `v4` with nothing between them, and a `writtenBy: 3` that no
+data root on earth could carry.
+
+The test is therefore **"was there a release between them?"**, not "were these two different
+changes". The SDLC epic (hugoforte/rig#9) is the worked example: it moved `work.json` twice —
+the phase replacing `status`, and stages giving every branch its own base and PR — in two
+separately reviewable pull requests that landed in one release, and so in one migration. Had
+the first shipped on its own, a data root could have been stamped with it, and it would have
+earned its own.
+
+Splitting them afterwards is not a free tidy-up: it would renumber a format that installations
+are already stamped with. If two changes have shipped together, they stay together.
+
 **Migration 1 is additive only.** It adds `writtenBy` and changes nothing else — it carries
 no transform at all, because the format change *is* that the format is now recorded.
 

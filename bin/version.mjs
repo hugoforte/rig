@@ -45,30 +45,34 @@ export const MIGRATIONS = [
     name: 'allow repos[].pr, the terminal PR facts backfill and close record',
   },
   {
+    // **Two record changes, one migration, because they shipped together.** The SDLC epic
+    // (hugoforte/rig#9) moved `work.json` twice — the phase replacing `status`, and stages
+    // giving every branch its own base and PR — and both landed in one release. A migration
+    // is a *format someone's data root can be in*, not a changelog of shape edits, and there
+    // is no reachable format between these two: nothing was ever stamped with it, because the
+    // intermediate state existed only on a work branch. Two entries here would claim four
+    // formats when only three are reachable, and would leave a hole in the published majors
+    // where nothing ever lived. So they are one, named for both.
+    //
     // No hook, for the reason migration 2 had none and one this repo has to live with: there
-    // is no mechanism to transform `work/*/work.json` (see `unrunnableHook`), and this change
-    // is entirely in that file. So the record move happens on the read path — `loadWork`
-    // drops `status` and turns the one value that meant something (`designed`) into the
-    // `designedAt` gate — and this migration's job is to move the major, which is what stops
-    // an older rig writing `status` back into a record that no longer has one.
+    // is no mechanism to transform `work/*/work.json` (see `unrunnableHook`), and both
+    // changes are entirely in that file. So the record moves on the read path, in `loadWork`,
+    // losslessly:
     //
-    // That refusal is the whole point of the bump. The new shape is additive and an old rig
-    // reading it would survive; what it must not do is *write*, because it would reintroduce
-    // the field this major exists to delete and re-derive a phase from it.
-    name: 'phase replaces status: designedAt and abandonedAt gates, no stored status',
-  },
-  {
-    // No hook, and for migration 3's reason: the whole change is in `work/*/work.json`, which
-    // has no transform mechanism (`unrunnableHook`). `loadWork` turns `repos[].base` and
-    // `repos[].pr` into the first entry of `repos[].branches[]` on the way in, losslessly,
-    // and `work.stages` defaults to empty — a work with no stages is exactly the work rig
-    // modelled before stages existed.
+    //   - `status` is dropped and its one meaningful value (`designed`) becomes the
+    //     `designedAt` gate; the other three were observable facts and `phaseOf` reproduces
+    //     them exactly.
+    //   - `repos[].base` and `repos[].pr` become the first entry of `repos[].branches[]`, and
+    //     `work.stages` defaults to empty — a work with no stages is exactly the work rig
+    //     modelled before stages existed.
     //
-    // What moves the major is that an older rig, writing such a record back, would drop
-    // `branches[]` and `stages[]` on the floor: it spreads the entry it read and knows
-    // nothing of either key on the way out. Additive on the read side is not enough when the
-    // write side is lossy, which is precisely what the write refusal is for.
-    name: 'stages and repos[].branches[]: a base and a PR per branch, not per repo',
+    // What this migration is *for* is moving the major, and the major is what stops an older
+    // rig **writing**. Reading the new shape would survive; writing it back would reintroduce
+    // `status` and drop `branches[]` and `stages[]` on the floor, because an old rig spreads
+    // the entry it read and knows none of those keys on the way out. Additive on the read side
+    // is not enough when the write side is lossy, which is precisely what the write refusal is
+    // for.
+    name: 'phase replaces status, and stages give every branch its own base and PR',
   },
 ]
 

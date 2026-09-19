@@ -56,33 +56,33 @@ test('migration 2 is additive too: offline, no hook, and only the major moves', 
   assert.deepEqual(config.tracker, before.tracker)
 })
 
-test('migration 3 is additive too: the record move happens on the read path', () => {
-  // `status` is dropped and `designed` becomes the `designedAt` gate in `loadWork`, because
-  // there is no mechanism to transform `work/*/work.json` at all (`unrunnableHook`). So this
-  // migration's only job is to move the major, which is what stops an older rig writing the
-  // deleted field back into a record.
+test('migration 3 is additive on the way in and lossy on the way out, which is what moves the major', () => {
+  // Both of the epic's record moves happen on the read path in `loadWork`, because there is
+  // no mechanism to transform `work/*/work.json` at all (`unrunnableHook`): `status` is
+  // dropped and `designed` becomes the `designedAt` gate, and `repos[].base`/`repos[].pr`
+  // become the first entry of `repos[].branches[]`. Losslessly — so an older rig could *read*
+  // the new shape. What it could not do is write it back: it would reintroduce `status` and
+  // drop `branches[]` and `stages[]`, because it spreads the entry it read and knows none of
+  // those keys. Additive reads are not enough when the write is lossy, and the write refusal
+  // is exactly that distinction.
   assert.equal('config' in MIGRATIONS[2], false)
   assert.equal(unrunnableHook(MIGRATIONS[2]), null)
   const before = { orgs: ['acme'], writtenBy: '2.3.0' }
   const { config, ran } = applyMigrations(before, '3.0.0')
-  assert.equal(ran[0], MIGRATIONS[2].name, 'a data root already at 2 starts at migration 3')
+  assert.deepEqual(ran, [MIGRATIONS[2].name], 'a data root already at 2 has only migration 3 pending')
   assert.equal(config.writtenBy, '3.0.0')
   assert.deepEqual(config.orgs, before.orgs)
 })
 
-test('migration 4 is additive on the way in and lossy on the way out, which is what moves the major', () => {
-  // `loadWork` turns `repos[].base` and `repos[].pr` into the first entry of
-  // `repos[].branches[]`, losslessly — so an older rig could *read* the new shape. What it
-  // could not do is write it back: it spreads the entry it read and knows neither key, so a
-  // single mutating command would drop the whole stack. Additive reads are not enough when
-  // the write is lossy, and the write refusal is exactly that distinction.
-  assert.equal('config' in MIGRATIONS[3], false)
-  assert.equal(unrunnableHook(MIGRATIONS[3]), null)
-  const before = { orgs: ['acme'], writtenBy: '3.0.0' }
-  const { config, ran } = applyMigrations(before, '4.0.0')
-  assert.deepEqual(ran, [MIGRATIONS[3].name], 'a data root already at 3 has only migration 4 pending')
-  assert.equal(config.writtenBy, '4.0.0')
-  assert.deepEqual(config.orgs, before.orgs)
+test('two record changes that ship together are one migration, because a major is a reachable format', () => {
+  // The SDLC epic moved `work.json` twice and released once. A migration is a format someone's
+  // data root can be *in*, not a changelog of shape edits — and no data root was ever stamped
+  // between these two, because the intermediate state existed only on a work branch. Counting
+  // them separately would claim a format nothing can be in and leave a hole in the published
+  // majors. This is the assertion that would catch someone splitting them back apart.
+  assert.equal(MAJOR, 3)
+  assert.match(MIGRATIONS[2].name, /phase replaces status/)
+  assert.match(MIGRATIONS[2].name, /stages/)
 })
 
 test('migrating twice changes nothing the second time', () => {
