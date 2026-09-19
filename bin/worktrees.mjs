@@ -146,6 +146,19 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return s
     },
 
+    // Cut a stage's branch in a worktree that already exists, on top of whatever this repo's
+    // stack reaches now. `cut` above makes the *work* branch, from the remote HEAD, in a
+    // worktree that does not exist yet; this is the other kind, and the difference that
+    // matters is that rig is watching — the one moment a stage's base is not in doubt.
+    //
+    // Whatever is uncommitted comes along, because starting work and then realising it wants
+    // its own stage is the ordinary way round. git decides whether that is possible, and its
+    // refusal is what comes back.
+    cutHere ({ dir, branch, base }) {
+      const r = git(dir, 'checkout', '-b', branch, base)
+      return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
+    },
+
     // Which of this work's stage branches the repo actually carries, and what each one sits
     // on. The branches are named by the work — its declared stages — so this asks about a
     // handful of refs rather than reading everything the mirror holds, which it shares with

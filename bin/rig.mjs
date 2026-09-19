@@ -639,7 +639,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -2187,14 +2187,26 @@ cmds.stage = ({ flags, positional }) => {
   const branch = positional[0]
 
   if (branch) {
-    const problem = stageBranchProblem(work, branch)
-    if (problem) die(problem)
-    if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
-    work.stages.push({ branch, delivers: flags.delivers || '' })
+    // Declaring and cutting are two acts on two days: a stage is normally declared before
+    // anyone makes its branch, which is why recording the branch at declaration time could
+    // never be the whole answer. `--cut` is how the second act reaches a stage already
+    // declared, and declaring and cutting at once is just both in one command.
+    const declared = work.stages.find(s => s.branch === branch)
+    if (!declared) {
+      const problem = stageBranchProblem(work, branch)
+      if (problem) die(problem)
+      if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
+      work.stages.push({ branch, delivers: flags.delivers || '' })
+    } else if (!flags.cut) {
+      die(`${branch} is already a stage of this work`)
+    }
+    const cut = flags.cut ? cutStageHere(cfg, work, branch) : null
+    const stage = work.stages.find(s => s.branch === branch)
     commitAs(work.id, branch)
     saveWork(cfg, work)
-    ok(`${work.id}: stage ${C.bold(branch)}${flags.delivers ? ` — ${flags.delivers}` : ''}`)
-    if (!flags.delivers) {
+    ok(`${work.id}: stage ${C.bold(branch)}${stage.delivers ? ` — ${stage.delivers}` : ''}`)
+    if (cut) ok(`${cut.repo}: cut ${C.bold(branch)} on ${cut.base}`)
+    if (!stage.delivers) {
       say(`  ${C.dim('nothing recorded about what it delivers — that one line is the only prose a stage carries')}`)
     }
     return
@@ -2223,6 +2235,32 @@ cmds.stage = ({ flags, positional }) => {
     // and only one of them means there is nothing to review.
     if (st.prUnknown) say(`       ${C.yellow(`PR state unknown in ${st.prUnknown.join(', ')}`)}`)
   }
+}
+
+// `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
+//
+// **Which repo is never asked for.** It is the worktree the command runs in — the same
+// convention every rig command already uses to resolve the work itself. A repo list typed at
+// declaration time would be a prediction of a stage's scope, and the repos a stage touches
+// are *derived* from where its branch is found, so a branch cut on a guess is
+// indistinguishable from one cut on purpose. Over-cutting corrupts the derived answer;
+// under-cutting costs nothing, because you cut it yourself later and discovery finds it.
+//
+// The base is this repo's own top of stack, which is the whole reason rig is worth having cut
+// it: at the moment of the cut the base is not in doubt, and it never needs recording.
+function cutStageHere (cfg, work, branch) {
+  const here = process.cwd()
+  const entry = work.repos.find(r => sameDir(r.path, here) || insideDir(here, r.path))
+  if (!entry) {
+    const names = work.repos.map(r => r.repo).join(', ') || 'none attached yet'
+    die(`--cut makes the branch in one repo: run it inside one of ${work.id}'s worktrees (${names})`)
+  }
+  const carried = stackOf(work, branchRows(cfg, work))
+    .filter(st => st.branch !== branch && st.repos.includes(entry.repo))
+  const base = carried.length ? carried[carried.length - 1].branch : work.branch
+  const failed = trees(cfg).cutHere({ dir: entry.path, branch, base })
+  if (failed) die(`${entry.repo}: could not cut ${branch} on ${base} — ${failed}`)
+  return { repo: entry.repo, base }
 }
 
 // The rollout plan, part generated and part prose.
@@ -2794,6 +2832,7 @@ cmds.help = () => {
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
   rig stage [branch]              the stack, in branch order; with a branch, declare one
+  rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
        --delivers "..."            the one line of prose a stage carries
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
