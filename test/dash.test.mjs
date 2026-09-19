@@ -15,7 +15,7 @@ const repo = (over = {}) => ({
   pr: pr(), firstCommitAt: '2026-03-01T09:00:00Z', ...over,
 })
 const work = (over = {}) => ({
-  id: 'w', title: 'A work', type: 'feat', status: 'closed', branch: 'feat/w',
+  id: 'w', title: 'A work', type: 'feat', branch: 'feat/w',
   createdAt: '2026-03-01T00:00:00Z', closedAt: null, activityAt: '2026-03-03T09:00:00Z',
   repos: [repo()], ...over,
 })

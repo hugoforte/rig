@@ -44,6 +44,19 @@ export const MIGRATIONS = [
     // (ADR-0002) — it is just what this change needs.
     name: 'allow repos[].pr, the terminal PR facts backfill and close record',
   },
+  {
+    // No hook, for the reason migration 2 had none and one this repo has to live with: there
+    // is no mechanism to transform `work/*/work.json` (see `unrunnableHook`), and this change
+    // is entirely in that file. So the record move happens on the read path — `loadWork`
+    // drops `status` and turns the one value that meant something (`designed`) into the
+    // `designedAt` gate — and this migration's job is to move the major, which is what stops
+    // an older rig writing `status` back into a record that no longer has one.
+    //
+    // That refusal is the whole point of the bump. The new shape is additive and an old rig
+    // reading it would survive; what it must not do is *write*, because it would reintroduce
+    // the field this major exists to delete and re-derive a phase from it.
+    name: 'phase replaces status: designedAt and abandonedAt gates, no stored status',
+  },
 ]
 
 export const MAJOR = MIGRATIONS.length

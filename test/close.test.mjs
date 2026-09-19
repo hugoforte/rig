@@ -114,7 +114,7 @@ test('close succeeds on the merged work with no --force, and says nothing was in
   assert.doesNotMatch(r.out, /unfinished business/)
   assert.doesNotMatch(r.out, /unpushed commit/, 'the commits are merged, under another sha')
   assert.match(r.out, /removed worktree billing/)
-  assert.equal(record('squashed').status, 'closed')
+  assert.ok(record('squashed').closedAt, 'closing records the gate and no status')
 })
 
 test('and it still recorded the merged PR\'s terminal facts on the way out', () => {
@@ -148,4 +148,86 @@ test('a work with nothing attached closes, and `list` said so before it did', ()
   assert.doesNotMatch(rig(['list']).out, /empty[\s\S]*?nothing outstanding/,
     'a work with no repos is not offered up as finished')
   assert.equal(rig(['close', '--work', 'empty']).code, 0)
+})
+
+// ------------------------------------------------- abandoning
+
+// The exit a work needs when it is stopped rather than finished. Before this the only two
+// options were to leave it idling forever in `rig list`, or `rig close --force`, which tears
+// down identically but records a work that landed — a lie about the one thing the record is
+// for.
+
+test('abandoning drops the did-it-land checks that would refuse a close', () => {
+  assert.equal(rig(['new', 'given-up', '--title', 'Given up', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'given-up']).code, 0)
+
+  const dest = worktree('given-up', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'half a thought\n')
+  gitMust(dest, 'commit', '-qam', 'half a thought')
+
+  // Unpushed commits and no PR: the two things that make `close` refuse, and the two things
+  // being abandoned actually looks like.
+  let r = rig(['close', '--work', 'given-up'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /1 unpushed commit/)
+
+  r = rig(['close', '--work', 'given-up', '--abandoned'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /unfinished business/)
+  assert.match(r.out, /abandoned given-up/)
+})
+
+test('it records the decision and the teardown as two dates, and reads back as abandoned', () => {
+  const w = record('given-up')
+  assert.ok(w.abandonedAt, 'the decision, which nothing else could recover')
+  assert.ok(w.closedAt, 'and the teardown that ran, which is a different fact')
+  assert.equal(w.status, undefined)
+  assert.match(rig(['list', '--quick']).out, /given-up[\s\S]*?Abandoned/)
+})
+
+test('an uncommitted change still refuses, because that is the one thing this can destroy', () => {
+  assert.equal(rig(['new', 'messy', '--title', 'Messy work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'messy']).code, 0)
+  const dest = worktree('messy', 'billing')
+  fs.writeFileSync(path.join(dest, 'NOTES.md'), 'unsaved\n')
+
+  const r = rig(['close', '--work', 'messy', '--abandoned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /not abandoning — unfinished business/)
+  assert.match(r.out, /billing: 1 uncommitted change\(s\)/)
+  assert.ok(fs.existsSync(path.join(dest, 'NOTES.md')), 'nothing torn down')
+})
+
+test('an open PR is named and left alone, never closed', () => {
+  fs.rmSync(path.join(worktree('messy', 'billing'), 'NOTES.md'))
+  const dest = worktree('messy', 'billing')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  const state = github()
+  state.repos['acme/billing'].prs.push({
+    branch: 'feat/messy-work', number: 7, state: 'OPEN',
+    url: 'https://github.com/acme/billing/pull/7',
+    openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [],
+  })
+  setGithub(state)
+
+  const r = rig(['close', '--work', 'messy', '--abandoned'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /PR #7 left open/)
+  // Closing someone's pull request is an outward-facing act rig does not take on its own.
+  const after = github().repos['acme/billing'].prs.find(pr => pr.number === 7)
+  assert.equal(after.state, 'OPEN', 'rig did not touch it')
+})
+
+test('doctor reports a contradiction as an error, not a warning', () => {
+  // Only reachable by editing a record by hand, which is the point: since the phase is
+  // derived, drift cannot produce one. A gate the teardown never ran behind is rig's bug.
+  const f = path.join(dataRoot, 'work', 'given-up', 'work.json')
+  const w = readJson(f)
+  delete w.closedAt
+  fs.writeFileSync(f, JSON.stringify(w, null, 2))
+
+  const r = rig(['doctor'])
+  assert.match(r.out, /given-up: abandoned, but no `closedAt`/)
+  assert.match(r.out, /should not be possible; please file an issue/)
 })

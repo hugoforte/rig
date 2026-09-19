@@ -68,6 +68,10 @@ rig status
 
 The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` marks the design agreed. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees, keeping the record.
 
+**Where a work is, and what rig writes down about it.** A work has a **phase** — `planning` → `designing` → `building` → `reviewing` → `landing`, ending in `closed` or `abandoned` — and rig never stores it. It is computed, every time it is shown, from the repos attached, the branches, the PRs and the gates. Active phases are present participles and terminal ones past, so the word alone says whether the work is still moving. What *is* stored are the **gates**: `designedAt`, `abandonedAt` and `closedAt`, each a decision on a date, kept because a decision someone took is the one thing no lookup can recover. `rig status` names the phase; `rig list` shows it for every work. A `Status:` line in the context doc and the generated `AGENTS.md` carries only the phases the record alone can prove — `reviewing` and `landing` need a live lookup, so a file never claims them.
+
+**Stopping a work you did not finish.** `rig close --abandoned` is the honest exit. It runs the same teardown and drops only the checks that ask whether the work landed — an unmerged PR and unpushed commits are what being abandoned looks like — while uncommitted changes still refuse, because unsaved work is the one thing a teardown can destroy. The ticket is told and left open, and open PRs are named and left alone.
+
 ## Next
 
 **Tickets.** Point an org at its tracker and `rig new` insists on a ticket decision: `--key PROJ-42` or `--key owner/repo#7` records an existing one, `--ticket` creates one (`--dry-run` previews it), `--no-ticket` records that you declined. Jira briefs are fetched for you; GitHub briefs arrive on stdin.
