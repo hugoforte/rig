@@ -94,6 +94,11 @@ rig attach orders-web
    PR is `MERGED` — a terminal fact cannot go stale the way branch or PR state can, which is
    what makes storing it a different act from storing state.
 
+   A repo's record carries `branches[]` — one entry per branch of this work it holds, each
+   with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
+   branch it was cut for, not to the repo, because a repo carries several once a work has
+   stages.
+
    The `Status:` line in the context doc header and the generated `AGENTS.md` carries only
    the phases the record alone can prove, because nothing written into a file may depend on a
    lookup: `reviewing` and `landing` are said by `rig status`, never by a document.
@@ -152,6 +157,37 @@ rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
+## Stages
+
+A work lands in its base branch **in one shot**, per repo. A **stage** is a delivery slice of
+that work, carried by a branch and reviewed on its own, stacked on the work branch and merging
+back down into it.
+
+```bash
+rig stage                                          # the stack, in the order the branches are stacked
+rig stage feat/schema --delivers "the write path"  # declare one
+```
+
+**A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
+Stages are for a work big enough to want slicing up, and most are not.
+
+Two things to hold on to:
+
+- **rig does not cut the branch.** You make the branch where branches are made, in the repos
+  the stage touches. Declaring it is what joins those branches into one slice *across* repos
+  and records the one line of prose nothing else can supply.
+- **The branch name is the stage's identity.** Same branch name in two repos means the same
+  stage — that is the join. A stage exists only in the repos that carry its branch, so the
+  chain is per repo while the stage list is per work.
+
+**Stored: the branch, and one line of what it delivers.** Everything else is derived — whether
+it has started (does the branch exist), whether it is up for review (is there a PR), whether it
+landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
+from, read live). Order is **never stored**: a stored order is a second answer to a question the
+branches already answer, and the two disagree the moment anything is rebased.
+
+A stage transition is **not a gate**. Stages are reported, never stopped at.
 
 ## What now
 

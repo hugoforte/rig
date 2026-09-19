@@ -65,8 +65,23 @@ test('migration 3 is additive too: the record move happens on the read path', ()
   assert.equal(unrunnableHook(MIGRATIONS[2]), null)
   const before = { orgs: ['acme'], writtenBy: '2.3.0' }
   const { config, ran } = applyMigrations(before, '3.0.0')
-  assert.deepEqual(ran, [MIGRATIONS[2].name], 'a data root already at 2 has only migration 3 pending')
+  assert.equal(ran[0], MIGRATIONS[2].name, 'a data root already at 2 starts at migration 3')
   assert.equal(config.writtenBy, '3.0.0')
+  assert.deepEqual(config.orgs, before.orgs)
+})
+
+test('migration 4 is additive on the way in and lossy on the way out, which is what moves the major', () => {
+  // `loadWork` turns `repos[].base` and `repos[].pr` into the first entry of
+  // `repos[].branches[]`, losslessly — so an older rig could *read* the new shape. What it
+  // could not do is write it back: it spreads the entry it read and knows neither key, so a
+  // single mutating command would drop the whole stack. Additive reads are not enough when
+  // the write is lossy, and the write refusal is exactly that distinction.
+  assert.equal('config' in MIGRATIONS[3], false)
+  assert.equal(unrunnableHook(MIGRATIONS[3]), null)
+  const before = { orgs: ['acme'], writtenBy: '3.0.0' }
+  const { config, ran } = applyMigrations(before, '4.0.0')
+  assert.deepEqual(ran, [MIGRATIONS[3].name], 'a data root already at 3 has only migration 4 pending')
+  assert.equal(config.writtenBy, '4.0.0')
   assert.deepEqual(config.orgs, before.orgs)
 })
 

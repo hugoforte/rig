@@ -16,6 +16,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
+import { stackOf, nextStage, stageBranchProblem } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -455,10 +456,38 @@ function loadWork (cfg, id) {
   // `unrunnableHook` in version.mjs), so the read path is where this has to happen.
   if (w.status === 'designed' && !w.designedAt && !w.closedAt) w.designedAt = activityAt(w)
   delete w.status
-  // A worktree's path is derived from this machine's work root, never stored:
-  // the same record must work on every machine that shares the data root.
-  for (const r of w.repos) r.path = path.join(workDir(cfg, id), r.repo)
+  w.stages = w.stages || []
+  for (const r of w.repos) {
+    // A worktree's path is derived from this machine's work root, never stored:
+    // the same record must work on every machine that shares the data root.
+    r.path = path.join(workDir(cfg, id), r.repo)
+    // Records written before stages carry one implicit branch — the work's — as a `base`
+    // beside a single `pr`. Both become the first entry of `branches[]`, which is where a
+    // base and a merged PR live now that a repo can carry more than one branch of this work.
+    // Additive on the way in and lossless: nothing about a pre-stage record is discarded.
+    if (!Array.isArray(r.branches)) {
+      r.branches = [{ branch: w.branch, base: r.base, ...(r.pr ? { pr: r.pr } : {}) }]
+    }
+    delete r.pr
+    // Derived on load and stripped on save, exactly like `path` above: every caller that says
+    // `entry.base` means the base of this repo's *work* branch, and there is no reason to make
+    // all of them walk the list for it.
+    r.base = workBranch(r, w)?.base ?? r.base
+  }
   return w
+}
+
+// This repo's record of one branch of this work, or of the work branch itself. Made on demand
+// by `branchRecord`, because a branch nobody has cut has nothing to record yet.
+const branchRecord = (entry, branch) => (entry.branches ||= []).find(b => b.branch === branch)
+const workBranch = (entry, work) => branchRecord(entry, work.branch)
+
+function ensureBranchRecord (entry, branch, base) {
+  const found = branchRecord(entry, branch)
+  if (found) return found
+  const made = { branch, base }
+  entry.branches.push(made)
+  return made
 }
 
 // The current work — `--work <id>`, else the folder the command runs in — as a record.
@@ -469,7 +498,12 @@ const openWork = (cfg, flags) => loadWork(cfg, findWorkId(cfg, flags.work))
 // rule 2). `repos[].path` is derived by `loadWork` and stripped here — it never reaches
 // disk (DESIGN.md decision 37).
 function saveWork (cfg, work) {
-  writeJson(recordFile(work.id), { ...work, repos: (work.repos || []).map(({ path: _derived, ...r }) => r) })
+  // `path` and `base` are both derived in `loadWork` and neither is stored: the path is this
+  // machine's (decision 37), and the base now lives on the branch it belongs to.
+  writeJson(recordFile(work.id), {
+    ...work,
+    repos: (work.repos || []).map(({ path: _machine, base: _onItsBranch, ...r }) => r),
+  })
   syncDocHeader(work.id, work)
   if (exists(workDir(cfg, work.id))) regenerate(cfg, work)
   else if (!work.closedAt) warn(`${work.id}: work folder ${workDir(cfg, work.id)} is missing — its AGENTS.md was not regenerated`)
@@ -1447,7 +1481,13 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   }
 
   const cat = known || findCatalog(repo)
-  work.repos.push({ repo, org, path: dest, base, role: cat?.role || '', attachedAt: new Date().toISOString() })
+  // The base belongs to the branch it was cut from, not to the repo: a repo carries several
+  // branches of one work once it has stages, each landing somewhere different.
+  work.repos.push({
+    repo, org, path: dest, base, role: cat?.role || '',
+    attachedAt: new Date().toISOString(),
+    branches: [{ branch: work.branch, base }],
+  })
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
 
@@ -1649,6 +1689,7 @@ const workJson = (cfg, work, live) => ({
   ticketsDeclined: !!work.ticketsDeclined,
   type: work.type || '',
   branch: work.branch,
+  stages: (work.stages || []).map(st => ({ branch: st.branch, delivers: st.delivers || '' })),
   createdAt: work.createdAt || null,
   designedAt: work.designedAt || null,
   abandonedAt: work.abandonedAt || null,
@@ -1673,18 +1714,27 @@ function repoEntryJson (cfg, entry, branch, live) {
   // for a merged PR, so the reader knows it without asking. Put back here, the payload is the
   // same shape either way and no consumer has to learn that a recorded PR is a special case.
   // Listed rather than spread, for the same reason the record above is.
-  if (entry.pr) {
+  // Every branch of this work this repo carries, with the base each lands on and the merged
+  // PR each recorded — the stack, as a consumer sees it. Listed rather than spread for the
+  // same reason the rest of this function is.
+  out.branches = (entry.branches || []).map(br => ({
+    branch: br.branch,
+    base: br.base,
+    ...(br.pr ? { pr: { ...br.pr, state: 'MERGED', recorded: true } } : {}),
+  }))
+  const stored = (entry.branches || []).find(br => br.branch === branch)?.pr
+  if (stored) {
     out.pr = {
-      number: entry.pr.number,
+      number: stored.number,
       state: 'MERGED',
-      url: entry.pr.url,
-      openedAt: entry.pr.openedAt,
-      firstReviewAt: entry.pr.firstReviewAt ?? null,
-      approvedAt: entry.pr.approvedAt ?? null,
-      mergedAt: entry.pr.mergedAt,
+      url: stored.url,
+      openedAt: stored.openedAt,
+      firstReviewAt: stored.firstReviewAt ?? null,
+      approvedAt: stored.approvedAt ?? null,
+      mergedAt: stored.mergedAt,
       recorded: true,
     }
-    out.firstCommitAt = entry.pr.firstCommitAt
+    out.firstCommitAt = stored.firstCommitAt
     // Local git state costs no GitHub call either, so a live listing still gets it — a
     // record does not mean the worktree stopped being worth reporting on.
     if (live) Object.assign(out, trees(cfg).state({ dir: entry.path, base: entry.base }))
@@ -1863,6 +1913,9 @@ cmds.status = ({ flags }) => {
   // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
   for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  // Named, not enumerated: `rig stage` is where the stack is read, and a status that
+  // reprinted it would be two places to keep saying the same thing.
+  if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
   say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
   say('')
@@ -1957,6 +2010,9 @@ cmds.next = ({ flags }) => {
     // The scaffolded stub, still standing where the design should be.
     directionTodo: /^## Direction$[\s\S]*?^_TODO_$/m.test(doc),
     planExists: exists(planFile(work.id)),
+    // The stack costs one PR lookup per branch, and `rig next` is a command you ran on
+    // purpose — the one place that can afford to know where you are in it.
+    stack: work.stages.length ? stackOf(work, branchRows(cfg, work)) : [],
   })
 
   say(`${C.bold(work.id)} ${C.dim(`— ${phaseLabel(phaseOf(work, repos))}`)}`)
@@ -1968,6 +2024,82 @@ cmds.next = ({ flags }) => {
   for (const o of offers) {
     say(`  ${C.cyan('→')} ${o.says}`)
     if (o.command) say(`    ${C.dim(o.command)}`)
+  }
+}
+
+// Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
+// row each. The base is read live (decision 63) because the base is what says where a stage
+// sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
+function branchRows (cfg, work) {
+  const rows = []
+  for (const entry of work.repos) {
+    for (const b of entry.branches || []) {
+      let pr = null
+      const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
+      const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
+      rows.push({
+        repo: entry.repo,
+        branch: b.branch,
+        // The live base wins when GitHub answered; the record is the fallback.
+        base: (!prError && pr?.base) || b.base,
+        pr: pr || recorded,
+        prError: prError || null,
+      })
+    }
+  }
+  return rows
+}
+
+// The stages of a work: declare one, or read the stack back.
+//
+// Declaring records the intent and nothing else — the branch, which is the stage's identity
+// and the join across repos, and one line of what it delivers. Everything else is derived:
+// whether it has started, whether it is up for review, whether it landed, which repos carry
+// it, and where it sits in the stack. All of that is already written in the branches and the
+// PRs, and a second copy in the record is the hand-maintained table that killed v1 — the very
+// one `templates/rollout-testing-plan.md` still opens with.
+//
+// **rig does not cut the branch.** A stage's branch is made where branches are made, by you,
+// in the repos it touches. Declaring it here is what joins those branches into one slice
+// across repos and gives it the one line of prose nothing else can supply.
+cmds.stage = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const branch = positional[0]
+
+  if (branch) {
+    const problem = stageBranchProblem(work, branch)
+    if (problem) die(problem)
+    if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
+    work.stages.push({ branch, delivers: flags.delivers || '' })
+    commitAs(work.id, branch)
+    saveWork(cfg, work)
+    ok(`${work.id}: stage ${C.bold(branch)}${flags.delivers ? ` — ${flags.delivers}` : ''}`)
+    if (!flags.delivers) {
+      say(`  ${C.dim('nothing recorded about what it delivers — that one line is the only prose a stage carries')}`)
+    }
+    return
+  }
+
+  const stack = stackOf(work, branchRows(cfg, work))
+  if (!stack.length) {
+    say(`${C.bold(work.id)} ${C.dim('— no stages')}`)
+    say(C.dim('  A work with no stages is one branch per repo, which is how every work starts.'))
+    say(C.dim('  Declare one with `rig stage <branch> --delivers "..."` when a work wants slicing up.'))
+    return
+  }
+
+  say(`${C.bold(work.id)} ${C.dim(`— ${stack.length} stage(s), in the order the branches are stacked`)}`)
+  say('')
+  const upNext = nextStage(stack)
+  for (const [i, st] of stack.entries()) {
+    const mark = st.landed ? C.green('✓') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
+    say(`  ${mark} ${i + 1}. ${C.bold(st.branch)}${st === upNext ? C.dim('  ← next') : ''}`)
+    if (st.delivers) say(`       ${st.delivers}`)
+    say(`       ${C.dim(st.started ? st.repos.join(', ') : 'not cut in any repo yet')}`)
+    for (const pr of st.prs) {
+      say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
+    }
   }
 }
 
@@ -2018,9 +2150,10 @@ cmds.close = ({ flags }) => {
   // so those terminal facts are recorded here exactly as they would be for any other close.
   work.repos.forEach((r, i) => {
     const s = states[i]
-    if (!verdict.repos[i].merged || !s.pr || r.pr?.number === s.pr.number) return
+    const onWorkBranch = ensureBranchRecord(r, work.branch, r.base)
+    if (!verdict.repos[i].merged || !s.pr || onWorkBranch.pr?.number === s.pr.number) return
     const { record, error } = terminalPr(r, s.pr)
-    if (record) r.pr = record
+    if (record) onWorkBranch.pr = record
     // Said out loud: a close that could not record looks identical to one that did, and the
     // work is about to lose the worktree its first commit could have been read from.
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
@@ -2082,18 +2215,22 @@ cmds.backfill = ({ flags }) => {
     if (!work.closedAt) continue
     let changed = false
     for (const entry of work.repos) {
-      const already = !!entry.pr
-      if (already && !flags.force) continue
-      let pr = null
-      const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, work.branch) })
-      if (prError) { unresolved.push(`${id}/${entry.repo}: ${prError}`); continue }
-      if (!pr || pr.state !== 'MERGED') continue   // not terminal — nothing to store, nothing to report
-      const { record, error } = terminalPr(entry, pr)
-      if (error) { unresolved.push(`${id}/${entry.repo}: ${error}`); continue }
-      entry.pr = record
-      changed = true
-      filled++
-      step(`${id}/${entry.repo}: ${already ? 'refreshed' : 'recorded'} PR #${pr.number}`)
+      // Every branch of the work this repo carries, not just the work's own: a stage is
+      // reviewed on its own and its merge is as terminal as any other.
+      for (const b of entry.branches) {
+        const already = !!b.pr
+        if (already && !flags.force) continue
+        let pr = null
+        const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
+        if (prError) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${prError}`); continue }
+        if (!pr || pr.state !== 'MERGED') continue   // not terminal — nothing to store, nothing to report
+        const { record, error } = terminalPr(entry, pr)
+        if (error) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${error}`); continue }
+        b.pr = record
+        changed = true
+        filled++
+        step(`${id}/${entry.repo} ${b.branch}: ${already ? 'refreshed' : 'recorded'} PR #${pr.number}`)
+      }
     }
     // Registered as soon as something is on disk, not at the end: a run interrupted after
     // this work still has its records committed under their own message (decision 42).
@@ -2501,6 +2638,8 @@ cmds.help = () => {
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
+  rig stage [branch]              the stack, in branch order; with a branch, declare one
+       --delivers "..."            the one line of prose a stage carries
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure

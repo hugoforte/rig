@@ -130,6 +130,47 @@ test('a stopped work has nothing to offer, and that is an answer', () => {
   assert.deepEqual(nextFor({ work: work({ repos: attached('a'), closedAt: AT, abandonedAt: AT }), repos: [repo('a')] }), [])
 })
 
+// ---------------------------------------------------------------- stages
+
+const stage = (branch, over = {}) => ({ branch, delivers: '', repos: [], started: false, open: false, landed: false, prs: [], ...over })
+
+test('a work with stages is told which one is next, and what it delivers', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [
+      stage('feat/one', { landed: true, started: true, repos: ['a'] }),
+      stage('feat/two', { delivers: 'the endpoints', started: true, repos: ['a'], open: true }),
+    ],
+  })
+  assert.match(says(out), /stage 2 of 2: feat\/two — the endpoints \(a — up for review\)/)
+})
+
+test('a stage nobody has cut yet says so rather than claiming progress', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [stage('feat/one')],
+  })
+  assert.match(says(out), /stage 1 of 1: feat\/one \(not cut in any repo yet\)/)
+})
+
+test('every stage in makes the work branch the thing that is left', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  assert.match(says(out), /every stage is in — the work branch is what is left to land/)
+})
+
+test('a work with no stages behaves exactly as it did before stages existed', () => {
+  const withNone = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
+  const withEmpty = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], stack: [] })
+  assert.deepEqual(withNone, withEmpty)
+  assert.doesNotMatch(says(withNone), /stage/)
+})
+
 // ---------------------------------------------------------------- the guardrails
 
 test('it only ever offers: nothing it says is a warning or a reproach', () => {

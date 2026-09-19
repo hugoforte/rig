@@ -25,6 +25,7 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
+import { nextStage } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
@@ -40,11 +41,13 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //                  plus `pushed` from the worktree state
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
+//   stack          the work's stages, ordered and with their state (`stackOf`), empty when
+//                  the work has none — which is most works, and is not a deficiency
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, stack = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -72,6 +75,22 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   const dirty = repos.filter(r => r.dirty)
   if (dirty.length) {
     out.push(offer(phase, `uncommitted changes in ${dirty.map(r => r.repo).join(', ')} — commit them where they belong`))
+  }
+
+  // A work with stages gets told which one is next and what it delivers, before anything
+  // about the work branch — the stack is what you are actually working through, and the work
+  // branch's own PR is the thing that happens *after* it. A work with no stages skips all of
+  // this and behaves exactly as it did before stages existed, which is the point.
+  if (stack.length) {
+    const up = nextStage(stack)
+    if (up) {
+      const where = up.started
+        ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}`
+        : 'not cut in any repo yet'
+      out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
+    } else {
+      out.push(offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+    }
   }
 
   const unpushed = repos.filter(r => !r.merged && r.ahead)

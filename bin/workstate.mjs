@@ -43,15 +43,24 @@
 
 const MERGED = 'MERGED'
 
-// A record in `repos[].pr` exists only for a merged PR (DESIGN.md decision 60), so reading
-// it back needs no lookup and no stored `state` — the reader knows it. Presented in the
-// live PR's shape, `recorded: true` and all, so no caller learns a second shape.
-const recordedPr = entry => (entry.pr ? { ...entry.pr, state: MERGED, recorded: true } : null)
+// A record under `repos[].branches[].pr` exists only for a merged PR (DESIGN.md decision 60),
+// so reading it back needs no lookup and no stored `state` — the reader knows it. Presented in
+// the live PR's shape, `recorded: true` and all, so no caller learns a second shape.
+//
+// `branch` is the scope stages made necessary: a repo now carries several branches of one
+// work, each with its own PR, and "did it merge" is a question about one of them. The verdict
+// this module reaches is about the **work branch** — stages merge *down* into it, so a work is
+// finished when that branch landed, whatever route its commits took to get there.
+const recordedPr = (entry, branch) => {
+  const rec = (entry.branches || []).find(b => b.branch === branch)?.pr
+  return rec ? { ...rec, state: MERGED, recorded: true } : null
+}
 
 // One repo's verdict. `s` is what `repoState` answered for it; `entry` is its record, which
-// is where a merged PR's terminal facts live.
-function repoVerdict (entry, s) {
-  const recorded = recordedPr(entry)
+// is where a merged PR's terminal facts live; `branch` says which of its branches is being
+// judged.
+function repoVerdict (entry, s, branch) {
+  const recorded = recordedPr(entry, branch)
   // The live lookup wins when it answered: a branch can carry a second PR after the first
   // merged, and an OPEN one must still block even though a record exists. A lookup that
   // *failed* is settled by the record instead — `repoEntryJson` already treats a stored
@@ -117,7 +126,7 @@ function reasonFor (repos, blockers, done) {
 // business, and equally nothing that landed.
 export function workState (work, states = []) {
   const entries = work.repos || []
-  const repos = entries.map((entry, i) => repoVerdict(entry, states[i] || {}))
+  const repos = entries.map((entry, i) => repoVerdict(entry, states[i] || {}, work.branch))
   const blockers = repos.flatMap(v => v.blockers)
   const safeToClose = blockers.length === 0
   const done = safeToClose && repos.length > 0 && repos.every(v => v.merged)

@@ -118,7 +118,7 @@ test('close succeeds on the merged work with no --force, and says nothing was in
 })
 
 test('and it still recorded the merged PR\'s terminal facts on the way out', () => {
-  const stored = record('squashed').repos[0].pr
+  const stored = record('squashed').repos[0].branches.find(b => b.branch === 'feat/squashed-work').pr
   assert.equal(stored.number, 5)
   assert.equal(stored.mergedAt, '2026-09-18T00:00:00Z')
 })
@@ -283,4 +283,86 @@ test('next never reproaches, whatever state it is handed', () => {
     assert.doesNotMatch(out, /should have|you failed|must |required/i, `"${out}" reproaches`)
     assert.doesNotMatch(out, /^!/m, 'no warnings')
   }
+})
+
+// ------------------------------------------------- stages
+
+test('a work starts with no stages, and says so without making it sound like a deficiency', () => {
+  assert.equal(rig(['new', 'sliced', '--title', 'Sliced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'sliced']).code, 0)
+  const r = rig(['stage', '--work', 'sliced'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /no stages/)
+  assert.match(r.out, /how every work starts/)
+})
+
+test('the record keeps a base per branch now, not one per repo', () => {
+  const entry = record('sliced').repos[0]
+  assert.equal(entry.base, undefined, 'a base belongs to the branch it was cut for')
+  assert.deepEqual(entry.branches, [{ branch: 'feat/sliced-work', base: 'main' }])
+})
+
+test('declaring a stage stores the branch and the one line, and nothing else', () => {
+  const r = rig(['stage', 'feat/sliced-one', '--delivers', 'the schema', '--work', 'sliced'])
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(record('sliced').stages, [{ branch: 'feat/sliced-one', delivers: 'the schema' }])
+})
+
+test('the work branch cannot be a stage of itself', () => {
+  const r = rig(['stage', 'feat/sliced-work', '--work', 'sliced'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /the work branch itself/)
+})
+
+test('and a stage is not declared twice', () => {
+  const r = rig(['stage', 'feat/sliced-one', '--work', 'sliced'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /already a stage/)
+})
+
+test('a declared stage nobody has cut is listed, and reported as not started', () => {
+  const r = rig(['stage', '--work', 'sliced'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1\. feat\/sliced-one/)
+  assert.match(r.out, /the schema/)
+  assert.match(r.out, /not cut in any repo yet/)
+})
+
+test('order comes from the chain the branches are actually stacked in', () => {
+  // Two stages, declared in the wrong order on purpose, then cut in the right one.
+  assert.equal(rig(['stage', 'feat/sliced-two', '--delivers', 'the endpoints', '--work', 'sliced']).code, 0)
+
+  const dest = worktree('sliced', 'billing')
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/sliced-two', number: 11, state: 'OPEN', url: 'https://github.com/acme/billing/pull/11', base: 'feat/sliced-one', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+    { branch: 'feat/sliced-one', number: 10, state: 'MERGED', url: 'https://github.com/acme/billing/pull/10', base: 'feat/sliced-work', openedAt: '2026-09-18T00:00:00Z', mergedAt: '2026-09-18T12:00:00Z', commits: [] },
+  )
+  setGithub(state)
+  // The branches have to be in the record for rig to ask about them at all.
+  const f = path.join(dataRoot, 'work', 'sliced', 'work.json')
+  const w = readJson(f)
+  w.repos[0].branches.push(
+    { branch: 'feat/sliced-two', base: 'feat/sliced-one' },
+    { branch: 'feat/sliced-one', base: 'feat/sliced-work' },
+  )
+  fs.writeFileSync(f, JSON.stringify(w, null, 2))
+  assert.ok(fs.existsSync(dest))
+
+  const out = rig(['stage', '--work', 'sliced']).out
+  assert.ok(out.indexOf('feat/sliced-one') < out.indexOf('feat/sliced-two'), 'the chain orders them, not the array')
+  assert.match(out, /1\. feat\/sliced-one/)
+  assert.match(out, /2\. feat\/sliced-two/)
+  assert.match(out, /PR #10 merged/)
+  assert.match(out, /PR #11 open/)
+})
+
+test('the next stage is the first that has not landed', () => {
+  assert.match(rig(['stage', '--work', 'sliced']).out, /feat\/sliced-two.*← next/s)
+})
+
+test('and rig next says which stage you are on rather than the whole stack', () => {
+  const out = rig(['next', '--work', 'sliced']).out
+  assert.match(out, /stage 2 of 2: feat\/sliced-two — the endpoints/)
+  assert.doesNotMatch(out, /sliced-one/, 'the whole stack is what rig stage is for; this is one line about where you are')
 })
