@@ -119,9 +119,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    state ({ dir, base, recordedBase = base }) {
+    // `branch` is optional and answers one extra question: has this branch reached the
+    // remote? Only `rig next` asks, and only it passes one.
+    state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
+      // Asked of the branch's own remote-tracking ref, never of `@{u}`: cutting a branch from
+      // `refs/remotes/origin/main` makes git set tracking to *main*, so an upstream exists
+      // from the moment `rig attach` runs and says nothing about whether anyone pushed.
+      s.pushed = branch ? git(dir, 'rev-parse', '--verify', '--quiet', ref(branch)).code === 0 : false
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const up = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
       const known = [base, recordedBase].filter(Boolean)

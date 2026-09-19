@@ -50,10 +50,39 @@ test('migration 2 is additive too: offline, no hook, and only the major moves', 
   assert.equal(unrunnableHook(MIGRATIONS[1]), null)
   const before = { orgs: ['acme'], tracker: { acme: { kind: 'github' } }, writtenBy: '1.4.0' }
   const { config, ran } = applyMigrations(before, '2.0.0')
-  assert.deepEqual(ran, [MIGRATIONS[1].name], 'a data root already at 1 has only migration 2 pending')
+  assert.equal(ran[0], MIGRATIONS[1].name, 'a data root already at 1 starts at migration 2')
   assert.equal(config.writtenBy, '2.0.0')
   assert.deepEqual(config.orgs, before.orgs)
   assert.deepEqual(config.tracker, before.tracker)
+})
+
+test('migration 3 is additive on the way in and lossy on the way out, which is what moves the major', () => {
+  // Both of the epic's record moves happen on the read path in `loadWork`, because there is
+  // no mechanism to transform `work/*/work.json` at all (`unrunnableHook`): `status` is
+  // dropped and `designed` becomes the `designedAt` gate, and `repos[].base`/`repos[].pr`
+  // become the first entry of `repos[].branches[]`. Losslessly — so an older rig could *read*
+  // the new shape. What it could not do is write it back: it would reintroduce `status` and
+  // drop `branches[]` and `stages[]`, because it spreads the entry it read and knows none of
+  // those keys. Additive reads are not enough when the write is lossy, and the write refusal
+  // is exactly that distinction.
+  assert.equal('config' in MIGRATIONS[2], false)
+  assert.equal(unrunnableHook(MIGRATIONS[2]), null)
+  const before = { orgs: ['acme'], writtenBy: '2.3.0' }
+  const { config, ran } = applyMigrations(before, '3.0.0')
+  assert.deepEqual(ran, [MIGRATIONS[2].name], 'a data root already at 2 has only migration 3 pending')
+  assert.equal(config.writtenBy, '3.0.0')
+  assert.deepEqual(config.orgs, before.orgs)
+})
+
+test('two record changes that ship together are one migration, because a major is a reachable format', () => {
+  // The SDLC epic moved `work.json` twice and released once. A migration is a format someone's
+  // data root can be *in*, not a changelog of shape edits — and no data root was ever stamped
+  // between these two, because the intermediate state existed only on a work branch. Counting
+  // them separately would claim a format nothing can be in and leave a hole in the published
+  // majors. This is the assertion that would catch someone splitting them back apart.
+  assert.equal(MAJOR, 3)
+  assert.match(MIGRATIONS[2].name, /phase replaces status/)
+  assert.match(MIGRATIONS[2].name, /stages/)
 })
 
 test('migrating twice changes nothing the second time', () => {

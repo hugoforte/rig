@@ -6,11 +6,9 @@ Deploy and test plan. See `context.md` for the design.
 > rollout, a migration. If there is a dependency on another initiative's rollout plan,
 > link it here.
 
-## The PRs (deploy order _Repo → Repo → Repo_)
+## The PRs (deploy order)
 
-| Order | PR | Repo / branch | What it does |
-|------:|----|---------------|--------------|
-| 1 | | | |
+{{DEPLOY_ORDER}}
 
 ## Why deploy order is mandatory
 

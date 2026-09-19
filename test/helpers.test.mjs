@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved,
 } from '../bin/rig.mjs'
@@ -162,21 +162,14 @@ test('ticketsLabel: keys joined, declined, or the placeholder', () => {
   assert.equal(ticketsLabel({ tickets: [] }), '_none_')
 })
 
-test('statusLabel: the fixed vocabulary, title-cased for the doc header', () => {
-  assert.equal(statusLabel('planning'), 'Planning')
-  assert.equal(statusLabel('in-progress'), 'In progress')
-  assert.equal(statusLabel('designed'), 'Designed')
-  assert.equal(statusLabel('closed'), 'Closed')
-})
-
-test('nextStatusAfterAttach: planning moves to in-progress on the first repo, not later ones', () => {
-  assert.equal(nextStatusAfterAttach({ status: 'planning', repos: [] }), 'in-progress')
-  assert.equal(nextStatusAfterAttach({ status: 'planning', repos: [{ repo: 'a' }] }), 'planning')
-})
-
-test('nextStatusAfterAttach: any other status is left alone', () => {
-  assert.equal(nextStatusAfterAttach({ status: 'designed', repos: [] }), 'designed')
-  assert.equal(nextStatusAfterAttach({ status: 'closed', repos: [] }), 'closed')
+test('statusLine: what a document may carry, which is only what the record can prove', () => {
+  // `nextStatusAfterAttach` went with the stored field: "repos attached" was one of the two
+  // values that were an observable fact written down, and `phaseOf` reads it off `repos`.
+  assert.equal(statusLine({ repos: [] }), 'Planning')
+  assert.equal(statusLine({ repos: [{ repo: 'a' }] }), 'Designing')
+  assert.equal(statusLine({ repos: [{ repo: 'a' }], designedAt: '2026-09-19T10:00:00.000Z' }),
+    'Building (design agreed 2026-09-19)')
+  assert.equal(statusLine({ repos: [], closedAt: '2026-09-19T10:00:00.000Z' }), 'Closed')
 })
 
 test('countCommits: a range git cannot answer is unknown, never zero', () => {

@@ -31,6 +31,8 @@ const BRANCH = 'feat/stacked-work'
 const recordFile = path.join(dataRoot, 'work', 'stacked', 'work.json')
 const recordBytes = () => fs.readFileSync(recordFile)
 const record = () => readJson(recordFile)
+// A base belongs to the branch it was cut for, not to the repo that carries it.
+const workBranchOf = w => w.repos[0].branches.find(br => br.branch === w.branch)
 const github = () => readJson(githubStateFile)
 const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 const worktree = path.join(workRoot, 'stacked', 'billing')
@@ -78,7 +80,7 @@ test('a work cut from main, then rebased onto another PR\'s branch and repointed
   assert.equal(rig(['new', 'stacked', '--title', 'Stacked work', '--type', 'feat', '--no-ticket']).code, 0)
   const r = rig(['attach', 'billing', '--work', 'stacked'])
   assert.equal(r.code, 0, r.out)
-  assert.equal(record().repos[0].base, 'main', 'the base the branch was cut from, recorded once')
+  assert.equal(workBranchOf(record()).base, 'main', 'the base the branch was cut from, recorded once')
 
   publishLowerPr()
   fs.writeFileSync(path.join(worktree, 'work.md'), 'the work\n')
@@ -122,7 +124,7 @@ test('the generated AGENTS.md says where the branch lands now, not where it was 
   assert.match(generatedAgents(), /- Base: `main → feat\/lower`/)
   assert.deepEqual(recordBytes(), before,
     'the record is #21\'s change and a record-format bump; this feature never writes to it')
-  assert.equal(record().repos[0].base, 'main')
+  assert.equal(workBranchOf(record()).base, 'main')
 })
 
 test('when the stack unwinds, the display follows GitHub with no rig command run', () => {

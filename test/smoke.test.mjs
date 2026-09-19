@@ -120,7 +120,7 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
   const record = path.join(dataRoot, 'work', 't1', 'work.json')
   assert.equal(readJson(record).branch, 'chore/smoke-work')
   assert.equal(readJson(record).ticketsDeclined, true)
-  assert.equal(readJson(record).status, 'planning')
+  assert.equal(readJson(record).status, undefined, 'the phase is derived; nothing about it is stored')
   assert.ok(fs.existsSync(path.join(workRoot, 't1', 'AGENTS.md')), 'generated file in the work folder')
   const doc = () => fs.readFileSync(path.join(dataRoot, 'work', 't1', 'context.md'), 'utf8')
   assert.match(doc(), /the brief/)
@@ -137,14 +137,14 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
   assert.match(r.out, /t1/)
   r = rig(['status', '--work', 't1'])
   assert.match(r.out, /branch chore\/smoke-work/)
-  assert.match(r.out, /status Planning/)
+  assert.match(r.out, /phase Planning/)
   assert.match(r.out, /tickets PROJ-9/)
 
   r = rig(['close', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.equal(lastCommit(dataRoot), 'rig close t1')
   assert.ok(readJson(record).closedAt)
-  assert.equal(readJson(record).status, 'closed')
+  assert.equal(readJson(record).abandonedAt, undefined, 'a close that landed is not an abandonment')
   assert.match(doc(), /^Tickets: PROJ-9 · Status: Closed$/m)
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
 })
@@ -325,8 +325,10 @@ test('rig new --key <a Jira key> fetches title and description from Jira, no pip
 test('rig save --designed records the design-agreed gate and commits with the message', () => {
   const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed'])
   assert.equal(r.code, 0, r.out)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).status, 'designed')
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /^Tickets: PROJ-2 · Status: Designed$/m)
+  const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
+  assert.ok(record.designedAt, 'the gate is stored with its date, and nothing else is')
+  assert.equal(record.status, undefined)
+  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /^Tickets: PROJ-2 · Status: Building \(design agreed \d{4}-\d{2}-\d{2}\)$/m)
   assert.equal(lastCommit(dataRoot), 'rig save t7: design agreed')
 })
 
@@ -635,10 +637,10 @@ test('dash says which payload file it could not find', () => {
   assert.match(r.out, /no such payload file/)
 })
 
-test('list shows each work\'s status and how long since it was touched', () => {
+test('list shows each work\'s phase and how long since it was touched', () => {
   const r = rig(['list', '--quick'])
   assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /old feat\/old\n {2}In progress · \d+[mhd] ago/)
+  assert.match(r.out, /old feat\/old\n {2}Designing · \d+[mhd] ago/)
   // "just now" on a fast runner: the work was closed seconds ago, in an earlier test.
   assert.match(r.out, /\n {2}Closed · (just now|\d+[mhd] ago)/, 'a closed work says so here, not next to the branch')
   assert.ok(r.out.indexOf('old feat/old') < r.out.indexOf('t1 chore/'), 'least recently touched first')
@@ -692,7 +694,7 @@ test('close with every PR merged comments on the GitHub ticket and closes it', (
 
 test('close recorded the merged PR\'s terminal facts before saving, and a record needs no lookup to read back', () => {
   const saved = readJson(path.join(dataRoot, 'work', 'old', 'work.json'))
-  const stored = saved.repos[0].pr
+  const stored = saved.repos[0].branches[0].pr
   assert.equal(stored.number, 12)
   assert.equal(stored.url, 'https://github.com/acme/billing/pull/12')
   assert.equal(stored.openedAt, '2026-01-02T00:00:00Z')
@@ -868,12 +870,12 @@ test('rig backfill fills a merged PR\'s terminal facts, and leaves an unmerged o
   assert.match(r.out, /backfilled 1 PR record\(s\) across 1 work\(s\)/)
 
   const saved = readJson(record)
-  assert.deepEqual(Object.keys(saved.repos[0].pr).sort(),
+  assert.deepEqual(Object.keys(saved.repos[0].branches[0].pr).sort(),
     ['approvedAt', 'firstCommitAt', 'firstReviewAt', 'mergedAt', 'number', 'openedAt', 'url'].sort(),
     'only terminal facts stored, never state or dirty/ahead/behind')
-  assert.equal(saved.repos[0].pr.number, 20)
-  assert.equal(saved.repos[0].pr.firstCommitAt, '2026-01-30T09:00:00Z')
-  assert.equal(saved.repos[0].pr.approvedAt, '2026-02-04T00:00:00Z')
+  assert.equal(saved.repos[0].branches[0].pr.number, 20)
+  assert.equal(saved.repos[0].branches[0].pr.firstCommitAt, '2026-01-30T09:00:00Z')
+  assert.equal(saved.repos[0].branches[0].pr.approvedAt, '2026-02-04T00:00:00Z')
   assert.equal(saved.repos[1].pr, undefined, 'the open PR on ledger is not terminal yet — nothing to store')
   assert.equal(lastCommit(dataRoot), 'rig backfill t8: 1 PR record(s) across 1 work(s)')
 })
@@ -896,13 +898,13 @@ test('--force refreshes an entry that is already stored; without it, a stored en
 
   const plain = rig(['backfill', '--work', 't8'])
   assert.match(plain.out, /nothing to backfill/)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].pr.approvedAt, '2026-02-04T00:00:00Z')
+  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].branches[0].pr.approvedAt, '2026-02-04T00:00:00Z')
 
   const forced = rig(['backfill', '--work', 't8', '--force'])
   assert.equal(forced.code, 0, forced.out)
   assert.match(forced.out, /refreshed PR #20/)
   assert.match(forced.out, /backfilled 1 PR record\(s\)/)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].pr.approvedAt, '2026-02-03T00:00:00Z')
+  assert.equal(readJson(path.join(dataRoot, 'work', 't8', 'work.json')).repos[0].branches[0].pr.approvedAt, '2026-02-03T00:00:00Z')
 })
 
 test('backfill: a lookup GitHub refuses is reported and left unstored, never cached as unknown', () => {
@@ -926,15 +928,16 @@ test('backfill: a lookup GitHub refuses is reported and left unstored, never cac
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /nothing to backfill/)
   assert.match(r.out, /GitHub would not answer for 1, left unstored/)
-  assert.match(r.out, /t9\/warehouse: gh not found on PATH/)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].pr, undefined,
+  assert.match(r.out, /t9\/warehouse feat\/t9: gh not found on PATH/,
+    "the branch is named too: a repo carries several branches of one work once it has stages")
+  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].branches?.[0]?.pr, undefined,
     'a refused lookup is not "no PR" — the next run gets a real try, not a cached guess')
 
   setGithub(state)   // gh is back
   r = rig(['backfill', '--work', 't9'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /backfilled 1 PR record\(s\)/)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].pr.number, 30)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].branches[0].pr.number, 30)
 })
 
 test('rig backfill with no --work scans every work in the data root', () => {
@@ -958,7 +961,7 @@ test('rig backfill with no --work scans every work in the data root', () => {
   const r = rig(['backfill'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /backfilled 1 PR record\(s\) across 1 work\(s\)/)
-  assert.equal(readJson(path.join(dataRoot, 'work', 't10', 'work.json')).repos[0].pr.number, 40)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't10', 'work.json')).repos[0].branches[0].pr.number, 40)
 })
 
 test('acceptance: with gh unavailable, rig list --json still emits complete PR timestamps for backfilled work', () => {

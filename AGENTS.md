@@ -82,16 +82,26 @@ rig attach orders-web
 2. **Never edit a generated file.** `C:\w\<work>\AGENTS.md` is regenerated on every mutating
    command. The context doc in `<data root>/work/<id>/context.md` is the only place prose
    lives.
-3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state — all of
-   it comes from `rig status`. The previous attempt at this tool died of hand-maintained
-   tables going stale. **`status`** (`planning` → `in-progress` → `designed` → `closed`,
-   shown in the context doc header) is the one exception: it is a **decision**, not
-   something git or `gh` can answer, so rig records it in `work.json` at each gate
-   (`rig new`, the first `rig attach`, `rig save --designed`, `rig close`) instead of
-   deriving it. A merged PR's terminal facts (`number`, `url`, `openedAt`, `firstCommitAt`,
-   `firstReviewAt`, `approvedAt`, `mergedAt`) are the other exception, recorded by `rig close`
-   and `rig backfill` once a PR is `MERGED` — a terminal fact cannot go stale the way branch
-   or PR state can, which is what makes storing it a different act from storing state.
+3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
+   **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
+   hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
+   `abandonedAt` and `closedAt`, each a decision on a date that nothing can observe
+   afterwards. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
+   terminating in `closed` or `abandoned`) is computed from those gates and the repos,
+   branches and PRs every time it is shown — see `bin/phase.mjs`. A merged PR's terminal
+   facts (`number`, `url`, `openedAt`, `firstCommitAt`, `firstReviewAt`, `approvedAt`,
+   `mergedAt`) are the other thing stored, recorded by `rig close` and `rig backfill` once a
+   PR is `MERGED` — a terminal fact cannot go stale the way branch or PR state can, which is
+   what makes storing it a different act from storing state.
+
+   A repo's record carries `branches[]` — one entry per branch of this work it holds, each
+   with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
+   branch it was cut for, not to the repo, because a repo carries several once a work has
+   stages.
+
+   The `Status:` line in the context doc header and the generated `AGENTS.md` carries only
+   the phases the record alone can prove, because nothing written into a file may depend on a
+   lookup: `reviewing` and `landing` are said by `rig status`, never by a document.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
    your head — that is the only moment the knowledge is cheap.
@@ -100,11 +110,25 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
 traversal over it.
+
+`setup` is how a repo is made ready; `check` is how it is verified — its test run, its
+lint, its build. Both are commands and never results: no pass or fail is ever stored.
+
+```bash
+rig check                 # what verifies every repo in this work — printed, not run
+rig check billing --run   # run billing's, in its worktree; non-zero if one fails
+```
+
+Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
+in, `rig check` prints the check commands and `--run` opts in. A command that cannot
+succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
+repo whose `check` is empty is named, with the file to write one in; write it while the
+repo is still loaded in your head (rule 4).
 
 ## Writing a context doc
 
@@ -127,12 +151,66 @@ the push landed; a push that fails warns and never dies. But the context doc is 
 you, not by rig, so when the Direction section is agreed, run:
 
 ```bash
-rig save -m "design agreed" --designed   # records status "designed", commits, pushes
+rig save -m "design agreed" --designed   # records the design gate, commits, pushes
 rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 ```
 
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
+## Stages
+
+A work lands in its base branch **in one shot**, per repo. A **stage** is a delivery slice of
+that work, carried by a branch and reviewed on its own, stacked on the work branch and merging
+back down into it.
+
+```bash
+rig stage                                          # the stack, in the order the branches are stacked
+rig stage feat/schema --delivers "the write path"  # declare one
+```
+
+**A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
+Stages are for a work big enough to want slicing up, and most are not.
+
+Two things to hold on to:
+
+- **rig does not cut the branch.** You make the branch where branches are made, in the repos
+  the stage touches. Declaring it is what joins those branches into one slice *across* repos
+  and records the one line of prose nothing else can supply.
+- **The branch name is the stage's identity.** Same branch name in two repos means the same
+  stage — that is the join. A stage exists only in the repos that carry its branch, so the
+  chain is per repo while the stage list is per work.
+
+**Stored: the branch, and one line of what it delivers.** Everything else is derived — whether
+it has started (does the branch exist), whether it is up for review (is there a PR), whether it
+landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
+from, read live). Order is **never stored**: a stored order is a second answer to a question the
+branches already answer, and the two disagree the moment anything is rebased.
+
+A stage transition is **not a gate**. Stages are reported, never stopped at.
+
+## What now
+
+```bash
+rig next        # what is available on the current work, read off live state
+```
+
+It reads the repos, the branches, the PRs and the gates, and names what is available —
+attach something, record the design gate, push, open a PR, scaffold a rollout plan, close.
+
+Two things it will never do, and both are the point:
+
+- **It only offers.** It never warns, never blocks, and never says you should have. Warnings
+  live in `doctor`, and only for contradictions. A work that reached review with no design
+  gate recorded has an *omission*, and an omission is something to offer, not to scold.
+- **It speaks only when asked.** A command you run — not a hook, and never fired off the back
+  of another command.
+
+**Weight is derived, never declared.** A work earns its ceremony from what it contains: one
+repo and no stages gets "build it, open the PR, close it"; three repos start being offered a
+rollout plan, because that is where deploy order stops being obvious. There is no
+`--track light|full` and there will not be one — a declaration made at `rig new` is a
+prediction, and predictions rot.
 
 ## Staying up to date
 
@@ -148,14 +226,63 @@ at a newer record format than this rig (the major version *is* the record format
 before they read it, so a second machine never works from stale records. How the check is
 measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
+## The rollout plan
+
+```bash
+rig plan             # scaffold it, deploy order already rendered from the stack
+rig plan --refresh   # re-render that table when the stack has moved
+```
+
+The file is **part generated and part prose**, and the split is the point.
+
+Between the `rig:deploy-order` markers is rig's: the deploy-order table, rendered from the
+stage list with live PR state, rewritten whole. **Never edit inside the markers** — the next
+refresh overwrites it, which is exactly what stops that table going stale.
+
+Everything around it is yours, and it is the part that earns the document: *why* the order is
+mandatory, the rejection window between deploys, the per-tenant configuration prerequisites,
+the UAT matrix, the verification queries, the rollback. Those are judgements nothing can
+derive, and a refresh never touches them.
+
+**Something has to read it back.** That is the standard this whole epic uses to decide whether
+an artifact deserves to exist, and the rollout plan failed it for its entire existence — `rig
+plan` wrote the file and nothing ever looked again. Now `rig next` compares the rendered table
+to the live stack and offers `rig plan --refresh` when they disagree.
+
+## Opening the pull requests
+
+```bash
+rig pr        # one PR per repo, work branch to the base it was cut from
+```
+
+The body is assembled from what the record already holds: the title, the tickets, the
+**Direction** section of the context doc lifted verbatim, and the stage table rendered from the
+stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
+hand-maintained the moment something renders it.
+
+**Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
+repo that already has an open PR is reported, not duplicated.
+
+rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
+it touches, and rig would have to guess which of the stack you meant.
+
 ## Closing
 
 ```bash
-rig list      # flags works whose PRs are merged and whose trees are clean
-rig close     # refuses if anything is uncommitted, unpushed, or has an open PR
+rig list                  # flags works whose PRs are merged and whose trees are clean
+rig close                 # refuses if anything is uncommitted, unpushed, or has an open PR
+rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
 
 `rig close` removes the worktrees and keeps `context.md`. Nothing is ever auto-deleted.
+
+**Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
+stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so
+those checks go, and uncommitted changes still refuse because unsaved work is the one thing
+a teardown can destroy. The ticket is told and left open — whether the problem is still worth
+solving is not rig's call — and open PRs are named and left alone, because closing someone's
+pull request is an outward-facing act rig does not take on its own. Reach for this instead of
+`--force`, which tears down identically but records a work that landed.
 
 ## Agent skills
 
