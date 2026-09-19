@@ -9,9 +9,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { workState } from '../bin/workstate.mjs'
 
-// A work record with one entry per state, named after it. `pr` on an entry is a merged
-// PR's terminal facts, the way `rig close` and `rig backfill` record them.
-const work = (...entries) => ({ id: 'w', repos: entries.map(e => ({ org: 'acme', ...e })) })
+// A work record with one entry per state, named after it. `pr` on an entry is a merged PR's
+// terminal facts, the way `rig close` and `rig backfill` record them — stored under the
+// branch that carried it, since a repo carries several branches of one work once it has
+// stages. The fixture takes `pr` flat and files it under the work branch, because every row
+// of the table below is about the work branch and none of them should have to say so.
+const BRANCH = 'feat/w'
+const work = (...entries) => ({
+  id: 'w',
+  branch: BRANCH,
+  repos: entries.map(({ pr, ...e }) => ({
+    org: 'acme',
+    branches: [{ branch: BRANCH, base: 'main', ...(pr ? { pr } : {}) }],
+    ...e,
+  })),
+})
 const clean = extra => ({ missing: false, dirty: 0, ahead: 0, behind: 0, pr: null, ...extra })
 const openPr = { number: 7, state: 'OPEN', url: 'https://github.com/acme/billing/pull/7' }
 const mergedPr = { number: 7, state: 'MERGED', url: 'https://github.com/acme/billing/pull/7', mergedAt: '2026-09-01T00:00:00Z' }

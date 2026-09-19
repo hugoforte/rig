@@ -1,0 +1,165 @@
+// The stage model over fixtures: the chain walk that derives order, the join across repos,
+// and what a stage's state adds up to. Pure, so a five-deep stack across three repos is an
+// object literal rather than a scenario anyone has to build.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import { stageOrder, stageState, stackOf, nextStage, stageBranchProblem } from '../bin/stages.mjs'
+
+const work = (over = {}) => ({ id: 'w', branch: 'feat/work', repos: [], stages: [], ...over })
+const stage = (branch, delivers = '') => ({ branch, delivers })
+// One `{ repo, branch, base, pr }` row, which is what a repo reports for each branch it carries.
+const on = (repo, branch, base, pr = null) => ({ repo, branch, base, pr })
+const merged = n => ({ number: n, state: 'MERGED', url: `https://x/${n}` })
+const open = n => ({ number: n, state: 'OPEN', url: `https://x/${n}` })
+const names = stages => stages.map(s => s.branch)
+
+// ---------------------------------------------------------------- order, derived
+
+test('a work with no stages has no stack', () => {
+  assert.deepEqual(stageOrder(work()), [])
+  assert.deepEqual(stackOf(work(), []), [])
+})
+
+test('order comes from the chain, not from the order the stages were declared in', () => {
+  const w = work({ stages: [stage('feat/three'), stage('feat/one'), stage('feat/two')] })
+  const chain = [
+    on('a', 'feat/one', 'feat/work'),
+    on('a', 'feat/two', 'feat/one'),
+    on('a', 'feat/three', 'feat/two'),
+  ]
+  assert.deepEqual(names(stageOrder(w, [chain])), ['feat/one', 'feat/two', 'feat/three'])
+})
+
+test('the first stage is the one sitting on the work branch', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/two')] })
+  const chain = [on('a', 'feat/two', 'feat/one'), on('a', 'feat/one', 'feat/work')]
+  assert.equal(stageOrder(w, [chain])[0].branch, 'feat/one')
+})
+
+test('a stage nobody has cut yet keeps its place at the end rather than disappearing', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/planned')] })
+  const chain = [on('a', 'feat/one', 'feat/work')]
+  assert.deepEqual(names(stageOrder(w, [chain])), ['feat/one', 'feat/planned'])
+})
+
+test('a stage cut from somewhere unexpected is reported, not dropped', () => {
+  // A fact about the repo, not a reason to lose the stage off the list.
+  const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
+  const chain = [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]
+  assert.deepEqual(names(stageOrder(w, [chain])), ['feat/one', 'feat/odd'])
+})
+
+test('the chain is per repo while the stage list is per work', () => {
+  // Two repos, each carrying part of the same stack. Either one is enough to place a stage.
+  const w = work({ stages: [stage('feat/one'), stage('feat/two')] })
+  const chains = [
+    [on('a', 'feat/one', 'feat/work')],
+    [on('b', 'feat/two', 'feat/one')],
+  ]
+  assert.deepEqual(names(stageOrder(w, chains)), ['feat/one', 'feat/two'])
+})
+
+test('two repos agreeing about a stage is the join working, not a conflict', () => {
+  const w = work({ stages: [stage('feat/one')] })
+  const chains = [[on('a', 'feat/one', 'feat/work')], [on('b', 'feat/one', 'feat/work')]]
+  assert.deepEqual(names(stageOrder(w, chains)), ['feat/one'])
+})
+
+test('a cycle in the chain terminates rather than spinning', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/two')] })
+  const chain = [on('a', 'feat/one', 'feat/two'), on('a', 'feat/two', 'feat/one')]
+  assert.deepEqual(names(stageOrder(w, [chain])).sort(), ['feat/one', 'feat/two'])
+})
+
+// ---------------------------------------------------------------- one stage's state
+
+test('a stage exists only in the repos that carry its branch', () => {
+  const s = stageState(stage('feat/one'), [on('a', 'feat/one', 'feat/work'), on('b', 'feat/other', 'feat/work')])
+  assert.deepEqual(s.repos, ['a'])
+})
+
+test('a stage nobody has cut has not started', () => {
+  assert.equal(stageState(stage('feat/one'), []).started, false)
+})
+
+test('a stage is up for review while any of its PRs is open', () => {
+  const s = stageState(stage('feat/one'), [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('b', 'feat/one', 'feat/work', open(2)),
+  ])
+  assert.equal(s.open, true)
+  assert.equal(s.landed, false)
+})
+
+test('a stage has landed only when every repo carrying it has merged', () => {
+  const s = stageState(stage('feat/one'), [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('b', 'feat/one', 'feat/work', merged(2)),
+  ])
+  assert.equal(s.landed, true)
+  assert.equal(s.open, false)
+})
+
+test('a repo carrying the branch with no PR at all holds the stage back', () => {
+  const s = stageState(stage('feat/one'), [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('b', 'feat/one', 'feat/work'),
+  ])
+  assert.equal(s.landed, false)
+})
+
+test('what a stage delivers is carried through, because it is the only prose stored', () => {
+  const s = stageState(stage('feat/one', 'the schema and the write path'), [on('a', 'feat/one', 'feat/work')])
+  assert.equal(s.delivers, 'the schema and the write path')
+})
+
+// ---------------------------------------------------------------- the stack
+
+test('the stack is ordered and stateful in one pass', () => {
+  const w = work({ stages: [stage('feat/two', 'the endpoints'), stage('feat/one', 'the schema')] })
+  const stack = stackOf(w, [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('a', 'feat/two', 'feat/one', open(2)),
+  ])
+  assert.deepEqual(names(stack), ['feat/one', 'feat/two'])
+  assert.equal(stack[0].landed, true)
+  assert.equal(stack[1].open, true)
+  assert.equal(stack[0].delivers, 'the schema')
+})
+
+test('the next stage is the first that has not landed', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/two')] })
+  const stack = stackOf(w, [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('a', 'feat/two', 'feat/one', open(2)),
+  ])
+  assert.equal(nextStage(stack).branch, 'feat/two')
+})
+
+test('every stage in means there is no next stage, which is what makes the work branch next', () => {
+  const w = work({ stages: [stage('feat/one')] })
+  const stack = stackOf(w, [on('a', 'feat/one', 'feat/work', merged(1))])
+  assert.equal(nextStage(stack), null)
+})
+
+// ---------------------------------------------------------------- what a stage may be called
+
+test('the work branch cannot be a stage of itself', () => {
+  assert.match(stageBranchProblem(work(), 'feat/work'), /the work branch itself/)
+})
+
+test('a stage is not declared twice', () => {
+  const w = work({ stages: [stage('feat/one')] })
+  assert.match(stageBranchProblem(w, 'feat/one'), /already a stage/)
+})
+
+test('a stage needs a branch name at all, since that is its identity', () => {
+  assert.match(stageBranchProblem(work(), ''), /needs a branch name/)
+})
+
+test('and it has to be one git would accept', () => {
+  assert.match(stageBranchProblem(work(), 'feat/two words'), /not a valid branch name/)
+  assert.match(stageBranchProblem(work(), 'feat/a..b'), /not a valid branch name/)
+  assert.equal(stageBranchProblem(work(), 'feat/fine'), null)
+})

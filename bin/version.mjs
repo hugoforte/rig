@@ -57,6 +57,19 @@ export const MIGRATIONS = [
     // the field this major exists to delete and re-derive a phase from it.
     name: 'phase replaces status: designedAt and abandonedAt gates, no stored status',
   },
+  {
+    // No hook, and for migration 3's reason: the whole change is in `work/*/work.json`, which
+    // has no transform mechanism (`unrunnableHook`). `loadWork` turns `repos[].base` and
+    // `repos[].pr` into the first entry of `repos[].branches[]` on the way in, losslessly,
+    // and `work.stages` defaults to empty — a work with no stages is exactly the work rig
+    // modelled before stages existed.
+    //
+    // What moves the major is that an older rig, writing such a record back, would drop
+    // `branches[]` and `stages[]` on the floor: it spreads the entry it read and knows
+    // nothing of either key on the way out. Additive on the read side is not enough when the
+    // write side is lossy, which is precisely what the write refusal is for.
+    name: 'stages and repos[].branches[]: a base and a PR per branch, not per repo',
+  },
 ]
 
 export const MAJOR = MIGRATIONS.length
