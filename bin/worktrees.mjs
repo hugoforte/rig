@@ -108,6 +108,11 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // decision 2 of §1.2). Distance is measured against the upstream when the branch has
     // one and against the recorded base when it does not — a branch that was never pushed
     // still has a base to be ahead of.
+    //
+    // A distance git could not measure answers `ahead: null` / `behind: null` with the
+    // reason, in the shape `prError` established, rather than a confident zero: after a
+    // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
+    // nothing outstanding, which is a different claim from "nobody could tell".
     state ({ dir, base }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
@@ -115,11 +120,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       const up = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
       const counts = git(dir, 'rev-list', '--left-right', '--count',
         `${up.code === 0 ? '@{u}' : ref(base)}...HEAD`)
-      if (counts.code === 0) {
-        const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-        s.behind = behind || 0
-        s.ahead = ahead || 0
+      if (counts.code !== 0) {
+        s.ahead = s.behind = null
+        s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
+          `git could not measure ${dir} against ${up.code === 0 ? 'its upstream' : ref(base)}`
+        return s
       }
+      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
+      s.behind = behind || 0
+      s.ahead = ahead || 0
       return s
     },
 

@@ -13,6 +13,7 @@ import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writ
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
+import { workState } from './workstate.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -823,7 +824,9 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
 // On close, every ticket gets a comment with the PR links. GitHub tickets also close
 // when every PR is merged; Jira tickets never do — transitions stay with the agent
 // (Direction: KTLO alone needs two hops to reach "In Progress", which is org workflow,
-// not rig's). `states` covers every attached repo, missing worktrees included.
+// not rig's). `states` covers every attached repo, missing worktrees included, and what it
+// *means* is `workState`'s to say (decision 62): a ticket left open and a `close` that
+// refused now answer for the same reason, instead of each deriving "merged" its own way.
 function ticketWriteBack (work, states) {
   const keys = work.tickets || []
   for (const k of keys) {
@@ -833,15 +836,8 @@ function ticketWriteBack (work, states) {
   const jiraKeys = keys.filter(isJiraKey)
   if (!githubKeys.length && !jiraKeys.length) return
 
-  let reason = ''
-  if (!work.repos.length) reason = 'No repos were attached, so there are no PRs to check.'
-  else {
-    const unmerged = states.filter(s => !s.pr || s.pr.state !== 'MERGED').map(s =>
-      `${s.repo} (${s.missing ? 'worktree missing' : s.prError ? 'PR state unknown' : s.pr ? `PR #${s.pr.number} ${s.pr.state.toLowerCase()}` : 'no PR'})`)
-    if (unmerged.length) reason = `Not every PR is merged — ${unmerged.join(', ')}.`
-  }
-  const merged = reason === ''
-  const prs = states.filter(s => s.pr).map(s => `- ${s.repo}: ${s.pr.url}`)
+  const { done: merged, reason, repos } = workState(work, states)
+  const prs = repos.filter(v => v.pr).map(v => `- ${v.repo}: ${v.pr.url}`)
 
   const githubBody = [
     `Closed by \`rig close\`.${merged ? '' : ` ${reason} The issue stays open.`}`,
@@ -1645,22 +1641,31 @@ cmds.list = ({ flags }) => {
       continue
     }
     if (!open) warn('  work folder is missing but the work is not closed')
-    let allMerged = work.repos.length > 0
-    let anyDirty = false
-    for (const r of work.repos) {
-      const s = live ? repoState(cfg, r, work.branch) : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) }
+    // One verdict, rendered — never a second rule for what the badges add up to. Under
+    // `--quick` nothing was looked up, so the facts are empty and only a recorded PR
+    // (decision 60) has anything to say; the closing line stays behind `live` for that
+    // reason, because "no blockers" from an empty lookup is not an answer.
+    const verdict = workState(work, work.repos.map(r => live
+      ? repoState(cfg, r, work.branch)
+      : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) }))
+    for (const v of verdict.repos) {
       const bits = []
-      if (s.missing) bits.push(C.red('missing'))
-      if (s.dirty) { bits.push(C.yellow(`${s.dirty} dirty`)); anyDirty = true }
-      if (s.ahead) bits.push(`${s.ahead} ahead`)
-      if (s.behind) bits.push(C.dim(`${s.behind} behind`))
-      if (s.prError) bits.push(C.yellow('PR state unknown'))
-      else if (s.pr) bits.push(s.pr.state === 'MERGED' ? C.green(`PR #${s.pr.number} merged`) : `PR #${s.pr.number} ${s.pr.state.toLowerCase()}`)
-      if (!s.pr || s.pr.state !== 'MERGED') allMerged = false
-      say(`  ${r.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
+      if (v.missing) bits.push(C.red('missing'))
+      if (v.dirty) bits.push(C.yellow(`${v.dirty} dirty`))
+      if (v.ahead) bits.push(`${v.ahead} ahead`)
+      if (v.behind) bits.push(C.dim(`${v.behind} behind`))
+      if (v.distanceUnknown) bits.push(C.dim('commits unknown'))
+      if (v.prUnknown) bits.push(C.yellow('PR state unknown'))
+      else if (v.pr) bits.push(v.merged ? C.green(`PR #${v.pr.number} merged`) : `PR #${v.pr.number} ${v.pr.state.toLowerCase()}`)
+      say(`  ${v.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
     }
-    if (live && allMerged && !anyDirty && !work.closedAt) {
+    if (live && verdict.done) {
       say(`  ${C.green('→ all PRs merged, nothing uncommitted — safe to `rig close`')}`)
+    } else if (live && verdict.safeToClose && verdict.repos.length) {
+      // The disagreement #2 was filed for: `list` used to stay silent here while `close`
+      // would have closed the work without a murmur. Said plainly instead, and not as a
+      // recommendation — nothing landed, so this is not finished work.
+      say(`  ${C.dim('→ nothing outstanding, but nothing merged either — `rig close` would not refuse')}`)
     }
     say('')
   }
@@ -1727,17 +1732,21 @@ cmds.status = ({ flags }) => {
   say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
   say('')
-  for (const r of work.repos) {
-    const s = repoState(cfg, r, work.branch)
+  // The same verdict `list` and `close` read, printed as facts rather than acted on: a
+  // distance git could not measure says so, instead of a confident `0 ahead · 0 behind`,
+  // and a PR read back from the record (decision 60) reads as the merged PR it is.
+  const verdict = workState(work, work.repos.map(r => repoState(cfg, r, work.branch)))
+  work.repos.forEach((r, i) => {
+    const v = verdict.repos[i]
     say(`${C.bold(r.repo)} ${C.dim(`(${r.org}, base ${r.base})`)}`)
-    say(`  path    ${r.path}${s.missing ? C.red('  MISSING') : ''}`)
-    if (!s.missing) {
-      say(`  changes ${s.dirty || 'none'}`)
-      say(`  commits ${s.ahead} ahead · ${s.behind} behind`)
+    say(`  path    ${r.path}${v.missing ? C.red('  MISSING') : ''}`)
+    if (!v.missing) {
+      say(`  changes ${v.dirty || 'none'}`)
+      say(`  commits ${v.distanceUnknown ? `unknown (${v.distanceUnknown})` : `${v.ahead} ahead · ${v.behind} behind`}`)
     }
-    say(`  pr      ${s.pr ? `#${s.pr.number} ${s.pr.state} ${s.pr.url}` : s.prError ? `unknown — ${s.prError}` : 'none'}`)
+    say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     say('')
-  }
+  })
 }
 
 function runSetup (dir, commands) {
@@ -1784,21 +1793,14 @@ cmds.close = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
-  const blockers = []
-  const states = []
-  for (const r of work.repos) {
-    const s = repoState(cfg, r, work.branch)
-    states.push(s)
-    if (!s.missing) {
-      if (s.dirty) blockers.push(`${r.repo}: ${s.dirty} uncommitted change(s)`)
-      if (s.ahead) blockers.push(`${r.repo}: ${s.ahead} unpushed commit(s)`)
-    }
-    if (s.pr && s.pr.state === 'OPEN') blockers.push(`${r.repo}: PR #${s.pr.number} still open`)
-    if (s.prError) blockers.push(`${r.repo}: PR state unknown (${s.prError})`)
-  }
-  if (blockers.length && !flags.force) {
+  // What counts as unfinished business is `workState`'s to decide (decision 62); `close`
+  // reads the list and refuses on it. Chiefly: a merged PR settles its branch, so the
+  // commits a squash merge left looking unpushed no longer demand `--force` (#52).
+  const states = work.repos.map(r => repoState(cfg, r, work.branch))
+  const verdict = workState(work, states)
+  if (!verdict.safeToClose && !flags.force) {
     warn('not closing — unfinished business:')
-    for (const b of blockers) say(`    ${C.red('•')} ${b}`)
+    for (const b of verdict.blockers) say(`    ${C.red('•')} ${b.message}`)
     say('')
     say(C.dim('Resolve these, or pass --force if you genuinely want to discard them.'))
     process.exitCode = 1
@@ -1810,7 +1812,7 @@ cmds.close = ({ flags }) => {
   // second PR after the first was recorded, and the newest is the one that finished the work.
   work.repos.forEach((r, i) => {
     const s = states[i]
-    if (!s.pr || s.pr.state !== 'MERGED' || r.pr?.number === s.pr.number) return
+    if (!verdict.repos[i].merged || !s.pr || r.pr?.number === s.pr.number) return
     const { record, error } = terminalPr(r, s.pr)
     if (record) r.pr = record
     // Said out loud: a close that could not record looks identical to one that did, and the
