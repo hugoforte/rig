@@ -11,33 +11,24 @@
 // work and refuse — on every merged work, forever, with `--force` the only way past. A
 // merged PR settles its branch; this is that rule, from the outside.
 //
-// One temp installation, shared, and the tests run in order.
-import { test, before, after } from 'node:test'
+// One temp installation, shared, and the tests run in order. test/harness.mjs builds it.
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { makeInstall, readJson } from './harness.mjs'
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-let tmp, tool, dataRoot, workRoot, remotesDir, env
+const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, git, gitMust, cleanup } = makeInstall({
+  prefix: 'rig-close-',
+  author: 'rig close',
+  email: 'close@example.invalid',
+  remotes: true,
+  github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', prs: [] } } },
+})
 
-const strip = s => s.replace(/\x1b\[\d+m/g, '')
-const rig = args => {
-  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env, input: '' })
-  return { code: r.status, out: strip(r.stdout + r.stderr), stdout: r.stdout }
-}
-const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
-const gitMust = (dir, ...args) => {
-  const r = git(dir, ...args)
-  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`)
-  return r.stdout.trim()
-}
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const record = id => readJson(path.join(dataRoot, 'work', id, 'work.json'))
-const github = () => readJson(env.RIG_FAKE_GITHUB)
-const setGithub = state => fs.writeFileSync(env.RIG_FAKE_GITHUB, JSON.stringify(state))
+const github = () => readJson(githubStateFile)
+const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 const worktree = (id, repo) => path.join(workRoot, id, repo)
 const bare = repo => path.join(remotesDir, 'acme', `${repo}.git`)
 
@@ -50,7 +41,7 @@ const publish = repo => {
   gitMust(seed, 'add', '-A')
   gitMust(seed, 'commit', '-q', '-m', `${repo}: first`)
   fs.mkdirSync(path.dirname(bare(repo)), { recursive: true })
-  assert.equal(spawnSync('git', ['clone', '-q', '--bare', seed, bare(repo)], { encoding: 'utf8', env }).status, 0)
+  gitMust(tmp, 'clone', '-q', '--bare', seed, bare(repo))
 }
 
 // What GitHub does when a PR lands on a repo that requires linear history: the branch's
@@ -66,31 +57,11 @@ const squashMergeAndDeleteBranch = (repo, branch, prNumber) => {
   gitMust(bare(repo), 'update-ref', '-d', `refs/heads/${branch}`)
 }
 
-before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-close-'))
-  tool = path.join(tmp, 'rig')
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(tool, d), { recursive: true })
-  fs.cpSync(path.join(SRC, 'package.json'), path.join(tool, 'package.json'))
-  dataRoot = path.join(tmp, 'rig-data')
-  workRoot = path.join(tmp, 'w')
-  remotesDir = path.join(tmp, 'remotes')
+publish('billing')
+assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
+  '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
 
-  env = { ...process.env }
-  env.RIG_FAKE_REMOTES = remotesDir
-  env.RIG_FAKE_GITHUB = path.join(tmp, 'github.json')
-  setGithub({ auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', prs: [] } } })
-  fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig close'
-  env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'close@example.invalid'
-
-  publish('billing')
-  assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
-    '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
-})
-
-after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
+after(cleanup)
 
 test('a work with a repo attached, one commit pushed, and a PR open on it', () => {
   assert.equal(rig(['new', 'squashed', '--title', 'Squashed work', '--type', 'feat', '--no-ticket']).code, 0)

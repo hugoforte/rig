@@ -6,30 +6,26 @@
 // under test. GitHub itself is the in-memory adapter — no `gh` is ever spawned.
 //
 // One temp installation, shared, and the tests run in order: each leaves the work where
-// the next one expects it.
-import { test, before, after } from 'node:test'
+// the next one expects it. test/harness.mjs builds it.
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { makeInstall, readJson } from './harness.mjs'
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-let tmp, tool, dataRoot, workRoot, remotesDir, env
+const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
+  prefix: 'rig-attach-',
+  author: 'rig attach',
+  email: 'attach@example.invalid',
+  remotes: true,
+  // Two repos rig can resolve, and no PRs on either: resolving a repo name to an org is
+  // still GitHub's job, and it is the only thing gh is asked here.
+  github: {
+    auth: 'ok',
+    repos: { 'acme/billing': { language: 'JavaScript' }, 'acme/orders': { language: 'Go' } },
+  },
+})
 
-const strip = s => s.replace(/\x1b\[\d+m/g, '')
-const rig = args => {
-  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env, input: '' })
-  return { code: r.status, out: strip(r.stdout + r.stderr) }
-}
-const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
-const gitMust = (dir, ...args) => {
-  const r = git(dir, ...args)
-  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`)
-  return r.stdout.trim()
-}
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const record = () => readJson(path.join(dataRoot, 'work', 't1', 'work.json'))
 const attached = name => record().repos.find(r => r.repo === name)
 const worktree = repo => path.join(workRoot, 't1', repo)
@@ -45,41 +41,13 @@ const publish = (repo, branch) => {
   gitMust(seed, 'commit', '-q', '-m', `${repo}: first`)
   const bare = path.join(remotesDir, 'acme', `${repo}.git`)
   fs.mkdirSync(path.dirname(bare), { recursive: true })
-  assert.equal(spawnSync('git', ['clone', '-q', '--bare', seed, bare], { encoding: 'utf8', env }).status, 0)
+  gitMust(tmp, 'clone', '-q', '--bare', seed, bare)
 }
 
-before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-attach-'))
-  tool = path.join(tmp, 'rig')
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(tool, d), { recursive: true })
-  fs.cpSync(path.join(SRC, 'package.json'), path.join(tool, 'package.json'))
-  dataRoot = path.join(tmp, 'rig-data')
-  workRoot = path.join(tmp, 'w')
-  remotesDir = path.join(tmp, 'remotes')
+publish('billing', 'main')
+publish('orders', 'trunk')
 
-  env = { ...process.env }
-  env.RIG_FAKE_REMOTES = remotesDir
-  env.RIG_FAKE_GITHUB = path.join(tmp, 'github.json')
-  // Two repos rig can resolve, and no PRs on either: resolving a repo name to an org is
-  // still GitHub's job, and it is the only thing gh is asked here.
-  fs.writeFileSync(env.RIG_FAKE_GITHUB, JSON.stringify({
-    auth: 'ok',
-    repos: { 'acme/billing': { language: 'JavaScript' }, 'acme/orders': { language: 'Go' } },
-  }))
-  // The tool writes `git config --global core.longpaths`; keep that, and every inherited
-  // setting, out of the real global config. The identity comes from the environment, so
-  // git has no *configured* user.email — which is what the identity checks below read.
-  fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig attach'
-  env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'attach@example.invalid'
-
-  publish('billing', 'main')
-  publish('orders', 'trunk')
-})
-
-after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
+after(cleanup)
 
 test('a set-up installation with an org and no identity for it', () => {
   const r = rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
