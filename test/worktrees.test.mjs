@@ -163,6 +163,29 @@ test('state measures against the recorded base when the branch has no upstream',
     { missing: false, dirty: 0, ahead: 1, behind: 1 })
 })
 
+test('state measures against the live base when the PR was repointed at another branch', () => {
+  // The stacked case (hugoforte/rig#24): the branch is 1 ahead of `main` and level with the
+  // branch it was rebased onto. Measured from the base recorded at `rig attach`, the PR
+  // underneath reads as this work's own outstanding commits.
+  const dest = workDir('t1', 'billing')
+  gitMust(dest, 'push', '-q', 'origin', 'HEAD:refs/heads/feat/lower')
+  gitMust(mirrorOf('acme', 'billing'), 'fetch', '-q', '--prune', 'origin')
+
+  assert.deepEqual(trees().state({ dir: dest, base: 'feat/lower', recordedBase: 'main' }),
+    { missing: false, dirty: 0, ahead: 0, behind: 0 })
+  assert.deepEqual(trees().state({ dir: dest, base: 'main', recordedBase: 'main' }),
+    { missing: false, dirty: 0, ahead: 1, behind: 1 }, 'the record alone still measures from main')
+})
+
+test('state falls back to the recorded base when the live base is not in the mirror', () => {
+  // GitHub can name a base this mirror has never fetched — a PR stacked on a branch made
+  // after the repo was attached. Refusing to measure there would turn a distance rig can
+  // read into a blocker at `rig close`.
+  const dest = workDir('t1', 'billing')
+  assert.deepEqual(trees().state({ dir: dest, base: 'feat/never-fetched', recordedBase: 'main' }),
+    { missing: false, dirty: 0, ahead: 1, behind: 1 })
+})
+
 test('a distance git could not measure answers null with the reason, never a confident zero', () => {
   // What a squash merge leaves behind: the upstream ref is gone with the deleted head
   // branch, and the base it falls back to is not in the mirror either. Answering `0 ahead`

@@ -928,7 +928,10 @@ function regenerate (cfg, work) {
     lines.push('')
     lines.push(`- Path: \`${r.path}\``)
     lines.push(`- Role: ${r.role || c?.role || '_not yet described in the catalogue_'}`)
-    lines.push(`- Base: \`${r.base}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
+    // One `gh pr list` per repo, which is the price of this file not still saying `main`
+    // after a PR is repointed. It is the only GitHub call a plain `rig save` makes, and a
+    // refusal costs a label, never the file.
+    lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
     lines.push('')
   }
@@ -1473,14 +1476,39 @@ cmds.detach = ({ flags, positional }) => {
   ok(`detached ${entry.repo}`)
 }
 
-function repoState (cfg, entry, branch) {
-  const s = { repo: entry.repo, pr: null, ...trees(cfg).state({ dir: entry.path, base: entry.base }) }
-  // The lookup only needs org/repo/branch, so it runs even with the worktree missing — a repo
-  // whose folder is gone can still have an open PR. One repo GitHub cannot answer for must not
-  // take the whole listing down; the caller shows the state as unknown, and `close` treats
-  // unknown as a blocker.
+// What GitHub says about this branch in this repo: its newest PR, and the base that PR
+// lands on. One lookup answers both — `baseRefName` rides along with the PR state — and
+// the live base wins, because `entry.base` is only where the branch was cut from at
+// `rig attach` and goes stale the moment the PR is repointed at another PR's branch.
+//
+// The lookup only needs org/repo/branch, so it runs even with the worktree missing — a repo
+// whose folder is gone can still have an open PR. One repo GitHub cannot answer for must not
+// take the whole listing down; the caller shows the state as unknown, and `close` treats
+// unknown as a blocker. A refused lookup leaves the recorded base in place and keeps
+// `prError` beside it, so no caller can pass the record off as the live answer.
+function prAndBase (entry, branch) {
+  const s = { pr: null, base: entry.base, recordedBase: entry.base }
   s.prError = trackerFailure(() => { s.pr = github().prForBranch(entry.org, entry.repo, branch) })
+  if (s.pr?.base) s.base = s.pr.base
   return s
+}
+
+// Is the branch landing somewhere other than where it was cut from? The stacked-PR case.
+const baseMoved = s => !s.prError && !!s.base && s.base !== s.recordedBase
+
+// One rendering of a base, for every surface that shows one. The record alone when the
+// live base agrees with it, or when there is no PR to disagree; both, `recorded → live`,
+// when they differ, because a bare `feat/other-work` hides that the record still says
+// `main`; and on a lookup GitHub refused, the record named as the record — a base rig
+// could not confirm must never read as one it did (the `prUnknown` rule, applied to the
+// base).
+const baseLabel = s => s.prError ? `${s.recordedBase} (recorded — GitHub would not say)`
+  : baseMoved(s) ? `${s.recordedBase} → ${s.base}`
+  : s.recordedBase
+
+function repoState (cfg, entry, branch) {
+  const s = { repo: entry.repo, ...prAndBase(entry, branch) }
+  return Object.assign(s, trees(cfg).state({ dir: entry.path, base: s.base, recordedBase: entry.base }))
 }
 
 // The one ordering rule for works: least recently touched first, so the last line of
@@ -1507,14 +1535,17 @@ function relativeAge (iso) {
 // not say" from "there is none", and a null that means both is how a work silently leaves
 // the numerator.
 function prTiming (entry, pr) {
-  if (!pr) return { firstCommitAt: branchFirstCommitAt(entry) }
+  // The PR's own base when it has one: a stacked branch measured from `main` dates itself
+  // to the first commit of the PR underneath it, which is not when this work started.
+  const fromBranch = () => branchFirstCommitAt(entry, pr?.base)
+  if (!pr) return { firstCommitAt: fromBranch() }
   let times = null
   // `prTimeline` answers null for a PR gh could not read at all, which is not a PR nobody
   // reviewed. Left as a plain null, that work leaves the review figures without a trace.
   const error = trackerFailure(() => { times = github().prTimeline(entry.org, entry.repo, pr.number) }) ||
     (times ? undefined : `GitHub would not answer for ${entry.org}/${entry.repo}#${pr.number}`)
-  if (!times) return { firstCommitAt: branchFirstCommitAt(entry), error }
-  return { ...times, firstCommitAt: times.firstCommitAt || branchFirstCommitAt(entry), error }
+  if (!times) return { firstCommitAt: fromBranch(), error }
+  return { ...times, firstCommitAt: times.firstCommitAt || fromBranch(), error }
 }
 
 // The stored shape (AGENTS.md rule 3's narrow exception, DESIGN.md decision 60): a merged
@@ -1545,12 +1576,17 @@ function terminalPr (entry, pr) {
 }
 
 // The first commit this branch adds over its base, or null when the worktree is gone or git
-// cannot resolve the range. Never the base's own history.
-function branchFirstCommitAt (entry) {
+// cannot resolve the range. Never the base's own history — which is why `base` is the live
+// base when one is known: over `main`, a branch stacked on another PR claims that PR's
+// commits as its own. The recorded base is the fallback, for a live base naming a branch
+// this checkout has never fetched.
+function branchFirstCommitAt (entry, base) {
   if (!exists(entry.path)) return null
-  const log = git(entry.path, 'log', '--reverse', '--format=%aI', `refs/remotes/origin/${entry.base}..HEAD`)
-  if (log.code !== 0) return null
-  return log.out.split('\n')[0].trim() || null
+  for (const b of new Set([base, entry.base].filter(Boolean))) {
+    const log = git(entry.path, 'log', '--reverse', '--format=%aI', `refs/remotes/origin/${b}..HEAD`)
+    if (log.code === 0) return log.out.split('\n')[0].trim() || null
+  }
+  return null
 }
 
 // The JSON listing: records as they are, plus the live fields a consumer cannot derive
@@ -1675,10 +1711,11 @@ cmds.list = ({ flags }) => {
     // `--quick` nothing was looked up, so the facts are empty and only a recorded PR
     // (decision 60) has anything to say; the closing line stays behind `live` for that
     // reason, because "no blockers" from an empty lookup is not an answer.
-    const verdict = workState(work, work.repos.map(r => live
+    const states = work.repos.map(r => live
       ? repoState(cfg, r, work.branch)
-      : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) }))
-    for (const v of verdict.repos) {
+      : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) })
+    const verdict = workState(work, states)
+    verdict.repos.forEach((v, i) => {
       const bits = []
       if (v.missing) bits.push(C.red('missing'))
       if (v.dirty) bits.push(C.yellow(`${v.dirty} dirty`))
@@ -1687,8 +1724,12 @@ cmds.list = ({ flags }) => {
       if (v.distanceUnknown) bits.push(C.dim('commits unknown'))
       if (v.prUnknown) bits.push(C.yellow('PR state unknown'))
       else if (v.pr) bits.push(v.merged ? C.green(`PR #${v.pr.number} merged`) : `PR #${v.pr.number} ${v.pr.state.toLowerCase()}`)
+      // Only when the PR landed somewhere other than the record: a listing of every work
+      // cannot afford `base main` on every line, and `PR state unknown` above already
+      // says when the base was not confirmed either.
+      if (baseMoved(states[i])) bits.push(C.yellow(`base ${baseLabel(states[i])}`))
       say(`  ${v.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
-    }
+    })
     if (live && verdict.done) {
       say(`  ${C.green('→ all PRs merged, nothing uncommitted — safe to `rig close`')}`)
     } else if (live && verdict.safeToClose && verdict.repos.length) {
@@ -1765,10 +1806,14 @@ cmds.status = ({ flags }) => {
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a
   // distance git could not measure says so, instead of a confident `0 ahead · 0 behind`,
   // and a PR read back from the record (decision 60) reads as the merged PR it is.
-  const verdict = workState(work, work.repos.map(r => repoState(cfg, r, work.branch)))
+  // The states are kept rather than passed straight in: the verdict is about whether the
+  // work is finished (`bin/workstate.mjs`), and a base is never a blocker, so where the
+  // branch lands is read off the state beside it.
+  const states = work.repos.map(r => repoState(cfg, r, work.branch))
+  const verdict = workState(work, states)
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
-    say(`${C.bold(r.repo)} ${C.dim(`(${r.org}, base ${r.base})`)}`)
+    say(`${C.bold(r.repo)} ${C.dim(`(${r.org}, base ${baseLabel(states[i])})`)}`)
     say(`  path    ${r.path}${v.missing ? C.red('  MISSING') : ''}`)
     if (!v.missing) {
       say(`  changes ${v.dirty || 'none'}`)
@@ -2328,7 +2373,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag, resolveJiraFields,
+  activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 

@@ -7,7 +7,7 @@
 // The interface, and what each call may do:
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
-//   prForBranch(org, name, branch)      { number, state, url, openedAt, mergedAt } newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, base, url, openedAt, mergedAt } newest PR, or null
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
@@ -54,14 +54,18 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const { name: canonical, language } = parseJson(r.out, 'gh api')
       return { name: canonical, language: language || '' }
     },
+    // `baseRefName` is the base the PR lands on *now* — repoint a PR at another branch and
+    // it changes, where the base a work recorded at `rig attach` never does. It rides along
+    // with the PR state for no extra round trip, which is what makes a live base affordable
+    // on every `list`, `status` and `close`.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,url,createdAt,mergedAt', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,url,createdAt,mergedAt', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
     // The PR, not the branch, because a merged PR's branch is usually deleted — this is the
     // only place the first commit of finished work can still be read. Commits and reviews
@@ -133,7 +137,7 @@ export function githubInMemory (state) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
     },
     prTimeline (org, name, number) {
       if (!answers()) return null

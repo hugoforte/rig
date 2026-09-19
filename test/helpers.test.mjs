@@ -8,6 +8,7 @@ import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  baseLabel, baseMoved,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -296,8 +297,10 @@ test('branchFirstCommitAt: the first commit the branch adds over its base', () =
     // What a fetched remote-tracking ref would be, without a remote to fetch from.
     assert.equal(git(repo, 'update-ref', 'refs/remotes/origin/main', base).status, 0)
     assert.equal(git(repo, 'checkout', '-q', '-b', 'feat/x').status, 0)
-    const [, firstDate] = commit(repo, 'the first commit of the work')
-    commit(repo, 'and a second')
+    const [lower, firstDate] = commit(repo, 'the first commit of the work')
+    const [, secondDate] = commit(repo, 'and a second')
+    // The branch of the PR this one is stacked on, as a fetched remote-tracking ref.
+    assert.equal(git(repo, 'update-ref', 'refs/remotes/origin/feat/lower', lower).status, 0)
 
     assert.equal(branchFirstCommitAt({ path: repo, base: 'main' }), firstDate,
       'the first of the branch commits, not the last and not the base')
@@ -305,9 +308,32 @@ test('branchFirstCommitAt: the first commit the branch adds over its base', () =
       'a worktree that is not there is unknown, not an error')
     assert.equal(branchFirstCommitAt({ path: repo, base: 'no-such-base' }), null,
       'a base git cannot resolve answers nothing rather than the whole history')
+    assert.equal(branchFirstCommitAt({ path: repo, base: 'main' }, 'feat/lower'), secondDate,
+      'a stacked branch starts where the PR underneath it ends, not where main does')
+    assert.equal(branchFirstCommitAt({ path: repo, base: 'main' }, 'feat/never-fetched'), firstDate,
+      'a live base this checkout has never fetched falls back to the recorded one')
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
+})
+
+test('baseLabel: the record alone when nothing disagrees with it', () => {
+  assert.equal(baseLabel({ base: 'main', recordedBase: 'main' }), 'main')
+  assert.equal(baseLabel({ base: 'trunk', recordedBase: 'trunk' }), 'trunk', 'the PR confirmed the record')
+})
+
+test('baseLabel: both bases when the PR lands somewhere the record does not know about', () => {
+  // A bare `feat/other-work` would hide that the record still says `main`, which is the
+  // thing a reader has to know before rebasing or closing.
+  const stacked = { base: 'feat/other-work', recordedBase: 'main' }
+  assert.equal(baseLabel(stacked), 'main → feat/other-work')
+  assert.equal(baseMoved(stacked), true)
+})
+
+test('baseLabel: a refused lookup names the record as the record, never as the live base', () => {
+  const refused = { base: 'main', recordedBase: 'main', prError: 'gh not found on PATH' }
+  assert.equal(baseLabel(refused), 'main (recorded — GitHub would not say)')
+  assert.equal(baseMoved(refused), false, 'nothing was confirmed, so nothing moved')
 })
 
 test('prTiming: a lookup GitHub refused is an error, never a work with no first commit', () => {
