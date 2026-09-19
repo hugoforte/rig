@@ -2131,17 +2131,35 @@ cmds.pr = ({ flags }) => {
 // Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
 // row each. The base is read live (decision 63) because the base is what says where a stage
 // sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
+//
+// Two sources, and neither is a copy of the other. **The record** answers for the work branch,
+// whose base is the remote HEAD it was cut from, and for a merged pull request's terminal
+// facts. **git** answers for the stages: whether the branch is there at all and what it sits
+// on. Before this, only the record was read, and since nothing ever wrote a stage into it, no
+// declared stage could be placed in the chain — which is hugoforte/rig#78.
+//
+// Nothing discovered is written back. A stage's place in the stack is a question the commits
+// answer, and a recorded answer is a second one that disagrees the first time a branch moves.
 function branchRows (cfg, work) {
   const rows = []
+  const declared = (work.stages || []).map(s => s.branch)
   for (const entry of work.repos) {
+    const found = trees(cfg).chain({ org: entry.org, repo: entry.repo, branch: work.branch, stages: declared })
+    const known = new Map(found.map(f => [f.branch, f]))
+    // The record laid over what git found: a recorded base wins where there is one, because
+    // the only branch that has one is the work branch and git cannot name a remote HEAD.
     for (const b of entry.branches || []) {
+      const prior = known.get(b.branch)
+      known.set(b.branch, { ...prior, ...b, base: b.base ?? prior?.base ?? null })
+    }
+    for (const b of known.values()) {
       let pr = null
       const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
       const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
       rows.push({
         repo: entry.repo,
         branch: b.branch,
-        // The live base wins when GitHub answered; the record is the fallback.
+        // The live base wins when GitHub answered; git, then the record, is the fallback.
         base: (!prError && pr?.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
@@ -2201,6 +2219,9 @@ cmds.stage = ({ flags, positional }) => {
     for (const pr of st.prs) {
       say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
     }
+    // Said out loud rather than left to read as "no PR": the two look identical otherwise,
+    // and only one of them means there is nothing to review.
+    if (st.prUnknown) say(`       ${C.yellow(`PR state unknown in ${st.prUnknown.join(', ')}`)}`)
   }
 }
 

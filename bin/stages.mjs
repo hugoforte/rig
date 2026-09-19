@@ -35,6 +35,7 @@
 // scenario someone has to build.
 
 const MERGED = 'MERGED'
+const OPEN = 'OPEN'
 
 // The stages a work has declared, in the order the branches are actually stacked — never in
 // the order the array happens to be in. `chains` is one entry per repo: the branches that
@@ -81,6 +82,10 @@ export function stageOrder (work, chains = []) {
 export function stageState (stage, perRepo = []) {
   const repos = perRepo.filter(r => r.branch === stage.branch)
   const prs = repos.filter(r => r.pr)
+  // A lookup GitHub refused, with nothing recorded to fall back on. Carried rather than
+  // dropped, because a stage rig could not ask about must never read as one nobody has
+  // opened anything on — the `prUnknown` rule the rest of rig already follows.
+  const unknown = repos.filter(r => r.prError && !r.pr).map(r => r.repo)
   return {
     branch: stage.branch,
     delivers: stage.delivers || '',
@@ -88,11 +93,13 @@ export function stageState (stage, perRepo = []) {
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
     started: repos.length > 0,
-    // Up for review while any repo's PR is open, and landed only when every repo that carries
-    // the stage has merged it — the same all-or-nothing rule `workState` uses for a work,
-    // scoped to one slice of it.
-    open: prs.some(r => r.pr.state !== MERGED),
+    // Up for review while any repo's PR is **open**, and landed only when every repo that
+    // carries the stage has merged it — the same all-or-nothing rule `workState` uses for a
+    // work, scoped to one slice of it. CLOSED is neither: a stage somebody gave up on is not
+    // one waiting for a reviewer, which is what "not merged" said before.
+    open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
+    prUnknown: unknown.length ? unknown : null,
     prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url })),
   }
 }
@@ -122,7 +129,8 @@ export const nextStage = stack => stack.find(s => !s.landed) || null
 // rollout plan (`rig plan`) — because the whole complaint against the rollout plan was that
 // its table was typed by hand, and two generators would be two tables that disagree.
 export function stageTable (stack) {
-  const where = st => st.landed ? 'landed' : st.open ? 'up for review' : st.started ? 'in progress' : 'not started'
+  const where = st => st.landed ? 'landed' : st.open ? 'up for review'
+    : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
   return [
     '| Order | Stage | Delivers | Repos | PR | State |',
@@ -157,7 +165,11 @@ export const renderPlanRegion = stack => [
 export function refreshedPlan (text, stack) {
   const re = planRegion()
   if (!re.test(text)) return null
-  return text.replace(re, renderPlanRegion(stack))
+  // A function replacer, because `String.replace` reads `$&` and `$1` in a *string*
+  // replacement as the match and its groups — so a branch or a `delivers` line containing one
+  // pasted the old region back inside the new one, and the corruption compounded on every
+  // refresh.
+  return text.replace(re, () => renderPlanRegion(stack))
 }
 
 // Does the plan's rendered table still say what the stack says? This is the read-back the whole
