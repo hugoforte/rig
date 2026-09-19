@@ -302,8 +302,15 @@ stopped without finishing: an unmerged PR and unpushed commits are what that *lo
 those checks go, and uncommitted changes still refuse because unsaved work is the one thing
 a teardown can destroy. The ticket is told and left open — whether the problem is still worth
 solving is not rig's call — and open PRs are named and left alone, because closing someone's
-pull request is an outward-facing act rig does not take on its own. Reach for this instead of
-`--force`, which tears down identically but records a work that landed.
+pull request is an outward-facing act rig does not take on its own.
+
+Reach for it instead of `--force` all the same, and the difference is what each one records.
+Neither closes a ticket it cannot honestly close: a forced close has always left the issue
+open when the work branch's own pull request was still open, and a slice still up for review
+is now said the same way, with the reason in the comment and `--force` named in it. What
+differs is the record. `--abandoned` says the work ended unfinished, and the phase reads
+`abandoned`; a forced close reads `closed`, with `forcedAt` the only sign anything was
+overridden.
 
 ## Agent skills
 

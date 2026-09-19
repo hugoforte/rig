@@ -936,14 +936,23 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   // written back either way.
   if (!githubKeys.length && !jiraKeys.length) return stageWriteBack(work, stages, { abandoned })
 
-  const { done: merged, reason, repos } = workState(work, states)
+  // The same stack `close` refused on, so the comment that explains a forced close can name
+  // the slice that never landed. Without it `workState` reached a second, kinder verdict here
+  // than the one the operator just forced past, and `reasonFor`'s slice line was unreachable.
+  const { done: merged, reason, repos } = workState(work, states, { stages })
   const prs = repos.filter(v => v.pr).map(v => `- ${v.repo}: ${v.pr.url}`)
+  // `forcedAt` records the decision where only rig can read it (decision 77), and the ticket
+  // is what someone who was not the operator reads. A close that tore down past an open pull
+  // request must not be indistinguishable there from one that had nothing to get past — that
+  // is the state `rig status` would otherwise call a bug.
+  const ranCmd = `rig close${work.forcedAt ? ' --force' : ''}`
+  const overridden = work.forcedAt ? ' The blockers were overridden deliberately.' : ''
   // An abandoned work never closes its ticket, whatever the PRs say: stopping is a decision
   // about this attempt, and whether the *problem* is still worth solving is not rig's to
   // answer. A slice that did land is still listed — it is on the base branch either way.
   const opening = abandoned
     ? 'Abandoned — `rig close --abandoned` ran. The work was stopped without finishing; the issue stays open.'
-    : `Closed by \`rig close\`.${merged ? '' : ` ${reason} The issue stays open.`}`
+    : `Closed by \`${ranCmd}\`.${overridden}${merged ? '' : ` ${reason} The issue stays open.`}`
 
   const githubBody = [
     opening,
@@ -964,7 +973,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   const jiraBody = [
     abandoned
       ? '`rig close --abandoned` ran. The work was stopped without finishing.'
-      : `\`rig close\` ran.${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
+      : `\`${ranCmd}\` ran.${overridden}${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
     ...(prs.length ? ['', ...prs] : []),
     '', `Context doc: ${contextDocRef(work.id)}`,
     '', 'rig does not transition Jira tickets — move this one yourself.',
@@ -1890,13 +1899,21 @@ cmds.list = ({ flags }) => {
       if (baseMoved(states[i])) bits.push(C.yellow(`base ${baseLabel(states[i])}`))
       say(`  ${v.repo.padEnd(34)} ${bits.join(' · ') || C.dim('clean')}`)
     })
+    // `close` asks the stack whether a slice is still up for review; `list` does not, because
+    // reading it is a git pass and a GitHub call per stage per work, which is not what a
+    // listing is (decision 77). So on a work that has stages the verdict says what it
+    // measured and no more — the same rule `--quick` and `prUnknown` already follow. The
+    // record alone answers this, so a work with no stages costs nothing and reads unchanged.
+    const unchecked = work.stages.length ? ' (stages not checked)' : ''
     if (live && verdict.done) {
-      say(`  ${C.green('→ all PRs merged, nothing uncommitted — safe to `rig close`')}`)
+      // The qualifier is dim outside the green: its job is to take the edge off the verdict,
+      // and the colour the verdict is printed in is half of that edge.
+      say(`  ${C.green('→ all PRs merged, nothing uncommitted — safe to `rig close`')}${unchecked ? C.dim(unchecked) : ''}`)
     } else if (live && verdict.safeToClose && verdict.repos.length) {
       // The disagreement #2 was filed for: `list` used to stay silent here while `close`
       // would have closed the work without a murmur. Said plainly instead, and not as a
       // recommendation — nothing landed, so this is not finished work.
-      say(`  ${C.dim('→ nothing outstanding, but nothing merged either — `rig close` would not refuse')}`)
+      say(`  ${C.dim(`→ nothing outstanding, but nothing merged either — \`rig close\` would not refuse${unchecked}`)}`)
     }
     say('')
   }
@@ -2062,7 +2079,12 @@ cmds.next = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const states = work.repos.map(r => repoState(cfg, r, work.branch))
-  const verdict = workState(work, states)
+  // The stack costs one PR lookup per branch, and `rig next` is a command you ran on purpose
+  // — the one place that can afford to know where you are in it. Read once and shared by
+  // everything below that needs it, `workState` included: `close` refuses over an open slice,
+  // so a verdict here that did not ask would disagree with the command it is describing.
+  const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+  const verdict = workState(work, states, { stages: stack })
   // `workState` answers the verdict half and the worktree state answers `pushed`; joined
   // here rather than in either, because "is this branch on the remote" is not a question
   // about whether the work is finished.
@@ -2075,10 +2097,8 @@ cmds.next = ({ flags }) => {
     // The scaffolded stub, still standing where the design should be.
     directionTodo: directionIsTodo(doc),
     planExists: exists(planFile(work.id)),
-    planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), work.stages.length ? stackOf(work, branchRows(cfg, work)) : []),
-    // The stack costs one PR lookup per branch, and `rig next` is a command you ran on
-    // purpose — the one place that can afford to know where you are in it.
-    stack: work.stages.length ? stackOf(work, branchRows(cfg, work)) : [],
+    planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
+    stack,
   })
 
   const phase = phaseOf(work, repos)
