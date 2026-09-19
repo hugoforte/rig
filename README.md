@@ -55,7 +55,7 @@ stateDiagram-v2
   planning --> designing: repos attached
   designing --> building: design gate passed
   building --> reviewing: a PR is open
-  reviewing --> landing: approved
+  reviewing --> landing: every PR merged
   landing --> closed: rig close
   building --> abandoned: stopped without finishing
   closed --> [*]

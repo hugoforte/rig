@@ -73,6 +73,35 @@ test('a branch nobody has written on is never nagged about opening a PR', () => 
   assert.match(says(out), /yours to write/)
 })
 
+test('a distance git could not measure is never read as nothing outstanding', () => {
+  // `ahead: null` is what `worktrees.state()` answers when it could not measure at all, and
+  // that is the *ordinary* state of a branch whose PR was squash-merged (decision 62). Read as
+  // 0 it means "pushed, waiting for a PR", which is a confident answer to a question nobody
+  // could answer.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { ahead: null, pushed: true })],
+  })
+  assert.doesNotMatch(says(out), /no PR open/)
+  assert.doesNotMatch(says(out), /not pushed/)
+})
+
+test('nor as work waiting to be written', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { ahead: null, pushed: false })],
+  })
+  assert.doesNotMatch(says(out), /yours to write/)
+})
+
+test('a measured zero still reads as zero, which is the distinction that was lost', () => {
+  const pushed = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { ahead: 0, pushed: true })],
+  })
+  assert.match(says(pushed), /is pushed with no PR open/)
+})
+
 // ---------------------------------------------------------------- weight, derived
 
 test('one repo is never offered a rollout plan', () => {

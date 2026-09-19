@@ -2008,7 +2008,7 @@ cmds.next = ({ flags }) => {
     work,
     repos,
     // The scaffolded stub, still standing where the design should be.
-    directionTodo: /^## Direction$[\s\S]*?^_TODO_$/m.test(doc),
+    directionTodo: directionIsTodo(doc),
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), work.stages.length ? stackOf(work, branchRows(cfg, work)) : []),
     // The stack costs one PR lookup per branch, and `rig next` is a command you ran on
@@ -2016,9 +2016,15 @@ cmds.next = ({ flags }) => {
     stack: work.stages.length ? stackOf(work, branchRows(cfg, work)) : [],
   })
 
-  say(`${C.bold(work.id)} ${C.dim(`— ${phaseLabel(phaseOf(work, repos))}`)}`)
+  const phase = phaseOf(work, repos)
+  say(`${C.bold(work.id)} ${C.dim(`— ${phaseLabel(phase)}`)}`)
   if (!offers.length) {
-    say(C.dim(work.closedAt ? '  nothing — this work is done' : '  nothing to suggest'))
+    // Asked of the phase, not of `closedAt`: an abandoned work carries `closedAt` too — the
+    // teardown did run — so reading that field alone told a work that was stopped unfinished
+    // that it was done, which is a lie about the one thing `--abandoned` exists to record.
+    say(C.dim(phase === 'abandoned' ? '  nothing — this work was abandoned'
+      : phase === 'closed' ? '  nothing — this work is done'
+        : '  nothing to suggest'))
     return
   }
   say('')
@@ -2028,18 +2034,42 @@ cmds.next = ({ flags }) => {
   }
 }
 
-// The Direction section of the context doc, which is where the design was agreed and written
-// down. Lifted verbatim into a PR body rather than summarised: a summary is a second copy that
-// starts drifting the moment either is edited, and the reviewer wants the reasoning that was
-// actually agreed, not rig's paraphrase of it.
-function directionProse (id) {
-  if (!exists(contextFile(id))) return ''
-  const m = /^## Direction\s*$([\s\S]*?)(?=^## |\Z)/m.exec(readText(contextFile(id)))
-  if (!m) return ''
-  // The scaffolded stub says nothing, and an empty section in a PR body is worse than none.
-  const body = m[1].replace(/^\s*<!--[\s\S]*?-->\s*$/gm, '').trim()
-  return body === '_TODO_' ? '' : body
+// The Direction section of a context doc, sliced out by hand rather than by one clever
+// expression. The clever one was wrong: `(?=^## |\Z)` reads as "the next heading, or the end
+// of the input" and `\Z` is not an end-of-input assertion in JavaScript — it is a literal `Z`.
+// So a Direction section that happened to be the last one matched nothing at all, and any
+// Direction containing a capital Z was silently truncated there. Measured against the real
+// data root when this was found: two of forty-six context docs truncated, one of them losing
+// 6,300 of 17,500 characters at the word `listHostedZones`.
+//
+// Finding the heading and then finding the next one is duller and cannot be wrong in that way.
+function directionSection (text) {
+  const heading = /^## Direction[^\n]*\n/m.exec(text || '')
+  if (!heading) return ''
+  const rest = text.slice(heading.index + heading[0].length)
+  const next = /^## /m.exec(rest)
+  return next ? rest.slice(0, next.index) : rest
 }
+
+// What the section actually says: its prose with the template's guidance comments stripped.
+// Both readers below go through this, so neither can disagree with the other about whether a
+// section that is only a comment and a stub counts as written.
+const directionSaid = text => directionSection(text).replace(/^\s*<!--[\s\S]*?-->\s*$/gm, '').trim()
+
+// Is the design still the scaffolded stub? Asked of the section rather than of the whole
+// document: the old test was `/^## Direction$[\s\S]*?^_TODO_$/m`, which finds a `_TODO_`
+// *anywhere* below the heading, so an agreed Direction with an unfinished checklist three
+// sections later read as undesigned.
+const directionIsTodo = text => directionSaid(text) === '_TODO_'
+
+// Empty for the stub, which says nothing — and an empty section in a PR body is worse than no
+// section at all.
+const directionBody = text => (directionIsTodo(text) ? '' : directionSaid(text))
+
+// Lifted verbatim into a PR body rather than summarised: a summary is a second copy that starts
+// drifting the moment either is edited, and the reviewer wants the reasoning that was actually
+// agreed, not rig's paraphrase of it.
+const directionProse = id => (exists(contextFile(id)) ? directionBody(readText(contextFile(id))) : '')
 
 // The PR body rig writes: what the work is, the ticket, what was decided, and what landed in
 // which order. Everything in it is already recorded somewhere — the point is that it is
@@ -2782,6 +2812,7 @@ export {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
+  directionSection, directionBody, directionIsTodo,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
