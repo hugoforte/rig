@@ -10,73 +10,46 @@
 // new before close). node:test runs a file's tests serially by default; running a
 // single one with --test-name-pattern is not supported.
 //
-// GitHub is the in-memory adapter from bin/github.mjs, selected by RIG_FAKE_GITHUB
-// naming a JSON state file the tool reads on start and writes back on exit (Jira the
-// same, via RIG_FAKE_TWG). Tests seed it and read it back; the real `gh`/`twg` are never
-// spawned. That file is shared state too: a test that seeds a repo or issue is relied on
-// by the later tests that assert on it, which is one more reason the order matters.
-import { test, before, after } from 'node:test'
+// GitHub and Jira are the in-memory adapters (test/harness.mjs says how). Tests seed them
+// and read them back; the real `gh`/`twg` are never spawned. That state is shared too: a
+// test that seeds a repo or issue is relied on by the later tests that assert on it, which
+// is one more reason the order matters.
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { MAJOR, MIGRATIONS, toolVersion } from '../bin/version.mjs'
+import { SRC, makeInstall, readJson, strip } from './harness.mjs'
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // What this tool stamps a data root with. Derived, because releases move the minor and a
 // hardcoded stamp would fail on the next one.
 const VERSION = toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')))
-let tmp, tool, localConfig, dataRoot, workRoot, env, githubStateFile, twgStateFile
 
-const strip = s => s.replace(/\x1b\[\d+m/g, '')
-// `out` is both streams, which is what almost every assertion here wants. `stdout` is kept
-// apart for the one caller that cares: `rig list --json` is a pipe, and everything rig says
-// for a human — the freshness line above all — has to stay off it.
-const rig = (args, input, envOverride = env) => {
-  const r = spawnSync(process.execPath, [path.join(tool, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env: envOverride, input })
-  return { code: r.status, out: strip(r.stdout + r.stderr), stdout: strip(r.stdout) }
-}
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
+const {
+  tmp, install: tool, localConfig, dataRoot, workRoot, env,
+  githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
+} = makeInstall({
+  prefix: 'rig-smoke-',
+  author: 'rig smoke',
+  email: 'smoke@example.invalid',
+  // The machine half, moved out of the tool copy. `init` creates it there; until it does,
+  // there is no config at all, which is the state `doctor` is asked about first.
+  localConfig: true,
+  // No gh at all until a test needs GitHub; init's warning path runs first.
+  github: { auth: 'missing' },
+  twg: { present: true, issues: {}, fields: {}, boards: {} },
+})
+
 const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 const github = () => readJson(githubStateFile)
 const setTwg = state => fs.writeFileSync(twgStateFile, JSON.stringify(state))
 const twg = () => readJson(twgStateFile)
-const gitIn = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
 const lastCommit = dir => gitIn(dir, 'log', '-1', '--format=%s').stdout.trim()
 const dirty = dir => gitIn(dir, 'status', '--porcelain').stdout.trim()
 
-before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-smoke-'))
-  tool = path.join(tmp, 'rig')
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(tool, d), { recursive: true })
-  fs.cpSync(path.join(SRC, 'package.json'), path.join(tool, 'package.json'))
-  dataRoot = path.join(tmp, 'rig-data')
-  workRoot = path.join(tmp, 'w')
-  localConfig = path.join(tmp, 'rig.local.json')
-
-  env = { ...process.env }
-  // The machine half, moved out of the tool copy. `init` creates it here; until it does,
-  // there is no config at all, which is the state `doctor` is asked about first.
-  env.RIG_LOCAL_CONFIG = localConfig
-  githubStateFile = path.join(tmp, 'github.json')
-  env.RIG_FAKE_GITHUB = githubStateFile
-  // No gh at all until a test needs GitHub; init's warning path runs first.
-  setGithub({ auth: 'missing' })
-  twgStateFile = path.join(tmp, 'twg.json')
-  env.RIG_FAKE_TWG = twgStateFile
-  setTwg({ present: true, issues: {}, fields: {}, boards: {} })
-  // The tool writes `git config --global core.longpaths`; keep that, and every
-  // inherited setting, out of the real global config.
-  fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig smoke'
-  env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'smoke@example.invalid'
-})
-
-after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
+after(cleanup)
 
 test('importing the tool runs nothing', () => {
   const url = pathToFileURL(path.join(tool, 'bin', 'rig.mjs')).href
@@ -131,14 +104,14 @@ test('init --orgs adds, never replaces', () => {
 
 test('new refuses without a ticket decision once a tracker is configured', () => {
   // acme-labs got a live Jira tracker two tests ago; the gate now applies data-root-wide.
-  const r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore'], 'the brief')
+  const r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore'], { input: 'the brief' })
   assert.equal(r.code, 1)
   assert.match(r.out, /--key.*--ticket.*--no-ticket/)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
 })
 
 test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
-  let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore', '--no-ticket'], 'the brief')
+  let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore', '--no-ticket'], { input: 'the brief' })
   assert.equal(r.code, 0, r.out)
   // Every mutating command ends by committing the whole data root, and says so.
   assert.match(r.out, /data root: committed [0-9a-f]{7,} \(no upstream/)
@@ -177,7 +150,7 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
 })
 
 test('a GitHub --key is recorded but never reaches the branch name', () => {
-  const r = rig(['new', 't2', '--key', 'acme/platform#3', '--title', 'Keyed work'], '')
+  const r = rig(['new', 't2', '--key', 'acme/platform#3', '--title', 'Keyed work'])
   assert.equal(r.code, 0, r.out)
   const record = readJson(path.join(dataRoot, 'work', 't2', 'work.json'))
   assert.equal(record.branch, 'feat/keyed-work')
@@ -185,7 +158,7 @@ test('a GitHub --key is recorded but never reaches the branch name', () => {
 })
 
 test('a Jira --key is recorded and does reach the branch name', () => {
-  const r = rig(['new', 't3', '--key', 'PROJ-42', '--title', 'Jira keyed'], '')
+  const r = rig(['new', 't3', '--key', 'PROJ-42', '--title', 'Jira keyed'])
   assert.equal(r.code, 0, r.out)
   assert.equal(readJson(path.join(dataRoot, 'work', 't3', 'work.json')).branch, 'feat/PROJ-42-jira-keyed')
 })
@@ -211,7 +184,8 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
   assert.equal(r.code, 0, r.out)
   assert.equal(lastCommit(dataRoot), 'rig init: rig.json')
 
-  r = rig(['new', 't4', '--title', 'Ticketed work', '--ticket', '--org', 'acme'], 'first paragraph of the brief\n\nsecond paragraph')
+  r = rig(['new', 't4', '--title', 'Ticketed work', '--ticket', '--org', 'acme'],
+    { input: 'first paragraph of the brief\n\nsecond paragraph' })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /ticket acme\/platform#4/)
   assert.deepEqual(readJson(path.join(dataRoot, 'work', 't4', 'work.json')).tickets, ['acme/platform#4'])
@@ -254,7 +228,7 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
   })
 
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs', '--dry-run'],
-    'the jira brief\n\nmore detail')
+    { input: 'the jira brief\n\nmore detail' })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /would create a Task in PROJ/)
   assert.match(r.out, /customfield_10058\s+3/)
@@ -266,7 +240,7 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
 
 test('rig new --ticket on a Jira org creates via twg with resolved fields', () => {
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs'],
-    'the jira brief\n\nmore detail')
+    { input: 'the jira brief\n\nmore detail' })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /ticket PROJ-1/)
   const record = readJson(path.join(dataRoot, 'work', 't5', 'work.json'))
@@ -282,7 +256,7 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
 test('a Jira ticket-creation failure surfaces as a clean error, not a stack trace', () => {
   const state = twg()
   setTwg({ ...state, present: false })
-  const r = rig(['new', 't5-fail', '--title', 'Should not crash', '--ticket', '--org', 'acme-labs'], 'brief')
+  const r = rig(['new', 't5-fail', '--title', 'Should not crash', '--ticket', '--org', 'acme-labs'], { input: 'brief' })
   setTwg(state)   // restore before any later test needs twg present again
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /twg not found on PATH/)
@@ -301,7 +275,7 @@ test('an unresolvable Jira component name dies loudly instead of reaching twg un
   rigJson.tracker['acme-labs'].fields.components = ['Not A Real Component']
   fs.writeFileSync(path.join(dataRoot, 'rig.json'), JSON.stringify(rigJson, null, 2))
 
-  const r = rig(['new', 't5-badcomponent', '--title', 'Bad component', '--ticket', '--org', 'acme-labs'], 'brief')
+  const r = rig(['new', 't5-badcomponent', '--title', 'Bad component', '--ticket', '--org', 'acme-labs'], { input: 'brief' })
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /"Not A Real Component" is not a value for "Components"/)
   assert.deepEqual(readJson(path.join(dataRoot, 'work', 't5-badcomponent', 'work.json')).tickets, [])
@@ -312,7 +286,7 @@ test('an unresolvable Jira component name dies loudly instead of reaching twg un
 
 test('--dry-run warns instead of misleadingly previewing when the work already has a ticket', () => {
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs', '--dry-run'],
-    'a different brief')
+    { input: 'a different brief' })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /t5 already has a ticket \(PROJ-1\)/)
   assert.doesNotMatch(r.out, /would create/, 'no misleading preview once a ticket already exists')
@@ -320,14 +294,14 @@ test('--dry-run warns instead of misleadingly previewing when the work already h
 
 test('--field is ignored for a GitHub tracker, and says so', () => {
   const r = rig(['new', 't6b', '--title', 'Field on GitHub', '--ticket', '--org', 'acme', '--field', 'story_points=5'],
-    'brief')
+    { input: 'brief' })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /--field is ignored for a GitHub tracker/)
 })
 
 test('--field name=value,... overrides the org\'s configured default', () => {
   const r = rig(['new', 't6', '--title', 'Overridden points', '--ticket', '--org', 'acme-labs', '--field', 'story_points=5'],
-    'brief')
+    { input: 'brief' })
   assert.equal(r.code, 0, r.out)
   const record = readJson(path.join(dataRoot, 'work', 't6', 'work.json'))
   const issue = twg().issues[record.tickets[0]]
@@ -338,7 +312,7 @@ test('rig new --key <a Jira key> fetches title and description from Jira, no pip
   const state = twg()
   state.issues['PROJ-2'] = { title: 'Fetched summary', body: 'Fetched description', comments: [] }
   setTwg(state)
-  const r = rig(['new', 't7', '--key', 'PROJ-2'], '')
+  const r = rig(['new', 't7', '--key', 'PROJ-2'])
   assert.equal(r.code, 0, r.out)
   const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
   assert.equal(record.title, 'Fetched summary')
@@ -377,7 +351,7 @@ test('a commit that fails (no git identity) warns and leaves the edit for next t
   fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nAnonymous edit.\n')
   const anonymous = { ...env }
   for (const k of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete anonymous[k]
-  let r = rig(['save', '--work', 't7', '-m', 'who am i'], undefined, anonymous)
+  let r = rig(['save', '--work', 't7', '-m', 'who am i'], { env: anonymous })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /could not commit/)
   assert.notEqual(dirty(dataRoot), '', 'the change is still there for the next command')

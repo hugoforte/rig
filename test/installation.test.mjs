@@ -4,28 +4,26 @@
 // the remote, so no test here touches a network.
 //
 // One temp installation, shared, and the tests run in order: each leaves the installation
-// where the next one expects it.
-import { test, before, after } from 'node:test'
+// where the next one expects it. test/harness.mjs builds it; `checkout` is what makes it a
+// real clone rather than the bare copy the other suites run.
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { MAJOR } from '../bin/version.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-let tmp, origin, install, dataRoot, workRoot, env
+const { tmp, origin, install, dataRoot, workRoot, env, rig, git, cleanup } = makeInstall({
+  prefix: 'rig-install-',
+  author: 'rig install test',
+  email: 'install@example.invalid',
+  checkout: true,
+  // No tracker CLI is reached by anything here, but the in-memory adapter keeps it that way.
+  github: { auth: 'missing' },
+})
 
-const strip = s => s.replace(/\x1b\[\d+m/g, '')
-const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const cacheFile = () => path.join(workRoot, '.rig', 'freshness.json')
-
-const rig = (args, root = install) => {
-  const r = spawnSync(process.execPath, [path.join(root, 'bin', 'rig.mjs'), ...args], { encoding: 'utf8', env })
-  return { code: r.status, out: strip(r.stdout + r.stderr) }
-}
 
 // The refresh is detached, so its cache appears after the command has already returned.
 // `accept` tells a rewritten cache from the one that was already there.
@@ -69,49 +67,16 @@ const pushToOrigin = message => {
   assert.equal(git(clone, 'push', '-q').status, 0)
 }
 
-before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-install-'))
-  env = { ...process.env }
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig install test'
-  env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'install@example.invalid'
-  // No tracker CLI is reached by anything here, but the in-memory adapters keep it that way.
-  env.RIG_FAKE_GITHUB = path.join(tmp, 'github.json')
-  fs.writeFileSync(env.RIG_FAKE_GITHUB, JSON.stringify({ auth: 'missing' }))
-  delete env.RIG_UPDATE_RESTARTED
+// A data root and work root for the installation, set up as `rig init` would leave them.
+fs.mkdirSync(workRoot)
+assert.equal(git(tmp, 'init', '-q', '-b', 'main', dataRoot).status, 0)
+fs.writeFileSync(path.join(dataRoot, 'rig.json'),
+  JSON.stringify({ orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' }, null, 2) + '\n')
+assert.equal(git(dataRoot, 'add', '-A').status, 0)
+assert.equal(git(dataRoot, 'commit', '-q', '-m', 'rig.json').status, 0)
+fs.writeFileSync(path.join(install, 'rig.local.json'), JSON.stringify({ dataRoot, workRoot }, null, 2) + '\n')
 
-  // The remote everyone clones from, seeded with this tool.
-  const seed = path.join(tmp, 'seed')
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(seed, d), { recursive: true })
-  fs.cpSync(path.join(SRC, 'package.json'), path.join(seed, 'package.json'))
-  // The real tool gitignores rig.local.json; without that the machine's own config would read
-  // as an uncommitted change and `rig update` would refuse to move a perfectly clean install.
-  fs.cpSync(path.join(SRC, '.gitignore'), path.join(seed, '.gitignore'))
-  assert.equal(git(tmp, 'init', '-q', '-b', 'main', seed).status, 0)
-  assert.equal(git(seed, 'add', '-A').status, 0)
-  assert.equal(git(seed, 'commit', '-q', '-m', 'the tool').status, 0)
-  origin = path.join(tmp, 'origin.git')
-  assert.equal(git(tmp, 'init', '-q', '--bare', '-b', 'main', origin).status, 0)
-  assert.equal(git(seed, 'push', '-q', origin, 'main').status, 0)
-
-  install = path.join(tmp, 'install')
-  assert.equal(git(tmp, 'clone', '-q', origin, install).status, 0)
-
-  // A data root and work root for it, set up as `rig init` would leave them.
-  dataRoot = path.join(tmp, 'rig-data')
-  workRoot = path.join(tmp, 'w')
-  fs.mkdirSync(workRoot)
-  assert.equal(git(tmp, 'init', '-q', '-b', 'main', dataRoot).status, 0)
-  fs.writeFileSync(path.join(dataRoot, 'rig.json'),
-    JSON.stringify({ orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: '1.0.0' }, null, 2) + '\n')
-  assert.equal(git(dataRoot, 'add', '-A').status, 0)
-  assert.equal(git(dataRoot, 'commit', '-q', '-m', 'rig.json').status, 0)
-  fs.writeFileSync(path.join(install, 'rig.local.json'), JSON.stringify({ dataRoot, workRoot }, null, 2) + '\n')
-})
-
-after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
+after(cleanup)
 
 test('an installation level with its remote reports itself up to date', () => {
   const r = rig(['doctor'])
@@ -350,11 +315,11 @@ test('the copy inside a linked worktree is never judged, and says so', () => {
   const worktree = path.join(tmp, 'work-copy')
   assert.equal(git(install, 'worktree', 'add', '-q', '-b', 'feat/x', worktree).status, 0)
   fs.writeFileSync(path.join(worktree, 'rig.local.json'), JSON.stringify({ dataRoot, workRoot }, null, 2) + '\n')
-  const r = rig(['doctor'], worktree)
+  const r = rig(['doctor'], { root: worktree })
   assert.match(r.out, /freshness not checked — the tool is running from a linked worktree/)
   assert.doesNotMatch(r.out, /commit\(s\) behind/)
 
-  const updated = rig(['update'], worktree)
+  const updated = rig(['update'], { root: worktree })
   assert.match(updated.out, /copy in a worktree/)
   assert.doesNotMatch(updated.out, /fast-forwarded/)
 })
