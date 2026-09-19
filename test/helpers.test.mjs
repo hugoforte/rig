@@ -145,6 +145,13 @@ test('statusLine: what a document may carry, which is only what the record can p
   assert.equal(statusLine({ repos: [], closedAt: '2026-09-19T10:00:00.000Z' }), 'Closed')
 })
 
+// These assert options rather than behaviour, deliberately. Each field is a contract with
+// the operating system whose only symptom is cost, and the cost does not show on an idle
+// machine — the refresh that took forty seconds under load and hung a desktop finished inside
+// its deadline when nothing else was running, so the behavioural test went green on exactly
+// the machines that were fine. A wrong option here is not a refactor; it is the regression.
+// The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
+// `test/checkouts.test.mjs`, where the operation it guards now lives.
 test('every child rig spawns is hidden, so a console-less child pays for no console', () => {
   assert.equal(SPAWN_DEFAULTS.windowsHide, true,
     'DETACHED_PROCESS has no console; without this each git call allocates a console host')

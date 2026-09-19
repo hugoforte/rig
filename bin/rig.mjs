@@ -310,6 +310,9 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', '
 function prepareDataRoot () {
   const root = dataRoot()
   if (exists(root) && where().split) {
+    // The full reading, for three fields: what it costs over the identity questions is
+    // one `status` and two counts, and the network fetch on the next line dwarfs them.
+    // The reading worth keeping cheap is the freshness one, which runs after every command.
     const before = co.describe(root)
     if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
       const fetched = co.fetch(root)
@@ -2552,7 +2555,10 @@ function updateCheckout (label, root) {
   // a file in the way — git's own words are the actionable part, and "rebase it by hand"
   // is not.
   if (moved.outcome === 'diverged') { warn(`${label}: ${behind} behind and ${moved.state.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`); return { status: 'failed', clean } }
-  if (moved.outcome !== 'moved') { warn(`${label}: could not fast-forward ${behind} commit(s) (${moved.error}) — not updated`); return { status: 'failed', clean } }
+  // `blocked` needs saying separately: only `failed` carries git's words, and the check
+  // above this fetch is what normally catches a tree with changes in it.
+  if (moved.outcome === 'blocked') { warn(`${label}: ${moved.state.modified} uncommitted change(s) — not updated`); return { status: 'failed', clean } }
+  if (moved.outcome !== 'moved') { warn(`${label}: could not fast-forward ${behind} commit(s) (${moved.error || 'no detail from git'}) — not updated`); return { status: 'failed', clean } }
   ok(`${label}: fast-forwarded ${behind} commit(s)`)
   const arrived = co.arrived(root, moved.from)
   for (const line of arrived.slice(0, 20)) say(`  ${C.dim(line)}`)

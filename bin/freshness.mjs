@@ -34,9 +34,10 @@ export function skipReason (state) {
   if (state.linked) return 'the tool is running from a linked worktree'
   if (!state.branch) return 'the tool checkout is on a detached HEAD'
   // `defaultBranch` is null unless the tool could confirm the ref still exists — see
-  // `toolState`. An unconfirmed one must not veto: git never refreshes `origin/HEAD`, so
-  // after the remote renames its default branch it names one that is gone, and vetoing on it
-  // switched the check off for good while blaming the user's branch.
+  // `identify` in `checkouts.mjs`. An unconfirmed one must not veto: git never refreshes
+  // `origin/HEAD`, so after the remote renames its default branch it names one that is
+  // gone, and vetoing on it switched the check off for good while blaming the user's
+  // branch.
   if (state.defaultBranch && state.branch !== state.defaultBranch) {
     return `the tool checkout is on ${state.branch}, not ${state.defaultBranch}`
   }

@@ -94,13 +94,17 @@ export function checkouts ({ run }) {
   function describe (dir) {
     const state = identity(dir)
     if (state.repo !== 'own') return state
-    const status = lines(git(dir, 'status', '--porcelain').out)
+    // A status git would not answer leaves both counts null, the same way an unmeasurable
+    // distance does. Reading a failed status as a clean tree is the quiet wrong answer that
+    // matters most here: it is what `rig update` migrates on.
+    const status = git(dir, 'status', '--porcelain')
+    const changes = status.code === 0 ? lines(status.out) : null
     return {
       ...state,
       ahead: state.upstream ? countCommits(dir, '@{u}..HEAD') : 0,
       behind: state.upstream ? countCommits(dir, 'HEAD..@{u}') : 0,
-      dirty: status.length,
-      modified: status.filter(l => !l.startsWith('??')).length,
+      dirty: changes && changes.length,
+      modified: changes && changes.filter(l => !l.startsWith('??')).length,
     }
   }
 
@@ -157,15 +161,15 @@ export function checkouts ({ run }) {
   //   · blocked · moved · failed
   //
   // `state` is what it decided from, so a caller can word the numbers; `from` is the HEAD
-  // it moved off, for `arrived` and for the reset that puts it back. `known` is a state
-  // the caller has already read, for the caller that had to look before it could decide
-  // whether to fetch.
-  function fastForward (dir, known = null) {
-    const state = known ?? describe(dir)
+  // it moved off, for `arrived` and for the reset that puts it back.
+  function fastForward (dir) {
+    const state = describe(dir)
     if (state.repo !== 'own') return { outcome: 'not-a-checkout', state }
     if (!state.branch) return { outcome: 'detached', state }
     if (!state.upstream) return { outcome: 'no-upstream', state }
-    if (state.behind === null) return { outcome: 'unmeasurable', state }
+    // A tree git would not read is as good a reason not to move as a distance it would not
+    // measure: both mean the answer that follows would be a guess.
+    if (state.behind === null || state.modified === null) return { outcome: 'unmeasurable', state }
     if (state.behind === 0) return { outcome: 'current', state }
     if (state.ahead) return { outcome: 'diverged', state }
     if (state.modified) return { outcome: 'blocked', state }

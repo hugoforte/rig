@@ -14,11 +14,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { checkouts, unreadable, FETCH_ENV } from '../bin/checkouts.mjs'
 
-let tmp, env
+let tmp, env, sandbox
 
-// `run` is spawnSync-shaped, the way rig.mjs passes it in.
+// `run` is spawnSync-shaped, the way rig.mjs passes it in. The sandbox goes on *last*:
+// `fetch` builds its environment from `process.env` to add the prompt guard, the way
+// rig.mjs's own runner does, and without this the one call in the file that does so would
+// escape to the machine's real git config.
 const run = (cmd, args, opts = {}) => {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', env, ...opts })
+  const merged = { ...(opts.env ?? env), ...sandbox }
+  const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts, env: merged })
   if (r.error) throw r.error
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
@@ -59,8 +63,10 @@ before(() => {
   env = { ...process.env }
   // Keep every inherited setting — and anything a test writes — out of the real config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  env.GIT_CONFIG_NOSYSTEM = '1'
+  // Which config git reads is the sandbox, applied to every call. Who it commits as is not:
+  // one test hands in an environment with no identity, and needs it to stay missing.
+  sandbox = { GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  Object.assign(env, sandbox)
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig checkouts'
   env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'checkouts@example.invalid'
 })
@@ -261,6 +267,24 @@ test('nothing to fast-forward from, and nowhere to do it', () => {
   const { local } = cloned('headless')
   gitMust(local, 'checkout', '-q', '--detach')
   assert.equal(c().fastForward(local).outcome, 'detached')
+})
+
+test('a tree git could not read is not a clean tree', () => {
+  // `rig update` migrates on `dirty === 0`, so reading a failed `git status` as "nothing to
+  // commit" would migrate a data root it could not see into. Same rule as the counts: null.
+  const unreadableTree = (cmd, args) => {
+    if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
+    if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
+    if (args.includes('symbolic-ref')) return { code: 0, out: 'main', err: '' }
+    if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
+    if (args.includes('rev-list')) return { code: 0, out: '1', err: '' }
+    return { code: 1, out: '', err: '' }
+  }
+  const state = checkouts({ run: unreadableTree }).describe('anywhere')
+  assert.deepEqual([state.dirty, state.modified], [null, null])
+  assert.equal(state.behind, 1, 'the distance was measurable; the tree was not')
+  assert.equal(checkouts({ run: unreadableTree }).fastForward('anywhere').outcome, 'unmeasurable',
+    'and a checkout whose tree nobody could read is not one to move')
 })
 
 test('a distance git could not measure is not a reason to move anything', () => {
