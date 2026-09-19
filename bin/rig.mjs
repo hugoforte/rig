@@ -602,7 +602,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
