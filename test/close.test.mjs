@@ -332,6 +332,11 @@ test('a declared stage nobody has cut is listed, and reported as not started', (
 // git, in the tree rig cut: exactly what you would do by hand, and the only setup these
 // tests are allowed. A test that writes the rows into `work.json` to make the stack appear
 // is the bug report that produced hugoforte/rig#78, not a convenience.
+const commitWork = (dest, message) => {
+  fs.appendFileSync(path.join(dest, 'README.md'), `${message}\n`)
+  gitMust(dest, 'commit', '-qam', message)
+}
+
 const cutStage = ({ work, repo, branch, from, back, message }) => {
   const dest = worktree(work, repo)
   gitMust(dest, 'checkout', '-q', '-b', branch, from)
@@ -452,6 +457,63 @@ test('a stage whose line contains $& is rendered as written, not as a regex repl
   const text = fs.readFileSync(planFile('dollar'), 'utf8')
   assert.match(text, /the \$& path/)
   assert.equal(text.match(/rig:deploy-order/g).length, 2, 'one region, not a region pasted inside itself')
+})
+
+// ------------------------------------------------- cutting one
+
+test('--cut outside a worktree says which repos it could have meant', () => {
+  assert.equal(rig(['new', 'cutter', '--title', 'Cutter work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'cutter']).code, 0)
+  const r = rig(['stage', 'feat/cutter-one', '--delivers', 'the schema', '--cut', '--work', 'cutter'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /run it inside one of cutter's worktrees \(billing\)/)
+})
+
+test('--cut makes the branch on the work branch, and rig finds it without being told', () => {
+  const dest = worktree('cutter', 'billing')
+  const r = rig(['stage', 'feat/cutter-one', '--delivers', 'the schema', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-one on feat\/cutter-work/)
+  assert.equal(gitMust(dest, 'branch', '--show-current'), 'feat/cutter-one')
+
+  const out = rig(['stage', '--work', 'cutter']).out
+  assert.match(out, /1\. feat\/cutter-one/)
+  assert.match(out, /billing/)
+  assert.doesNotMatch(out, /not cut in any repo yet/)
+  assert.deepEqual(record('cutter').repos[0].branches, [{ branch: 'feat/cutter-work', base: 'main' }],
+    'rig watched itself cut the branch and still wrote nothing down')
+})
+
+test('a second --cut stacks on the first, because that is where this repo has reached', () => {
+  const dest = worktree('cutter', 'billing')
+  commitWork(dest, 'the schema')
+  const r = rig(['stage', 'feat/cutter-two', '--delivers', 'the endpoints', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-two on feat\/cutter-one/)
+
+  const out = rig(['stage', '--work', 'cutter']).out
+  assert.match(out, /1\. feat\/cutter-one/)
+  assert.match(out, /2\. feat\/cutter-two/)
+})
+
+test('--cut reaches a stage declared long before anyone made its branch', () => {
+  // The ordinary order, and the case #78 ruled out recording at declaration time for.
+  assert.equal(rig(['stage', 'feat/cutter-three', '--delivers', 'the UI', '--work', 'cutter']).code, 0)
+  const dest = worktree('cutter', 'billing')
+  commitWork(dest, 'the endpoints')
+
+  const r = rig(['stage', 'feat/cutter-three', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-three on feat\/cutter-two/)
+  assert.equal(record('cutter').stages.filter(st => st.branch === 'feat/cutter-three').length, 1,
+    'cutting a declared stage does not declare it twice')
+  assert.match(rig(['stage', '--work', 'cutter']).out, /3\. feat\/cutter-three/)
+})
+
+test('and declaring the same stage twice is still refused when nothing is being cut', () => {
+  const r = rig(['stage', 'feat/cutter-three', '--work', 'cutter'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /already a stage/)
 })
 
 test('the next stage is the first that has not landed', () => {
