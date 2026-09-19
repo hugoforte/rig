@@ -8,7 +8,7 @@ import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
-  baseLabel, baseMoved,
+  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
@@ -369,4 +369,47 @@ test('sinceFlag: a number of days, an ISO date, or a loud failure', () => {
   assert.throws(() => sinceFlag('last tuesday'), /a number of days like 14d, or a date/)
   // `new Date('7')` is the year 2001, so the obvious slip for `7d` would otherwise pass.
   assert.throws(() => sinceFlag('7'), /a number of days like 14d, or a date/)
+})
+
+// ---------------------------------------------------------------- the Direction section
+
+// `(?=^## |\Z)` looked like "the next heading, or end of input". `\Z` is not an end-of-input
+// assertion in JavaScript — it is a literal `Z` — so the old expression lost a trailing
+// Direction entirely and truncated any Direction containing a capital Z. Both were measured
+// against the real data root: two of forty-six context docs, one losing 6,300 of 17,500
+// characters at the word `listHostedZones`.
+
+const doc = body => `# w\n\nTickets: none · Status: Designing\n\n## Problem\n\nthe brief\n\n## Direction\n\n${body}\n`
+
+test('a Direction that is the last section is read, not lost', () => {
+  assert.equal(directionBody(doc('Because the adjacent effort would have cost a third major.')),
+    'Because the adjacent effort would have cost a third major.')
+})
+
+test('a Direction containing a capital Z is not truncated at it', () => {
+  const prose = 'Mechanical: `listHostedZones` then `listResourceRecordSets`, in that order.'
+  assert.equal(directionBody(doc(prose)), prose)
+})
+
+test('a Direction followed by another section stops at that section', () => {
+  assert.equal(directionBody(`${doc('Agreed approach.')}\n## Status / Next steps\n\n- [ ] _next step_\n`),
+    'Agreed approach.')
+})
+
+test('a document with no Direction section answers empty rather than throwing', () => {
+  assert.equal(directionSection('# w\n\n## Problem\n\nthe brief\n'), '')
+  assert.equal(directionBody(''), '')
+})
+
+test('the template guidance comments are stripped, and the scaffolded stub says nothing', () => {
+  assert.equal(directionBody(doc('<!-- Why this approach; why NOT the adjacent effort. -->\n\n_TODO_')), '')
+  assert.equal(directionIsTodo(doc('_TODO_')), true)
+})
+
+test('an unfinished checklist further down the document is not the Direction being a stub', () => {
+  // The old test was `/^## Direction$[\s\S]*?^_TODO_$/m`, which finds a `_TODO_` anywhere below
+  // the heading — so an agreed design with an open item three sections later read as undesigned.
+  const agreed = `${doc('Agreed: derive the phase, store the gates.')}\n## Status / Next steps\n\n_TODO_\n`
+  assert.equal(directionIsTodo(agreed), false)
+  assert.equal(directionBody(agreed), 'Agreed: derive the phase, store the gates.')
 })
