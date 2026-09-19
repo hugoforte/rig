@@ -74,7 +74,7 @@ test('the record keeps the org and the base, and never the path', () => {
   assert.equal(attached('billing').org, 'acme')
   assert.equal(attached('billing').base, 'main')
   assert.equal(attached('billing').path, undefined, 'the path is derived from this machine\'s work root')
-  assert.equal(record().status, 'in-progress')
+  assert.equal(record().status, undefined, 'the phase is derived; nothing about it is stored')
 })
 
 test('attaching a repo the catalogue has never seen drafts an entry to correct', () => {
@@ -170,7 +170,7 @@ test('close removes every worktree and the work folder once the work is pushed',
   assert.match(r.out, /removed worktree billing/)
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
   assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /t1/)
-  assert.equal(record().status, 'closed')
+  assert.equal(record().closedAt !== undefined, true, 'closing records the gate and no status')
   // The mirror outlives the work: it is a cache under the work root, not part of the work.
   assert.ok(fs.existsSync(mirrorOf('billing')))
 })

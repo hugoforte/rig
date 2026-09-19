@@ -14,6 +14,7 @@ import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
+import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -36,6 +37,15 @@ const aside = s => console.error(s)
 const step = s => console.log(`${C.cyan('·')} ${s}`)
 const warn = s => console.log(`${C.yellow('!')} ${s}`)
 const ok = s => console.log(`${C.green('✓')} ${s}`)
+// A rung above `warn`, and `doctor` is the only caller: `!` is something for you to deal
+// with, `✗` is something that should not be possible. Keeping them apart is what stops the
+// one report that means "rig has a bug" reading like the eleven that mean "push your data
+// root".
+const bad = s => console.log(`${C.red('✗')} ${s}`)
+
+// Where a `✗` sends you. rig's own tracker, because a contradiction is rig's bug and not the
+// reader's — see `docs/agents/issue-tracker.md`.
+const ISSUES_URL = 'https://github.com/hugoforte/rig/issues'
 
 const die = msg => { throw new RigError(msg) }
 
@@ -430,10 +440,20 @@ function loadWork (cfg, id) {
   const w = readJson(recordFile(id))
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
-  // Records written before the status gate existed carry no `status`; infer one from
-  // what the record already shows rather than defaulting everything to "planning".
   w.repos = w.repos || []
-  if (w.status === undefined) w.status = w.closedAt ? 'closed' : (w.repos.length ? 'in-progress' : 'planning')
+  // Records written before the phase replaced `status` carry the field instead of the gate.
+  // Three of its four values were observable facts written down — `planning` and
+  // `in-progress` are `repos.length`, and `closed` is `closedAt` — so `phaseOf` reproduces
+  // them exactly and they are simply dropped. Only `designed` said something no lookup can
+  // recover, and that one becomes the gate it always meant.
+  //
+  // Its date was never recorded, so the record's last activity stands in: the tightest bound
+  // the record itself can offer. Approximate for records written before this major and exact
+  // for every one after it, which is the trade for not losing nine live design gates to a
+  // field rename. There is no migration mechanism for `work/*/work.json` (see
+  // `unrunnableHook` in version.mjs), so the read path is where this has to happen.
+  if (w.status === 'designed' && !w.designedAt && !w.closedAt) w.designedAt = activityAt(w)
+  delete w.status
   // A worktree's path is derived from this machine's work root, never stored:
   // the same record must work on every machine that shares the data root.
   for (const r of w.repos) r.path = path.join(workDir(cfg, id), r.repo)
@@ -582,7 +602,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -674,21 +694,15 @@ function orgForJiraKey (cfg, key) {
 // The context doc header's two rendered facts.
 const ticketsLabel = work =>
   work.tickets?.length ? work.tickets.join(', ') : (work.ticketsDeclined ? 'none (declined)' : '_none_')
-const STATUS_LABEL = { planning: 'Planning', 'in-progress': 'In progress', designed: 'Designed', closed: 'Closed' }
-const statusLabel = status => STATUS_LABEL[status] || status
-
-// The context doc header, rewritten from the record's tickets and status in one place.
+// The context doc header, rewritten from the record's tickets and gates in one place. The
+// word `Status:` survives — it is what a reader of a document expects to find — but what
+// follows it is computed from the record every time it is written, never stored.
 function syncDocHeader (id, work) {
   const f = contextFile(id)
   if (!exists(f)) return
   writeText(f, readText(f).replace(/^Tickets: .*? · Status: .*$/m,
-    `Tickets: ${ticketsLabel(work)} · Status: ${statusLabel(work.status)}`))
+    `Tickets: ${ticketsLabel(work)} · Status: ${statusLine(work)}`))
 }
-
-// The only status transition `attach` makes: planning -> in-progress, on the first repo.
-// Already past planning (in-progress, designed, closed) is left alone.
-const nextStatusAfterAttach = work =>
-  (work.status === 'planning' && work.repos.length === 0) ? 'in-progress' : work.status
 
 // Where the work records live on GitHub, for linking issues back to context docs.
 function dataRemoteUrl () {
@@ -874,7 +888,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
 // not rig's). `states` covers every attached repo, missing worktrees included, and what it
 // *means* is `workState`'s to say (decision 62): a ticket left open and a `close` that
 // refused now answer for the same reason, instead of each deriving "merged" its own way.
-function ticketWriteBack (work, states) {
+function ticketWriteBack (work, states, { abandoned = false } = {}) {
   const keys = work.tickets || []
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
@@ -885,9 +899,15 @@ function ticketWriteBack (work, states) {
 
   const { done: merged, reason, repos } = workState(work, states)
   const prs = repos.filter(v => v.pr).map(v => `- ${v.repo}: ${v.pr.url}`)
+  // An abandoned work never closes its ticket, whatever the PRs say: stopping is a decision
+  // about this attempt, and whether the *problem* is still worth solving is not rig's to
+  // answer. A slice that did land is still listed — it is on the base branch either way.
+  const opening = abandoned
+    ? 'Abandoned — `rig close --abandoned` ran. The work was stopped without finishing; the issue stays open.'
+    : `Closed by \`rig close\`.${merged ? '' : ` ${reason} The issue stays open.`}`
 
   const githubBody = [
-    `Closed by \`rig close\`.${merged ? '' : ` ${reason} The issue stays open.`}`,
+    opening,
     ...(prs.length ? ['', ...prs] : []),
     '', `Context doc: ${contextDocRef(work.id)}`,
   ].join('\n')
@@ -895,6 +915,7 @@ function ticketWriteBack (work, states) {
     const [repo, n] = key.split('#')
     const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
+    if (abandoned) { step(`commented on ${key} (left open: abandoned)`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
     const notClosed = trackerFailure(() => github().closeIssue(repo, n))
     if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
@@ -902,7 +923,9 @@ function ticketWriteBack (work, states) {
   }
 
   const jiraBody = [
-    `\`rig close\` ran.${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
+    abandoned
+      ? '`rig close --abandoned` ran. The work was stopped without finishing.'
+      : `\`rig close\` ran.${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
     ...(prs.length ? ['', ...prs] : []),
     '', `Context doc: ${contextDocRef(work.id)}`,
     '', 'rig does not transition Jira tickets — move this one yourself.',
@@ -929,7 +952,7 @@ function regenerate (cfg, work) {
   lines.push(`# ${work.id}${work.title ? ` — ${work.title}` : ''}`)
   lines.push('')
   if (work.title) lines.push(work.title)
-  lines.push(`Tickets: ${ticketsLabel(work)} · Status: ${statusLabel(work.status)}`)
+  lines.push(`Tickets: ${ticketsLabel(work)} · Status: ${statusLine(work)}`)
   lines.push('')
   lines.push(`**Context doc (the only copy, edit it there):** \`${contextFile(work.id)}\``)
   if (exists(planFile(work.id))) lines.push(`**Rollout plan:** \`${planFile(work.id)}\``)
@@ -1339,7 +1362,6 @@ cmds.new = async ({ flags, positional }) => {
     ...(noTicket ? { ticketsDeclined: true } : {}),
     type,
     branch,
-    status: 'planning',
     repos: [],
     createdAt: new Date().toISOString(),
   }
@@ -1421,7 +1443,6 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   }
 
   const cat = known || findCatalog(repo)
-  work.status = nextStatusAfterAttach(work)
   work.repos.push({ repo, org, path: dest, base, role: cat?.role || '', attachedAt: new Date().toISOString() })
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
@@ -1458,7 +1479,8 @@ cmds.attach = async ({ flags, positional }) => {
 }
 
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
-// is the "design agreed" gate: the one status change no other command makes.
+// records the "design agreed" gate, which is what the flag's name always said it did: a
+// decision someone took, on a date nothing else can recover. It used to set a status.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -1467,7 +1489,10 @@ cmds.save = ({ flags }) => {
   commitAs(id, flags.message)
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
-    work.status = 'designed'
+    if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
+    // Re-recorded rather than refused: agreeing the design a second time is a real thing to
+    // do after a rethink, and the date that matters is the one the current design was agreed.
+    work.designedAt = new Date().toISOString()
     ok(`${id}: design agreed`)
   }
   saveWork(cfg, work)
@@ -1620,8 +1645,9 @@ const workJson = (cfg, work, live) => ({
   ticketsDeclined: !!work.ticketsDeclined,
   type: work.type || '',
   branch: work.branch,
-  status: work.status || '',
   createdAt: work.createdAt || null,
+  designedAt: work.designedAt || null,
+  abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
   repos: (work.repos || []).map(r => repoEntryJson(cfg, r, work.branch, live)),
@@ -1714,24 +1740,29 @@ cmds.list = ({ flags }) => {
     const wd = workDir(cfg, id)
     const open = exists(wd)
     const head = `${C.bold(id)} ${C.dim(work.branch)}`
+    const stopped = work.closedAt || work.abandonedAt
+    // One verdict, rendered — never a second rule for what the badges add up to. Under
+    // `--quick` nothing was looked up, so the facts are empty and only a recorded PR
+    // (decision 60) has anything to say; the closing line stays behind `live` for that
+    // reason, because "no blockers" from an empty lookup is not an answer.
+    //
+    // Gathered before the phase line rather than after it: a work that stopped is settled by
+    // its gate and costs no lookup, and for every other work this is the lookup that lets the
+    // line say `Reviewing` instead of guessing from the record.
+    const states = stopped ? [] : work.repos.map(r => live
+      ? repoState(cfg, r, work.branch)
+      : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) })
+    const verdict = workState(work, states)
     say(head)
-    say(`  ${C.dim(`${work.closedAt ? 'Closed' : statusLabel(work.status) || '—'} · ${relativeAge(activityAt(work))}`)}`)
+    say(`  ${C.dim(`${phaseLabel(phaseOf(work, stopped ? null : verdict.repos))} · ${relativeAge(activityAt(work))}`)}`)
     if (work.title) say(`  ${work.title}`)
     if (work.tickets?.length) say(`  ${C.dim(work.tickets.join(', '))}`)
-    if (work.closedAt) {
+    if (stopped) {
       say(`  ${C.dim(`${work.repos.length} repo(s) · context kept at ${contextFile(id)}`)}`)
       say('')
       continue
     }
     if (!open) warn('  work folder is missing but the work is not closed')
-    // One verdict, rendered — never a second rule for what the badges add up to. Under
-    // `--quick` nothing was looked up, so the facts are empty and only a recorded PR
-    // (decision 60) has anything to say; the closing line stays behind `live` for that
-    // reason, because "no blockers" from an empty lookup is not an answer.
-    const states = work.repos.map(r => live
-      ? repoState(cfg, r, work.branch)
-      : { repo: r.repo, dirty: 0, ahead: 0, behind: 0, pr: null, missing: !exists(r.path) })
-    const verdict = workState(work, states)
     verdict.repos.forEach((v, i) => {
       const bits = []
       if (v.missing) bits.push(C.red('missing'))
@@ -1814,12 +1845,6 @@ cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
-  say(`${C.bold(work.id)} — ${work.title || ''}`)
-  say(`branch ${work.branch}`)
-  say(`status ${statusLabel(work.status)}`)
-  say(`tickets ${ticketsLabel(work)}`)
-  say(`context ${contextFile(id)}`)
-  say('')
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a
   // distance git could not measure says so, instead of a confident `0 ahead · 0 behind`,
   // and a PR read back from the record (decision 60) reads as the merged PR it is.
@@ -1828,6 +1853,15 @@ cmds.status = ({ flags }) => {
   // branch lands is read off the state beside it.
   const states = work.repos.map(r => repoState(cfg, r, work.branch))
   const verdict = workState(work, states)
+  say(`${C.bold(work.id)} — ${work.title || ''}`)
+  say(`branch ${work.branch}`)
+  // Gathered above rather than below, because this is the one command that looks the PRs up
+  // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
+  say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
+  for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  say(`tickets ${ticketsLabel(work)}`)
+  say(`context ${contextFile(id)}`)
+  say('')
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
     say(`${C.bold(r.repo)} ${C.dim(`(${r.org}, base ${baseLabel(states[i])})`)}`)
@@ -1890,9 +1924,15 @@ cmds.close = ({ flags }) => {
   // commits a squash merge left looking unpushed no longer demand `--force` (#52).
   const states = work.repos.map(r => repoState(cfg, r, work.branch))
   const verdict = workState(work, states)
-  if (!verdict.safeToClose && !flags.force) {
-    warn('not closing — unfinished business:')
-    for (const b of verdict.blockers) say(`    ${C.red('•')} ${b.message}`)
+  // Abandoning is the decision to stop a work without finishing it, so every blocker that
+  // asks "did it land?" is asking the wrong question — an unmerged PR and unpushed commits
+  // are what being abandoned *looks like*, not a reason to refuse. `dirty` survives, because
+  // unsaved work in a tree is the one thing this command can destroy whatever it is called.
+  const abandoned = !!flags.abandoned
+  const blockers = abandoned ? verdict.blockers.filter(b => b.kind === 'dirty') : verdict.blockers
+  if (blockers.length && !flags.force) {
+    warn(`not ${abandoned ? 'abandoning' : 'closing'} — unfinished business:`)
+    for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
     say('')
     say(C.dim('Resolve these, or pass --force if you genuinely want to discard them.'))
     process.exitCode = 1
@@ -1902,6 +1942,8 @@ cmds.close = ({ flags }) => {
   // is the one moment to record it, before the worktree the branch fallback would read from
   // is removed below. A record for a different PR number is re-taken: the branch carried a
   // second PR after the first was recorded, and the newest is the one that finished the work.
+  // An abandoned work can still have landed a slice or two; `merged` below is what decides,
+  // so those terminal facts are recorded here exactly as they would be for any other close.
   work.repos.forEach((r, i) => {
     const s = states[i]
     if (!verdict.repos[i].merged || !s.pr || r.pr?.number === s.pr.number) return
@@ -1929,11 +1971,19 @@ cmds.close = ({ flags }) => {
       warn('something still has it open (a shell, an editor). Delete it by hand.')
     }
   }
+  // Two dates, two facts: `closedAt` is when the teardown ran, and `abandonedAt` is the
+  // decision that it ended unfinished. `phaseOf` reports the more specific one.
   work.closedAt = new Date().toISOString()
-  work.status = 'closed'
-  saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as closed
-  ticketWriteBack(work, states)
-  ok(`closed ${id} — context doc kept at ${contextFile(id)}`)
+  if (abandoned) work.abandonedAt = work.closedAt
+  saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as stopped
+  ticketWriteBack(work, states, { abandoned })
+  ok(`${abandoned ? 'abandoned' : 'closed'} ${id} — context doc kept at ${contextFile(id)}`)
+  if (abandoned) {
+    const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
+    // Named rather than closed: closing someone's pull request is an outward-facing act, and
+    // an abandoned work is exactly the case where someone else may still want what is on it.
+    for (const v of open) say(`  ${C.dim(`${v.repo}: PR #${v.pr.number} left open — ${v.pr.url}`)}`)
+  }
 }
 
 // Fills `repos[].pr` for merged PRs `close` never got the chance to record — a work closed
@@ -2294,6 +2344,24 @@ cmds.doctor = () => {
     say(`${C.dim('·')} ${C.dim(`tracker for ${org}: ${desc}`)}`)
   }
 
+  // Contradictions: a recorded gate that reality denies. Since the phase is derived, drift is
+  // no longer possible — the only way one of these fires is a bug in rig or a hand-edited
+  // record, which is why they are `✗` and say so. Omissions are deliberately *not* here: a
+  // work with no design gate recorded is an ordinary work, `rig next` is where the offer to
+  // record one belongs, and a doctor that warns about every one of them is a doctor nobody
+  // reads.
+  //
+  // Asked of the records alone, with no PR lookup: doctor already fetches once and runs over
+  // every work, and a GitHub call per repo per work would make the command too slow to be the
+  // one you reach for. The contradictions that need live state are caught by `rig status`,
+  // which looks them up anyway.
+  for (const id of listWorkIds()) {
+    for (const message of contradictions(loadWork(cfg, id))) {
+      bad(`${message} — this should not be possible; please file an issue at ${ISSUES_URL}`)
+      problems++
+    }
+  }
+
   // Strays: anything directly under a work folder that rig did not create.
   for (const id of listWorkIds()) {
     const work = loadWork(cfg, id)
@@ -2366,6 +2434,9 @@ cmds.help = () => {
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
                                   --designed records the "design agreed" gate
   rig close [--force]             safety-checked teardown
+       --abandoned                 stop a work without finishing it: the did-it-land
+                                   checks are dropped, uncommitted changes still refuse,
+                                   the ticket is told and open PRs are left alone
   rig backfill [--work <id>] [--force]
                                   store each merged PR's terminal facts (number, url,
                                   openedAt, firstCommitAt, firstReviewAt, approvedAt,
@@ -2389,7 +2460,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 // Pure helpers, importable by tests. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }

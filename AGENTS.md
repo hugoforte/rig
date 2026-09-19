@@ -82,16 +82,21 @@ rig attach orders-web
 2. **Never edit a generated file.** `C:\w\<work>\AGENTS.md` is regenerated on every mutating
    command. The context doc in `<data root>/work/<id>/context.md` is the only place prose
    lives.
-3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state — all of
-   it comes from `rig status`. The previous attempt at this tool died of hand-maintained
-   tables going stale. **`status`** (`planning` → `in-progress` → `designed` → `closed`,
-   shown in the context doc header) is the one exception: it is a **decision**, not
-   something git or `gh` can answer, so rig records it in `work.json` at each gate
-   (`rig new`, the first `rig attach`, `rig save --designed`, `rig close`) instead of
-   deriving it. A merged PR's terminal facts (`number`, `url`, `openedAt`, `firstCommitAt`,
-   `firstReviewAt`, `approvedAt`, `mergedAt`) are the other exception, recorded by `rig close`
-   and `rig backfill` once a PR is `MERGED` — a terminal fact cannot go stale the way branch
-   or PR state can, which is what makes storing it a different act from storing state.
+3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
+   **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
+   hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
+   `abandonedAt` and `closedAt`, each a decision on a date that nothing can observe
+   afterwards. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
+   terminating in `closed` or `abandoned`) is computed from those gates and the repos,
+   branches and PRs every time it is shown — see `bin/phase.mjs`. A merged PR's terminal
+   facts (`number`, `url`, `openedAt`, `firstCommitAt`, `firstReviewAt`, `approvedAt`,
+   `mergedAt`) are the other thing stored, recorded by `rig close` and `rig backfill` once a
+   PR is `MERGED` — a terminal fact cannot go stale the way branch or PR state can, which is
+   what makes storing it a different act from storing state.
+
+   The `Status:` line in the context doc header and the generated `AGENTS.md` carries only
+   the phases the record alone can prove, because nothing written into a file may depend on a
+   lookup: `reviewing` and `landing` are said by `rig status`, never by a document.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
    your head — that is the only moment the knowledge is cheap.
@@ -127,7 +132,7 @@ the push landed; a push that fails warns and never dies. But the context doc is 
 you, not by rig, so when the Direction section is agreed, run:
 
 ```bash
-rig save -m "design agreed" --designed   # records status "designed", commits, pushes
+rig save -m "design agreed" --designed   # records the design gate, commits, pushes
 rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 ```
 
@@ -151,11 +156,20 @@ measured and configured is in the README's "Staying up to date" and DESIGN.md de
 ## Closing
 
 ```bash
-rig list      # flags works whose PRs are merged and whose trees are clean
-rig close     # refuses if anything is uncommitted, unpushed, or has an open PR
+rig list                  # flags works whose PRs are merged and whose trees are clean
+rig close                 # refuses if anything is uncommitted, unpushed, or has an open PR
+rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
 
 `rig close` removes the worktrees and keeps `context.md`. Nothing is ever auto-deleted.
+
+**Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
+stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so
+those checks go, and uncommitted changes still refuse because unsaved work is the one thing
+a teardown can destroy. The ticket is told and left open — whether the problem is still worth
+solving is not rig's call — and open PRs are named and left alone, because closing someone's
+pull request is an outward-facing act rig does not take on its own. Reach for this instead of
+`--force`, which tears down identically but records a work that landed.
 
 ## Agent skills
 

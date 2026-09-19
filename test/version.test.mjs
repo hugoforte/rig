@@ -50,10 +50,24 @@ test('migration 2 is additive too: offline, no hook, and only the major moves', 
   assert.equal(unrunnableHook(MIGRATIONS[1]), null)
   const before = { orgs: ['acme'], tracker: { acme: { kind: 'github' } }, writtenBy: '1.4.0' }
   const { config, ran } = applyMigrations(before, '2.0.0')
-  assert.deepEqual(ran, [MIGRATIONS[1].name], 'a data root already at 1 has only migration 2 pending')
+  assert.equal(ran[0], MIGRATIONS[1].name, 'a data root already at 1 starts at migration 2')
   assert.equal(config.writtenBy, '2.0.0')
   assert.deepEqual(config.orgs, before.orgs)
   assert.deepEqual(config.tracker, before.tracker)
+})
+
+test('migration 3 is additive too: the record move happens on the read path', () => {
+  // `status` is dropped and `designed` becomes the `designedAt` gate in `loadWork`, because
+  // there is no mechanism to transform `work/*/work.json` at all (`unrunnableHook`). So this
+  // migration's only job is to move the major, which is what stops an older rig writing the
+  // deleted field back into a record.
+  assert.equal('config' in MIGRATIONS[2], false)
+  assert.equal(unrunnableHook(MIGRATIONS[2]), null)
+  const before = { orgs: ['acme'], writtenBy: '2.3.0' }
+  const { config, ran } = applyMigrations(before, '3.0.0')
+  assert.deepEqual(ran, [MIGRATIONS[2].name], 'a data root already at 2 has only migration 3 pending')
+  assert.equal(config.writtenBy, '3.0.0')
+  assert.deepEqual(config.orgs, before.orgs)
 })
 
 test('migrating twice changes nothing the second time', () => {
