@@ -326,7 +326,7 @@ test('a declared stage nobody has cut is listed, and reported as not started', (
   assert.match(r.out, /1\. feat\/sliced-one/)
   assert.match(r.out, /the schema/)
   assert.match(r.out, /not cut in any repo yet/)
-  assert.doesNotMatch(r.out, /declaration order/, 'an uncut stage is ordinary, not a stage that lost its place')
+  assert.doesNotMatch(r.out, /Outside the stack/, 'an uncut stage is ordinary, and nothing contradicts where it is shown')
 })
 
 // Cut a branch in the worktree, put a commit on it, and go back to the work branch. Real
@@ -405,10 +405,12 @@ test('the chain outranks the order the stages were declared in', () => {
   assert.ok(out.indexOf('restacked-early') < out.indexOf('restacked-late'), 'the branches order them, not the array')
 })
 
-test('a stage the branches cannot place is shown as such, not as if they had', () => {
-  // Cut from the base branch instead of the stack, which is what is left behind when the
-  // branch below is squashed or rebased. The fallback puts it last and that is right; without
-  // this the list read as evidence, confidently and silently.
+test('a stage cut outside the stack is not accused, because git is never asked a question that could say so', () => {
+  // The limitation, pinned so it cannot be mistaken for an oversight. `worktrees.chain()`
+  // picks a base out of a candidate set that is the work branch plus the declared stages, so
+  // a git-derived base is **inside the stack by construction** — a stage cut from the base
+  // branch reports `base: null`, which is the same answer as a stage whose neighbour below
+  // landed and took its branch away. An unknown is not a fact, so nothing is said.
   assert.equal(rig(['new', 'adrift', '--title', 'Adrift work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'adrift']).code, 0)
   assert.equal(rig(['stage', 'feat/adrift-one', '--delivers', 'the schema', '--work', 'adrift']).code, 0)
@@ -423,27 +425,81 @@ test('a stage the branches cannot place is shown as such, not as if they had', (
   const out = rig(['stage', '--work', 'adrift']).out
   assert.match(out, /1\. feat\/adrift-one/)
   assert.match(out, /2\. feat\/adrift-two/)
-  assert.match(out, /Not placed by the branches, so shown in declaration order: feat\/adrift-two/)
-  assert.doesNotMatch(out, /feat\/adrift-one, feat\/adrift-two/, 'the stage the branches did place is not in doubt')
+  assert.doesNotMatch(out, /Outside the stack/, 'git cannot tell this from an ordinary landed neighbour')
+})
+
+test('a stage whose pull request lands outside the stack is shown as such, not as if it were placed', () => {
+  // The reachable contradiction, and the only one: a pull request names any branch it likes,
+  // and `branchRows` prefers the live PR base. A stage merging into the base branch is not a
+  // slice of this work's stack, so its position in the list is the order it was declared in.
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/adrift-two', number: 40, state: 'OPEN', url: 'https://github.com/acme/billing/pull/40', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+  )
+  setGithub(state)
+
+  const out = rig(['stage', '--work', 'adrift']).out
+  const note = out.split('\n').find(l => l.includes('Outside the stack'))
+  assert.ok(note, `no note in:\n${out}`)
+  assert.match(note, /Outside the stack, so shown in declaration order: feat\/adrift-two$/)
+  assert.doesNotMatch(note, /adrift-one/, 'the stage the branches do not contradict is not named')
 
   // And the deploy-order table says it too, since the reader of a PR body has even less to
   // go on than the reader of a terminal.
   assert.equal(rig(['plan', '--work', 'adrift']).code, 0)
-  assert.match(fs.readFileSync(planFile('adrift'), 'utf8'), /_Not placed by the branches, so shown in declaration order: feat\/adrift-two\._/)
+  assert.match(fs.readFileSync(planFile('adrift'), 'utf8'), /_Outside the stack, so shown in declaration order: `feat\/adrift-two`\._/)
 })
 
-test('and rig next, which claims a position too, says the branches did not produce it', () => {
+test('a stack under review, every pull request pointing at the work branch, is accused of nothing', () => {
+  // The convention decision 75 relies on, and the state every sliced work is in from the
+  // moment its slices are up for review: the live PR base wins over git, so every stage names
+  // the work branch and the chain walk can only ever reach one of them. Nothing is wrong here,
+  // and nothing may be said — this is the case the first cut of this feature fired on.
+  assert.equal(rig(['new', 'stacked', '--title', 'Stacked work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'stacked']).code, 0)
+  for (const [n, what] of [['one', 'the schema'], ['two', 'the endpoints'], ['three', 'the UI']]) {
+    assert.equal(rig(['stage', `feat/stacked-${n}`, '--delivers', what, '--work', 'stacked']).code, 0)
+  }
+
+  const opts = { work: 'stacked', repo: 'billing', back: 'feat/stacked-work' }
+  cutStage({ ...opts, branch: 'feat/stacked-one', from: 'feat/stacked-work', message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/stacked-two', from: 'feat/stacked-one', message: 'the endpoints' })
+  cutStage({ ...opts, branch: 'feat/stacked-three', from: 'feat/stacked-two', message: 'the UI' })
+
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    ...['one', 'two', 'three'].map((n, i) => ({
+      branch: `feat/stacked-${n}`, number: 30 + i, state: 'OPEN', url: `https://github.com/acme/billing/pull/${30 + i}`,
+      base: 'feat/stacked-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [],
+    })),
+  )
+  setGithub(state)
+
+  const out = rig(['stage', '--work', 'stacked']).out
+  assert.doesNotMatch(out, /Outside the stack/, 'the convention is not a fault')
+  assert.equal(rig(['plan', '--work', 'stacked']).code, 0)
+  assert.doesNotMatch(fs.readFileSync(planFile('stacked'), 'utf8'), /Outside the stack/)
+  assert.doesNotMatch(rig(['next', '--work', 'stacked']).out, /outside the stack/)
+})
+
+test('and rig next, which claims a position too, says when the stage is outside the stack', () => {
   assert.equal(rig(['new', 'lone', '--title', 'Lone work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'lone']).code, 0)
   assert.equal(rig(['stage', 'feat/lone-one', '--delivers', 'the schema', '--work', 'lone']).code, 0)
 
   const dest = worktree('lone', 'billing')
   commitWork(dest, 'the work branch has its own commit')
-  cutStage({ work: 'lone', repo: 'billing', branch: 'feat/lone-one', from: 'main', back: 'feat/lone-work', message: 'the schema' })
+  cutStage({ work: 'lone', repo: 'billing', branch: 'feat/lone-one', from: 'feat/lone-work', back: 'feat/lone-work', message: 'the schema' })
+
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/lone-one', number: 41, state: 'OPEN', url: 'https://github.com/acme/billing/pull/41', base: 'main', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+  )
+  setGithub(state)
 
   const out = rig(['next', '--work', 'lone']).out
   assert.match(out, /stage 1 of 1: feat\/lone-one/)
-  assert.match(out, /not placed by the branches/)
+  assert.match(out, /outside the stack/)
 })
 
 test('a closed pull request is not up for review', () => {

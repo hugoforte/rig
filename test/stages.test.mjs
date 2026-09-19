@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 
 import {
   stageOrder, stageState, stackOf, nextStage, stageBranchProblem,
-  stageTable, unplacedNote, renderPlanRegion, refreshedPlan, planIsStale, PLAN_MARK,
+  stageTable, adriftNote, renderPlanRegion, refreshedPlan, planIsStale, PLAN_MARK,
 } from '../bin/stages.mjs'
 
 const work = (over = {}) => ({ id: 'w', branch: 'feat/work', repos: [], stages: [], ...over })
@@ -53,20 +53,29 @@ test('a stage cut from somewhere unexpected is reported, not dropped', () => {
   assert.deepEqual(names(stageOrder(w, [chain])), ['feat/one', 'feat/odd'])
 })
 
-test('a stage the branches could not place says so, and the rest of the list does not', () => {
-  // The fallback is right; it was invisible. `feat/odd` is cut from outside the chain, so its
-  // place in the list is the order it was declared in and nothing more.
+test('a stage the branches put outside the stack is marked, and the rest of the list is not', () => {
+  // The fallback is right; it was invisible. `feat/odd` sits on the base branch, which this
+  // stack does not contain, so its place in the list is the order it was declared in.
   const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
   const chain = [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]
   const [one, odd] = stageOrder(w, [chain])
-  assert.equal(one.placed, true)
-  assert.equal(odd.placed, false)
+  assert.equal(one.adrift, false)
+  assert.equal(odd.adrift, true)
 })
 
-test('an uncut stage is unplaced too, because it has no base to be found by', () => {
+test('an uncut stage is not adrift — there is no base saying otherwise', () => {
   const w = work({ stages: [stage('feat/one'), stage('feat/planned')] })
   const chain = [on('a', 'feat/one', 'feat/work')]
-  assert.equal(stageOrder(w, [chain])[1].placed, false)
+  assert.equal(stageOrder(w, [chain])[1].adrift, false)
+})
+
+test('any repo is enough to call a stage adrift, so attach order cannot decide it', () => {
+  // First-repo-wins still picks the base the walk uses, but which repo answered first must
+  // never be something a reader can feel in the output.
+  const w = work({ stages: [stage('feat/one')] })
+  const chains = [[on('a', 'feat/one', 'feat/work')], [on('b', 'feat/one', 'main')]]
+  assert.equal(stageOrder(w, chains)[0].adrift, true)
+  assert.equal(stageOrder(w, [...chains].reverse())[0].adrift, true)
 })
 
 test('the chain is per repo while the stage list is per work', () => {
@@ -162,28 +171,56 @@ test('every stage in means there is no next stage, which is what makes the work 
   assert.equal(nextStage(stack), null)
 })
 
-test('an uncut stage is unplaced but is not reported as unplaceable', () => {
-  // Three declared, none cut, is how every sliced work starts. It must not grow three lines
-  // of doubt about an order nobody has had a chance to establish yet.
+test('a stack of stages nobody has cut says nothing about its order', () => {
   const w = work({ stages: [stage('feat/one'), stage('feat/two'), stage('feat/three')] })
-  const stack = stackOf(w, [])
-  assert.deepEqual(stack.map(st => st.placed), [false, false, false])
-  assert.equal(unplacedNote(stack), null)
+  assert.equal(adriftNote(stackOf(w, [])), null)
 })
 
-test('cut but unplaceable is the case the note is for, and it names the branch', () => {
+test('stages whose pull requests all point at the work branch are not accused of anything', () => {
+  // Decision 75's convention: a stage's pull request merges into the **work branch**, and the
+  // live PR base is what `branchRows` reports. Every stage with a PR therefore names the same
+  // base, the walk can only ever reach one of them, and that is the steady state of a sliced
+  // work under review rather than an order that stopped being evidence.
+  const w = work({ stages: [stage('feat/one'), stage('feat/two'), stage('feat/three')] })
+  assert.equal(adriftNote(stackOf(w, [
+    on('a', 'feat/one', 'feat/work', open(1)),
+    on('a', 'feat/two', 'feat/work', open(2)),
+    on('a', 'feat/three', 'feat/work', open(3)),
+  ])), null)
+})
+
+test('a landed stage whose branch is gone leaves the stage above it alone', () => {
+  // A true merge per decision 75, then the head branch deleted: nothing surviving is an
+  // ancestor of the stage above, so it has no base at all. An absence is not a contradiction.
+  const w = work({ stages: [stage('feat/one'), stage('feat/two')] })
+  assert.equal(adriftNote(stackOf(w, [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('a', 'feat/two', null, open(2)),
+  ])), null)
+  assert.equal(adriftNote(stackOf(w, [
+    on('a', 'feat/one', 'feat/work', merged(1)),
+    on('a', 'feat/two', null),
+  ])), null, 'and the same before it has a pull request of its own')
+})
+
+test('a stage outside the stack is the case the note is for, and it names that stage', () => {
   const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
   const stack = stackOf(w, [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')])
-  const note = unplacedNote(stack)
-  assert.match(note, /declaration order/)
-  assert.match(note, /feat\/odd/)
-  assert.doesNotMatch(note, /feat\/one/, 'a stage the branches did place is not in doubt')
+  const note = adriftNote(stack)
+  assert.match(note, /Outside the stack, so shown in declaration order: feat\/odd/)
+  assert.doesNotMatch(note, /feat\/one/, 'a stage the branches do not contradict is not in doubt')
 })
 
-test('the note says what rig could read, never why a branch moved', () => {
+test('the note says what the branches report, never why a branch moved', () => {
   const w = work({ stages: [stage('feat/odd')] })
-  const note = unplacedNote(stackOf(w, [on('a', 'feat/odd', 'main')]))
+  const note = adriftNote(stackOf(w, [on('a', 'feat/odd', 'main')]))
   assert.doesNotMatch(note, /squash|rebase/i, 'that would be a guess, and a rebase does it too')
+})
+
+test('the caller says how a branch name is written, so markdown gets its backticks', () => {
+  const w = work({ stages: [stage('feat/odd')] })
+  const stack = stackOf(w, [on('a', 'feat/odd', 'main')])
+  assert.match(adriftNote(stack, b => '`' + b + '`'), /`feat\/odd`/)
 })
 
 // ---------------------------------------------------------------- what a stage may be called
@@ -220,16 +257,21 @@ test('the deploy-order table is rendered from the stack, in stack order', () => 
   assert.match(t, /\| 2 \| `feat\/two` \| the endpoints \| a \| #2 \| up for review \|/)
 })
 
-test('the table carries the note for a stage the branches could not place', () => {
+test('the table carries the note for a stage the branches put outside the stack', () => {
   const w = work({ stages: [stage('feat/one', 'the schema'), stage('feat/odd', 'the rest')] })
   const t = stageTable(stackOf(w, [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]))
   assert.match(t, /\| 2 \| `feat\/odd` \|/)
-  assert.match(t, /_Not placed by the branches, so shown in declaration order: feat\/odd\._/)
+  assert.match(t, /_Outside the stack, so shown in declaration order: `feat\/odd`\._/,
+    'the branch is backticked here, as it is in the table above it')
 })
 
-test('a table of stages nobody has cut carries no note', () => {
+test('an ordinary stack under review carries no note', () => {
   const w = work({ stages: [stage('feat/one', 'the schema'), stage('feat/two', 'the rest')] })
   assert.doesNotMatch(stageTable(stackOf(w, [])), /declaration order/)
+  assert.doesNotMatch(stageTable(stackOf(w, [
+    on('a', 'feat/one', 'feat/work', open(1)),
+    on('a', 'feat/two', 'feat/work', open(2)),
+  ])), /declaration order/, 'every stage pointing at the work branch is the convention, not a fault')
 })
 
 test('the note is inside the rendered region, so a fresh plan does not go stale on it', () => {
