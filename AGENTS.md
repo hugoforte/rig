@@ -181,6 +181,14 @@ Two things to hold on to:
   stage — that is the join. A stage exists only in the repos that carry its branch, so the
   chain is per repo while the stage list is per work.
 
+**How a stage lands.** A stage's pull request merges into the work branch **with a merge
+commit**; the work branch is **squashed** into the base branch at the end. The squash is what
+keeps one commit per work in the base branch. The merge is what keeps the stack readable: a
+squash replaces a stage's commits, so the stage above stops descending from anything and has
+to be rebased — and a rebase is what breaks the chain rig reads the order from. rig never
+merges anything, so this is a convention it relies on rather than enforces; a stage somebody
+squashes anyway falls back to the order it was declared in.
+
 **Stored: the branch, and one line of what it delivers.** Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
