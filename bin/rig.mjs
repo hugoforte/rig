@@ -9,6 +9,7 @@ import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
+import { checkouts, unreadable } from './checkouts.mjs'
 import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
@@ -106,14 +107,12 @@ function must (cmd, args, opts = {}) {
 }
 
 const git = (dir, ...args) => run('git', ['-C', dir, ...args])
-// A plain fetch of a whole remote, and it may never prompt: a fetch that stops for
-// credentials hangs a command someone is watching, or — in the detached refresh, which has
-// no terminal to answer on — leaves a stuck process behind for every command that armed one.
-// Asserted by a test as an option, like the spawn options: the only symptom of dropping it
-// is a hang, on a machine whose remote happens to want credentials.
-const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
-const gitFetch = dir => run('git', ['-C', dir, 'fetch', '-q'], { env: { ...process.env, ...FETCH_ENV } })
 const gitMust = (dir, ...args) => must('git', ['-C', dir, ...args])
+
+// The two checkouts an installation owns — the data root and the tool itself. Reading one
+// and moving one is `checkouts.mjs`'s; what to warn about and when to refuse is the policy
+// below, which is the only part that differs between them.
+const co = checkouts({ run })
 
 function readStdin () {
   if (process.stdin.isTTY) return ''
@@ -196,40 +195,14 @@ const version = () => toolVersion(exists(packageFile) ? readJson(packageFile) : 
 const repoConfigJson = () => readOrg(where()) ?? {}
 
 // What the tool checkout is, as far as freshness goes; freshness.mjs decides what that
-// means. `linked` is the copy running from a work's worktree — its git dir sits under the
-// main checkout's, which is how git itself tells the two apart.
+// means. The reading is `checkouts.mjs`'s; the one thing here is the guard in front of it.
 function toolState () {
   // Ambient work on behalf of a command that has already run: no environment problem found
   // here is this function's to report. So the probe must not be `run`, which dies when git is
   // absent — doctor calls this before it reaches its own `git` check, and has to live long
   // enough to make it.
-  if (!onPath('git')) return { repo: false }
-  const top = git(RIG_ROOT, 'rev-parse', '--show-toplevel')
-  if (top.code !== 0) return { repo: false }
-  // A rig checked out *inside* another repo would otherwise report that repo's distance.
-  if (!sameDir(top.out, RIG_ROOT)) return { repo: true, nested: true }
-  const gitDir = git(RIG_ROOT, 'rev-parse', '--absolute-git-dir').out
-  const commonDir = path.resolve(RIG_ROOT, git(RIG_ROOT, 'rev-parse', '--git-common-dir').out)
-  const branch = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'HEAD')
-  // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the remote
-  // renames its default branch the ref names one that no longer exists, so it is believed
-  // only when the branch it points at is still there.
-  const originHead = git(RIG_ROOT, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
-  const defaultBranch = originHead.code === 0 ? originHead.out.replace(/^origin\//, '') : null
-  const defaultBranchLives = defaultBranch !== null &&
-    git(RIG_ROOT, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${defaultBranch}`).code === 0
-  const upstream = git(RIG_ROOT, 'rev-parse', '--abbrev-ref', '@{u}')
-  // On an unborn HEAD git exits 128 and echoes the token `HEAD`, which would be printed as
-  // though it were a sha and stamped into the cache as one.
-  const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
-  return {
-    repo: true,
-    linked: !sameDir(gitDir, commonDir),
-    branch: branch.code === 0 ? branch.out : null,
-    defaultBranch: defaultBranchLives ? defaultBranch : null,
-    upstream: upstream.code === 0 ? upstream.out : null,
-    head: head.code === 0 ? head.out : null,
-  }
+  if (!onPath('git')) return unreadable()
+  return co.identify(RIG_ROOT)
 }
 
 // Disposable state, so it lives with the other disposable state rather than in the config
@@ -263,22 +236,12 @@ const writeCache = (cfg, name, value) => {
 const readFreshness = cfg => readCache(cfg, 'freshness.json')
 const writeFreshness = (cfg, measured) => writeCache(cfg, 'freshness.json', measured)
 
-// A commit count, or null when git could not answer. Never 0 for "we do not know": a green
-// "up to date" on the strength of a failed command is the kind of quiet wrong answer this
-// whole feature exists to prevent.
-function countCommits (dir, range) {
-  const r = git(dir, 'rev-list', '--count', range)
-  if (r.code !== 0) return null
-  const n = Number(r.out)
-  return Number.isFinite(n) ? n : null
-}
-
 // Distance from the upstream *as last fetched* — the caller decides whether to fetch first.
 // `behind: null` means unmeasurable, and reads as "nothing to say" everywhere downstream.
 const measureFreshness = state => ({
   sha: state.head,
   remote: state.upstream,
-  behind: countCommits(RIG_ROOT, 'HEAD..@{u}'),
+  behind: co.countCommits(RIG_ROOT, 'HEAD..@{u}'),
   checkedAt: new Date().toISOString(),
 })
 
@@ -348,23 +311,25 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', '
 function prepareDataRoot () {
   const root = dataRoot()
   if (exists(root) && where().split) {
-    const before = checkoutState(root)
+    const before = co.describe(root)
     if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
-      const fetched = gitFetch(root)
-      if (fetched.code !== 0) {
+      const fetched = co.fetch(root)
+      if (!fetched.ok) {
         stampDataFetchFailure()
-        say(C.dim(`· data root: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — working from what is here`))
+        say(C.dim(`· data root: could not fetch (${fetched.error}) — working from what is here`))
       } else {
         clearDataFetchFailure()
-        const state = checkoutState(root)
-        if (state.behind && state.ahead) {
+        const { outcome, state, error } = co.fastForward(root)
+        // Everything but these four is a data root with nothing to do, and a command about
+        // to run is the wrong moment to be told about it.
+        if (outcome === 'diverged') {
           warn(`data root: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
-        } else if (state.behind && state.dirty) {
+        } else if (outcome === 'blocked') {
           warn(`data root: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
-        } else if (state.behind) {
-          const ff = git(root, 'merge', '--ff-only', '@{u}')
-          if (ff.code !== 0) warn(`data root: could not fast-forward (${firstLine(ff.err) || 'no detail from git'})`)
-          else say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
+        } else if (outcome === 'failed') {
+          warn(`data root: could not fast-forward (${error})`)
+        } else if (outcome === 'moved') {
+          say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
         }
       }
     }
@@ -1081,28 +1046,6 @@ function regenerate (cfg, work) {
 
 // ------------------------------------------------------ data root commits
 
-// How the data root stands as a git checkout, read once for both the commit below and
-// The three questions asked of either checkout an installation is made of — the data root
-// and the tool itself. `repo` is 'none' (not versioned), 'nested' (a directory inside some
-// other checkout, whose top is `top` — `git add -A` there would stage all of it) or 'own';
-// `branch` is null on a detached HEAD; `ahead` and `behind` are measured against the
-// upstream as last fetched, so a caller that wants them current fetches first.
-function checkoutState (root) {
-  const top = git(root, 'rev-parse', '--show-toplevel')
-  if (top.code !== 0) return { repo: 'none' }
-  if (!sameDir(top.out, root)) return { repo: 'nested', top: top.out }
-  const branch = git(root, 'symbolic-ref', '-q', '--short', 'HEAD')
-  const upstream = git(root, 'rev-parse', '--abbrev-ref', '@{u}').code === 0
-  return {
-    repo: 'own',
-    branch: branch.code === 0 ? branch.out : null,
-    upstream,
-    ahead: upstream ? countCommits(root, '@{u}..HEAD') : 0,
-    behind: upstream ? countCommits(root, 'HEAD..@{u}') : 0,
-    dirty: git(root, 'status', '--porcelain').out.split('\n').filter(Boolean).length,
-  }
-}
-
 // Every mutating command ends here — see `main`, which runs it once the command has
 // registered what it is committing as (`commitAs`), whether the command then succeeded
 // or reported a failure, so a record written before a later step died is committed under
@@ -1116,7 +1059,7 @@ function checkoutState (root) {
 function commitDataRoot (message) {
   const root = dataRoot()
   if (!where().split) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
-  const state = checkoutState(root)
+  const state = co.describe(root)
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
 
@@ -1137,8 +1080,8 @@ function commitDataRoot (message) {
   }
   if (!staged && !state.ahead) { say(C.dim('· data root: nothing to commit, nothing to push')); return }
 
-  const fetch = gitFetch(root)
-  if (fetch.code !== 0) { warn(`data root: ${committed}, but could not fetch from origin (${firstLine(fetch.err) || 'no detail from git'}) — nothing pushed`); return }
+  const fetched = co.fetch(root)
+  if (!fetched.ok) { warn(`data root: ${committed}, but could not fetch from origin (${fetched.error}) — nothing pushed`); return }
   const rebase = git(root, 'rebase', '-q', '@{u}')
   if (rebase.code !== 0) {
     const abort = git(root, 'rebase', '--abort')
@@ -2594,43 +2537,38 @@ cmds.prompt = ({ positional }) => {
 // same as a tree that is safe to commit into, and `rig update` migrates only when it is
 // both. A local-only data root reaches 'current' without the question ever being asked.
 function updateCheckout (label, root) {
-  const state = checkoutState(root)
+  const state = co.describe(root)
   if (state.repo !== 'own') { say(`${C.dim('·')} ${C.dim(`${label}: ${root} is not a checkout of its own — nothing to update`)}`); return { status: 'current', clean: false } }
   if (!state.branch) { warn(`${label}: detached HEAD — not updated`); return { status: 'failed', clean: false } }
-  // Only tracked changes are counted. An untracked scratch file stops a fast-forward only
-  // when the merge would overwrite it, and git says so itself in that case — refusing on any
-  // untracked file means one stray file wedges the installation, and for the data root the
-  // advice that follows would `git add -A` it and manufacture the divergence being avoided.
-  const modified = git(root, 'status', '--porcelain', '--untracked-files=no').out.split('\n').filter(Boolean)
-  // Two different questions. `modified` is what stops a fast-forward. `clean` is what
-  // `commitDataRoot` would sweep up, and that is `git add -A` — untracked files included,
-  // so an unfinished note nobody staged makes the tree unsafe to migrate in.
+  // Two different questions about the same tree. `modified` is what stops a fast-forward.
+  // `clean` is what `commitDataRoot` would sweep up, and that is `git add -A` — untracked
+  // files included, so an unfinished note nobody staged makes the tree unsafe to migrate in.
   const clean = state.dirty === 0
   if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
-  if (modified.length) {
+  // Asked before the fetch, unlike `fastForward`'s own `blocked`: an update you ran is a
+  // command that should say what is in the way rather than go quiet because there happened
+  // to be nothing to bring down anyway.
+  if (state.modified) {
     const how = label === 'data root' ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
-    warn(`${label}: ${modified.length} uncommitted change(s) — not updated${how}`)
+    warn(`${label}: ${state.modified} uncommitted change(s) — not updated${how}`)
     return { status: 'failed', clean }
   }
-  const fetched = gitFetch(root)
-  if (fetched.code !== 0) { warn(`${label}: could not fetch (${firstLine(fetched.err) || 'no detail from git'}) — not updated`); return { status: 'failed', clean } }
-  const from = git(root, 'rev-parse', 'HEAD').out
-  const fetchedState = checkoutState(root)
-  if (fetchedState.behind === null) { warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean } }
-  if (fetchedState.behind === 0) { ok(`${label}: already up to date`); return { status: 'current', from, clean } }
-  const ff = git(root, 'merge', '--ff-only', '@{u}')
-  if (ff.code !== 0) {
-    // Divergence is only one reason a fast-forward fails. For the others — a lock, a file in
-    // the way — git's own words are the actionable part, and "rebase it by hand" is not.
-    if (fetchedState.ahead) warn(`${label}: ${fetchedState.behind} behind and ${fetchedState.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`)
-    else warn(`${label}: could not fast-forward ${fetchedState.behind} commit(s) (${firstLine(ff.err) || 'no detail from git'}) — not updated`)
-    return { status: 'failed', clean }
-  }
-  ok(`${label}: fast-forwarded ${fetchedState.behind} commit(s)`)
-  const arrived = git(root, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out.split('\n').filter(Boolean)
+  const fetched = co.fetch(root)
+  if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error}) — not updated`); return { status: 'failed', clean } }
+  const moved = co.fastForward(root)
+  const behind = moved.state.behind
+  if (moved.outcome === 'unmeasurable') { warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean } }
+  if (moved.outcome === 'current') { ok(`${label}: already up to date`); return { status: 'current', clean } }
+  // Divergence is only one reason a fast-forward does not happen. For the others — a lock,
+  // a file in the way — git's own words are the actionable part, and "rebase it by hand"
+  // is not.
+  if (moved.outcome === 'diverged') { warn(`${label}: ${behind} behind and ${moved.state.ahead} ahead of its upstream — not updated; merge or rebase it by hand in ${root}`); return { status: 'failed', clean } }
+  if (moved.outcome !== 'moved') { warn(`${label}: could not fast-forward ${behind} commit(s) (${moved.error}) — not updated`); return { status: 'failed', clean } }
+  ok(`${label}: fast-forwarded ${behind} commit(s)`)
+  const arrived = co.arrived(root, moved.from)
   for (const line of arrived.slice(0, 20)) say(`  ${C.dim(line)}`)
   if (arrived.length > 20) say(`  ${C.dim(`… and ${arrived.length - 20} more`)}`)
-  return { status: 'moved', from, clean }
+  return { status: 'moved', from: moved.from, clean }
 }
 
 cmds.update = ({ flags }) => {
@@ -2708,13 +2646,13 @@ cmds['freshness-refresh'] = () => {
   const cfg = config()
   const state = toolState()
   if (skipReason(state)) return
-  const fetched = gitFetch(RIG_ROOT)
+  const fetched = co.fetch(RIG_ROOT)
   // A failed check is still a check: stamping it means an unreachable remote is retried once
   // per interval rather than at the end of every command. What it must not do is forget a
   // distance that is still true — concurrent refreshes make each other's fetches fail on the
   // ref lock, and the loser erasing the winner's "3 commits behind" would go quiet for the
   // whole interval on the strength of a race.
-  if (fetched.code !== 0) {
+  if (!fetched.ok) {
     const previous = readFreshness(cfg)
     const behind = previous?.sha === state.head ? previous.behind ?? null : null
     writeFreshness(cfg, { sha: state.head, remote: state.upstream, behind, checkedAt: new Date().toISOString() })
@@ -2761,9 +2699,9 @@ cmds.doctor = () => {
   const skipped = skipReason(tool)
   if (skipped) say(`${C.dim('·')} ${C.dim(`freshness not checked — ${skipped}`)}`)
   else {
-    const fetched = gitFetch(RIG_ROOT)
-    if (fetched.code !== 0) {
-      warn(`freshness not checked — could not fetch (${firstLine(fetched.err) || 'no detail from git'})`); problems++
+    const fetched = co.fetch(RIG_ROOT)
+    if (!fetched.ok) {
+      warn(`freshness not checked — could not fetch (${fetched.error})`); problems++
     } else {
       const measured = measureFreshness(tool)
       writeFreshness(cfg, measured)
@@ -2807,7 +2745,7 @@ cmds.doctor = () => {
       : 'is inside the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
   })
   if (split && exists(dataRoot()) && gv.code === 0) {
-    const state = checkoutState(dataRoot())
+    const state = co.describe(dataRoot())
     check('data root is a git checkout of its own', state.repo === 'own', {
       bad: state.repo === 'nested'
         ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
@@ -2815,7 +2753,7 @@ cmds.doctor = () => {
     })
     if (state.repo === 'own') {
       // rig commits after its own commands; an edit made outside rig waits for `rig save`.
-      const dirty = git(dataRoot(), 'status', '--porcelain').out.split('\n').filter(Boolean).length
+      const dirty = state.dirty
       if (dirty) warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`)
       if (!state.branch) { warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'); problems++ }
       else if (!state.upstream) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
@@ -2990,9 +2928,9 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 // GitHub about every branch. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, effectiveIdentity, parseDf,
   directionSection, directionBody, directionIsTodo,
   listing,
 }

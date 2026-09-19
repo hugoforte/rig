@@ -6,8 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -36,33 +36,6 @@ test('parseArgs: -m is --message, and a short flag is never eaten as another fla
 
 test('parseArgs: an unknown short flag fails rather than swallowing a positional', () => {
   assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
-})
-
-test('checkoutState: a plain directory, a checkout of its own, and a directory nested in another repo', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-state-'))
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
-  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
-  const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
-  try {
-    const plain = path.join(tmp, 'plain'); fs.mkdirSync(plain)
-    assert.equal(checkoutState(plain).repo, 'none')
-
-    const own = path.join(tmp, 'own'); fs.mkdirSync(own)
-    assert.equal(git(own, 'init', '-q', '-b', 'main').status, 0)
-    assert.deepEqual(checkoutState(own),
-      { repo: 'own', branch: 'main', upstream: false, ahead: 0, behind: 0, dirty: 0 })
-
-    fs.writeFileSync(path.join(own, 'untracked.md'), 'not committed\n')
-    assert.equal(checkoutState(own).dirty, 1, 'an uncommitted change is what stops an update')
-
-    const nested = path.join(own, 'notes', 'rig-data'); fs.mkdirSync(nested, { recursive: true })
-    const state = checkoutState(nested)
-    assert.equal(state.repo, 'nested')
-    // git prints the long real path; the temp dir may be an 8.3 short name (CI on Windows).
-    assert.equal(fs.realpathSync.native(state.top).toLowerCase(), fs.realpathSync.native(own).toLowerCase())
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true })
-  }
 })
 
 test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {
@@ -172,34 +145,6 @@ test('statusLine: what a document may carry, which is only what the record can p
   assert.equal(statusLine({ repos: [], closedAt: '2026-09-19T10:00:00.000Z' }), 'Closed')
 })
 
-test('countCommits: a range git cannot answer is unknown, never zero', () => {
-  // The invariant the whole freshness feature rests on. `Number(…) || 0` here reports a green
-  // "up to date" on the strength of a command that did not run, and three callers downstream
-  // lose their "could not measure" branch at the same time.
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-count-'))
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
-  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
-  const git = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env })
-  try {
-    const repo = path.join(tmp, 'repo'); fs.mkdirSync(repo)
-    assert.equal(git(repo, 'init', '-q', '-b', 'main').status, 0)
-    fs.writeFileSync(path.join(repo, 'a.md'), 'one\n')
-    assert.equal(git(repo, 'add', '-A').status, 0)
-    assert.equal(git(repo, '-c', 'user.email=t@e.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'one').status, 0)
-
-    assert.equal(countCommits(repo, 'HEAD..HEAD'), 0, 'a range git can answer is a number')
-    assert.equal(countCommits(repo, 'refs/remotes/origin/gone..HEAD'), null, 'a ref that is not there is unknown')
-    assert.equal(countCommits(path.join(tmp, 'not-a-repo'), 'HEAD..HEAD'), null)
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true })
-  }
-})
-
-// These two assert options rather than behaviour, deliberately. Each field is a contract with
-// the operating system whose only symptom is cost, and the cost does not show on an idle
-// machine — the refresh that took forty seconds under load and hung a desktop finished inside
-// its deadline when nothing else was running, so the behavioural test went green on exactly
-// the machines that were fine. A wrong option here is not a refactor; it is the regression.
 test('every child rig spawns is hidden, so a console-less child pays for no console', () => {
   assert.equal(SPAWN_DEFAULTS.windowsHide, true,
     'DETACHED_PROCESS has no console; without this each git call allocates a console host')
@@ -210,12 +155,6 @@ test('the freshness refresh is detached, silent, rooted in the tool, and hidden'
   assert.equal(REFRESH_SPAWN.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
   assert.equal(REFRESH_SPAWN.windowsHide, true, 'see above; this is the one that hung a machine')
   assert.ok(REFRESH_SPAWN.cwd, 'a child sitting in a worktree is one `rig close` cannot remove')
-})
-
-test('a fetch may never stop to ask for credentials', () => {
-  // The refresh is detached with no terminal to answer on: a fetch that prompts is a stuck
-  // process for every command that armed one. Same reasoning as the spawn options above.
-  assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
 })
 
 // Free space has no portable probe, so `df -Pk` carries the whole check off Windows and its

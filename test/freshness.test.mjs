@@ -2,9 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { QUIET_COMMANDS, skipReason, dueForRefresh, staleLine, announces } from '../bin/freshness.mjs'
 
-// Shaped like what `toolState` actually returns: `branch`, `defaultBranch` and `upstream` are
-// strings or null, never booleans.
-const onMain = { repo: true, linked: false, branch: 'main', defaultBranch: 'main', upstream: 'origin/main' }
+// Shaped like what `checkouts.mjs` answers in: `repo` is the enum, and `branch`,
+// `defaultBranch` and `upstream` are strings or null, never booleans.
+const onMain = { repo: 'own', linked: false, branch: 'main', defaultBranch: 'main', upstream: 'origin/main' }
 
 test('a checkout on its default branch with an upstream is judged', () => {
   assert.equal(skipReason(onMain), null)
@@ -27,7 +27,8 @@ test('a default branch the tool could not confirm never vetoes', () => {
 
 test('a detached HEAD, an unversioned tree and a remoteless checkout are all skipped', () => {
   assert.match(skipReason({ ...onMain, branch: null }), /detached HEAD/)
-  assert.match(skipReason({ repo: false }), /not a git checkout/)
+  assert.match(skipReason({ repo: 'none' }), /not a git checkout/)
+  assert.match(skipReason({ repo: 'nested' }), /inside another checkout/)
   assert.match(skipReason({ ...onMain, upstream: null }), /no upstream/)
 })
 
