@@ -65,7 +65,7 @@ test('migrating twice changes nothing the second time', () => {
 
 test('the stamp is applyMigrations to write, not migration 1', () => {
   // When only migration 1 wrote `writtenBy`, a data root already at 1 was never stamped
-  // again, so every later major silently failed to take and the write gate never fired.
+  // again, so every later major silently failed to take and the write refusal never fired.
   assert.equal('config' in MIGRATIONS[0], false, 'migration 1 must not carry the stamp itself')
   assert.equal(applyMigrations({}, '1.0.0').config.writtenBy, '1.0.0')
 })

@@ -325,7 +325,7 @@ function freshnessEpilogue (command) {
   } catch { /* ambient: a command that has already finished must not fail because of this */ }
 }
 
-// Commands that write records. The distinction drives the write gate — an old rig must not
+// Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
 const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close', 'backfill'])
 

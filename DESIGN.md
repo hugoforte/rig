@@ -8,6 +8,23 @@ Status: design agreed and built 2026-09-14; §3 updated the same day for the too
 
 Vocabulary is [CONTEXT.md](./CONTEXT.md); this document uses it unchanged.
 
+## Principles
+
+The decision log says *what* was decided. These say what the decisions have in common.
+
+**Keep it refactorable; don't factor it early.**
+The rule of three, stated as a pair. A seam you can move later is worth more than an
+abstraction you guessed at now — so two similar things are a coincidence, and you wait for
+the third before naming the pattern. What "refactorable" buys is the right to wait: pure
+modules where the logic is hard, one seam per external system, and no caller composing
+three steps that one operation should own.
+
+**Strong convictions, loosely held.**
+Decide, write the reason down, then let evidence move you. A superseded decision is struck
+through and names what replaced it, never deleted; a refuted hypothesis stays in the doc
+with its date and its evidence. A position with no reason attached can't be argued out of,
+and an opinion nobody recorded can't be corrected.
+
 1. [The problem, stated honestly](#1-the-problem-stated-honestly)
 2. [Shape](#2-shape)
 3. [On-disk layout](#3-on-disk-layout)
@@ -82,7 +99,7 @@ brief in" design) — both already authenticated on the machine.
 
 ### 2.1 Vocabulary
 
-The terms this document leans on — work, catalogue, mirror, data root, tool, installation, work root, freshness, refresh, record format, write gate — are defined once, in [CONTEXT.md](./CONTEXT.md), with the synonyms each one displaces. A term used here means what it means there.
+The terms this document leans on — work, catalogue, mirror, data root, tool, installation, work root, freshness, refresh, record format, write refusal — are defined once, in [CONTEXT.md](./CONTEXT.md), with the synonyms each one displaces. A term used here means what it means there.
 
 ---
 

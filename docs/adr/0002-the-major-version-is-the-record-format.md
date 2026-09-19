@@ -80,7 +80,7 @@ Writing one is the price of the first migration that needs it.
 
 ## Why migration 1 is additive, specifically
 
-This is the one major bump the write gate cannot protect, and the reason looks arbitrary
+This is the one major bump the write refusal cannot protect, and the reason looks arbitrary
 without it written down.
 
 A rig from before this change has never heard of `writtenBy` or of refusing to write. So the
