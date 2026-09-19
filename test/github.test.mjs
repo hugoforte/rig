@@ -33,12 +33,25 @@ test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
 })
 
 test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
-  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
+  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
-    { number: 12, state: 'MERGED', url: 'https://github.com/acme/platform/pull/12',
+    { number: 12, state: 'MERGED', base: 'main', url: 'https://github.com/acme/platform/pull/12',
       openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z' })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,url,createdAt,mergedAt', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,baseRefName,url,createdAt,mergedAt', '--limit', '1'])
+})
+
+test('gh adapter: prForBranch answers the base the PR lands on now, in the same call', () => {
+  // A PR repointed at another PR's branch: the base rig recorded at `rig attach` is `main`
+  // and this is what makes the stack visible without a second round trip.
+  const { calls, github } = canned(() => '[{"number":12,"state":"OPEN","baseRefName":"feat/other-work","url":"u","createdAt":"2026-01-02T00:00:00Z","mergedAt":null}]')
+  assert.equal(github.prForBranch('acme', 'platform', 'feat/x').base, 'feat/other-work')
+  assert.equal(calls.length, 1, 'the base rides along with the PR state')
+})
+
+test('gh adapter: a PR gh answered for without a base reads as no base, not undefined', () => {
+  const { github } = canned(() => '[{"number":12,"state":"OPEN","url":"u","createdAt":"2026-01-02T00:00:00Z","mergedAt":null}]')
+  assert.equal(github.prForBranch('acme', 'platform', 'feat/x').base, null)
 })
 
 test('gh adapter: an open PR has no mergedAt', () => {
@@ -174,6 +187,15 @@ test('in-memory adapter: prForBranch finds the PR by branch', () => {
   const github = githubInMemory(world())
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x').number, 12)
   assert.equal(github.prForBranch('acme', 'platform', 'feat/other'), null)
+})
+
+test('in-memory adapter: prForBranch carries the base a seeded PR lands on', () => {
+  // The fixture field is `base`, as `branch` and `openedAt` are: the in-memory world speaks
+  // the interface's language, and `baseRefName` is gh's name for it in the adapter above.
+  const state = world()
+  assert.equal(githubInMemory(state).prForBranch('acme', 'platform', 'feat/x').base, null, 'no base seeded')
+  state.repos['acme/Platform'].prs[0].base = 'feat/other-work'
+  assert.equal(githubInMemory(state).prForBranch('acme', 'platform', 'feat/x').base, 'feat/other-work')
 })
 
 test('in-memory adapter: prForBranch answers the newest PR on a branch, as gh --limit 1 does', () => {

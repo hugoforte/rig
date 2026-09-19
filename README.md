@@ -64,7 +64,7 @@ rig attach another-repo
 rig status
 ```
 
-`new` records the work in the data root and makes `C:\w\my-first-work`. Commands that act on a work find it from the folder you are in, or take `--work my-first-work` from anywhere. Each `attach` finds the repo in your org through `gh`, clones a bare mirror once, cuts a worktree on the work's branch, and for a repo it has not seen drafts a catalogue entry, asking with a `!` that you correct it while the repo is fresh in your head. A first run can come back to that. `status` shows every worktree, its branch, and how far it is from its base — all derived live, none of it written down.
+`new` records the work in the data root and makes `C:\w\my-first-work`. Commands that act on a work find it from the folder you are in, or take `--work my-first-work` from anywhere. Each `attach` finds the repo in your org through `gh`, clones a bare mirror once, cuts a worktree on the work's branch, and for a repo it has not seen drafts a catalogue entry, asking with a `!` that you correct it while the repo is fresh in your head. A first run can come back to that. `status` shows every worktree, its branch, and how far it is from its base — all derived live, none of it written down. The base is the PR's own, so a branch stacked on another PR reads as `base main → feat/other-work` rather than still claiming `main`.
 
 The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` marks the design agreed. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees, keeping the record.
 

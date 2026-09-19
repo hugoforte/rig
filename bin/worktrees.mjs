@@ -106,24 +106,32 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
 
     // A worktree as it stands right now: nothing here is ever written down (DESIGN.md
     // decision 2 of §1.2). Distance is measured against the upstream when the branch has
-    // one and against the recorded base when it does not — a branch that was never pushed
-    // still has a base to be ahead of.
+    // one and against a base when it does not — a branch that was never pushed still has a
+    // base to be ahead of.
+    //
+    // `base` is the base the branch lands on *now*, which for a stacked PR is another PR's
+    // branch rather than the one the work was cut from; `recordedBase` is that recorded
+    // one, and it answers when the live base names a branch this mirror has never fetched.
+    // Measuring a stacked branch against `main` counts the PR underneath it as this work's
+    // own commits, which is the ahead/behind half of hugoforte/rig#24.
     //
     // A distance git could not measure answers `ahead: null` / `behind: null` with the
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    state ({ dir, base }) {
+    state ({ dir, base, recordedBase = base }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const up = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
-      const counts = git(dir, 'rev-list', '--left-right', '--count',
-        `${up.code === 0 ? '@{u}' : ref(base)}...HEAD`)
+      const known = [base, recordedBase].filter(Boolean)
+        .find(b => git(dir, 'rev-parse', '--verify', '--quiet', ref(b)).code === 0)
+      const against = up.code === 0 ? '@{u}' : ref(known || base)
+      const counts = git(dir, 'rev-list', '--left-right', '--count', `${against}...HEAD`)
       if (counts.code !== 0) {
         s.ahead = s.behind = null
         s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
-          `git could not measure ${dir} against ${up.code === 0 ? 'its upstream' : ref(base)}`
+          `git could not measure ${dir} against ${up.code === 0 ? 'its upstream' : against}`
         return s
       }
       const [behind, ahead] = counts.out.split(/\s+/).map(Number)
