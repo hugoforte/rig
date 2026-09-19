@@ -2943,13 +2943,17 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 
 // --------------------------------------------------------------------- main
 
-// Pure helpers, importable by tests. Nothing below the guard runs on import.
+// Pure helpers, importable by tests — and, with the config it reads, the one machine-readable
+// surface (decision 55): `listPayload` is what `rig list --json` prints, and asserting the
+// shape of it should not mean JSON-parsing a subprocess's stdout.
+// Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
   directionSection, directionBody, directionIsTodo,
+  config, listPayload,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
