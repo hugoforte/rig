@@ -180,5 +180,49 @@ export function checkouts ({ run }) {
   // What arrived, newest last, for a caller that has just moved this checkout.
   const arrived = (dir, from) => lines(git(dir, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out)
 
-  return { countCommits, describe, identify, fetch, fastForward, arrived }
+  const shortHead = dir => git(dir, 'rev-parse', '--short', 'HEAD').out || null
+
+  // The whole tree, committed under one message. `git add -A`, so a checkout rig commits
+  // into is one where everything present is meant to be committed — which is why a caller
+  // asks `describe` whether this is a checkout of its own first, and why `.gitignore` is
+  // written before a data root's first commit.
+  //
+  //   committed · nothing (there was nothing staged to commit) · stage-failed
+  //   · commit-failed
+  //
+  // `hash` is what HEAD is afterwards, short, or null when there is no commit to name.
+  function commitAll (dir, message) {
+    const add = git(dir, 'add', '-A')
+    if (add.code !== 0) return { outcome: 'stage-failed', hash: null, error: firstLine(add.err) }
+    const staged = git(dir, 'diff', '--cached', '--quiet').code !== 0
+    if (staged) {
+      const commit = git(dir, 'commit', '-q', '-m', message)
+      if (commit.code !== 0) return { outcome: 'commit-failed', hash: null, error: firstLine(commit.err || commit.out) }
+    }
+    return { outcome: staged ? 'committed' : 'nothing', hash: shortHead(dir) }
+  }
+
+  // Ours on top of theirs, then pushed. The rebase is what makes two machines committing
+  // to one data root work at all; the abort is what stops a conflict leaving a tree
+  // mid-rebase for someone to find later.
+  //
+  //   pushed · fetch-failed · conflict (aborted, tree left as it was)
+  //   · conflict-stuck (the abort failed too) · push-failed
+  //
+  // `hash` is HEAD after the rebase rewrote it, which is not what it was before.
+  function pushRebasing (dir) {
+    const fetched = fetch(dir)
+    if (!fetched.ok) return { outcome: 'fetch-failed', hash: null, error: fetched.error }
+    const rebase = git(dir, 'rebase', '-q', '@{u}')
+    if (rebase.code !== 0) {
+      const abort = git(dir, 'rebase', '--abort')
+      return { outcome: abort.code === 0 ? 'conflict' : 'conflict-stuck', hash: null, error: firstLine(rebase.err) }
+    }
+    const hash = shortHead(dir)
+    const push = git(dir, 'push', '-q')
+    if (push.code !== 0) return { outcome: 'push-failed', hash, error: firstLine(push.err) }
+    return { outcome: 'pushed', hash }
+  }
+
+  return { countCommits, describe, identify, fetch, fastForward, arrived, commitAll, pushRebasing }
 }

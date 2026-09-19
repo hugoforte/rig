@@ -1063,15 +1063,11 @@ function commitDataRoot (message) {
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
 
-  const add = git(root, 'add', '-A')
-  if (add.code !== 0) { warn(`data root: could not stage (${firstLine(add.err)}) — commit it by hand`); return }
-  const staged = git(root, 'diff', '--cached', '--quiet').code !== 0
-  if (staged) {
-    const commit = git(root, 'commit', '-q', '-m', message)
-    if (commit.code !== 0) { warn(`data root: could not commit (${firstLine(commit.err || commit.out)}) — the change waits for the next command`); return }
-  }
-  const hash = git(root, 'rev-parse', '--short', 'HEAD').out || '(unborn)'
-  const committed = staged ? `committed ${hash}` : 'nothing to commit'
+  const commit = co.commitAll(root, message)
+  if (commit.outcome === 'stage-failed') { warn(`data root: could not stage (${commit.error}) — commit it by hand`); return }
+  if (commit.outcome === 'commit-failed') { warn(`data root: could not commit (${commit.error}) — the change waits for the next command`); return }
+  const staged = commit.outcome === 'committed'
+  const committed = staged ? `committed ${commit.hash ?? '(unborn)'}` : 'nothing to commit'
   if (!state.branch) { warn(`data root: ${committed} on a detached HEAD — check out a branch and cherry-pick it`); return }
   if (!state.upstream) {
     if (staged) ok(`data root: ${committed} (no upstream — not pushed)`)
@@ -1080,19 +1076,13 @@ function commitDataRoot (message) {
   }
   if (!staged && !state.ahead) { say(C.dim('· data root: nothing to commit, nothing to push')); return }
 
-  const fetched = co.fetch(root)
-  if (!fetched.ok) { warn(`data root: ${committed}, but could not fetch from origin (${fetched.error}) — nothing pushed`); return }
-  const rebase = git(root, 'rebase', '-q', '@{u}')
-  if (rebase.code !== 0) {
-    const abort = git(root, 'rebase', '--abort')
-    if (abort.code !== 0) warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`)
-    else warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`)
-    return
-  }
-  const pushed = git(root, 'rev-parse', '--short', 'HEAD').out   // rewritten by the rebase
-  const push = git(root, 'push', '-q')
-  if (push.code !== 0) { warn(`data root: ${committed} as ${pushed}, but the push failed (${firstLine(push.err)}) — push it by hand`); return }
-  ok(`data root: ${staged ? `committed ${pushed}` : `pushed ${pushed}, committed earlier`} and pushed`)
+  const sent = co.pushRebasing(root)
+  if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error}) — nothing pushed`); return }
+  if (sent.outcome === 'conflict-stuck') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`); return }
+  if (sent.outcome === 'conflict') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`); return }
+  // `sent.hash` is HEAD as the rebase left it, which is not what was committed above.
+  if (sent.outcome === 'push-failed') { warn(`data root: ${committed} as ${sent.hash}, but the push failed (${sent.error}) — push it by hand`); return }
+  ok(`data root: ${staged ? `committed ${sent.hash}` : `pushed ${sent.hash}, committed earlier`} and pushed`)
 }
 
 // A mutating command's registration of what it is committing as. Called as soon as the

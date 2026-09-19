@@ -1,7 +1,8 @@
 // The two checkouts an installation owns, against real git. The module's seam is the
 // runner it is handed, so these tests hand it one that spawns git for real — local bare
 // remotes in a temp tree, no network, no `gh`, and no CLI subprocess. A fake runner
-// appears exactly twice, for the two answers real git will not produce on demand.
+// appears only where real git will not produce the answer on demand: an unmeasurable
+// distance, a refused `git add`, and a rebase whose abort fails too.
 //
 // One temp tree, shared, and the tests run in order — each leaves the checkouts where the
 // next one expects them.
@@ -278,4 +279,118 @@ test('a distance git could not measure is not a reason to move anything', () => 
   const r = checkouts({ run: fake }).fastForward(path.join(tmp, 'own'))
   assert.equal(r.outcome, 'unmeasurable')
   assert.equal(r.state.behind, null)
+})
+
+test('commitAll stages everything present, including what nobody staged', () => {
+  const { local } = cloned('committing')
+  fs.writeFileSync(path.join(local, 'record.md'), 'a record\n')
+  fs.appendFileSync(path.join(local, 'README.md'), 'edited\n')
+
+  const r = c().commitAll(local, 'rig save: a record')
+  assert.equal(r.outcome, 'committed')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'))
+  assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: a record')
+  assert.equal(c().describe(local).dirty, 0)
+})
+
+test('nothing to commit is an outcome, not a failure', () => {
+  const { local } = cloned('nothing')
+  const r = c().commitAll(local, 'rig save: nothing happened')
+  assert.equal(r.outcome, 'nothing')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'and HEAD is still nameable')
+})
+
+test('a commit git refuses answers git\'s reason, and the change is still there', () => {
+  // No identity to commit with — the case a fresh machine meets before `rig init`.
+  const { local } = cloned('nameless')
+  fs.writeFileSync(path.join(local, 'record.md'), 'a record\n')
+  const nameless = { ...env }
+  delete nameless.GIT_AUTHOR_NAME; delete nameless.GIT_AUTHOR_EMAIL
+  delete nameless.GIT_COMMITTER_NAME; delete nameless.GIT_COMMITTER_EMAIL
+  const bare = checkouts({ run: (cmd, args, opts = {}) => run(cmd, args, { env: nameless, ...opts }) })
+
+  const r = bare.commitAll(local, 'rig save: a record')
+  assert.equal(r.outcome, 'commit-failed')
+  assert.ok(r.error)
+  assert.equal(c().describe(local).dirty, 1, 'the change waits for the next command')
+})
+
+test('a stage git refuses is its own outcome, and nothing is committed', () => {
+  // `git add` failing is what a permission problem or a lock looks like; real git will not
+  // produce one on demand, and the caller's advice ("commit it by hand") turns on it.
+  const refuses = (cmd, args) => args.includes('add')
+    ? { code: 128, out: '', err: 'fatal: Unable to create index.lock: File exists.' }
+    : { code: 0, out: '', err: '' }
+  const r = checkouts({ run: refuses }).commitAll('anywhere', 'rig save: blocked')
+  assert.equal(r.outcome, 'stage-failed')
+  assert.match(r.error, /index\.lock/)
+})
+
+test('pushRebasing puts ours on top of theirs and pushes the result', () => {
+  const { bare, local } = cloned('pushing')
+  pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  assert.equal(c().commitAll(local, 'rig save: a record of my own').outcome, 'committed')
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'pushed')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'the hash is the rebase\'s, not the commit\'s')
+  assert.ok(fs.existsSync(path.join(local, 'THEIRS.md')), 'the other machine\'s commit was rebased under ours')
+  assert.equal(run('git', ['-C', bare, 'log', '-1', '--format=%s']).out, 'rig save: a record of my own')
+})
+
+test('a conflict aborts the rebase rather than leaving the tree mid-rebase', () => {
+  const { bare, local } = cloned('conflicting')
+  pushFromElsewhere(bare, 'README.md', 'their line')
+  fs.writeFileSync(path.join(local, 'README.md'), 'my line\n')
+  assert.equal(c().commitAll(local, 'rig save: my line').outcome, 'committed')
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'conflict')
+  assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: my line', 'the local commit is kept')
+  assert.equal(c().describe(local).dirty, 0, 'tree left clean')
+  assert.ok(!fs.existsSync(path.join(local, '.git', 'rebase-merge')), 'never left mid-rebase')
+  assert.equal(run('git', ['-C', bare, 'log', '-1', '--format=%s']).out, 'their line', 'nothing pushed')
+})
+
+test('a conflict whose abort also fails is a different answer', () => {
+  // The state that needs sorting out by hand, and the one real git will not stage for us.
+  const stuck = (cmd, args) => {
+    if (args.includes('fetch')) return { code: 0, out: '', err: '' }
+    if (args.includes('rebase') && args.includes('--abort')) return { code: 1, out: '', err: 'fatal: could not abort' }
+    if (args.includes('rebase')) return { code: 1, out: '', err: 'CONFLICT (content): Merge conflict' }
+    return { code: 0, out: '', err: '' }
+  }
+  const r = checkouts({ run: stuck }).pushRebasing('anywhere')
+  assert.equal(r.outcome, 'conflict-stuck')
+})
+
+test('a fetch that fails is never reported as a conflict', () => {
+  const { local } = cloned('unreachable')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  assert.equal(c().commitAll(local, 'rig save: offline').outcome, 'committed')
+  gitMust(local, 'remote', 'set-url', 'origin', path.join(tmp, 'no-such-remote.git'))
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'fetch-failed')
+  assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: offline')
+})
+
+test('a push the remote refuses keeps the commit and says whose refusal it was', () => {
+  // A remote that fetches fine and refuses the push: a checked-out branch in a non-bare
+  // repo is git's own default refusal, and the nearest thing to a protected branch.
+  const { local } = cloned('refused')
+  const theirs = path.join(tmp, 'refusing-remote')
+  assert.equal(run('git', ['clone', '-q', path.join(tmp, 'refused.git'), theirs]).code, 0)
+  gitMust(theirs, 'config', 'receive.denyCurrentBranch', 'refuse')
+  gitMust(local, 'remote', 'set-url', 'origin', theirs)
+  gitMust(local, 'fetch', '-q')
+  gitMust(local, 'branch', '--set-upstream-to=origin/main')
+  fs.writeFileSync(path.join(local, 'MINE.md'), 'a record of my own\n')
+  assert.equal(c().commitAll(local, 'rig save: unpushable').outcome, 'committed')
+
+  const r = c().pushRebasing(local)
+  assert.equal(r.outcome, 'push-failed')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'the caller can name what is waiting')
+  assert.ok(r.error)
 })
