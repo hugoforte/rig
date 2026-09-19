@@ -712,9 +712,10 @@ const isGithubKey = k => /^[\w.-]+\/[\w.-]+#\d+$/.test(k)
 // Resolves an org's `tracker.<org>.fields` (rig.json, e.g. `{ assignee: "me", sprint:
 // "active", story_points: 3, components: ["Payments"] }`), merged with `--field
 // name=value` overrides, into what `twg jira workitem create --field` wants: a
-// customfield_* id for every name. Field and allowed-value ids are discovered through
+// usable id for every name. Custom field and allowed-value ids are discovered through
 // `field create-metadata`, never hardcoded — see docs/adr/0001-jira-via-twg.md for the
-// KTLO ids that must never be pasted in here as a shortcut.
+// KTLO ids that must never be pasted in here as a shortcut. System fields are the one
+// thing rig knows by heart (JIRA_SYSTEM_FIELDS): their ids are Jira's, not a site's.
 // `--field name=value,name2=value2` on top of `t.fields` from rig.json; last write wins.
 function mergeFieldOverrides (configuredFields, overrides) {
   const configured = { ...configuredFields }
@@ -740,41 +741,70 @@ function resolveActiveSprint (jiraClient, t, sprint) {
 // through in resolveJiraFields.
 const NAMED_JIRA_FIELDS = { sprint: 'Sprint', story_points: 'Story Points', components: 'Components' }
 
-// `key`/`value` from `t.fields` (rig.json), translated to a customfield_* id and a
-// Jira-ready value: `components` resolves each name to its allowed-value id via the
-// project/type's field metadata (fetched once, on first need, and cached in `metadata`).
-function resolveJiraField (jiraClient, t, metadata, key, value) {
-  const name = NAMED_JIRA_FIELDS[key] || key
-  metadata.current = metadata.current || jiraClient.fieldMetadata(t.project, t.type)
-  const field = metadata.current.find(f => f.name.toLowerCase() === name.toLowerCase()) ||
-    die(`no field named "${name}" for ${t.project}/${t.type} — check rig.json or the name in Jira`)
-  if (key !== 'components') return { id: field.id, value }
-  const names = Array.isArray(value) ? value : [value]
-  // A name that matches nothing dies here — passing it through would let a typo or a
-  // renamed/removed component reach `twg` unresolved (ADR-0001: fail loudly, don't guess).
-  const ids = names.map(n => {
-    const allowed = field.allowedValues.find(a => a.name.toLowerCase() === String(n).toLowerCase() || a.id === String(n))
-    return allowed ? allowed.id :
-      die(`"${n}" is not a value for "${field.name}" (${t.project}/${t.type}) — known: ${field.allowedValues.map(a => a.name).join(', ') || 'none'}`)
+// Jira's system fields, spelled as Jira's own ids — for these the id *is* the name, and it
+// is the same on every site. They are a fixed list rather than a discovery because
+// `field create-metadata` returns **custom fields only**: for KTLO/Story it answers 31
+// entries, every one a `customfield_*`, and no system field at all (hugoforte/rig#45). So
+// there is nothing to discover them from, and a configured `components` used to die on a
+// field that plainly exists on the create screen. Extending the list is a one-line change
+// when an org needs one; guessing at unknown names is not (see the die below).
+const JIRA_SYSTEM_FIELDS = ['components', 'labels', 'priority', 'versions', 'fixVersions']
+
+// rig.json's vocabulary is snake_case (`story_points`), Jira's is camelCase, so
+// `fix_versions` and `fixVersions` are one field.
+const systemFieldId = key => JIRA_SYSTEM_FIELDS.find(id => id.toLowerCase() === key.replace(/_/g, '').toLowerCase())
+
+// Component names -> their ids, against whatever list of allowed values applies. A name
+// that matches nothing dies here — passing it through would let a typo or a
+// renamed/removed component reach `twg` unresolved (ADR-0001: fail loudly, don't guess).
+function resolveComponentIds (allowed, label, where, value) {
+  return (Array.isArray(value) ? value : [value]).map(n => {
+    const match = allowed.find(a => a.name.toLowerCase() === String(n).toLowerCase() || a.id === String(n))
+    return match ? match.id :
+      die(`"${n}" is not a value for "${label}" (${where}) — known: ${allowed.map(a => a.name).join(', ') || 'none'}`)
   })
-  return { id: field.id, value: ids }
+}
+
+// `key`/`value` from `t.fields` (rig.json), translated to the id `twg` wants — a
+// `customfield_*` for a custom field, Jira's own name for a system one — and a Jira-ready
+// value: `components` resolves each name to an id. Both lookups are fetched at most once
+// per create and cached in `cache`.
+function resolveJiraField (jiraClient, t, cache, key, value) {
+  const name = NAMED_JIRA_FIELDS[key] || key
+  const where = `${t.project}/${t.type}`
+  cache.metadata ??= jiraClient.fieldMetadata(t.project, t.type)
+  // create-metadata wins over JIRA_SYSTEM_FIELDS when both know the name: its entry is
+  // this project and type's own — the real id and the real allowed values — where the
+  // system list is only rig's site-independent fallback for what that endpoint omits.
+  const field = cache.metadata.find(f => f.name.toLowerCase() === name.toLowerCase())
+  if (field) {
+    return { id: field.id, value: key === 'components' ? resolveComponentIds(field.allowedValues, field.name, where, value) : value }
+  }
+  const systemId = systemFieldId(key) ||
+    die(`no field named "${name}" for ${where} — check rig.json or the name in Jira`)
+  if (systemId !== 'components') return { id: systemId, value }
+  // Allowed values for a system Components field are the project's components, since
+  // create-metadata never carried the field to carry them.
+  cache.components ??= jiraClient.projectComponents(t.project)
+  return { id: systemId, value: resolveComponentIds(cache.components, name, t.project, value) }
 }
 
 // Resolves an org's Jira create defaults (rig.json `tracker.<org>.fields`, `--field`
-// overrides applied on top) to `{ assignee, fields }`: `fields` maps customfield_* ids
-// to the values `twg jira workitem create --field` wants.
+// overrides applied on top) to `{ assignee, fields }`: `fields` maps field ids —
+// `customfield_*`, or a system field's own Jira name — to the values `twg jira workitem
+// create --field` wants.
 function resolveJiraFields (jiraClient, t, overrides) {
   const configured = mergeFieldOverrides(t.fields, overrides)
   configured.sprint = resolveActiveSprint(jiraClient, t, configured.sprint)
 
   let assignee
   const fields = {}
-  const metadata = {}   // lazily fetched at most once, shared across every field lookup
+  const cache = {}   // field metadata and components, each fetched at most once
   for (const [key, value] of Object.entries(configured)) {
     if (value === null || value === undefined) continue
     if (key === 'assignee') { assignee = value; continue }
     if (/^customfield_/.test(key)) { fields[key] = value; continue }
-    const { id, value: resolved } = resolveJiraField(jiraClient, t, metadata, key, value)
+    const { id, value: resolved } = resolveJiraField(jiraClient, t, cache, key, value)
     fields[id] = resolved
   }
   return { assignee, fields }
@@ -2298,7 +2328,7 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLabel, nextStatusAfterAttach, checkoutState, countCommits,
-  activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
 }
 

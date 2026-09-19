@@ -18,6 +18,7 @@
 //   createIssue({ project, type, summary, description, assignee, fields })   the new key
 //   commentIssue(key, body)
 //   fieldMetadata(project, type)                  [{ id, name }] for `--field` by name
+//   projectComponents(project)                    [{ id, name }] the project's components
 //   activeSprintId(boardId)                       the board's active sprint id, or null
 // Every call but present() throws JiraError when twg is missing or the call fails.
 import { spawnSync } from 'node:child_process'
@@ -109,6 +110,17 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       if (!Array.isArray(fields)) fail(`could not read fields from twg's JSON:\n${out}`)
       return fields.map(f => ({ id: f.id, name: f.name, allowedValues: f.allowedValues || [] }))
     },
+    // Components come from the REST passthrough because `field create-metadata` returns
+    // custom fields only, so Components — a system field — is never in it, allowed values
+    // and all (hugoforte/rig#45). The paginated `/component` variant answers `{ values }`;
+    // this unpaginated one answers a bare array. Both shapes are read.
+    projectComponents (project) {
+      const out = must(['api', `jira:/rest/api/3/project/${project}/components`])
+      const body = parseJson(out, 'twg api project components')
+      const items = Array.isArray(body) ? body : body.values || body.components || body.data
+      if (!Array.isArray(items)) fail(`could not read components from twg's JSON:\n${out}`)
+      return items.map(c => ({ id: String(c.id), name: c.name }))
+    },
     activeSprintId (boardId) {
       const out = must(['jira', 'sprint', 'snapshot', '--board-id', String(boardId), '-o', 'json'])
       const body = parseJson(out, 'twg jira sprint snapshot')
@@ -120,7 +132,8 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
 
 // Canned Jira for tests. `state` is mutated in place: { present, issues: { KEY: {
 // title, body, comments, assignee, fields } }, fields: { project: { type: [{ id, name,
-// allowedValues }] } }, boards: { boardId: activeSprintId | null } }.
+// allowedValues }] } }, components: { project: [{ id, name }] },
+// boards: { boardId: activeSprintId | null } }.
 export function twgInMemory (state) {
   const guard = () => { if (state.present === false) fail('twg not found on PATH (in-memory Jira)') }
   const issue = key => state.issues[key] || fail(`${key}: no such issue (in-memory Jira)`)
@@ -148,6 +161,10 @@ export function twgInMemory (state) {
     fieldMetadata (project, type) {
       guard()
       return state.fields?.[project]?.[type] || []
+    },
+    projectComponents (project) {
+      guard()
+      return state.components?.[project] || []
     },
     activeSprintId (boardId) {
       guard()

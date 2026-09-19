@@ -25,7 +25,7 @@ dependencies) intact: no SDK, no stored credentials, one more CLI on PATH.
 
 `twg` is rig's Jira client, named in code and handled the same way as `gh`: `bin/jira.mjs`
 is `bin/github.mjs`'s counterpart — one interface (`present`, `getIssue`, `createIssue`,
-`commentIssue`, `fieldMetadata`, `activeSprintId`), a `twgViaCli` adapter that shells to
+`commentIssue`, `fieldMetadata`, `projectComponents`, `activeSprintId`), a `twgViaCli` adapter that shells to
 `twg`, and a `twgInMemory` adapter for tests. "twg not found" is handled like "gh not
 found" — `init` and `doctor` warn, nothing dies.
 
@@ -55,6 +55,14 @@ Story Points, say) are **discovered** through `twg jira workitem field
 create-metadata`, never pasted into `rig.json` or this codebase from a one-off
 inspection — the KTLO ids the `rig-workflow-gates` context doc records are a fixture
 for that org's data root, not a shortcut for this one.
+
+That holds for **custom** fields. `field create-metadata` turned out to return custom
+fields only (hugoforte/rig#45), so Jira's **system** fields — `components`, `labels`,
+`priority`, `versions`, `fixVersions` — cannot be discovered from it at all. They are a
+fixed list in `bin/rig.mjs` (`JIRA_SYSTEM_FIELDS`), which is not a hardcoded *site* fact:
+a system field's id is its Jira name, the same on every site. Their allowed values still
+come from the site — components from `projectComponents`, the REST passthrough
+`twg api jira:/rest/api/3/project/<KEY>/components`. A name in neither place still dies.
 
 `rig new --ticket --dry-run` resolves and prints the create defaults (including a
 `sprint: "active"` resolved through the org's board, and named fields like `components`
