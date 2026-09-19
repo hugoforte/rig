@@ -139,6 +139,29 @@ rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
 
+## What now
+
+```bash
+rig next        # what is available on the current work, read off live state
+```
+
+It reads the repos, the branches, the PRs and the gates, and names what is available —
+attach something, record the design gate, push, open a PR, scaffold a rollout plan, close.
+
+Two things it will never do, and both are the point:
+
+- **It only offers.** It never warns, never blocks, and never says you should have. Warnings
+  live in `doctor`, and only for contradictions. A work that reached review with no design
+  gate recorded has an *omission*, and an omission is something to offer, not to scold.
+- **It speaks only when asked.** A command you run — not a hook, and never fired off the back
+  of another command.
+
+**Weight is derived, never declared.** A work earns its ceremony from what it contains: one
+repo and no stages gets "build it, open the PR, close it"; three repos start being offered a
+rollout plan, because that is where deploy order stops being obvious. There is no
+`--track light|full` and there will not be one — a declaration made at `rig new` is a
+prediction, and predictions rot.
+
 ## Staying up to date
 
 A dim line on stderr — `rig is N commits behind … — rig update` — is addressed to you. Run

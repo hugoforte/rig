@@ -15,6 +15,7 @@ import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
+import { nextFor } from './next.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -1550,7 +1551,7 @@ const baseLabel = s => s.prError ? `${s.recordedBase} (recorded — GitHub would
 
 function repoState (cfg, entry, branch) {
   const s = { repo: entry.repo, ...prAndBase(entry, branch) }
-  return Object.assign(s, trees(cfg).state({ dir: entry.path, base: s.base, recordedBase: entry.base }))
+  return Object.assign(s, trees(cfg).state({ dir: entry.path, base: s.base, recordedBase: entry.base, branch }))
 }
 
 // The one ordering rule for works: least recently touched first, so the last line of
@@ -1896,6 +1897,40 @@ cmds.setup = ({ flags, positional }) => {
     const cat = findCatalog(r.repo)
     if (!cat?.setup?.length) { warn(`${r.repo}: no setup commands in the catalogue`); continue }
     runSetup(r.path, cat.setup)
+  }
+}
+
+// The "what now" answer. Read-only, and a command you run — never a hook, and never fired
+// off the back of another command (decision 66). The gathering lives here; every decision
+// about what is worth offering is `bin/next.mjs`'s.
+cmds.next = ({ flags }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const states = work.repos.map(r => repoState(cfg, r, work.branch))
+  const verdict = workState(work, states)
+  // `workState` answers the verdict half and the worktree state answers `pushed`; joined
+  // here rather than in either, because "is this branch on the remote" is not a question
+  // about whether the work is finished.
+  const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed }))
+
+  const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const offers = nextFor({
+    work,
+    repos,
+    // The scaffolded stub, still standing where the design should be.
+    directionTodo: /^## Direction$[\s\S]*?^_TODO_$/m.test(doc),
+    planExists: exists(planFile(work.id)),
+  })
+
+  say(`${C.bold(work.id)} ${C.dim(`— ${phaseLabel(phaseOf(work, repos))}`)}`)
+  if (!offers.length) {
+    say(C.dim(work.closedAt ? '  nothing — this work is done' : '  nothing to suggest'))
+    return
+  }
+  say('')
+  for (const o of offers) {
+    say(`  ${C.cyan('→')} ${o.says}`)
+    if (o.command) say(`    ${C.dim(o.command)}`)
   }
 }
 
@@ -2428,6 +2463,7 @@ cmds.help = () => {
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
+  rig next                        what is available now on the current work
   rig setup [repo...]             run the catalogue's setup commands
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig plan                        scaffold the rollout & testing plan
