@@ -35,18 +35,34 @@ let scenario = 0
 // once per process and then holds them: a new instance is what keeps one scenario's data
 // root and canned pull requests out of the next, and is what lets `github: 'missing'` be a
 // run in which every lookup is refused.
+//
+// Two things this rests on, neither of which would announce itself if it moved:
+//
+//   - **Only `rig.mjs` is forked by the query string.** Its imports are not, so this holds
+//     exactly as long as the memoising lives in `rig.mjs`: `location` and the two tracker
+//     adapters. Moved down into `roots.mjs`, `github.mjs` or `worktrees.mjs`, one copy would
+//     be shared by every instance and the scenarios would start bleeding into each other
+//     rather than failing.
+//   - **The scenario is handed over through `process.env`, which is one per process.** Two
+//     overlapping `produce` calls and the last writer wins for both. `node:test` awaits the
+//     top-level tests in this file one at a time, so only ever one is in flight; adding
+//     `{ concurrency: true }` is what would break it.
 async function produce (works, { live = true, github = 'ok' } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-dash-'))
   temps.push(tmp)
   const dataRoot = path.join(tmp, 'data')
   const repos = {}
+  const folders = new Set()
   // GitHub numbers a repo's pull requests, not the fixture: two works sharing a repo must not
   // share a number, or a timeline lookup on one answers with the other's.
   const numbers = {}
   for (const w of works) {
     const branch = `${w.type}/${w.id}`
     const attached = w.repos.map(r => ({ ...r, number: nextNumber(repos, numbers, `${r.org}/${r.repo}`) }))
-    const dir = path.join(dataRoot, 'work', folderName(w.id))
+    const folder = folderName(w.id)
+    assert.ok(!folders.has(folder), `two works of this scenario are both recorded at work/${folder} — one would overwrite the other`)
+    folders.add(folder)
+    const dir = path.join(dataRoot, 'work', folder)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'work.json'), JSON.stringify(record(w, attached, branch), null, 2))
     // A PR nobody recorded is one the producer has to look up, which is what the canned
@@ -63,13 +79,15 @@ async function produce (works, { live = true, github = 'ok' } = {}) {
   fs.writeFileSync(localConfig, JSON.stringify({ dataRoot, workRoot: path.join(tmp, 'w') }))
   process.env.RIG_LOCAL_CONFIG = localConfig
   process.env.RIG_FAKE_GITHUB = githubState
-  const { config, listPayload } = await import(`${PRODUCER}?scenario=${++scenario}`)
-  return listPayload(config(), live)
+  const { listing } = await import(`${PRODUCER}?scenario=${++scenario}`)
+  return listing(live)
 }
 
 // A record's folder is named for the filesystem; the `id` inside it is what every surface
 // renders. They are the same string for every work rig makes — the escaping test below is
-// the one place they part, because Windows will not take `<` in a directory name.
+// the one place they part, because Windows will not take `<` in a directory name. Two ids
+// that flatten to the same folder is a fixture bug rather than a scenario, so `produce`
+// refuses it instead of letting one work overwrite the other.
 const folderName = id => id.replace(/[^a-zA-Z0-9._-]+/g, '_')
 
 // The next number GitHub would give this repo's pull requests, and the canned repo to hang
@@ -141,10 +159,22 @@ const workById = (payload, id) => payload.works.find(w => w.id === id)
 
 test('the payload names the tool that wrote it, and the record format it wrote', async () => {
   // The drift this file was rewritten for: a hand-written payload said `recordFormat: 1` and
-  // `rig: '1.3.0'` for two majors, and nothing could notice.
+  // `rig: '1.3.0'` for two majors, and nothing could notice. What this pins is that both
+  // fields are still read off the tool rather than written out as literals — what `MAJOR`
+  // itself should be is test/version.test.mjs's to assert, and it does.
   const p = await produce([work()])
   assert.equal(p.recordFormat, MAJOR, 'the record format is the major version (ADR 0002)')
   assert.equal(p.rig, toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8'))))
+})
+
+test('the works are least recently touched first, so the last one is the work in hand', async () => {
+  // Named so that neither the order they were written in nor the order the filesystem lists
+  // them in is the answer: both of those put `alpha` first, and the rule puts `zulu` first.
+  const p = await produce([
+    work({ id: 'alpha', createdAt: '2026-03-08T00:00:00Z', repos: [repo({ attachedAt: '2026-03-09T00:00:00Z' })] }),
+    work({ id: 'zulu', createdAt: '2026-03-01T00:00:00Z', repos: [repo({ attachedAt: '2026-03-02T00:00:00Z' })] }),
+  ])
+  assert.deepEqual(p.works.map(w => w.id), ['zulu', 'alpha'])
 })
 
 test('percentile: nearest-rank, so every figure printed is one that happened', () => {
@@ -329,9 +359,14 @@ test('duration: units people can hold in their head', () => {
 
 test('renderDash: says when it was generated, and what the clocks mean', async () => {
   const p = await produce([work()])
+  // Asserted before it is interpolated below: an expectation taken from the value under test
+  // holds just as well when that value is empty, and the page would then say `Generated`
+  // followed by nothing at all.
+  assert.match(p.generatedAt, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, 'the producer dated the payload')
+  const at = p.generatedAt.replace(/\./g, '\\.')
   const html = renderDash(p)
-  assert.ok(html.includes(`Generated <strong>${p.generatedAt}</strong>`))
-  assert.ok(html.includes(`read from GitHub at ${p.generatedAt}`))
+  assert.match(html, new RegExp(`Generated <strong>${at}</strong>`))
+  assert.match(html, new RegExp(`read from GitHub at ${at}`))
   assert.match(html, /Two clocks/)
   assert.match(html, /no pre-rig\s+period/, 'the page refuses the before-and-after claim')
 })
