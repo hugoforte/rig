@@ -326,6 +326,7 @@ test('a declared stage nobody has cut is listed, and reported as not started', (
   assert.match(r.out, /1\. feat\/sliced-one/)
   assert.match(r.out, /the schema/)
   assert.match(r.out, /not cut in any repo yet/)
+  assert.doesNotMatch(r.out, /declaration order/, 'an uncut stage is ordinary, not a stage that lost its place')
 })
 
 // Cut a branch in the worktree, put a commit on it, and go back to the work branch. Real
@@ -402,6 +403,47 @@ test('the chain outranks the order the stages were declared in', () => {
   assert.match(out, /1\. feat\/restacked-early/)
   assert.match(out, /2\. feat\/restacked-late/)
   assert.ok(out.indexOf('restacked-early') < out.indexOf('restacked-late'), 'the branches order them, not the array')
+})
+
+test('a stage the branches cannot place is shown as such, not as if they had', () => {
+  // Cut from the base branch instead of the stack, which is what is left behind when the
+  // branch below is squashed or rebased. The fallback puts it last and that is right; without
+  // this the list read as evidence, confidently and silently.
+  assert.equal(rig(['new', 'adrift', '--title', 'Adrift work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'adrift']).code, 0)
+  assert.equal(rig(['stage', 'feat/adrift-one', '--delivers', 'the schema', '--work', 'adrift']).code, 0)
+  assert.equal(rig(['stage', 'feat/adrift-two', '--delivers', 'the endpoints', '--work', 'adrift']).code, 0)
+
+  const dest = worktree('adrift', 'billing')
+  commitWork(dest, 'the work branch has its own commit')
+  const opts = { work: 'adrift', repo: 'billing', back: 'feat/adrift-work' }
+  cutStage({ ...opts, branch: 'feat/adrift-one', from: 'feat/adrift-work', message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/adrift-two', from: 'main', message: 'the endpoints' })
+
+  const out = rig(['stage', '--work', 'adrift']).out
+  assert.match(out, /1\. feat\/adrift-one/)
+  assert.match(out, /2\. feat\/adrift-two/)
+  assert.match(out, /Not placed by the branches, so shown in declaration order: feat\/adrift-two/)
+  assert.doesNotMatch(out, /feat\/adrift-one, feat\/adrift-two/, 'the stage the branches did place is not in doubt')
+
+  // And the deploy-order table says it too, since the reader of a PR body has even less to
+  // go on than the reader of a terminal.
+  assert.equal(rig(['plan', '--work', 'adrift']).code, 0)
+  assert.match(fs.readFileSync(planFile('adrift'), 'utf8'), /_Not placed by the branches, so shown in declaration order: feat\/adrift-two\._/)
+})
+
+test('and rig next, which claims a position too, says the branches did not produce it', () => {
+  assert.equal(rig(['new', 'lone', '--title', 'Lone work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'lone']).code, 0)
+  assert.equal(rig(['stage', 'feat/lone-one', '--delivers', 'the schema', '--work', 'lone']).code, 0)
+
+  const dest = worktree('lone', 'billing')
+  commitWork(dest, 'the work branch has its own commit')
+  cutStage({ work: 'lone', repo: 'billing', branch: 'feat/lone-one', from: 'main', back: 'feat/lone-work', message: 'the schema' })
+
+  const out = rig(['next', '--work', 'lone']).out
+  assert.match(out, /stage 1 of 1: feat\/lone-one/)
+  assert.match(out, /not placed by the branches/)
 })
 
 test('a closed pull request is not up for review', () => {

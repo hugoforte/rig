@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 
 import {
   stageOrder, stageState, stackOf, nextStage, stageBranchProblem,
-  stageTable, renderPlanRegion, refreshedPlan, planIsStale, PLAN_MARK,
+  stageTable, unplacedNote, renderPlanRegion, refreshedPlan, planIsStale, PLAN_MARK,
 } from '../bin/stages.mjs'
 
 const work = (over = {}) => ({ id: 'w', branch: 'feat/work', repos: [], stages: [], ...over })
@@ -51,6 +51,22 @@ test('a stage cut from somewhere unexpected is reported, not dropped', () => {
   const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
   const chain = [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]
   assert.deepEqual(names(stageOrder(w, [chain])), ['feat/one', 'feat/odd'])
+})
+
+test('a stage the branches could not place says so, and the rest of the list does not', () => {
+  // The fallback is right; it was invisible. `feat/odd` is cut from outside the chain, so its
+  // place in the list is the order it was declared in and nothing more.
+  const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
+  const chain = [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]
+  const [one, odd] = stageOrder(w, [chain])
+  assert.equal(one.placed, true)
+  assert.equal(odd.placed, false)
+})
+
+test('an uncut stage is unplaced too, because it has no base to be found by', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/planned')] })
+  const chain = [on('a', 'feat/one', 'feat/work')]
+  assert.equal(stageOrder(w, [chain])[1].placed, false)
 })
 
 test('the chain is per repo while the stage list is per work', () => {
@@ -146,6 +162,30 @@ test('every stage in means there is no next stage, which is what makes the work 
   assert.equal(nextStage(stack), null)
 })
 
+test('an uncut stage is unplaced but is not reported as unplaceable', () => {
+  // Three declared, none cut, is how every sliced work starts. It must not grow three lines
+  // of doubt about an order nobody has had a chance to establish yet.
+  const w = work({ stages: [stage('feat/one'), stage('feat/two'), stage('feat/three')] })
+  const stack = stackOf(w, [])
+  assert.deepEqual(stack.map(st => st.placed), [false, false, false])
+  assert.equal(unplacedNote(stack), null)
+})
+
+test('cut but unplaceable is the case the note is for, and it names the branch', () => {
+  const w = work({ stages: [stage('feat/one'), stage('feat/odd')] })
+  const stack = stackOf(w, [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')])
+  const note = unplacedNote(stack)
+  assert.match(note, /declaration order/)
+  assert.match(note, /feat\/odd/)
+  assert.doesNotMatch(note, /feat\/one/, 'a stage the branches did place is not in doubt')
+})
+
+test('the note says what rig could read, never why a branch moved', () => {
+  const w = work({ stages: [stage('feat/odd')] })
+  const note = unplacedNote(stackOf(w, [on('a', 'feat/odd', 'main')]))
+  assert.doesNotMatch(note, /squash|rebase/i, 'that would be a guess, and a rebase does it too')
+})
+
 // ---------------------------------------------------------------- what a stage may be called
 
 test('the work branch cannot be a stage of itself', () => {
@@ -178,6 +218,31 @@ test('the deploy-order table is rendered from the stack, in stack order', () => 
   const t = stageTable(twoStages())
   assert.match(t, /\| 1 \| `feat\/one` \| the schema \| a \| #1 \| landed \|/)
   assert.match(t, /\| 2 \| `feat\/two` \| the endpoints \| a \| #2 \| up for review \|/)
+})
+
+test('the table carries the note for a stage the branches could not place', () => {
+  const w = work({ stages: [stage('feat/one', 'the schema'), stage('feat/odd', 'the rest')] })
+  const t = stageTable(stackOf(w, [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')]))
+  assert.match(t, /\| 2 \| `feat\/odd` \|/)
+  assert.match(t, /_Not placed by the branches, so shown in declaration order: feat\/odd\._/)
+})
+
+test('a table of stages nobody has cut carries no note', () => {
+  const w = work({ stages: [stage('feat/one', 'the schema'), stage('feat/two', 'the rest')] })
+  assert.doesNotMatch(stageTable(stackOf(w, [])), /declaration order/)
+})
+
+test('the note is inside the rendered region, so a fresh plan does not go stale on it', () => {
+  // `planIsStale` compares rendered regions. A note rendered beside the table instead of in it
+  // would leave the plan disagreeing with the stack with nothing able to see it.
+  const w = work({ stages: [stage('feat/one', 'the schema'), stage('feat/odd', 'the rest')] })
+  const stack = stackOf(w, [on('a', 'feat/one', 'feat/work'), on('a', 'feat/odd', 'main')])
+  const plan = `x
+${renderPlanRegion(stack)}
+y
+`
+  assert.match(plan, /declaration order/)
+  assert.equal(planIsStale(plan, stack), false)
 })
 
 test('a work with no stages renders a line saying so, not an empty table', () => {

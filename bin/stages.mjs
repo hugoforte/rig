@@ -28,7 +28,8 @@
 // **Stored (intent):** the branch and one line of what it delivers. That is all.
 // **Derived (state):** started (does the branch exist), up for review (is there a PR), landed
 // (did it merge), which repos it touches (where the branch is found), and what it sits on
-// (what it was cut from, read live — decision 63).
+// (what it was cut from, read live — decision 63) — or, when the branches could not say,
+// that the position shown is the order it was declared in rather than anything observed.
 //
 // Pure, like `phase.mjs`, `workstate.mjs`, `dash.mjs` and `freshness.mjs`: no fs, no git, no
 // gh. Which is what makes a five-deep stack across three repos a fixture rather than a
@@ -64,7 +65,7 @@ export function stageOrder (work, chains = []) {
   for (let guard = 0; guard <= declared.size; guard++) {
     const next = [...declared.keys()].find(b => !seen.has(b) && below.get(b) === current)
     if (!next) break
-    ordered.push(declared.get(next))
+    ordered.push({ ...declared.get(next), placed: true })
     seen.add(next)
     current = next
   }
@@ -72,7 +73,12 @@ export function stageOrder (work, chains = []) {
   // Anything the chain could not place goes last, in declaration order. A stage whose branch
   // nobody has cut yet has no base to be found by, and a stage cut from somewhere unexpected
   // is a fact about the repo rather than a reason to drop it off the list.
-  for (const [branch, stage] of declared) if (!seen.has(branch)) ordered.push(stage)
+  //
+  // `placed` is what carries that out. The fallback is right, and it was invisible: a list
+  // ordered by the branches and a list ordered by the array look identical, so a stage the
+  // chain lost its grip on was reported confidently and silently in whatever order somebody
+  // happened to declare things. Which half of the list is evidence is the caller's to say.
+  for (const [branch, stage] of declared) if (!seen.has(branch)) ordered.push({ ...stage, placed: false })
   return ordered
 }
 
@@ -97,6 +103,10 @@ export function stageState (stage, perRepo = []) {
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
     started: repos.length > 0,
+    // Did the branches put this stage where it sits, or did the declaration order? Set by
+    // `stageOrder`, which is the only thing that knows; a stage handed here on its own has no
+    // chain to have been misplaced by, so it is taken at its word.
+    placed: stage.placed !== false,
     // Up for review while any repo's PR is **open**, and landed only when every repo that
     // carries the stage has merged it — the same all-or-nothing rule `workState` uses for a
     // work, scoped to one slice of it. CLOSED is neither: a stage somebody gave up on is not
@@ -129,17 +139,44 @@ const groupByRepo = perRepo => {
 // is what makes the work branch's own PR the thing that is available next.
 export const nextStage = stack => stack.find(s => !s.landed) || null
 
+// The one line of honesty under an order that is partly a guess, or null when the whole list
+// is evidence. **Cut, but unplaceable** is the condition, and the `started` half is what makes
+// it worth saying: a stage nobody has cut yet is unplaced too, and that is ordinary — it has no
+// base to be found by, and it is already reported as not started. A branch that exists and
+// still could not be placed is the case where the order silently stopped being evidence.
+//
+// It says what happened and not why. "The branches could not place it" is a fact rig can see;
+// "the branch below it was squashed" is a guess about somebody's merge button, and a rebase
+// below a cut stage does the same thing. One note rather than a mark per row, because a stack
+// normally loses its footing all at once — and it names the branches, so being quieter than a
+// column costs no precision.
+//
+// `placed === false` rather than `!placed`, matching `stageState`'s own default: unplaced is
+// something the chain walk *said*, and an entry that never went through it has no chain to
+// have been misplaced by. Absence is not doubt.
+export function unplacedNote (stack) {
+  const lost = stack.filter(st => st.started && st.placed === false)
+  if (!lost.length) return null
+  return `Not placed by the branches, so shown in declaration order: ${lost.map(st => st.branch).join(', ')}`
+}
+
 // The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the
 // rollout plan (`rig plan`) — because the whole complaint against the rollout plan was that
 // its table was typed by hand, and two generators would be two tables that disagree.
+//
+// The note goes **inside** this output rather than beside it at each call site: `planIsStale`
+// compares the rendered region against the live stack, so a note rendered outside would leave a
+// plan that says one thing and a stack that says another, with nothing able to tell.
 export function stageTable (stack) {
   const where = st => st.landed ? 'landed' : st.open ? 'up for review'
     : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
+  const note = unplacedNote(stack)
   return [
     '| Order | Stage | Delivers | Repos | PR | State |',
     '|------:|-------|----------|-------|----|-------|',
     ...stack.map((st, i) => `| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${st.repos.join(', ') || '—'} | ${prs(st)} | ${where(st)} |`),
+    ...(note ? ['', `_${note}._`] : []),
   ].join('\n')
 }
 

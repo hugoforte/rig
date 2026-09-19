@@ -85,8 +85,12 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   if (stack.length) {
     const up = nextStage(stack)
     if (up) {
+      // "stage 2 of 5" is itself a claim about the order, so where the branches did not
+      // produce that number it says so. A fact about what rig could read, not a reproach and
+      // not a guess at why — a stage nobody has cut yet is unplaced too, and that is the
+      // ordinary case this deliberately does not speak up about.
       const where = up.started
-        ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}`
+        ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.placed === false ? ' — not placed by the branches' : ''}`
         : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
