@@ -178,6 +178,10 @@ talks_to:
     how: pushes refunds through the orders bus (not directly, since PROJ-1291)
   - repo: orders-api
     how: confirms returns against online orders
+setup:
+  - dotnet restore
+check:
+  - dotnet test
 ---
 
 Prose. What this repo actually is, the gotchas, the expensive-to-rediscover facts.
@@ -215,6 +219,7 @@ rig dash [--org] [--since]  throughput and cycle time as one disposable HTML pag
 rig status                  the derived phase, plus live per-repo branch/ahead/behind/PR state
 rig next                    what is available now; offers, never warns
 rig setup <repo>            run the catalogue's setup commands
+rig check [repo...] [--run] print what verifies each repo; --run runs it
 rig catalog [repo]          the repo catalogue: index, or one entry
 rig plan                    scaffold rollout-testing-plan.md
 rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate
@@ -289,6 +294,19 @@ succeed yet — `npm ci` before `.env` exists, a restore that needs a VPN, a rep
 only in order to read it. An attach that appears to fail is worse than one that tells you
 what to run next. (Background-with-logging is the likely v2 of this, once it's known which
 repos are slow.)
+
+The catalogue carries `check` beside `setup`: what *verifies* a repo — its test run, its
+lint, its build. `rig check` prints it for every repo in the work, or for the ones named,
+and `--run` opts in. The rule is the same one and it holds for the same reason — a check
+in a worktree nothing has set up yet fails for a reason that is not the code's — plus one
+of its own: a check is the thing you most often want in your own terminal, narrowed to a
+single test or watched as it goes.
+
+A command is a durable fact about a repo; a result is not, so nothing about a run is
+written down (decision 3), and under `--run` a failure reaches the caller as the exit code
+and nowhere else. The empty `check` a drafted entry ships with is a prompt, not a gap:
+`rig check` names the repo and the file to write it in, which is rule 4 arriving at the
+moment the knowledge is cheap.
 
 ### 5.5 Secrets
 
@@ -538,3 +556,4 @@ One line per decision, in the order they were made. The section each summarises 
 | 66 | **`rig next` offers; it never warns and never stops** (`bin/next.mjs`, pure like `phase.mjs` and `workstate.mjs`). The epic's principle made concrete: *rig never adds a stop; it adds an answer to "what now"*. It reads live state — repos, branches, PRs, gates — and names what is available: attach, record the design gate, push, open a PR, scaffold a rollout plan, close. Two guardrails are asserted rather than merely intended: **it only offers** (a test runs every shape of work through the output and fails on any reproaching phrasing, because "only offers" is a property of the whole answer and not of any one line), and **it speaks only when asked** — a command, never a hook, never fired off the back of another. A stopped work returns nothing, which is an answer and is said out loud rather than papered over with an invented suggestion. |
 | 67 | **Weight is derived from what a work contains, never declared.** ❌ REJECTED: `rig new --track light|full`, or a per-org default in `rig.json`. It is a prediction made before the work's shape is known, and predictions rot — the dependency bump that becomes a four-repo migration by Wednesday leaves the declaration wrong and nobody goes back to fix it, which is `status`'s disease exactly (decision 64). Instead the thresholds are read off the record: one repo gets "this part is yours to write"; **three repos** start being offered a rollout plan, because two is a pair you can hold in your head and three is where deploy order starts causing incidents. Nothing to choose at `rig new`, nothing to un-choose on Thursday. Tripwire, in #17's style: revisit the first time more than one person shares a data root and the org wants to enforce a policy. |
 | 68 | **`pushed` asks whether the branch reached the remote, not whether it has an upstream.** `worktrees.state()` gains it, and only `rig next` passes the `branch` that answers it. The obvious implementation — `git rev-parse @{u}` succeeded — is wrong in a way that is invisible until it matters: cutting a branch from `refs/remotes/origin/main` makes git set tracking to *main*, so an upstream exists from the moment `rig attach` runs. `ahead` cannot stand in either, because it counts what is *un*pushed and reads 0 both for a branch that has been pushed and for one nobody has written on — and offering a pull request for an empty branch is precisely the reproach decision 66 forbids. |
+| 69 | The catalogue carries a `check` beside `setup` — a repo's test run, its lint, its build — and `rig check` **prints it rather than running it**, with `--run` opting in: decision 31's rule, unchanged, for a command that fails for the same wrong reason in a worktree nothing has set up yet. A command is a durable fact about a repo; a result is not, so no pass or fail is stored anywhere (decision 3 stands) and a failure under `--run` reaches the caller as the exit code alone. One optional frontmatter key is not a record-format change: the catalogue is knowledge about a repo, not a work record, and the majors of decision 60 are `work.json`'s. The empty `check` on a drafted entry is a prompt — `rig check` names the repo and the file to write one in, which is rule 4 at the moment the knowledge is cheap |

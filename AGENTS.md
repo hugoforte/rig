@@ -105,11 +105,25 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
 traversal over it.
+
+`setup` is how a repo is made ready; `check` is how it is verified — its test run, its
+lint, its build. Both are commands and never results: no pass or fail is ever stored.
+
+```bash
+rig check                 # what verifies every repo in this work — printed, not run
+rig check billing --run   # run billing's, in its worktree; non-zero if one fails
+```
+
+Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
+in, `rig check` prints the check commands and `--run` opts in. A command that cannot
+succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
+repo whose `check` is empty is named, with the file to write one in; write it while the
+repo is still loaded in your head (rule 4).
 
 ## Writing a context doc
 
