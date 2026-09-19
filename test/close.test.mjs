@@ -328,33 +328,192 @@ test('a declared stage nobody has cut is listed, and reported as not started', (
   assert.match(r.out, /not cut in any repo yet/)
 })
 
-test('order comes from the chain the branches are actually stacked in', () => {
-  // Two stages, declared in the wrong order on purpose, then cut in the right one.
-  assert.equal(rig(['stage', 'feat/sliced-two', '--delivers', 'the endpoints', '--work', 'sliced']).code, 0)
+// Cut a branch in the worktree, put a commit on it, and go back to the work branch. Real
+// git, in the tree rig cut: exactly what you would do by hand, and the only setup these
+// tests are allowed. A test that writes the rows into `work.json` to make the stack appear
+// is the bug report that produced hugoforte/rig#78, not a convenience.
+const commitWork = (dest, message) => {
+  fs.appendFileSync(path.join(dest, 'README.md'), `${message}\n`)
+  gitMust(dest, 'commit', '-qam', message)
+}
 
-  const dest = worktree('sliced', 'billing')
+const cutStage = ({ work, repo, branch, from, back, message }) => {
+  const dest = worktree(work, repo)
+  gitMust(dest, 'checkout', '-q', '-b', branch, from)
+  fs.appendFileSync(path.join(dest, 'README.md'), `${message}
+`)
+  gitMust(dest, 'commit', '-qam', message)
+  gitMust(dest, 'checkout', '-q', back)
+}
+
+test('a stage branch cut in a repo is found, and nothing is written to the record', () => {
+  cutStage({ work: 'sliced', repo: 'billing', branch: 'feat/sliced-one', from: 'feat/sliced-work', back: 'feat/sliced-work', message: 'the schema' })
+
+  const r = rig(['stage', '--work', 'sliced'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1\. feat\/sliced-one/)
+  assert.match(r.out, /billing/)
+  assert.doesNotMatch(r.out, /not cut in any repo yet/)
+  assert.deepEqual(record('sliced').repos[0].branches, [{ branch: 'feat/sliced-work', base: 'main' }],
+    'the stack is derived: the record still holds the work branch alone')
+})
+
+test('a second stage, stacked on the first, is placed under it with no PR to ask', () => {
+  assert.equal(rig(['stage', 'feat/sliced-two', '--delivers', 'the endpoints', '--work', 'sliced']).code, 0)
+  cutStage({ work: 'sliced', repo: 'billing', branch: 'feat/sliced-two', from: 'feat/sliced-one', back: 'feat/sliced-work', message: 'the endpoints' })
+
+  const out = rig(['stage', '--work', 'sliced']).out
+  assert.ok(out.indexOf('feat/sliced-one') < out.indexOf('feat/sliced-two'), 'the chain orders them, not the array')
+  assert.match(out, /1\. feat\/sliced-one/)
+  assert.match(out, /2\. feat\/sliced-two/)
+})
+
+test('and a pull request, once one exists, answers the base over git', () => {
   const state = github()
   state.repos['acme/billing'].prs.push(
     { branch: 'feat/sliced-two', number: 11, state: 'OPEN', url: 'https://github.com/acme/billing/pull/11', base: 'feat/sliced-one', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
     { branch: 'feat/sliced-one', number: 10, state: 'MERGED', url: 'https://github.com/acme/billing/pull/10', base: 'feat/sliced-work', openedAt: '2026-09-18T00:00:00Z', mergedAt: '2026-09-18T12:00:00Z', commits: [] },
   )
   setGithub(state)
-  // The branches have to be in the record for rig to ask about them at all.
-  const f = path.join(dataRoot, 'work', 'sliced', 'work.json')
-  const w = readJson(f)
-  w.repos[0].branches.push(
-    { branch: 'feat/sliced-two', base: 'feat/sliced-one' },
-    { branch: 'feat/sliced-one', base: 'feat/sliced-work' },
-  )
-  fs.writeFileSync(f, JSON.stringify(w, null, 2))
-  assert.ok(fs.existsSync(dest))
 
   const out = rig(['stage', '--work', 'sliced']).out
-  assert.ok(out.indexOf('feat/sliced-one') < out.indexOf('feat/sliced-two'), 'the chain orders them, not the array')
   assert.match(out, /1\. feat\/sliced-one/)
   assert.match(out, /2\. feat\/sliced-two/)
   assert.match(out, /PR #10 merged/)
   assert.match(out, /PR #11 open/)
+  assert.deepEqual(record('sliced').repos[0].branches, [{ branch: 'feat/sliced-work', base: 'main' }],
+    'a pull request is read, never recorded, until it is merged and the work closes')
+})
+
+test('the chain outranks the order the stages were declared in', () => {
+  // Declared late-then-early and stacked early-then-late, so the array and the branches
+  // disagree. Nothing stores an order, so where the commits sit is the only thing that can
+  // tell them apart — and it is the one that survives someone re-stacking the work.
+  assert.equal(rig(['new', 'restacked', '--title', 'Restacked work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'restacked']).code, 0)
+  assert.equal(rig(['stage', 'feat/restacked-late', '--delivers', 'the endpoints', '--work', 'restacked']).code, 0)
+  assert.equal(rig(['stage', 'feat/restacked-early', '--delivers', 'the schema', '--work', 'restacked']).code, 0)
+
+  const opts = { work: 'restacked', repo: 'billing', back: 'feat/restacked-work' }
+  cutStage({ ...opts, branch: 'feat/restacked-early', from: 'feat/restacked-work', message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/restacked-late', from: 'feat/restacked-early', message: 'the endpoints' })
+
+  const out = rig(['stage', '--work', 'restacked']).out
+  assert.match(out, /1\. feat\/restacked-early/)
+  assert.match(out, /2\. feat\/restacked-late/)
+  assert.ok(out.indexOf('restacked-early') < out.indexOf('restacked-late'), 'the branches order them, not the array')
+})
+
+test('a closed pull request is not up for review', () => {
+  // CLOSED is neither merged nor open, and reading "not merged" as "up for review" makes a
+  // stage somebody gave up on look like one that is waiting for a reviewer.
+  assert.equal(rig(['new', 'shelved', '--title', 'Shelved work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'shelved']).code, 0)
+  assert.equal(rig(['stage', 'feat/shelved-one', '--delivers', 'the schema', '--work', 'shelved']).code, 0)
+  cutStage({ work: 'shelved', repo: 'billing', branch: 'feat/shelved-one', from: 'feat/shelved-work', back: 'feat/shelved-work', message: 'the schema' })
+
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/shelved-one', number: 20, state: 'CLOSED', url: 'https://github.com/acme/billing/pull/20', base: 'feat/shelved-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+  )
+  setGithub(state)
+
+  assert.equal(rig(['plan', '--work', 'shelved']).code, 0)
+  const text = fs.readFileSync(planFile('shelved'), 'utf8')
+  assert.match(text, /\| `feat\/shelved-one` \|.*\| in progress \|/)
+  assert.doesNotMatch(text, /up for review/)
+})
+
+test('a pull request lookup GitHub refused reads as unknown, never as no PR', () => {
+  // `branchRows` has always computed the error and the stack has always dropped it, so a
+  // rate-limited lookup rendered as a stage nobody has opened anything on. rig has a rule
+  // for this everywhere else: a lookup that failed is unknown, and says so.
+  assert.equal(rig(['new', 'refused', '--title', 'Refused work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'refused']).code, 0)
+  assert.equal(rig(['stage', 'feat/refused-one', '--delivers', 'the schema', '--work', 'refused']).code, 0)
+  cutStage({ work: 'refused', repo: 'billing', branch: 'feat/refused-one', from: 'feat/refused-work', back: 'feat/refused-work', message: 'the schema' })
+
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  const out = rig(['stage', '--work', 'refused']).out
+  const plan = rig(['plan', '--work', 'refused'])
+  setGithub({ ...github(), auth: 'ok' })
+
+  assert.match(out, /PR state unknown/)
+  assert.equal(plan.code, 0, plan.out)
+  assert.match(fs.readFileSync(planFile('refused'), 'utf8'), /\| `feat\/refused-one` \|.*\| PR state unknown \|/)
+})
+
+test('a stage whose line contains $& is rendered as written, not as a regex replacement', () => {
+  // `String.replace` reads `$&` in the *replacement* as the whole match, so a refresh used to
+  // paste the old region back into the new one and corrupt the document.
+  assert.equal(rig(['new', 'dollar', '--title', 'Dollar work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'dollar']).code, 0)
+  assert.equal(rig(['stage', 'feat/dollar-one', '--delivers', 'the $& path', '--work', 'dollar']).code, 0)
+  assert.equal(rig(['plan', '--work', 'dollar']).code, 0)
+  assert.equal(rig(['stage', 'feat/dollar-two', '--delivers', 'the rest', '--work', 'dollar']).code, 0)
+  assert.equal(rig(['plan', '--work', 'dollar', '--refresh']).code, 0)
+
+  const text = fs.readFileSync(planFile('dollar'), 'utf8')
+  assert.match(text, /the \$& path/)
+  assert.equal(text.match(/rig:deploy-order/g).length, 2, 'one region, not a region pasted inside itself')
+})
+
+// ------------------------------------------------- cutting one
+
+test('--cut outside a worktree says which repos it could have meant', () => {
+  assert.equal(rig(['new', 'cutter', '--title', 'Cutter work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'cutter']).code, 0)
+  const r = rig(['stage', 'feat/cutter-one', '--delivers', 'the schema', '--cut', '--work', 'cutter'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /run it inside one of cutter's worktrees \(billing\)/)
+})
+
+test('--cut makes the branch on the work branch, and rig finds it without being told', () => {
+  const dest = worktree('cutter', 'billing')
+  const r = rig(['stage', 'feat/cutter-one', '--delivers', 'the schema', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-one on feat\/cutter-work/)
+  assert.equal(gitMust(dest, 'branch', '--show-current'), 'feat/cutter-one')
+
+  const out = rig(['stage', '--work', 'cutter']).out
+  assert.match(out, /1\. feat\/cutter-one/)
+  assert.match(out, /billing/)
+  assert.doesNotMatch(out, /not cut in any repo yet/)
+  assert.deepEqual(record('cutter').repos[0].branches, [{ branch: 'feat/cutter-work', base: 'main' }],
+    'rig watched itself cut the branch and still wrote nothing down')
+})
+
+test('a second --cut stacks on the first, because that is where this repo has reached', () => {
+  const dest = worktree('cutter', 'billing')
+  commitWork(dest, 'the schema')
+  const r = rig(['stage', 'feat/cutter-two', '--delivers', 'the endpoints', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-two on feat\/cutter-one/)
+
+  const out = rig(['stage', '--work', 'cutter']).out
+  assert.match(out, /1\. feat\/cutter-one/)
+  assert.match(out, /2\. feat\/cutter-two/)
+})
+
+test('--cut reaches a stage declared long before anyone made its branch', () => {
+  // The ordinary order, and the case #78 ruled out recording at declaration time for.
+  assert.equal(rig(['stage', 'feat/cutter-three', '--delivers', 'the UI', '--work', 'cutter']).code, 0)
+  const dest = worktree('cutter', 'billing')
+  commitWork(dest, 'the endpoints')
+
+  const r = rig(['stage', 'feat/cutter-three', '--cut', '--work', 'cutter'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: cut feat\/cutter-three on feat\/cutter-two/)
+  assert.equal(record('cutter').stages.filter(st => st.branch === 'feat/cutter-three').length, 1,
+    'cutting a declared stage does not declare it twice')
+  assert.match(rig(['stage', '--work', 'cutter']).out, /3\. feat\/cutter-three/)
+})
+
+test('and declaring the same stage twice is still refused when nothing is being cut', () => {
+  const r = rig(['stage', 'feat/cutter-three', '--work', 'cutter'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /already a stage/)
 })
 
 test('the next stage is the first that has not landed', () => {
@@ -365,6 +524,144 @@ test('and rig next says which stage you are on rather than the whole stack', () 
   const out = rig(['next', '--work', 'sliced']).out
   assert.match(out, /stage 2 of 2: feat\/sliced-two — the endpoints/)
   assert.doesNotMatch(out, /sliced-one/, 'the whole stack is what rig stage is for; this is one line about where you are')
+})
+
+test('a stage whose branch is gone but whose PR merged is landed, not uncut', () => {
+  // The branch is deleted when the slice lands, and until `rig close` records the merged
+  // pull request there is nothing in the record either. Git cannot answer, so GitHub is
+  // asked — for the branches git could not find, and only those.
+  assert.equal(rig(['new', 'vanished', '--title', 'Vanished work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'vanished']).code, 0)
+  const dest = worktree('vanished', 'billing')
+  assert.equal(rig(['stage', 'feat/vanished-one', '--delivers', 'the schema', '--cut', '--work', 'vanished'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/vanished-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/vanished-one')
+  seedPr({ branch: 'feat/vanished-one', number: 60, state: 'MERGED', base: 'feat/vanished-work', url: 'https://github.com/acme/billing/pull/60', mergedAt: '2026-09-19T12:00:00Z' })
+  gitMust(dest, 'branch', '-D', 'feat/vanished-one')
+
+  const out = rig(['stage', '--work', 'vanished']).out
+  assert.ok(out.includes('billing'), out)
+  assert.ok(!out.includes('not cut in any repo yet'), out)
+  assert.ok(out.includes('PR #60 merged'), out)
+})
+
+test('and a stage nobody has cut anywhere is still reported as not started', () => {
+  assert.equal(rig(['stage', 'feat/vanished-two', '--delivers', 'the endpoints', '--work', 'vanished']).code, 0)
+  const out = rig(['stage', '--work', 'vanished']).out
+  assert.ok(out.includes('not cut in any repo yet'), out)
+})
+
+// ------------------------------------------------- a stage's own ticket, and closing
+
+const seedIssue = (number, title) => {
+  const state = github()
+  const repo = state.repos['acme/billing']
+  repo.issues = (repo.issues || []).concat([{ number, title, state: 'OPEN', comments: [] }])
+  setGithub(state)
+}
+
+const seedPr = pr => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({ openedAt: '2026-09-19T00:00:00Z', commits: ['2026-09-19T00:00:00Z'], ...pr })
+  setGithub(state)
+}
+
+const issueNumbered = n => github().repos['acme/billing'].issues.find(i => i.number === n)
+
+test('a slice that landed closes its own ticket, at the one moment rig speaks', () => {
+  // GitHub fires a closing keyword only for a pull request that merges into the default
+  // branch, and a stage's pull request never does — so a slice's ticket cannot close itself.
+  assert.equal(rig(['new', 'ticketed', '--title', 'Ticketed work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'ticketed']).code, 0)
+  seedIssue(7, 'the schema')
+
+  const dest = worktree('ticketed', 'billing')
+  const r = rig(['stage', 'feat/ticketed-one', '--delivers', 'the schema', '--key', 'acme/billing#7', '--cut', '--work', 'ticketed'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/ticketed-work')
+  // Merged down, not squashed: the convention the derived stack relies on.
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/ticketed-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  seedPr({ branch: 'feat/ticketed-one', number: 30, state: 'MERGED', base: 'feat/ticketed-work', url: 'https://github.com/acme/billing/pull/30', mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: 'feat/ticketed-work', number: 31, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/31', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = rig(['close', '--work', 'ticketed'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(c.out.includes('closed acme/billing#7 (stage feat/ticketed-one landed)'), c.out)
+  assert.equal(issueNumbered(7).state, 'CLOSED')
+  assert.match(issueNumbered(7).comments[0], /The slice this was opened for landed/)
+})
+
+test('a pull request opened after a work closed is reported by status, which has the facts', () => {
+  // The rule's second term is live state, so it can turn true long after the record stopped
+  // moving. `rig status` is where it fires because it is the command that already looked the
+  // pull requests up; `doctor` asks the records alone, over every work.
+  seedPr({ branch: 'feat/ticketed-work', number: 32, state: 'OPEN', base: 'main', url: 'https://github.com/acme/billing/pull/32', mergedAt: null })
+  const r = rig(['status', '--work', 'ticketed'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(r.out.includes('ticketed: closed, but billing still has PR #32 open'), r.out)
+  assert.match(r.out, /should not be possible/)
+})
+
+test('a slice still up for review stops the work closing over it', () => {
+  assert.equal(rig(['new', 'outstanding', '--title', 'Outstanding work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'outstanding']).code, 0)
+  seedIssue(8, 'the endpoints')
+
+  const dest = worktree('outstanding', 'billing')
+  assert.equal(rig(['stage', 'feat/outstanding-one', '--delivers', 'the endpoints', '--key', 'acme/billing#8', '--cut', '--work', 'outstanding'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the endpoints')
+  gitMust(dest, 'checkout', '-q', 'feat/outstanding-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the endpoints', 'feat/outstanding-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  seedPr({ branch: 'feat/outstanding-one', number: 40, state: 'OPEN', base: 'feat/outstanding-work', url: 'https://github.com/acme/billing/pull/40', mergedAt: null })
+  seedPr({ branch: 'feat/outstanding-work', number: 41, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/41', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = rig(['close', '--work', 'outstanding'])
+  assert.equal(c.code, 1, c.out)
+  assert.ok(c.out.includes('stage feat/outstanding-one still has PR #40 open'), c.out)
+  assert.equal(issueNumbered(8).state, 'OPEN')
+})
+
+test('abandoning tells the slice ticket and leaves it open, like every other ticket', () => {
+  const c = rig(['close', '--abandoned', '--work', 'outstanding'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(c.out.includes('left open: stage feat/outstanding-one did not land'), c.out)
+  assert.equal(issueNumbered(8).state, 'OPEN')
+  assert.match(issueNumbered(8).comments[0], /This slice did not land/)
+})
+
+test('forcing past an open slice records the decision, rather than leaving it unexplained', () => {
+  assert.equal(rig(['new', 'forced', '--title', 'Forced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'forced']).code, 0)
+  const dest = worktree('forced', 'billing')
+  assert.equal(rig(['stage', 'feat/forced-one', '--delivers', 'the schema', '--cut', '--work', 'forced'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/forced-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/forced-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/forced-one', number: 50, state: 'OPEN', base: 'feat/forced-work', url: 'https://github.com/acme/billing/pull/50', mergedAt: null })
+  seedPr({ branch: 'feat/forced-work', number: 51, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/51', mergedAt: '2026-09-19T11:00:00Z' })
+
+  assert.equal(rig(['close', '--work', 'forced']).code, 1, 'it refuses first')
+  const c = rig(['close', '--force', '--work', 'forced'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(record('forced').forcedAt, 'the force is a decision, and decisions are what rig records')
+})
+
+test('and a forced close is not then reported as a contradiction', () => {
+  // `rig close --force` exists to tear down past exactly this, so the state is explained. The
+  // rule fires on a record nothing can account for, never on a decision made on purpose.
+  const r = rig(['status', '--work', 'forced'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /should not be possible/)
+  // Scoped to this work: the shared installation carries other works with contradictions of
+  // their own, which is the point of `doctor` running over all of them.
+  assert.doesNotMatch(rig(['doctor']).out, /forced: closed, but/)
 })
 
 // ------------------------------------------------- opening the pull request

@@ -146,6 +146,70 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return s
     },
 
+    // Cut a stage's branch in a worktree that already exists, on top of whatever this repo's
+    // stack reaches now. `cut` above makes the *work* branch, from the remote HEAD, in a
+    // worktree that does not exist yet; this is the other kind, and the difference that
+    // matters is that rig is watching — the one moment a stage's base is not in doubt.
+    //
+    // Whatever is uncommitted comes along, because starting work and then realising it wants
+    // its own stage is the ordinary way round. git decides whether that is possible, and its
+    // refusal is what comes back.
+    cutHere ({ dir, branch, base }) {
+      const r = git(dir, 'checkout', '-b', branch, base)
+      return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
+    },
+
+    // Which of this work's stage branches the repo actually carries, and what each one sits
+    // on. The branches are named by the work — its declared stages — so this asks about a
+    // handful of refs rather than reading everything the mirror holds, which it shares with
+    // every other work on the same repo.
+    //
+    // **Nothing here is written down.** The stack is a question the commits already answer,
+    // and an answer copied into the record is wrong the first time anyone re-points a branch.
+    //
+    // No fetch, either: `rig stage`, `rig plan` and `rig pr` all come through here, and none
+    // of them asked for a network round trip. A branch cut in a worktree is already in the
+    // mirror's `refs/heads`, because the worktree shares the mirror's ref store; a branch
+    // pushed from another machine is under `refs/remotes/origin`.
+    //
+    // A stage's base is the nearest of the work's other branches that is an ancestor of it.
+    // That holds while a stage's pull request **merges** into the branch below rather than
+    // being squashed onto it: a squash replaces the commits, so the originals stop being
+    // ancestors of anything and the chain goes with them. `stageOrder` falls back to
+    // declaration order for whatever cannot be placed, which is the net under exactly that.
+    chain ({ org, repo, branch, stages = [] }) {
+      const mirror = mirrorPath(org, repo)
+      if (!fs.existsSync(mirror) || !stages.length) return []
+      // A branch cut here, or one only ever seen on the remote. Either is this repo carrying
+      // it; which of the two it is says nothing about the stage.
+      const revOf = b => {
+        for (const r of [`refs/heads/${b}`, ref(b)]) {
+          const got = git(mirror, 'rev-parse', '--verify', '--quiet', r)
+          if (got.code === 0 && got.out) return got.out.trim()
+        }
+        return null
+      }
+      const present = stages.map(b => ({ branch: b, rev: revOf(b) })).filter(b => b.rev)
+      if (!present.length) return []
+
+      // The work branch is a candidate base but never gets one derived for it: its base is
+      // the remote HEAD it was cut from, which is in the record and which git cannot say.
+      const workRev = revOf(branch)
+      const candidates = (workRev ? [{ branch, rev: workRev }] : []).concat(present)
+      const at = b => candidates.findIndex(c => c.branch === b.branch)
+      const ancestor = (a, b) => git(mirror, 'merge-base', '--is-ancestor', a.rev, b.rev).code === 0
+      // A branch nobody has committed on yet sits at the same commit as the one below it, so
+      // ancestry is mutual and would place each under the other. Declaration order breaks
+      // that tie, which is the one thing that can tell them apart.
+      const below = (c, b) => c.branch !== b.branch && ancestor(c, b) && (c.rev !== b.rev || at(c) < at(b))
+      const nearer = (best, c) => !best || (best.rev === c.rev ? at(c) > at(best) : ancestor(best, c))
+
+      return present.map(b => {
+        const base = candidates.filter(c => below(c, b)).reduce((best, c) => nearer(best, c) ? c : best, null)
+        return { branch: b.branch, base: base ? base.branch : null }
+      })
+    },
+
     // Any one mirror for the org, as a place to ask git what it would commit with. Every
     // mirror carries the org's remote URL — which is what a `hasconfig:remote.*.url`
     // conditional include matches on — so any of them answers for the whole org.

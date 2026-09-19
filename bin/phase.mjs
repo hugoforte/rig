@@ -151,8 +151,15 @@ export function contradictions (work, repos = []) {
   // An open PR under a closed work means rig closed something that had not landed, which its
   // own blockers forbid. Not asked of an abandoned one: leaving open PRs alone is what
   // `close --abandoned` promises, because closing someone's pull request is an outward-facing
-  // act rig should not take on its own.
-  if (work.closedAt && !work.abandonedAt) {
+  // act rig should not take on its own. Not asked of a **forced** one either, for the same
+  // shape of reason: `rig close --force` exists to tear down past exactly this, so the state
+  // is explained rather than impossible, and telling someone to file an issue about a
+  // decision they made on purpose is not a health check.
+  //
+  // Unlike its three neighbours, this rule compares a record to *live* state, which keeps
+  // moving after the record is written — reopen a merged pull request and nothing about the
+  // work changed. It is the reason this one is `rig status`'s to report and not `doctor`'s.
+  if (work.closedAt && !work.abandonedAt && !work.forcedAt) {
     for (const r of repos) {
       if (r.pr && r.pr.state === 'OPEN') {
         found.push(`${work.id}: closed, but ${r.repo} still has PR #${r.pr.number} open`)

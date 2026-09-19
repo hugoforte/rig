@@ -120,9 +120,11 @@ export function makeInstall ({
   // for the callers that care: `rig list --json` is a pipe, and everything rig says for a
   // human — the freshness line above all — has to stay off it. `root` runs a different copy
   // of the tool than the installation; `env` a different environment than this one.
-  const rig = (args, { input = '', env: envOverride = env, root = install } = {}) => {
+  // `cwd` is how a test reaches the commands that resolve something from the folder they run
+  // in — the work, and the repo `rig stage --cut` makes the branch in.
+  const rig = (args, { input = '', env: envOverride = env, root = install, cwd } = {}) => {
     const r = spawnSync(process.execPath, [path.join(root, 'bin', 'rig.mjs'), ...args],
-      { encoding: 'utf8', env: envOverride, input })
+      { encoding: 'utf8', env: envOverride, input, ...(cwd ? { cwd } : {}) })
     return { code: r.status, out: strip(r.stdout + r.stderr), stdout: strip(r.stdout) }
   }
 

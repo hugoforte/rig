@@ -131,6 +131,13 @@ test('closed with an open PR is a contradiction', () => {
   assert.match(found[0], /closed.*PR #7/)
 })
 
+test('a forced close is explained, not impossible', () => {
+  // `rig close --force` exists to tear down past an open PR, and it records that it did.
+  // Without the record the state is indistinguishable from a rig bug, which is what this rule
+  // used to call it.
+  assert.deepEqual(contradictions(work({ repos: [{ repo: 'r' }], closedAt: AT, forcedAt: AT }), [open(7)]), [])
+})
+
 test('a work both closed and abandoned contradicts nothing', () => {
   assert.deepEqual(contradictions(work({ closedAt: AT, abandonedAt: AT }), []), [])
 })

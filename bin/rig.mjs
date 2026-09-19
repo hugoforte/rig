@@ -639,7 +639,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -925,14 +925,16 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
 // not rig's). `states` covers every attached repo, missing worktrees included, and what it
 // *means* is `workState`'s to say (decision 62): a ticket left open and a `close` that
 // refused now answer for the same reason, instead of each deriving "merged" its own way.
-function ticketWriteBack (work, states, { abandoned = false } = {}) {
+function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {}) {
   const keys = work.tickets || []
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
   const githubKeys = keys.filter(isGithubKey)
   const jiraKeys = keys.filter(isJiraKey)
-  if (!githubKeys.length && !jiraKeys.length) return
+  // A work that declined a ticket can still have slices that carry one, so the stages are
+  // written back either way.
+  if (!githubKeys.length && !jiraKeys.length) return stageWriteBack(work, stages, { abandoned })
 
   const { done: merged, reason, repos } = workState(work, states)
   const prs = repos.filter(v => v.pr).map(v => `- ${v.repo}: ${v.pr.url}`)
@@ -971,6 +973,49 @@ function ticketWriteBack (work, states, { abandoned = false } = {}) {
     const notCommented = trackerFailure(() => jira().commentIssue(key, jiraBody))
     if (notCommented) warn(`${key}: could not comment (${notCommented})`)
     else step(`commented on ${key}`)
+  }
+
+  stageWriteBack(work, stages, { abandoned })
+}
+
+// A stage's own tickets, told what became of the slice they were opened for.
+//
+// This is the one moment rig speaks to a tracker, and a stage's ticket is written back here
+// with every other rather than the moment its pull requests merge — one outward-facing act,
+// not a new rule about when rig speaks. A slice that landed closes its ticket; one that did
+// not is commented on and left open, because whether the slice is still wanted is not rig's
+// answer any more than an abandoned work's is.
+function stageWriteBack (work, stages, { abandoned }) {
+  for (const st of stages) {
+    const keys = st.tickets || []
+    if (!keys.length) continue
+    const landed = !abandoned && st.landed
+    const prs = st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)
+    const body = [
+      landed
+        ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
+        : `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}. This slice did not land, so the issue stays open.`,
+      '', `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`,
+      ...(prs.length ? ['', ...prs] : []),
+      '', `Context doc: ${contextDocRef(work.id)}`,
+    ].join('\n')
+
+    for (const key of keys) {
+      if (isJiraKey(key)) {
+        const notCommented = trackerFailure(() => jira().commentIssue(key, `${body}\n\nrig does not transition Jira tickets — move this one yourself.`))
+        if (notCommented) warn(`${key}: could not comment (${notCommented})`)
+        else step(`commented on ${key} (stage ${st.branch})`)
+        continue
+      }
+      if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
+      const [repo, n] = key.split('#')
+      const notCommented = trackerFailure(() => github().commentIssue(repo, n, body))
+      if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
+      if (!landed) { step(`commented on ${key} (left open: stage ${st.branch} did not land)`); continue }
+      const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+      if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
+      else step(`closed ${key} (stage ${st.branch} landed)`)
+    }
   }
 }
 
@@ -1930,6 +1975,13 @@ cmds.status = ({ flags }) => {
     say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     say('')
   })
+  // The contradictions that need a lookup fire here, because this is the command that has
+  // already paid for one. `doctor` asks the records alone and runs over every work, so a PR
+  // call per repo per work would make it too slow to be the command you reach for when
+  // something is already broken.
+  for (const message of contradictions(work, verdict.repos)) {
+    warn(`${message} — this should not be possible; please file an issue at ${ISSUES_URL}`)
+  }
 }
 
 // The catalogue's commands for one repo, in that repo's worktree. `label` is the
@@ -2131,17 +2183,42 @@ cmds.pr = ({ flags }) => {
 // Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
 // row each. The base is read live (decision 63) because the base is what says where a stage
 // sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
+//
+// Two sources, and neither is a copy of the other. **The record** answers for the work branch,
+// whose base is the remote HEAD it was cut from, and for a merged pull request's terminal
+// facts. **git** answers for the stages: whether the branch is there at all and what it sits
+// on. Before this, only the record was read, and since nothing ever wrote a stage into it, no
+// declared stage could be placed in the chain — which is hugoforte/rig#78.
+//
+// Nothing discovered is written back. A stage's place in the stack is a question the commits
+// answer, and a recorded answer is a second one that disagrees the first time a branch moves.
 function branchRows (cfg, work) {
   const rows = []
+  const declared = (work.stages || []).map(s => s.branch)
   for (const entry of work.repos) {
+    const found = trees(cfg).chain({ org: entry.org, repo: entry.repo, branch: work.branch, stages: declared })
+    const known = new Map(found.map(f => [f.branch, f]))
+    // The record laid over what git found: a recorded base wins where there is one, because
+    // the only branch that has one is the work branch and git cannot name a remote HEAD.
     for (const b of entry.branches || []) {
+      const prior = known.get(b.branch)
+      known.set(b.branch, { ...prior, ...b, base: b.base ?? prior?.base ?? null })
+    }
+    // A slice that landed usually loses its branch, and until `rig close` records the merged
+    // pull request the record has nothing either — so a stage that finished would read as one
+    // nobody ever cut, which is the symptom this whole change exists to remove. GitHub is
+    // asked for the branches git could not find, and only those: a repo carrying the branch
+    // costs nothing extra, and a row survives only if a pull request answers for it.
+    for (const b of declared) if (!known.has(b)) known.set(b, { branch: b, base: null, absent: true })
+    for (const b of known.values()) {
       let pr = null
       const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
       const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
+      if (b.absent && !pr && !recorded) continue
       rows.push({
         repo: entry.repo,
         branch: b.branch,
-        // The live base wins when GitHub answered; the record is the fallback.
+        // The live base wins when GitHub answered; git, then the record, is the fallback.
         base: (!prError && pr?.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
@@ -2169,14 +2246,32 @@ cmds.stage = ({ flags, positional }) => {
   const branch = positional[0]
 
   if (branch) {
-    const problem = stageBranchProblem(work, branch)
-    if (problem) die(problem)
-    if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
-    work.stages.push({ branch, delivers: flags.delivers || '' })
+    // Declaring and cutting are two acts on two days: a stage is normally declared before
+    // anyone makes its branch, which is why recording the branch at declaration time could
+    // never be the whole answer. `--cut` is how the second act reaches a stage already
+    // declared, and declaring and cutting at once is just both in one command.
+    const declared = work.stages.find(s => s.branch === branch)
+    const key = flags.key === true ? die('--key needs a ticket, PROJ-123 or owner/repo#7') : flags.key
+    if (key && !isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#7`)
+    if (!declared) {
+      const problem = stageBranchProblem(work, branch)
+      if (problem) die(problem)
+      if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
+      work.stages.push({ branch, delivers: flags.delivers || '', ...(key ? { tickets: [key] } : {}) })
+    } else if (!flags.cut && !key) {
+      die(`${branch} is already a stage of this work`)
+    } else if (key) {
+      declared.tickets = declared.tickets || []
+      if (!declared.tickets.includes(key)) declared.tickets.push(key)
+    }
+    const cut = flags.cut ? cutStageHere(cfg, work, branch) : null
+    const stage = work.stages.find(s => s.branch === branch)
     commitAs(work.id, branch)
     saveWork(cfg, work)
-    ok(`${work.id}: stage ${C.bold(branch)}${flags.delivers ? ` — ${flags.delivers}` : ''}`)
-    if (!flags.delivers) {
+    ok(`${work.id}: stage ${C.bold(branch)}${stage.delivers ? ` — ${stage.delivers}` : ''}`)
+    if (stage.tickets?.length) say(`  ${C.dim(stage.tickets.join(', '))}`)
+    if (cut) ok(`${cut.repo}: cut ${C.bold(branch)} on ${cut.base}`)
+    if (!stage.delivers) {
       say(`  ${C.dim('nothing recorded about what it delivers — that one line is the only prose a stage carries')}`)
     }
     return
@@ -2197,11 +2292,41 @@ cmds.stage = ({ flags, positional }) => {
     const mark = st.landed ? C.green('✓') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
     say(`  ${mark} ${i + 1}. ${C.bold(st.branch)}${st === upNext ? C.dim('  ← next') : ''}`)
     if (st.delivers) say(`       ${st.delivers}`)
+    if (st.tickets.length) say(`       ${C.dim(st.tickets.join(', '))}`)
     say(`       ${C.dim(st.started ? st.repos.join(', ') : 'not cut in any repo yet')}`)
     for (const pr of st.prs) {
       say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
     }
+    // Said out loud rather than left to read as "no PR": the two look identical otherwise,
+    // and only one of them means there is nothing to review.
+    if (st.prUnknown) say(`       ${C.yellow(`PR state unknown in ${st.prUnknown.join(', ')}`)}`)
   }
+}
+
+// `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
+//
+// **Which repo is never asked for.** It is the worktree the command runs in — the same
+// convention every rig command already uses to resolve the work itself. A repo list typed at
+// declaration time would be a prediction of a stage's scope, and the repos a stage touches
+// are *derived* from where its branch is found, so a branch cut on a guess is
+// indistinguishable from one cut on purpose. Over-cutting corrupts the derived answer;
+// under-cutting costs nothing, because you cut it yourself later and discovery finds it.
+//
+// The base is this repo's own top of stack, which is the whole reason rig is worth having cut
+// it: at the moment of the cut the base is not in doubt, and it never needs recording.
+function cutStageHere (cfg, work, branch) {
+  const here = process.cwd()
+  const entry = work.repos.find(r => sameDir(r.path, here) || insideDir(here, r.path))
+  if (!entry) {
+    const names = work.repos.map(r => r.repo).join(', ') || 'none attached yet'
+    die(`--cut makes the branch in one repo: run it inside one of ${work.id}'s worktrees (${names})`)
+  }
+  const carried = stackOf(work, branchRows(cfg, work))
+    .filter(st => st.branch !== branch && st.repos.includes(entry.repo))
+  const base = carried.length ? carried[carried.length - 1].branch : work.branch
+  const failed = trees(cfg).cutHere({ dir: entry.path, branch, base })
+  if (failed) die(`${entry.repo}: could not cut ${branch} on ${base} — ${failed}`)
+  return { repo: entry.repo, base }
 }
 
 // The rollout plan, part generated and part prose.
@@ -2260,7 +2385,10 @@ cmds.close = ({ flags }) => {
   // reads the list and refuses on it. Chiefly: a merged PR settles its branch, so the
   // commits a squash merge left looking unpushed no longer demand `--force` (#52).
   const states = work.repos.map(r => repoState(cfg, r, work.branch))
-  const verdict = workState(work, states)
+  // The stack, which `close` is the one caller that needs: a slice still up for review is
+  // unfinished business, and the work branch's own PR cannot say so.
+  const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+  const verdict = workState(work, states, { stages: stack })
   // Abandoning is the decision to stop a work without finishing it, so every blocker that
   // asks "did it land?" is asking the wrong question — an unmerged PR and unpushed commits
   // are what being abandoned *looks like*, not a reason to refuse. `dirty` survives, because
@@ -2275,6 +2403,12 @@ cmds.close = ({ flags }) => {
     process.exitCode = 1
     return
   }
+  // Forcing past the blockers is a decision, and decision 64's rule is that a decision no
+  // lookup can recover afterwards is the one thing worth storing. Without it, a work closed
+  // over an open pull request is indistinguishable from a rig bug — which is exactly what
+  // `contradictions` used to call it. A `--force` that had nothing to get past is not a
+  // decision and is not recorded.
+  if (flags.force && blockers.length) work.forcedAt = new Date().toISOString()
   // Every PR left is terminal by now — blockers above already refused an open one — so this
   // is the one moment to record it, before the worktree the branch fallback would read from
   // is removed below. A record for a different PR number is re-taken: the branch carried a
@@ -2314,7 +2448,7 @@ cmds.close = ({ flags }) => {
   work.closedAt = new Date().toISOString()
   if (abandoned) work.abandonedAt = work.closedAt
   saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as stopped
-  ticketWriteBack(work, states, { abandoned })
+  ticketWriteBack(work, states, { abandoned, stages: stack })
   ok(`${abandoned ? 'abandoned' : 'closed'} ${id} — context doc kept at ${contextFile(id)}`)
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -2696,7 +2830,8 @@ cmds.doctor = () => {
   // Asked of the records alone, with no PR lookup: doctor already fetches once and runs over
   // every work, and a GitHub call per repo per work would make the command too slow to be the
   // one you reach for. The contradictions that need live state are caught by `rig status`,
-  // which looks them up anyway.
+  // which looks them up anyway — it says so here because it now does, which it did not when
+  // this comment was first written.
   for (const id of listWorkIds()) {
     for (const message of contradictions(loadWork(cfg, id))) {
       bad(`${message} — this should not be possible; please file an issue at ${ISSUES_URL}`)
@@ -2773,6 +2908,8 @@ cmds.help = () => {
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
   rig stage [branch]              the stack, in branch order; with a branch, declare one
+  rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
+  rig stage <branch> --key <k>    give the stage its own ticket, closed when the slice lands
        --delivers "..."            the one line of prose a stage carries
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
