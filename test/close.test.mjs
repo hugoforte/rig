@@ -526,6 +526,32 @@ test('and rig next says which stage you are on rather than the whole stack', () 
   assert.doesNotMatch(out, /sliced-one/, 'the whole stack is what rig stage is for; this is one line about where you are')
 })
 
+test('a stage whose branch is gone but whose PR merged is landed, not uncut', () => {
+  // The branch is deleted when the slice lands, and until `rig close` records the merged
+  // pull request there is nothing in the record either. Git cannot answer, so GitHub is
+  // asked — for the branches git could not find, and only those.
+  assert.equal(rig(['new', 'vanished', '--title', 'Vanished work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'vanished']).code, 0)
+  const dest = worktree('vanished', 'billing')
+  assert.equal(rig(['stage', 'feat/vanished-one', '--delivers', 'the schema', '--cut', '--work', 'vanished'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/vanished-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/vanished-one')
+  seedPr({ branch: 'feat/vanished-one', number: 60, state: 'MERGED', base: 'feat/vanished-work', url: 'https://github.com/acme/billing/pull/60', mergedAt: '2026-09-19T12:00:00Z' })
+  gitMust(dest, 'branch', '-D', 'feat/vanished-one')
+
+  const out = rig(['stage', '--work', 'vanished']).out
+  assert.ok(out.includes('billing'), out)
+  assert.ok(!out.includes('not cut in any repo yet'), out)
+  assert.ok(out.includes('PR #60 merged'), out)
+})
+
+test('and a stage nobody has cut anywhere is still reported as not started', () => {
+  assert.equal(rig(['stage', 'feat/vanished-two', '--delivers', 'the endpoints', '--work', 'vanished']).code, 0)
+  const out = rig(['stage', '--work', 'vanished']).out
+  assert.ok(out.includes('not cut in any repo yet'), out)
+})
+
 // ------------------------------------------------- a stage's own ticket, and closing
 
 const seedIssue = (number, title) => {

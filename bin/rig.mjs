@@ -2204,10 +2204,17 @@ function branchRows (cfg, work) {
       const prior = known.get(b.branch)
       known.set(b.branch, { ...prior, ...b, base: b.base ?? prior?.base ?? null })
     }
+    // A slice that landed usually loses its branch, and until `rig close` records the merged
+    // pull request the record has nothing either — so a stage that finished would read as one
+    // nobody ever cut, which is the symptom this whole change exists to remove. GitHub is
+    // asked for the branches git could not find, and only those: a repo carrying the branch
+    // costs nothing extra, and a row survives only if a pull request answers for it.
+    for (const b of declared) if (!known.has(b)) known.set(b, { branch: b, base: null, absent: true })
     for (const b of known.values()) {
       let pr = null
       const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
       const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
+      if (b.absent && !pr && !recorded) continue
       rows.push({
         repo: entry.repo,
         branch: b.branch,
