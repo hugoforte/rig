@@ -1835,6 +1835,19 @@ const listPayload = (cfg, live) => ({
   works: worksByActivity(cfg).map(w => workJson(cfg, w, live)),
 })
 
+// The same payload, for a consumer inside this process rather than downstream of a pipe — a
+// test asserting the shape of the published surface should not have to parse a subprocess's
+// stdout to see it.
+//
+// It takes no config, deliberately. `listPayload` finds the *records* through this
+// installation's own data root (`where()`) whatever config it is handed, so a published
+// signature that accepted one would promise a choice it does not make; giving one data root
+// per call is hugoforte/rig#77's, and it is a change to how the records are located, not to
+// how they are published. Handing a config out would publish the machine half besides — the
+// work root, the mirrors, the identities and the secrets — which is exactly what the payload
+// withholds from a consumer field by field (decision 37).
+const listing = live => listPayload(config(), live)
+
 cmds.list = ({ flags }) => {
   const cfg = config()
   const live = flags.prs !== false && !flags.quick
@@ -2972,13 +2985,16 @@ this installation is behind its remote, \`rig update\` brings it forward.`)
 
 // --------------------------------------------------------------------- main
 
-// Pure helpers, importable by tests. Nothing below the guard runs on import.
+// Importable by tests: the pure helpers, and `listing` — the one machine-readable surface
+// (decision 55), which is neither pure nor cheap, since it reads every record and may ask
+// GitHub about every branch. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine, checkoutState, countCommits,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   SPAWN_DEFAULTS, REFRESH_SPAWN, FETCH_ENV, effectiveIdentity, parseDf,
   directionSection, directionBody, directionIsTodo,
+  listing,
 }
 
 // Node realpaths the main module before evaluating it, so compare realpaths: through a
