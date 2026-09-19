@@ -526,6 +526,118 @@ test('and rig next says which stage you are on rather than the whole stack', () 
   assert.doesNotMatch(out, /sliced-one/, 'the whole stack is what rig stage is for; this is one line about where you are')
 })
 
+// ------------------------------------------------- a stage's own ticket, and closing
+
+const seedIssue = (number, title) => {
+  const state = github()
+  const repo = state.repos['acme/billing']
+  repo.issues = (repo.issues || []).concat([{ number, title, state: 'OPEN', comments: [] }])
+  setGithub(state)
+}
+
+const seedPr = pr => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({ openedAt: '2026-09-19T00:00:00Z', commits: ['2026-09-19T00:00:00Z'], ...pr })
+  setGithub(state)
+}
+
+const issueNumbered = n => github().repos['acme/billing'].issues.find(i => i.number === n)
+
+test('a slice that landed closes its own ticket, at the one moment rig speaks', () => {
+  // GitHub fires a closing keyword only for a pull request that merges into the default
+  // branch, and a stage's pull request never does — so a slice's ticket cannot close itself.
+  assert.equal(rig(['new', 'ticketed', '--title', 'Ticketed work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'ticketed']).code, 0)
+  seedIssue(7, 'the schema')
+
+  const dest = worktree('ticketed', 'billing')
+  const r = rig(['stage', 'feat/ticketed-one', '--delivers', 'the schema', '--key', 'acme/billing#7', '--cut', '--work', 'ticketed'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/ticketed-work')
+  // Merged down, not squashed: the convention the derived stack relies on.
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/ticketed-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  seedPr({ branch: 'feat/ticketed-one', number: 30, state: 'MERGED', base: 'feat/ticketed-work', url: 'https://github.com/acme/billing/pull/30', mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: 'feat/ticketed-work', number: 31, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/31', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = rig(['close', '--work', 'ticketed'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(c.out.includes('closed acme/billing#7 (stage feat/ticketed-one landed)'), c.out)
+  assert.equal(issueNumbered(7).state, 'CLOSED')
+  assert.match(issueNumbered(7).comments[0], /The slice this was opened for landed/)
+})
+
+test('a pull request opened after a work closed is reported by status, which has the facts', () => {
+  // The rule's second term is live state, so it can turn true long after the record stopped
+  // moving. `rig status` is where it fires because it is the command that already looked the
+  // pull requests up; `doctor` asks the records alone, over every work.
+  seedPr({ branch: 'feat/ticketed-work', number: 32, state: 'OPEN', base: 'main', url: 'https://github.com/acme/billing/pull/32', mergedAt: null })
+  const r = rig(['status', '--work', 'ticketed'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(r.out.includes('ticketed: closed, but billing still has PR #32 open'), r.out)
+  assert.match(r.out, /should not be possible/)
+})
+
+test('a slice still up for review stops the work closing over it', () => {
+  assert.equal(rig(['new', 'outstanding', '--title', 'Outstanding work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'outstanding']).code, 0)
+  seedIssue(8, 'the endpoints')
+
+  const dest = worktree('outstanding', 'billing')
+  assert.equal(rig(['stage', 'feat/outstanding-one', '--delivers', 'the endpoints', '--key', 'acme/billing#8', '--cut', '--work', 'outstanding'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the endpoints')
+  gitMust(dest, 'checkout', '-q', 'feat/outstanding-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the endpoints', 'feat/outstanding-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  seedPr({ branch: 'feat/outstanding-one', number: 40, state: 'OPEN', base: 'feat/outstanding-work', url: 'https://github.com/acme/billing/pull/40', mergedAt: null })
+  seedPr({ branch: 'feat/outstanding-work', number: 41, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/41', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = rig(['close', '--work', 'outstanding'])
+  assert.equal(c.code, 1, c.out)
+  assert.ok(c.out.includes('stage feat/outstanding-one still has PR #40 open'), c.out)
+  assert.equal(issueNumbered(8).state, 'OPEN')
+})
+
+test('abandoning tells the slice ticket and leaves it open, like every other ticket', () => {
+  const c = rig(['close', '--abandoned', '--work', 'outstanding'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(c.out.includes('left open: stage feat/outstanding-one did not land'), c.out)
+  assert.equal(issueNumbered(8).state, 'OPEN')
+  assert.match(issueNumbered(8).comments[0], /This slice did not land/)
+})
+
+test('forcing past an open slice records the decision, rather than leaving it unexplained', () => {
+  assert.equal(rig(['new', 'forced', '--title', 'Forced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'forced']).code, 0)
+  const dest = worktree('forced', 'billing')
+  assert.equal(rig(['stage', 'feat/forced-one', '--delivers', 'the schema', '--cut', '--work', 'forced'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/forced-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/forced-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/forced-one', number: 50, state: 'OPEN', base: 'feat/forced-work', url: 'https://github.com/acme/billing/pull/50', mergedAt: null })
+  seedPr({ branch: 'feat/forced-work', number: 51, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/51', mergedAt: '2026-09-19T11:00:00Z' })
+
+  assert.equal(rig(['close', '--work', 'forced']).code, 1, 'it refuses first')
+  const c = rig(['close', '--force', '--work', 'forced'])
+  assert.equal(c.code, 0, c.out)
+  assert.ok(record('forced').forcedAt, 'the force is a decision, and decisions are what rig records')
+})
+
+test('and a forced close is not then reported as a contradiction', () => {
+  // `rig close --force` exists to tear down past exactly this, so the state is explained. The
+  // rule fires on a record nothing can account for, never on a decision made on purpose.
+  const r = rig(['status', '--work', 'forced'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /should not be possible/)
+  // Scoped to this work: the shared installation carries other works with contradictions of
+  // their own, which is the point of `doctor` running over all of them.
+  assert.doesNotMatch(rig(['doctor']).out, /forced: closed, but/)
+})
+
 // ------------------------------------------------- opening the pull request
 
 // Review is the phase rig was most obviously absent from: it has read PR state everywhere

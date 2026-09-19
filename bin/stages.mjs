@@ -89,6 +89,10 @@ export function stageState (stage, perRepo = []) {
   return {
     branch: stage.branch,
     delivers: stage.delivers || '',
+    // A stage's own tickets, if it was given any. GitHub fires a closing keyword only for a
+    // pull request that merges into the default branch, and a stage's never does — so a
+    // slice's ticket cannot close itself, and rig is the only thing that can.
+    tickets: stage.tickets || [],
     repos: repos.map(r => r.repo),
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.

@@ -167,6 +167,8 @@ back down into it.
 ```bash
 rig stage                                          # the stack, in the order the branches are stacked
 rig stage feat/schema --delivers "the write path"  # declare one
+rig stage feat/schema --cut                        # and make the branch, here, on this repo's stack
+rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -174,9 +176,11 @@ Stages are for a work big enough to want slicing up, and most are not.
 
 Two things to hold on to:
 
-- **rig does not cut the branch.** You make the branch where branches are made, in the repos
-  the stage touches. Declaring it is what joins those branches into one slice *across* repos
-  and records the one line of prose nothing else can supply.
+- **rig does not cut the branch behind your back.** `--cut` makes it, in the repo whose
+  worktree you are standing in and nowhere else, on top of whatever that repo's stack reaches.
+  There is no repo list to type, because the repos a stage touches are derived from where its
+  branch is found — so a branch cut on a guess would be indistinguishable from one cut on
+  purpose. Cut it yourself in your editor instead and rig finds it either way.
 - **The branch name is the stage's identity.** Same branch name in two repos means the same
   stage — that is the join. A stage exists only in the repos that carry its branch, so the
   chain is per repo while the stage list is per work.
@@ -189,7 +193,10 @@ to be rebased — and a rebase is what breaks the chain rig reads the order from
 merges anything, so this is a convention it relies on rather than enforces; a stage somebody
 squashes anyway falls back to the order it was declared in.
 
-**Stored: the branch, and one line of what it delivers.** Everything else is derived — whether
+**Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
+A stage's pull request merges into the work branch, never the default branch, so a closing
+keyword never fires for it and a slice's ticket cannot close itself. `rig close` closes it when
+the slice landed, and comments and leaves it open when it did not. Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
@@ -283,6 +290,12 @@ rig close --abandoned     # stopped, not finished: the did-it-land checks are dr
 ```
 
 `rig close` removes the worktrees and keeps `context.md`. Nothing is ever auto-deleted.
+
+A **stage** still up for review refuses the close too, and is named like any other blocker: a
+slice that never landed is unfinished business, and the work branch's own pull request cannot
+say so. `--force` tears down past all of it and **records that it did** (`forcedAt`), because
+forcing is a decision and a work closed over an open pull request is otherwise
+indistinguishable from a bug — which is what `rig status` would call it.
 
 **Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
 stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so

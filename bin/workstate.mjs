@@ -108,6 +108,8 @@ function reasonFor (repos, blockers, done) {
   if (!repos.length) return 'No repos were attached, so there are no PRs to check.'
   const unmerged = repos.filter(v => !v.merged)
   if (unmerged.length) return `Not every PR is merged — ${unmerged.map(describe).join(', ')}.`
+  const slices = blockers.filter(b => b.kind === 'stage-pr-open')
+  if (slices.length) return `The work branch landed, but a slice of it did not — ${slices.map(b => b.message).join(', ')}.`
   // Every PR landed and something is still in the way — an uncommitted change, in practice.
   return `Every PR is merged, but ${blockers.map(b => b.message).join(', ')}.`
 }
@@ -117,17 +119,28 @@ function reasonFor (repos, blockers, done) {
 //
 //   repos       per-repo facts plus `merged` and that repo's blockers
 //   blockers    every blocker, in repo order: { repo, kind, message }
-//               kind: dirty | unpushed | distance-unknown | pr-open | pr-unknown
+//               kind: dirty | unpushed | distance-unknown | pr-open | pr-unknown | stage-pr-open
 //   safeToClose nothing is in the way of `rig close`
 //   done        safe to close *and* every attached repo landed a PR
 //   reason      one line saying why not done, empty when it is
 //
 // A work with nothing attached is safe to close and is not done: there is no unfinished
 // business, and equally nothing that landed.
-export function workState (work, states = []) {
+//
+// `stages` is the stack, when the caller has it. The verdict this module reaches is still
+// about the work branch — that is what a work landing *means* — but a slice still up for
+// review is unfinished business by any reading, and until a stage could be placed in the
+// chain at all there was nothing here to ask. Optional because only `close` needs it: `list`
+// runs over every work, and a git and GitHub pass per stage per work is not what a listing is.
+export function workState (work, states = [], { stages = [] } = {}) {
   const entries = work.repos || []
   const repos = entries.map((entry, i) => repoVerdict(entry, states[i] || {}, work.branch))
-  const blockers = repos.flatMap(v => v.blockers)
+  const slices = stages.flatMap(st => st.prs.filter(pr => pr.state === 'OPEN').map(pr => ({
+    repo: pr.repo,
+    kind: 'stage-pr-open',
+    message: `${pr.repo}: stage ${st.branch} still has PR #${pr.number} open`,
+  })))
+  const blockers = repos.flatMap(v => v.blockers).concat(slices)
   const safeToClose = blockers.length === 0
   const done = safeToClose && repos.length > 0 && repos.every(v => v.merged)
   return { repos, blockers, safeToClose, done, reason: reasonFor(repos, blockers, done) }
