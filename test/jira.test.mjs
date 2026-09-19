@@ -6,6 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { twgViaCli, twgInMemory } from '../bin/jira.mjs'
+import { resolveJiraFields } from '../bin/rig.mjs'
 
 const canned = reply => {
   const calls = []
@@ -154,6 +155,22 @@ test('twg adapter: fieldMetadata fails loudly on a JSON shape it cannot read', (
   assert.throws(() => twg.fieldMetadata('KTLO', 'Task'), /could not read fields/)
 })
 
+test('twg adapter: projectComponents reads the REST passthrough\'s array of components', () => {
+  const { calls, twg } = canned(() => JSON.stringify([{ id: 11023, name: 'InfoManagerWeb' }, { id: 11024, name: 'Payments' }]))
+  assert.deepEqual(twg.projectComponents('KTLO'), [{ id: '11023', name: 'InfoManagerWeb' }, { id: '11024', name: 'Payments' }])
+  assert.deepEqual(calls[0], ['api', 'jira:/rest/api/3/project/KTLO/components'])
+})
+
+test('twg adapter: projectComponents also reads the paginated { values } shape', () => {
+  const { twg } = canned(() => JSON.stringify({ values: [{ id: '11023', name: 'InfoManagerWeb' }] }))
+  assert.deepEqual(twg.projectComponents('KTLO'), [{ id: '11023', name: 'InfoManagerWeb' }])
+})
+
+test('twg adapter: projectComponents fails loudly on a JSON shape it cannot read', () => {
+  const { twg } = canned(() => '{"errorMessages":["No project could be found with key KTLO"]}')
+  assert.throws(() => twg.projectComponents('KTLO'), /could not read components/)
+})
+
 test('twg adapter: activeSprintId finds the sprint in state "active"', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { sprints: [{ id: 5, state: 'closed' }, { id: 7, state: 'active' }] } }))
   assert.equal(twg.activeSprintId(123), 7)
@@ -172,6 +189,7 @@ const world = () => ({
     { id: 'customfield_10058', name: 'Story Points', allowedValues: [] },
     { id: 'customfield_10755', name: 'Components', allowedValues: [{ id: '10755', name: 'Payments' }] },
   ] } },
+  components: { KTLO: [{ id: '11023', name: 'InfoManagerWeb' }] },
   boards: { 123: 7 },   // board id -> active sprint id
 })
 
@@ -192,9 +210,11 @@ test('in-memory adapter: createIssue numbers a new key under the project and rec
   assert.deepEqual(state.issues['KTLO-2'], { title: 'New', body: 'D', assignee: 'me', fields: { customfield_10058: 3 }, comments: [] })
 })
 
-test('in-memory adapter: fieldMetadata and activeSprintId read the canned tables', () => {
+test('in-memory adapter: fieldMetadata, projectComponents and activeSprintId read the canned tables', () => {
   const twg = twgInMemory(world())
   assert.equal(twg.fieldMetadata('KTLO', 'Task')[0].name, 'Story Points')
+  assert.deepEqual(twg.projectComponents('KTLO'), [{ id: '11023', name: 'InfoManagerWeb' }])
+  assert.deepEqual(twg.projectComponents('OTHER'), [])
   assert.equal(twg.activeSprintId(123), 7)
   assert.equal(twg.activeSprintId(999), null)
 })
@@ -203,4 +223,57 @@ test('in-memory adapter: present false makes every call fail like a missing twg'
   const twg = twgInMemory({ ...world(), present: false })
   assert.equal(twg.present(), false)
   assert.throws(() => twg.getIssue('KTLO-1'), /twg not found on PATH/)
+})
+
+// ------------------------------------------------- rig.json fields -> what twg is given
+//
+// `resolveJiraFields` is bin/rig.mjs's, but everything it asks about is this module's
+// interface, so it is exercised here against the in-memory adapter. The create-metadata
+// table below is the shape a real Jira answers with: custom fields only. No system field
+// is ever in it (hugoforte/rig#45 — 31 entries for KTLO/Story, every one a
+// `customfield_*`), which is why rig has to know them by heart.
+const customFieldsOnly = () => ({
+  present: true,
+  issues: {},
+  fields: { KTLO: { Story: [{ id: 'customfield_10058', name: 'Story Points', allowedValues: [] }] } },
+  components: { KTLO: [{ id: '11023', name: 'InfoManagerWeb' }, { id: '11024', name: 'Payments' }] },
+  boards: {},
+})
+const ktlo = (fields, type = 'Story') => ({ org: 'linenmaster', project: 'KTLO', type, fields })
+
+test('resolveJiraFields: a system field resolves although create-metadata omits it', () => {
+  const resolved = resolveJiraFields(twgInMemory(customFieldsOnly()),
+    ktlo({ assignee: 'me', story_points: 3, components: ['InfoManagerWeb'] }), [])
+  // `components` keeps Jira's own name as its id — there is no customfield_* to become —
+  // and this is also the payload `--dry-run` prints, line for line.
+  assert.deepEqual(resolved, { assignee: 'me', fields: { customfield_10058: 3, components: ['11023'] } })
+})
+
+test('resolveJiraFields: a component name resolves to its id from the project components', () => {
+  const resolved = resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ components: 'Payments' }), [])
+  assert.deepEqual(resolved.fields, { components: ['11024'] }, 'a bare name resolves like a list of one')
+})
+
+test('resolveJiraFields: a component the project does not have dies, listing the ones it does', () => {
+  assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ components: ['Payment'] }), []),
+    /"Payment" is not a value for "Components" \(KTLO\) — known: InfoManagerWeb, Payments/)
+})
+
+test('resolveJiraFields: system fields other than components pass through under their Jira name', () => {
+  const resolved = resolveJiraFields(twgInMemory(customFieldsOnly()),
+    ktlo({ labels: ['ktlo'], priority: 'High', fix_versions: ['2026.9'] }), [])
+  assert.deepEqual(resolved.fields, { labels: ['ktlo'], priority: 'High', fixVersions: ['2026.9'] },
+    'rig.json may spell it fix_versions; Jira calls it fixVersions')
+})
+
+test('resolveJiraFields: a name in neither create-metadata nor the system set still dies', () => {
+  assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ compnoents: ['InfoManagerWeb'] }), []),
+    /no field named "compnoents" for KTLO\/Story/)
+})
+
+test('resolveJiraFields: create-metadata wins over the system set when both know the name', () => {
+  // world()'s KTLO/Task does carry a Components field, with allowed values of its own that
+  // the project's component list (InfoManagerWeb) knows nothing about.
+  const resolved = resolveJiraFields(twgInMemory(world()), ktlo({ components: ['Payments'] }, 'Task'), [])
+  assert.deepEqual(resolved.fields, { customfield_10755: ['10755'] })
 })
