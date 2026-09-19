@@ -28,7 +28,8 @@
 // **Stored (intent):** the branch and one line of what it delivers. That is all.
 // **Derived (state):** started (does the branch exist), up for review (is there a PR), landed
 // (did it merge), which repos it touches (where the branch is found), and what it sits on
-// (what it was cut from, read live — decision 63).
+// (what it was cut from, read live — decision 63) — and whether what it was cut from is part
+// of this stack at all, which is the one thing that can contradict the order being shown.
 //
 // Pure, like `phase.mjs`, `workstate.mjs`, `dash.mjs` and `freshness.mjs`: no fs, no git, no
 // gh. Which is what makes a five-deep stack across three repos a fixture rather than a
@@ -50,10 +51,21 @@ export function stageOrder (work, chains = []) {
 
   // Every `base -> branch` edge any repo knows about. A stage that exists in three repos says
   // the same thing three times, which is the join doing its job rather than a conflict.
+  //
+  // `adrift` is the separate question: does any repo put this stage on something that is not
+  // part of this stack at all? That is a **contradiction** — the branches naming a place the
+  // stack does not contain — and it is the only thing the order being shown can be measured
+  // against. It is deliberately `any repo`, not the first to answer: which repo was attached
+  // first is not something a reader should be able to feel, and a stage rebased off the stack
+  // in one repo is genuinely adrift there whatever the others say.
   const below = new Map()
+  const adrift = new Set()
+  const inStack = b => b === work?.branch || declared.has(b)
   for (const chain of chains) {
     for (const { branch, base } of chain || []) {
-      if (declared.has(branch) && base && !below.has(branch)) below.set(branch, base)
+      if (!declared.has(branch) || !base) continue
+      if (!below.has(branch)) below.set(branch, base)
+      if (!inStack(base)) adrift.add(branch)
     }
   }
 
@@ -64,7 +76,7 @@ export function stageOrder (work, chains = []) {
   for (let guard = 0; guard <= declared.size; guard++) {
     const next = [...declared.keys()].find(b => !seen.has(b) && below.get(b) === current)
     if (!next) break
-    ordered.push(declared.get(next))
+    ordered.push({ ...declared.get(next), adrift: adrift.has(next) })
     seen.add(next)
     current = next
   }
@@ -72,7 +84,14 @@ export function stageOrder (work, chains = []) {
   // Anything the chain could not place goes last, in declaration order. A stage whose branch
   // nobody has cut yet has no base to be found by, and a stage cut from somewhere unexpected
   // is a fact about the repo rather than a reason to drop it off the list.
-  for (const [branch, stage] of declared) if (!seen.has(branch)) ordered.push(stage)
+  //
+  // **Not reaching a stage is not evidence against it.** The walk stops for reasons that are
+  // the ordinary life of a sliced work: a stage's pull request points at the work branch, which
+  // is decision 75's convention and makes every stage with a PR report the same base; the stage
+  // below has landed and its branch is gone, so nothing surviving is an ancestor of the one
+  // above. Both leave the walk short and neither means anything is wrong. `adrift` is the fact
+  // that can be said instead — the branches naming a place this stack does not contain.
+  for (const [branch, stage] of declared) if (!seen.has(branch)) ordered.push({ ...stage, adrift: adrift.has(branch) })
   return ordered
 }
 
@@ -97,6 +116,10 @@ export function stageState (stage, perRepo = []) {
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
     started: repos.length > 0,
+    // Do the branches put this stage somewhere this stack does not contain? Set by
+    // `stageOrder`, which is the only thing that knows; a stage handed here on its own has no
+    // chain to have contradicted it, so it is taken at its word.
+    adrift: stage.adrift === true,
     // Up for review while any repo's PR is **open**, and landed only when every repo that
     // carries the stage has merged it — the same all-or-nothing rule `workState` uses for a
     // work, scoped to one slice of it. CLOSED is neither: a stage somebody gave up on is not
@@ -129,17 +152,49 @@ const groupByRepo = perRepo => {
 // is what makes the work branch's own PR the thing that is available next.
 export const nextStage = stack => stack.find(s => !s.landed) || null
 
+// The one line of honesty under an order that is partly a guess, or null when nothing
+// contradicts it. `mark` is how the caller writes a branch name — backticked for markdown,
+// bare for a terminal — because a branch name is not plain prose in either.
+//
+// **The condition is a contradiction, not an absence.** A stage is named here only when the
+// branches put it on something this stack does not contain: cut from the base branch, or
+// rebased off the stack. The order shown for it is then the order somebody declared it in and
+// nothing else, and the branches say so rather than merely failing to say otherwise.
+//
+// Everything quieter than that stays quiet, and that is the point. A stage nobody has cut is
+// unplaced and ordinary; so is one whose pull request points at the work branch, which is
+// decision 75's convention rather than a fault; so is one whose neighbour below has landed and
+// taken its branch with it. Those are the steady state of every sliced work, and they are also
+// indistinguishable from the squash this began as a net for — so rig says nothing about them,
+// on its own rule that an unknown is not a fact.
+//
+// It says what happened and not why. "Outside the stack" is what the branches report; "somebody
+// squashed the branch below" is a guess about a merge button, and a rebase does the same thing.
+// One note rather than a mark per row, and it names the branches, so being quieter than a
+// column costs no precision.
+export function adriftNote (stack, mark = b => b) {
+  const lost = stack.filter(st => st.adrift)
+  if (!lost.length) return null
+  return `Outside the stack, so shown in declaration order: ${lost.map(st => mark(st.branch)).join(', ')}`
+}
+
 // The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the
 // rollout plan (`rig plan`) — because the whole complaint against the rollout plan was that
 // its table was typed by hand, and two generators would be two tables that disagree.
+//
+// The note goes **inside** this output rather than beside it at each call site: `planIsStale`
+// compares the rendered region against the live stack, so a note rendered outside would leave a
+// plan that says one thing and a stack that says another, with nothing able to tell.
 export function stageTable (stack) {
   const where = st => st.landed ? 'landed' : st.open ? 'up for review'
     : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
+  const note = adriftNote(stack, b => `\`${b}\``)
   return [
     '| Order | Stage | Delivers | Repos | PR | State |',
     '|------:|-------|----------|-------|----|-------|',
     ...stack.map((st, i) => `| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${st.repos.join(', ') || '—'} | ${prs(st)} | ${where(st)} |`),
+    ...(note ? ['', `_${note}._`] : []),
   ].join('\n')
 }
 

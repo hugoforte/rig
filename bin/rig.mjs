@@ -16,7 +16,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale } from './stages.mjs'
+import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -2333,6 +2333,15 @@ cmds.stage = ({ flags, positional }) => {
     // Said out loud rather than left to read as "no PR": the two look identical otherwise,
     // and only one of them means there is nothing to review.
     if (st.prUnknown) say(`       ${C.yellow(`PR state unknown in ${st.prUnknown.join(', ')}`)}`)
+  }
+  // The header above says the list is in the order the branches are stacked. Where the branches
+  // contradict that — a stage sitting on something this stack does not contain — it is said out
+  // loud: a numbered list reads as evidence whether or not it is, and the reader has no other
+  // way to tell.
+  const adrift = adriftNote(stack)
+  if (adrift) {
+    say('')
+    say(`  ${C.yellow(adrift)}`)
   }
 }
 

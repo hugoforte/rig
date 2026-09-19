@@ -85,8 +85,12 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   if (stack.length) {
     const up = nextStage(stack)
     if (up) {
+      // "stage 2 of 5" is itself a claim about the order, so where the branches contradict it
+      // — this stage sits on something the stack does not contain — it says so. A fact about
+      // what the branches report, not a reproach and not a guess at why. The ordinary reasons
+      // a stack cannot be walked end to end are deliberately silent here.
       const where = up.started
-        ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}`
+        ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.adrift ? ' — outside the stack' : ''}`
         : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
