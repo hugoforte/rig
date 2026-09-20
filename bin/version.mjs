@@ -78,12 +78,16 @@ export const MIGRATIONS = [
 
 export const MAJOR = MIGRATIONS.length
 
-// `package.json` carries the whole version for anyone reading the file, but only its minor
-// and patch are believed here; a test asserts the two agree on the major.
-export function toolVersion (pkg = {}) {
-  const [, minor = '0', patch = '0'] = String(pkg.version || '0.0.0').split('.')
-  return `${MAJOR}.${minor}.${patch}`
-}
+// What a migration stamps into the data root as `writtenBy`. Derived, and `package.json` is
+// not consulted: the stamp is a *record format*, not a note of which rig last touched the data
+// root (ADR 0002), so the minor and the patch never meant anything in it. Reading them from
+// `package.json` is also how the placeholder there would have become an unparseable stamp and
+// refused every mutating command (ADR 0004) — this is the line that makes the placeholder
+// inert.
+//
+// Old data roots carry a stamp with a real minor and patch (`3.7.0`). `majorOf` reads the major
+// out of either shape, so no migration is needed to move between them.
+export const FORMAT_STAMP = `${MAJOR}.0.0`
 
 // The major in a version rig wrote, 0 when there is no stamp at all, and `null` when there
 // is one rig could not have written. Null is not zero: guessing "never migrated" at a stamp

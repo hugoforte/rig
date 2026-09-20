@@ -379,8 +379,9 @@ Both are stated in full in DESIGN.md's "Principles".
 
 ### Releases
 
-Working *on* rig rather than with it: your PR carries its own version. A required check
-computes what it lands as — `feat/` branch → minor, `fix/` → patch, a `release:` label
-overrides — and fails until `package.json` says it, naming the value to write. The merge
-tags it and publishes notes made of the PR descriptions, so write the description as the
-release note. README's "Releases" and `docs/adr/0003-the-pr-carries-its-own-version.md`.
+Working *on* rig rather than with it: **never write a version number.** Your PR names a bump —
+`feat/` branch → minor, `fix/` → patch, a `release:` label overrides — and the required check
+asks only whether it names one. The merge collects the PRs since the previous tag, takes the
+strongest bump among them, tags the commit, and publishes notes made of the PR descriptions, so
+write the description as the release note. `package.json` reads `0.0.0-development` and is not a version.
+README's "Releases" and `docs/adr/0004-the-pr-carries-a-bump-not-a-version.md`.

@@ -20,13 +20,13 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { MAJOR, MIGRATIONS, toolVersion } from '../bin/version.mjs'
+import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
 import { SRC, makeInstall, readJson, strip } from './harness.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
-// What this tool stamps a data root with. Derived, because releases move the minor and a
-// hardcoded stamp would fail on the next one.
-const VERSION = toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')))
+// What this tool stamps a data root with: the record format, derived (ADR 0004). Not read
+// from `package.json`, which no longer carries a version at all.
+const VERSION = FORMAT_STAMP
 
 const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
@@ -788,7 +788,7 @@ test('a data root from before stamping is warned about, then migrated by update'
   assert.match(updated.out, /migrated: stamp the data root/)
   assert.equal(readJson(file).writtenBy, VERSION)
   assert.equal(dirty(dataRoot), '', 'the migration is committed, not left in the tree')
-  assert.match(updated.out, new RegExp(`record format ${MAJOR}, stamped by rig ${VERSION}`), 'the doctor checks run inline')
+  assert.match(updated.out, new RegExp(`record format ${MAJOR}`), 'the doctor checks run inline')
 })
 
 test('update does not migrate over a dirty data root that has no upstream', () => {

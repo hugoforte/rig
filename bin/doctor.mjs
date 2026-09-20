@@ -105,7 +105,10 @@ function rootFindings (root) {
     } else if (stamp.pending?.length) {
       out.push(warn(`${stamp.pending.length} pending migration(s) — run \`rig update\`: ${stamp.pending.join('; ')}`))
     } else {
-      out.push(note(`record format ${stamp.major}, stamped by rig ${stamp.writtenBy ?? 'from before stamping existed'}`))
+      // No "stamped by rig X": `writtenBy` is derived from the format now, so naming it here
+      // would be this line saying the same number twice and calling the second one a rig
+      // (ADR 0004). A data root from before stamping existed still has something to say.
+      out.push(note(stamp.writtenBy ? `record format ${stamp.major}` : `record format ${stamp.major}, from before stamping existed`))
     }
   }
 
@@ -181,7 +184,9 @@ export function doctorFindings (snap = {}) {
   // used to reach the tool checkout first and die there when git was absent, saying nothing.
   out.push(ok('node', snap.node))
   out.push(check('git', !!snap.git, { ok: snap.git, bad: 'not on PATH' }))
-  out.push(note(`rig ${snap.rig?.version} at ${snap.rig?.root}${snap.rig?.mark ? ` (${snap.rig.mark})` : ''}`))
+  // The mark *is* the version (ADR 0004), so it is said once. A checkout with no release in
+  // its history has no version to name and says where it is instead.
+  out.push(note(`rig ${snap.rig?.mark ? `${snap.rig.mark} ` : ''}at ${snap.rig?.root}`))
 
   // The asymmetry is deliberate: a machine that was never going to answer costs a note,
   // while one that tried and failed counts. "Nothing to measure here" and "the fetch broke"

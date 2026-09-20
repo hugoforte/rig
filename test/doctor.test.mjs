@@ -202,19 +202,21 @@ test('pending migrations are reported and never run', () => {
   assert.equal(problemCount(found), 1)
 })
 
-test('a data root at the format this rig writes is a note naming what stamped it', () => {
+test('a data root at the format this rig writes is a note, and names the format once', () => {
+  // No "stamped by rig X": the stamp is derived from the format now, so naming it would be
+  // this line saying one number twice and calling the second one a rig (ADR 0004).
   const found = doctorFindings(snap())
   assert.equal(only(found, /record format 3/).verdict, 'note')
-  assert.match(only(found, /record format 3/).says, /stamped by rig 3\.4\.0/)
+  assert.equal(only(found, /record format 3/).says, 'record format 3')
 })
 
 test('a data root written before stamping existed says so, rather than showing undefined', () => {
-  // The oldest data roots carry no `writtenBy` at all. The fallback is the only reason that
-  // reads as a fact about the record rather than as a bug in the line printing it.
+  // The oldest data roots carry no `writtenBy` at all. That is still worth saying — it is a
+  // fact about the record, and the only stamp state a derived one cannot account for.
   const found = doctorFindings(snap({
     dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: [], major: 3 } } })],
   }))
-  assert.match(only(found, /record format 3/).says, /stamped by rig from before stamping existed/)
+  assert.match(only(found, /record format 3/).says, /from before stamping existed/)
 })
 
 test('an org with no mirror yet is a note: there is nothing to ask git about', () => {

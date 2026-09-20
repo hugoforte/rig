@@ -200,7 +200,7 @@ export function summarize (payload, { org: only, since } = {}) {
     // would be false for that payload, so the header needs to tell the two `!live` cases
     // apart; read straight off the payload, since `reduceWork` does not keep the flag.
     recorded: (payload.works || []).some(w => (w.repos || []).some(r => r.pr?.recorded)),
-    rig: payload.rig,
+    release: payload.release,
     only,
     since,
     orgs,
@@ -371,7 +371,7 @@ export function renderDash (payload, opts = {}) {
 <style>${STYLE}</style>
 <h1><span class="tag">rig</span>Throughput and cycle time</h1>
 <header class="meta">
-  <p>Generated <strong>${esc(s.generatedAt)}</strong> by rig ${esc(s.rig || '')} · scope: ${esc(scope)}${s.since ? ` · merged since ${esc(s.since)}` : ''}</p>
+  <p>Generated <strong>${esc(s.generatedAt)}</strong> by rig ${esc(s.release || 'from an untagged checkout')} · scope: ${esc(scope)}${s.since ? ` · merged since ${esc(s.since)}` : ''}</p>
   <p>${stale}</p>
   <p><em>Two clocks.</em> <em>Work opened → merged</em> starts when <code>rig new</code>
   ran, which is when the work was decided on and where its design time sits. <em>First commit →

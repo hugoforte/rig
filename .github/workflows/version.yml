@@ -1,6 +1,13 @@
-# The PR carries its own version: this check fails until `package.json` says what the PR will
-# land as, so the merge to `main` only has to tag it. Runs on label changes too — a label is
-# how a PR overrides the bump its branch prefix implies.
+# The PR names a bump. This check asks whether it named one, and nothing else — a question
+# about this pull request alone, so no other merge can turn it red (ADR 0004). What the PR
+# lands as is not asked here: that is a fold over every PR in the release, and a branch cannot
+# see the other branches. The merge works it out.
+#
+# Runs on label changes too — a label is how a PR overrides the bump its branch prefix implies.
+#
+# This is a branch-protection check, gating entry to the merge queue. It is deliberately not a
+# merge-queue check: a merge group holds several pull requests and the question does not apply
+# to one.
 
 name: version
 
@@ -16,20 +23,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # No history and no tags: the question is about the branch name and the labels, both of
+      # which arrive in the event. Only `bin/release.mjs` is needed from the checkout.
       - uses: actions/checkout@v4
-        with:
-          # The whole history, for the tags: the next version is computed from the latest
-          # release, and a shallow clone carries none of them.
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: the version this PR lands as
+      - name: the bump this PR asks for
         env:
           BRANCH: ${{ github.head_ref }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        run: |
-          # The newest release in the repo, not the newest one this branch contains: a branch
-          # cut before a release must still land above it.
-          tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
-          node bin/release.mjs check --tag "$tag" --branch "$BRANCH" --labels "$LABELS"
+        run: node bin/release.mjs check --branch "$BRANCH" --labels "$LABELS"
