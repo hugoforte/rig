@@ -167,6 +167,17 @@ const where = () => (location ??= locate(RIG_ROOT, process.env, {
 // `current` chose this root, and no flag, shell or work folder did. Said by the commands
 // that have no work folder to anchor them, and only when there is more than one root to
 // have chosen between — a pointer that could only point one way is not invisible state.
+// `dataRoot` is what a rig from before named roots reads, and it is the only thing it can
+// read. One exists on any machine that has not updated yet — including this one, between an
+// `init` that names the roots and the `rig update` that brings the installed copy forward — so
+// it is kept pointed at whatever is current rather than deleted. Code that knows about
+// `dataRoots` ignores it entirely, which is what stops it being a second answer.
+const mirrorLegacyDataRoot = machine => {
+  const current = machine.dataRoots?.[machine.current]?.path
+  if (current) machine.dataRoot = current
+  return machine
+}
+
 const CHOSE_QUIETLY = { current: 'current', repo: 'the repo it is about' }
 function sayCurrentRoot () {
   const w = where()
@@ -1324,12 +1335,12 @@ cmds.init = ({ flags }) => {
     if (!prev) {
       created = true
       const name = named || DEFAULT_ROOT_NAME
-      return {
+      return mirrorLegacyDataRoot({
         workRoot: flags['work-root'] ? path.resolve(flags['work-root']) : config().workRoot,
         ...(isSplit ? { dataRoots: { [name]: { path: targetDataRoot } }, current: name } : {}),
         identities: Object.fromEntries(orgs.map(o => [o, email])),
         secrets: {},
-      }
+      })
     }
     const next = { ...prev }
     // The one-root form becomes a registry of one, the first time init writes. The machine
@@ -1338,7 +1349,6 @@ cmds.init = ({ flags }) => {
     if (next.dataRoot && !next.dataRoots) {
       next.dataRoots = { [DEFAULT_ROOT_NAME]: { path: next.dataRoot } }
       next.current = next.current || DEFAULT_ROOT_NAME
-      delete next.dataRoot
       changes.push('dataRoots')
     }
     if (flags['data-root']) {
@@ -1364,7 +1374,7 @@ cmds.init = ({ flags }) => {
       next.identities = { ...next.identities }
       for (const o of orgs) if (!next.identities[o]) { next.identities[o] = email; changes.push(`identity for ${o}`) }
     }
-    return next
+    return mirrorLegacyDataRoot(next)
   })
   if (created) ok(`wrote ${localConfigFile()}`)
   else if (changes.length) ok(`updated ${localConfigFile()}: ${changes.join(', ')}`)
@@ -1449,9 +1459,12 @@ cmds.use = ({ positional }) => {
   if (writesBlocked(cfgJson)) {
     die(`data root "${name}" is at record format ${dataMajor(cfgJson)} and this rig writes ${MAJOR} — run \`rig update\` before switching to it.`)
   }
-  if (reg.current === name) { ok(`already on data root ${name} ${C.dim(entry.path)}`); return }
-  writeMachine({ localFile: reg.localFile }, prev => ({ ...(prev ?? {}), current: name }))
-  ok(`data root ${name} ${C.dim(entry.path)}${reg.current ? C.dim(` (was ${reg.current})`) : ''}`)
+  // Written even when the name is not moving: the legacy pointer this keeps in step may be
+  // missing or stale, and `rig use <the one you are on>` is the obvious way to ask for it back.
+  // An unchanged file is not rewritten, so there is nothing to churn.
+  writeMachine({ localFile: reg.localFile }, prev => mirrorLegacyDataRoot({ ...(prev ?? {}), current: name }))
+  if (reg.current === name) { ok(`already on data root ${name} ${C.dim(entry.path)}`) }
+  else ok(`data root ${name} ${C.dim(entry.path)}${reg.current ? C.dim(` (was ${reg.current})`) : ''}`)
   const pending = pendingMigrations(cfgJson)
   if (pending.length) warn(`${name} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
 }

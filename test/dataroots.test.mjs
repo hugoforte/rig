@@ -265,7 +265,8 @@ test('init names the root it set up, and normalises nothing away in doing so', (
   const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
   assert.deepEqual(Object.keys(machine.dataRoots), ['hugoforte', 'personal'])
   assert.equal(machine.dataRoots.hugoforte.path, dataRoot)
-  assert.equal(machine.dataRoot, undefined, 'the one-root key is gone once there is a registry')
+  assert.equal(path.resolve(machine.dataRoot), path.resolve(second),
+    'the one-root key stays, pointed at current, for a rig that has not updated yet')
   assert.equal(machine.current, 'personal', 'the root just set up is the one in hand')
 })
 
@@ -316,6 +317,24 @@ test('rig use switches, and says what it switched from', () => {
   assert.equal(r.code, 0)
   assert.match(r.out, /was personal/)
   assert.equal(JSON.parse(fs.readFileSync(localConfig, 'utf8')).current, 'hugoforte')
+})
+
+test('the one-root key is kept pointed at current, so a rig that has not updated still works', () => {
+  // Between naming the roots and `rig update` bringing the installed copy forward, the rig on
+  // PATH reads `dataRoot` and nothing else. Deleting it broke that rig until it updated.
+  assert.equal(rig(['use', 'personal']).code, 0)
+  const onPersonal = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+  assert.equal(path.resolve(onPersonal.dataRoot), path.resolve(second))
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  const onHugoforte = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+  assert.equal(path.resolve(onHugoforte.dataRoot), path.resolve(dataRoot), 'it follows `rig use`')
+
+  // And `rig use <the one you are already on>` is how a missing or stale one is asked back.
+  const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+  delete machine.dataRoot
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  assert.equal(path.resolve(JSON.parse(fs.readFileSync(localConfig, 'utf8')).dataRoot), path.resolve(dataRoot))
 })
 
 test('rig use refuses a name the machine does not configure', () => {
