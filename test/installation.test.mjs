@@ -360,7 +360,7 @@ test('update leaves a pending migration alone while the data root is diverged', 
   withLocalConfig({ dataRoot: diverged }, () => {
     const r = rig(['update'])
     assert.match(r.out, /data root: 1 behind and 1 ahead of its upstream — not updated/)
-    assert.match(r.out, /migration\(s\) pending, not run — the data root has to be clean and current first/)
+    assert.match(r.out, /migration\(s\) pending, not run — it has to be clean and current first/)
     assert.doesNotMatch(r.out, /migrated:/)
     assert.equal(readJson(path.join(diverged, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
     assert.equal(git(diverged, 'log', '-1', '--format=%s').stdout.trim(), 'a record of my own',

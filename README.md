@@ -157,6 +157,8 @@ The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`
 
 **Stopping a work you did not finish.** `rig close --abandoned` is the honest exit. It runs the same teardown and drops only the checks that ask whether the work landed — an unmerged PR and unpushed commits are what being abandoned looks like — while uncommitted changes still refuse, because unsaved work is the one thing a teardown can destroy. The ticket is told and left open, and open PRs are named and left alone.
 
+One data root is the normal case. Keeping personal, open-source and employer knowledge apart needs more than one, which is [More than one data root](#more-than-one-data-root) below.
+
 `RIG_LOCAL_CONFIG` names `rig.local.json` somewhere other than beside the tool — for a second installation sharing one checkout, or for a test — and a relative `dataRoot` inside it is read against that file's own directory. A key belonging to the org half is ignored in the machine file, and `rig doctor` says so. There is no override for the tool checkout: freshness and `rig update` measure the code that is running, and one that could say otherwise would point `update` at someone else's clone.
 
 ### Tickets
@@ -176,6 +178,75 @@ rig init --data-repo your-org/rig-data --email you@work.example
 ```
 
 The same flag creates the repo when it does not exist yet, with `--orgs` and `--tracker` for the org-level half.
+
+### More than one data root
+
+Personal, open-source and employer knowledge belong in separate data roots, because a data root is a repo that gets pushed and each of those has different people entitled to read it. One installation knows them all by name — one `rig update`, one freshness answer, one `rig` on PATH.
+
+**Add one.** `--name` is what registers it; the root you just set up becomes the current one.
+
+```powershell
+rig init --data-repo you/rig-data --name personal --email you@home.example
+rig init --data-root D:\employer\rig-data --name employer --email you@work.example
+```
+
+**See where you are, and switch.**
+
+```powershell
+rig use                  # every root this machine knows; * marks the one in hand
+rig use employer         # switch to it
+```
+
+`rig use` checks before it moves anything: the directory is there, it has a `rig.json`, and its record format is one this rig can write. If not, it says which and refuses — better than switching and hitting the write refusal on your next `rig save`.
+
+**Use another root without switching.**
+
+```powershell
+rig list --data personal            # one command
+$env:RIG_DATA_ROOT = 'personal'     # a whole shell, until you close it
+```
+
+**Mostly you never say which root.** A repo belongs to a data root from the first time you attach it — that is what the catalogue entry `rig attach` drafts *is* — and rig reads that binding back:
+
+```powershell
+rig new refunds --repos Payments      # goes in whichever root catalogues Payments
+cd D:\code\Payments; rig list          # answers for that repo's root, wherever you cd'd from
+```
+
+**Which root a command reads**, first one that answers:
+
+1. `--data <name>` on the command
+2. `RIG_DATA_ROOT` in the environment
+3. **the work folder you are standing in** — `C:\w\<work>\.rig\data` records the root that work's records live in
+4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue
+5. `current`, moved by `rig use`
+
+Rules 3 and 4 are why this stays out of your way: inside a work folder, or inside a repo you have used before, you never pass a flag and never think about which root is current. The commands that fall through to `current` — `new`, `list`, `catalog`, `dash` — print which root chose for them, so a switch you forgot about is visible rather than silent.
+
+**One work lives in one data root.** Its record is a single `work.json` and a single `context.md`, and the two roots have different readers, so a work cannot span them. rig says so rather than half-doing it: `rig new --repos a,b` refuses when `a` and `b` are catalogued in different roots, and `rig attach` refuses a repo belonging to another root — which is what stops an employer's repo name being drafted into a personal catalogue. Two related works, one per root, is the answer.
+
+**Two things that bite, both on purpose:**
+
+- **One work root serves every data root**, so a work id is unique across all of them. `rig new` refuses an id whose folder already exists and names the root that owns it. Renaming a folder another root's records point at would break that work, so the id is what gives.
+- **A repo catalogued in two roots is ambiguous**, and rig asks rather than guesses: pass `--data <name>` once, and the work folder remembers it from then on.
+- **`rig update` brings every configured root forward**, not just the current one. The write refusal is per data root, so migrating one and leaving the others means the next `rig save` in another root refuses, mid-work.
+
+**A commit identity per root.** `identities` on a root entry beats the machine-wide map, which is what you want the first time the same org name means a different person in two roots:
+
+```json
+{
+  "dataRoots": {
+    "personal": { "path": "D:\\rig-data" },
+    "employer": { "path": "D:\\employer\\rig-data", "identities": { "acme": "you@work.example" } }
+  },
+  "identities": { "acme": "you@home.example" },
+  "current": "personal"
+}
+```
+
+**Already set up with one root?** Nothing to do. A machine file with a single `dataRoot` still reads, as a registry of one called `default`; `rig init` rewrites it into `dataRoots` the first time it writes. That is a normalisation and not a migration — the machine half is gitignored, so no other machine has to hear about it.
+
+A name selects which knowledge is in hand and nothing else: there are no per-root flags and no per-root defaults. Why it is shaped this way is DESIGN.md decision 82.
 
 ### Checking a repo
 

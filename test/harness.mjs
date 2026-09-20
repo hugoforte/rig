@@ -121,8 +121,12 @@ export function makeInstall ({
   // human — the freshness line above all — has to stay off it. `root` runs a different copy
   // of the tool than the installation; `env` a different environment than this one.
   // `cwd` is how a test reaches the commands that resolve something from the folder they run
-  // in — the work, and the repo `rig stage --cut` makes the branch in.
-  const rig = (args, { input = '', env: envOverride = env, root = install, cwd } = {}) => {
+  // in — the work, and the repo `rig stage --cut` makes the branch in. It defaults to the
+  // temp directory rather than being inherited, for the same reason every `RIG_` variable is
+  // stripped above: rig resolves its data root partly from the folder it runs in, and the
+  // suite is itself run from inside a rig work folder often enough that inheriting would let
+  // the machine decide what an isolated installation reads.
+  const rig = (args, { input = '', env: envOverride = env, root = install, cwd = tmp } = {}) => {
     const r = spawnSync(process.execPath, [path.join(root, 'bin', 'rig.mjs'), ...args],
       { encoding: 'utf8', env: envOverride, input, ...(cwd ? { cwd } : {}) })
     return { code: r.status, out: strip(r.stdout + r.stderr), stdout: strip(r.stdout) }

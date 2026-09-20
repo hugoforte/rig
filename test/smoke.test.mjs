@@ -22,6 +22,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { MAJOR, MIGRATIONS, toolVersion } from '../bin/version.mjs'
 import { SRC, makeInstall, readJson, strip } from './harness.mjs'
+import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 // What this tool stamps a data root with. Derived, because releases move the minor and a
 // hardcoded stamp would fail on the next one.
@@ -86,7 +87,11 @@ test('init --data-root makes a git checkout with a first commit and writes both 
     { orgs: ['acme'], tracker: { acme: { kind: 'none' } }, writtenBy: VERSION },
     'a data root rig just created is stamped with the format it writes, not one behind')
   const local = readJson(localConfig)
-  assert.equal(path.resolve(local.dataRoot), path.resolve(dataRoot))
+  // A data root is named, and the name is how every later command asks for it. An init that
+  // was given none gets the one the single-root form always meant.
+  assert.deepEqual(Object.keys(local.dataRoots), [DEFAULT_ROOT_NAME])
+  assert.equal(path.resolve(local.dataRoots[DEFAULT_ROOT_NAME].path), path.resolve(dataRoot))
+  assert.equal(local.current, DEFAULT_ROOT_NAME)
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
 })
