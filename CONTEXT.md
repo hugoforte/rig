@@ -85,7 +85,7 @@ One thing `rig doctor` has to say about an installation: a verdict, the line it 
 _Avoid_: check (that is the question, not the answer), problem, issue, error
 
 **Work root**:
-The disposable tree worktrees are assembled under, with the mirrors and caches beside them. Machine-owned; nothing in it is durable.
+The disposable tree worktrees are assembled under, with the mirrors and caches beside them. Machine-owned; nothing in it is durable. One per installation, shared by every data root it knows — which is why a work id is unique across all of them, and why the checks `rig doctor` makes of it are asked once against every root's records together.
 _Avoid_: workspace, scratch
 
 **Freshness**:

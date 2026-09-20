@@ -50,6 +50,90 @@ const trackerLabel = t => t?.kind
   ? `${t.kind}${t.repo ? ' ' + t.repo : ''}${t.project ? ' ' + t.project : ''}`
   : 'none — `rig new --ticket` unavailable (rig.json)'
 
+// One data root, checked in full: where it is, what git makes of it, the org half it carries
+// and the catalogue in it. Every check here is answerable from that root alone, which is what
+// makes repeating it per root the right shape — and what leaves the two work-root checks out,
+// since the work root is shared and no single root can answer for it.
+function rootFindings (root) {
+  const out = []
+  out.push(check('data root', !!(root.split && root.exists), {
+    ok: root.path,
+    bad: root.split
+      ? `${root.path} missing — check ${root.name ? `dataRoots.${root.name}` : 'dataRoot'} in rig.local.json`
+      : "is inside the tool checkout — not set up; knowledge must not live inside a public tool's tree. Run `rig prompt setup`",
+  }))
+  // A root whose directory has gone is one finding and not eight: there is nothing there to
+  // read, so every check below would be reporting the same absence again. The roots after it
+  // are still checked, which is the whole reason this is a finding rather than a throw.
+  if (!root.exists) return out
+
+  if (root.state) {
+    const state = root.state
+    out.push(check('data root is a git checkout of its own', state.repo === 'own', {
+      bad: state.repo === 'nested'
+        ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
+        : 'records written there are not versioned',
+    }))
+    if (state.repo === 'own') {
+      // rig commits after its own commands; an edit made outside rig waits for `rig save`.
+      // `dirty` is null when git could not read the tree, which is neither clean nor a
+      // count — a green tick on the strength of a command that failed is the one thing
+      // this check must never print.
+      const dirty = state.dirty
+      if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
+      else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
+      if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
+      else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
+      else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))
+      else if (dirty === 0) out.push(ok('data root is committed and pushed'))
+      // Measured against the last fetch, which a mutating command does for itself.
+      if (state.behind) out.push(warn(`data root is ${state.behind} commit(s) behind origin — \`rig update\` fast-forwards it`))
+    }
+  }
+
+  const rc = root.repoConfig || {}
+  out.push(check('rig.json', rc.exists, { ok: rc.path, bad: `missing in ${root.path} — not set up; run \`rig prompt setup\`` }))
+  if (rc.exists && !rc.orgs) out.push(warn('rig.json has no orgs — not set up; run `rig prompt setup`'))
+  // Reported, never run: doctor does not mutate, which is what makes it the command you can
+  // always run to ask a question without answering it.
+  if (rc.exists) {
+    const stamp = rc.stamp || {}
+    if (stamp.unreadable) {
+      out.push(warn(`data root records writtenBy ${JSON.stringify(stamp.writtenBy)}, which is not a record format any rig wrote — mutating commands refuse until it is fixed by hand`))
+    } else if (stamp.blocked) {
+      out.push(warn(`data root is at record format ${stamp.dataMajor}, this rig writes ${stamp.major} — mutating commands refuse until this rig is updated`))
+    } else if (stamp.pending?.length) {
+      out.push(warn(`${stamp.pending.length} pending migration(s) — run \`rig update\`: ${stamp.pending.join('; ')}`))
+    } else {
+      out.push(note(`record format ${stamp.major}, stamped by rig ${stamp.writtenBy ?? 'from before stamping existed'}`))
+    }
+  }
+
+  // rig cannot know which address is *correct* for an org, only which one git will use, so
+  // this reports rather than warns. The one state worth a warning is git having no answer.
+  // Asked per root because an identity is per org *and* per root: the same org name means a
+  // different person in a personal root and a paid one.
+  for (const o of root.orgs || []) {
+    const id = o.identity || {}
+    if (id.source === 'unknown') out.push(note(`identity for ${o.org}: no mirror yet — git decides once one is cloned`))
+    else {
+      out.push(check(`identity for ${o.org}`, !!id.email, {
+        ok: `${id.email}${id.source === 'git' ? ' — from git, not rig' : ''}`,
+        bad: 'git has no user.email to commit with',
+      }))
+    }
+    out.push(note(`tracker for ${o.org}: ${trackerLabel(o.tracker)}`))
+  }
+
+  // A draft entry is an invitation to correct the catalogue while the repo is still loaded in
+  // your head (rule 4), not a fault: it warns and does not count.
+  const drafts = root.drafts || []
+  if (drafts.length) {
+    out.push(warn(`${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.join(', ')}`, { counts: false }))
+  }
+  return out
+}
+
 // Everything the findings need that they cannot work out for themselves, gathered by the
 // caller so this stays pure. **Decision 54 is a field here, not a branch**: a check this
 // machine cannot make arrives null — `git: null` with no git on PATH, `gitConfig: null`
@@ -63,16 +147,20 @@ const trackerLabel = t => t?.kind
 //   rig               { version, root, mark } — the release this checkout stands on, or null
 //   freshness         { skipped, fetchError, behind, upstream }, measured live by the caller
 //   gh                'ok' | 'missing' | anything else for a gh that is not authenticated
-//   jira              { needed, present } — needed only when an org tracks in Jira
+//   jira              { needed, present } — needed when any root has an org tracking in
+//                     Jira, since twg is one tool on one machine
 //   gitConfig         { longpaths, symlinks } as git answered them, or null without git
-//   workRoot,
+//   workRoot          { path, exists, entries } — `entries` is what is directly under it,
+//                     minus the two things rig keeps there itself
 //   mirrorRoot        { path, exists }
-//   dataRoot          { path, split, exists, state } — `state` is `checkouts.describe()`,
-//                     null when there is nothing readable to describe
-//   repoConfig        { path, exists, orgs, stamp } — `stamp` is the record-format reading
-//   orgs              [{ org, identity: { email, source }, tracker }]
-//   works             [{ id, closed, contradictions, folderMissing, strays, repos }]
-//   drafts            the repo names whose catalogue entry is still a draft
+//   dataRoots         one per root this installation configures, each
+//                     { name, path, split, exists, state, repoConfig, orgs, drafts }:
+//                     `state` is `checkouts.describe()` and null when there is nothing
+//                     readable to describe, `repoConfig` is { path, exists, orgs, stamp }
+//                     with `stamp` the record-format reading, and `orgs` is
+//                     [{ org, identity: { email, source }, tracker }]
+//   works             every root's, in one list — [{ id, closed, contradictions,
+//                     folderMissing, strays, repos }]
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -129,67 +217,15 @@ export function doctorFindings (snap = {}) {
   const mr = snap.mirrorRoot || {}
   out.push(check('mirror root', mr.exists, { ok: mr.path, bad: `${mr.path} missing` }))
 
-  const d = snap.dataRoot || {}
-  out.push(check('data root', !!(d.split && d.exists), {
-    ok: d.path,
-    bad: d.split
-      ? `${d.path} missing — check dataRoot in rig.local.json`
-      : "is inside the tool checkout — not set up; knowledge must not live inside a public tool's tree. Run `rig prompt setup`",
-  }))
-  if (d.state) {
-    const state = d.state
-    out.push(check('data root is a git checkout of its own', state.repo === 'own', {
-      bad: state.repo === 'nested'
-        ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
-        : 'records written there are not versioned',
-    }))
-    if (state.repo === 'own') {
-      // rig commits after its own commands; an edit made outside rig waits for `rig save`.
-      // `dirty` is null when git could not read the tree, which is neither clean nor a
-      // count — a green tick on the strength of a command that failed is the one thing
-      // this check must never print.
-      const dirty = state.dirty
-      if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${d.path} status\` says why`))
-      else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
-      if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
-      else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
-      else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))
-      else if (dirty === 0) out.push(ok('data root is committed and pushed'))
-      // Measured against the last fetch, which a mutating command does for itself.
-      if (state.behind) out.push(warn(`data root is ${state.behind} commit(s) behind origin — \`rig update\` fast-forwards it`))
+  // Every configured root, each checked in full, because the roots nobody looks at are the
+  // ones that rot. Named when there is more than one, and silent when there is not: a
+  // single-root installation has never had to say which, and every line it prints would grow
+  // a word for nothing — the rule `rig update` labels its roots by.
+  const roots = snap.dataRoots || []
+  for (const root of roots) {
+    for (const finding of rootFindings(root)) {
+      out.push(roots.length > 1 ? { ...finding, says: `${root.name}: ${finding.says}` } : finding)
     }
-  }
-
-  const rc = snap.repoConfig || {}
-  out.push(check('rig.json', rc.exists, { ok: rc.path, bad: `missing in ${d.path} — not set up; run \`rig prompt setup\`` }))
-  if (rc.exists && !rc.orgs) out.push(warn('rig.json has no orgs — not set up; run `rig prompt setup`'))
-  // Reported, never run: doctor does not mutate, which is what makes it the command you can
-  // always run to ask a question without answering it.
-  if (rc.exists) {
-    const stamp = rc.stamp || {}
-    if (stamp.unreadable) {
-      out.push(warn(`data root records writtenBy ${JSON.stringify(stamp.writtenBy)}, which is not a record format any rig wrote — mutating commands refuse until it is fixed by hand`))
-    } else if (stamp.blocked) {
-      out.push(warn(`data root is at record format ${stamp.dataMajor}, this rig writes ${stamp.major} — mutating commands refuse until this rig is updated`))
-    } else if (stamp.pending?.length) {
-      out.push(warn(`${stamp.pending.length} pending migration(s) — run \`rig update\`: ${stamp.pending.join('; ')}`))
-    } else {
-      out.push(note(`record format ${stamp.major}, stamped by rig ${stamp.writtenBy ?? 'from before stamping existed'}`))
-    }
-  }
-
-  // rig cannot know which address is *correct* for an org, only which one git will use, so
-  // this reports rather than warns. The one state worth a warning is git having no answer.
-  for (const o of snap.orgs || []) {
-    const id = o.identity || {}
-    if (id.source === 'unknown') out.push(note(`identity for ${o.org}: no mirror yet — git decides once one is cloned`))
-    else {
-      out.push(check(`identity for ${o.org}`, !!id.email, {
-        ok: `${id.email}${id.source === 'git' ? ' — from git, not rig' : ''}`,
-        bad: 'git has no user.email to commit with',
-      }))
-    }
-    out.push(note(`tracker for ${o.org}: ${trackerLabel(o.tracker)}`))
   }
 
   // Contradictions: a recorded gate that reality denies. Since the phase is derived, drift is
@@ -210,7 +246,9 @@ export function doctorFindings (snap = {}) {
     }
   }
 
-  // Strays: anything directly under a work folder that rig did not create.
+  // Strays: anything directly under a work folder that rig did not create. Over every root's
+  // works at once, which is what makes the missing-folder warning below reach an unclosed work
+  // whatever root holds its record.
   for (const w of snap.works || []) {
     if (w.closed) continue
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed`)); continue }
@@ -225,11 +263,16 @@ export function doctorFindings (snap = {}) {
     }
   }
 
-  // A draft entry is an invitation to correct the catalogue while the repo is still loaded in
-  // your head (rule 4), not a fault: it warns and does not count.
-  const drafts = snap.drafts || []
-  if (drafts.length) {
-    out.push(warn(`${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.join(', ')}`, { counts: false }))
+  // And the work root itself: a folder no root has a record for. Asked once against the union
+  // and never per root, because the work root is shared — "is this folder accounted for" has
+  // one answer per folder and one place to look it up per root, and a loop over the roots
+  // would have each of them report the others' live work folders as junk. Said without naming
+  // a root for the same reason the warnings above are: a work id is unique across every data
+  // root on the machine, so the id is the whole answer to which work a folder belongs to.
+  const accounted = new Set((snap.works || []).map(w => w.id))
+  for (const entry of wr.entries || []) {
+    if (accounted.has(entry)) continue
+    out.push(warn(`unmanaged entry "${entry}" in ${wr.path} — no data root has a work record for it; rig owns this tree`))
   }
 
   // The label comes from the probe, not from the path: a drive letter on Windows, the mount

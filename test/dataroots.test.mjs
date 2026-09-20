@@ -428,3 +428,50 @@ test('rig update brings every configured root forward, not only the one in hand'
     assert.notEqual(JSON.parse(fs.readFileSync(path.join(root, 'rig.json'), 'utf8')).writtenBy, '1.0.0')
   }
 })
+
+// ------------------------------------------------------------- doctor, over every root
+
+// What the findings say is asserted over fixtures in test/doctor.test.mjs; what these prove is
+// the half that cannot be faked — that the gathering reaches past the root in hand, and that
+// the work root it compares against is the one both roots share.
+
+test('doctor checks every configured root, and says which root each line is about', () => {
+  const out = strip(rig(['doctor']).out)
+  assert.match(out, /hugoforte: data root/)
+  assert.match(out, /personal: data root/)
+  assert.match(out, /hugoforte: rig\.json/)
+  assert.match(out, /personal: rig\.json/)
+})
+
+test('a work folder another root holds the record for is accounted for, not reported as junk', () => {
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  assert.equal(rig(['new', 'doctor-roots-elsewhere', '--title', 'In the other root',
+    '--no-ticket', '--data', 'personal']).code, 0)
+  assert.doesNotMatch(strip(rig(['doctor']).out), /doctor-roots-elsewhere/,
+    'the current root has never heard of it, and the work root is shared')
+})
+
+test('an entry under the work root no data root has a record for is named', () => {
+  const junk = path.join(workRoot, 'doctor-roots-junk')
+  fs.mkdirSync(junk, { recursive: true })
+  try {
+    assert.match(strip(rig(['doctor']).out), /unmanaged entry "doctor-roots-junk"/)
+  } finally { fs.rmSync(junk, { recursive: true, force: true }) }
+})
+
+test('an unclosed work is warned about whichever root holds its record', () => {
+  fs.rmSync(path.join(workRoot, 'doctor-roots-elsewhere'), { recursive: true, force: true })
+  assert.match(strip(rig(['doctor']).out), /doctor-roots-elsewhere: work folder missing but not closed/)
+})
+
+test('a root whose directory has gone is a finding, and the roots that are fine still answer', () => {
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const machine = JSON.parse(saved)
+  machine.dataRoots.ghost = { path: path.join(tmp, 'not-here') }
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  try {
+    const out = strip(rig(['doctor']).out)
+    assert.match(out, /ghost: data root .* missing — check dataRoots\.ghost/)
+    assert.match(out, /hugoforte: rig\.json/, 'and the root after it was still checked')
+  } finally { fs.writeFileSync(localConfig, saved) }
+})

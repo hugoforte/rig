@@ -16,6 +16,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { percentile, median, isoWeek, reduceWork, summarize, renderDash, duration } from '../bin/dash.mjs'
 import { MAJOR, toolVersion } from '../bin/version.mjs'
+import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PRODUCER = pathToFileURL(path.join(SRC, 'bin', 'rig.mjs')).href
@@ -78,6 +79,11 @@ async function produce (works, { live = true, github = 'ok' } = {}) {
   fs.writeFileSync(githubState, JSON.stringify({ auth: github, repos }))
   fs.writeFileSync(localConfig, JSON.stringify({ dataRoot, workRoot: path.join(tmp, 'w') }))
   process.env.RIG_LOCAL_CONFIG = localConfig
+  // The one root that machine file names, pinned. The producer runs in *this* process, whose
+  // cwd is the checkout under test, and the suite is run from inside a rig work folder often
+  // enough that its `.rig/data` would otherwise anchor the producer to a root this throwaway
+  // installation does not configure.
+  process.env.RIG_DATA_ROOT = DEFAULT_ROOT_NAME
   process.env.RIG_FAKE_GITHUB = githubState
   const { listing } = await import(`${PRODUCER}?scenario=${++scenario}`)
   return listing(live)
