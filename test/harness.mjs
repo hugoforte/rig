@@ -223,7 +223,10 @@ export function previousRelease ({ tmp, gitMust }, tag = previousReleaseTag()) {
   // One checkout per tag per machine: a journey asks for the same release from more than one
   // step, and cloning it again would cost seconds the scenario count is rationed by.
   if (!fs.existsSync(root)) {
-    gitMust(tmp, 'clone', '-q', '--local', SRC, root)
+    // `--no-hardlinks`, because a local clone links its objects by default and the checkout
+    // and the temp directory are not always on one volume — on the Windows runner the repo is
+    // on D: and the temp directory on C:, and git dies with "Improper link".
+    gitMust(tmp, 'clone', '-q', '--no-hardlinks', SRC, root)
     gitMust(root, 'checkout', '-q', '--detach', tag)
     fs.rmSync(path.join(root, '.git'), { recursive: true, force: true, maxRetries: 5 })
   }
