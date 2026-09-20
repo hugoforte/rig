@@ -21,8 +21,12 @@ A bare clone rig owns, from which worktrees are cut.
 _Avoid_: cache, clone
 
 **Data root**:
-The committed checkout holding the catalogue, the work records and `rig.json`. Private when the tool is public.
-_Avoid_: knowledge repo, rig-data (that is its conventional name, not the concept)
+The committed checkout holding the catalogue, the work records and `rig.json`. Private when the tool is public. An installation may know several — personal, public and employer knowledge are separate repos because they have separate readers — and each answers to a **name**, which selects which knowledge is in hand and never anything else. The name is a name: there is no noun for "a data root and its name together", and `profile` is rejected for it because it reads as settings, which is the one thing a name must not carry.
+_Avoid_: knowledge repo, rig-data (that is its conventional name, not the concept), profile, workspace
+
+**Current data root**:
+The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT` and the work folder the command is running in — so it decides only for the commands that have no work to anchor them, and those say when it did.
+_Avoid_: active profile, selected root, default (that is the name of the one-root form)
 
 **Tracker**:
 The ticket system an org uses: GitHub Issues or Jira. Configured per org in `rig.json`.

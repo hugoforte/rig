@@ -10,7 +10,7 @@ how to *use* it.
 | | |
 |---|---|
 | `C:\rig` (this repo) | **The tool.** Committed, generic, public. |
-| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named by `dataRoot` in `rig.local.json` — never this one. `rig doctor` prints which. |
+| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
 | `C:\w` (the work root) | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
 
 Never put durable prose in the work root. Never put anything that names a real org, repo or
@@ -157,6 +157,38 @@ rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
+## More than one data root
+
+Personal, public and employer knowledge are separate repos because they have separate
+readers. One installation knows them all, by name:
+
+```bash
+rig use                  # every data root this machine knows; * marks the current one
+rig use employer         # move `current` — verified first, refused if it cannot be worked in
+rig list --data personal # one command against another root, without moving anything
+rig init --data-repo me/rig-data --name personal   # add one
+```
+
+Which root a command reads is the first of these that answers: `--data <name>`,
+`RIG_DATA_ROOT`, **the work folder the command is running in**, then `current`. The third is
+the one that matters: `C:\w\<id>\.rig\data` names the root a work's records live in, so
+every command run inside a work folder is right without a flag, and `current` decides only
+for the ones with no work to anchor them — `new`, `list`, `catalog`, `dash` — which say so
+when it did.
+
+Two consequences worth holding on to:
+
+- **One work root, shared.** A work id is unique across every data root on the machine, and
+  `rig new` refuses one whose folder exists, naming the root that owns it. Renaming a folder
+  another root's records point at would break that work, so the id is what gives.
+- **`rig update` brings every configured root forward**, not the one in hand. The write
+  refusal is per data root, so migrating only the current one leaves the others to refuse the
+  next mutating command, mid-work.
+
+A name selects which knowledge is in hand and **nothing else**. There are no per-root flags
+and no per-root defaults for ceremony — that would be the declared-track mistake rejected in
+`rig next`'s design, with a config file instead of a flag.
 
 ## Stages
 

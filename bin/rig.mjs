@@ -19,7 +19,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -137,7 +137,22 @@ const writeText = (p, v) => {
 // the data root is moving in the command that is running — bin/roots.mjs owns everything
 // else about the two files.
 let location
-const where = () => (location ??= locate(RIG_ROOT))
+// Which data root the command asked for, set by `main` from `--data` before anything reads
+// config. A module-level value rather than a parameter on `where` because every caller of
+// `where` wants the same answer, and threading it through all of them would be a second way
+// to be wrong about which knowledge is in hand.
+let requestedData = null
+const where = () => (location ??= locate(RIG_ROOT, process.env, { data: requestedData }))
+
+// `current` chose this root, and no flag, shell or work folder did. Said by the commands
+// that have no work folder to anchor them, and only when there is more than one root to
+// have chosen between — a pointer that could only point one way is not invisible state.
+function sayCurrentRoot () {
+  const w = where()
+  if (w.source === 'current' && Object.keys(w.roots).length > 1) {
+    say(C.dim(`· data root: ${w.name} (${w.dataRoot})`))
+  }
+}
 const dataRoot = () => where().dataRoot
 const localConfigFile = () => where().localFile
 const repoConfigFile = () => where().orgFile
@@ -374,9 +389,9 @@ function checkWriteGate () {
 
 // Runs the pending migrations over rig.json and writes the result. The one place a
 // migration lands on disk, through the same writer as every other rig.json.
-function writeOrgMigrations () {
+function writeOrgMigrations (loc = where()) {
   let ran = []
-  writeOrg(where(), prev => {
+  writeOrg(loc, prev => {
     const result = applyMigrations(prev ?? {}, version())
     ran = result.ran
     return result.config
@@ -1041,6 +1056,11 @@ function regenerate (cfg, work) {
   writeText(path.join(wd, WORK_FOLDER.agents), lines.join('\n'))
   writeText(path.join(wd, WORK_FOLDER.claude), `See [${WORK_FOLDER.agents}](./${WORK_FOLDER.agents}).\n`)
   writeText(path.join(wd, WORK_FOLDER.marker, 'id'), work.id + '\n')
+  // Beside the work id, the data root that holds its record. This is what lets every command
+  // run from inside a work folder resolve without `--data`, and so what keeps `current` off
+  // the path of all but the rootless few. Nothing is written when the root has no name — an
+  // installation still on the fallback has nothing to anchor to.
+  if (where().name) writeText(path.join(wd, WORK_FOLDER.marker, 'data'), where().name + '\n')
 }
 
 // ------------------------------------------------------ data root commits
@@ -1055,9 +1075,9 @@ function regenerate (cfg, work) {
 // git failure warns and leaves the change for the next command. Before pushing, others'
 // commits are fetched and rebased under ours; a conflict aborts the rebase and says so,
 // so the data root is never left mid-rebase.
-function commitDataRoot (message) {
-  const root = dataRoot()
-  if (!where().split) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
+function commitDataRoot (message, loc = where()) {
+  const root = loc.dataRoot
+  if (!loc.split) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
   const state = co.describe(root)
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
@@ -1261,6 +1281,12 @@ cmds.init = ({ flags }) => {
   }
   const orgs = repoJson?.orgs || []
   const email = typeof flags.email === 'string' ? flags.email : ''
+  if (flags.name === true) die('--name wants a name for the data root')
+  const named = typeof flags.name === 'string' && flags.name ? flags.name : null
+  const knownRoots = registry(RIG_ROOT).roots
+  if (named && !flags['data-root'] && !knownRoots[named]) {
+    die(`--name ${named} names a data root this machine does not configure — pass --data-root <dir> or --data-repo owner/name to say where it is`)
+  }
 
   // Only the machine-level half goes in rig.local.json: the roots, and an identity per org.
   // An existing file is merged into — a new data root, and identities for orgs that have
@@ -1270,15 +1296,30 @@ cmds.init = ({ flags }) => {
   writeMachine(where(), prev => {
     if (!prev) {
       created = true
+      const name = named || DEFAULT_ROOT_NAME
       return {
         workRoot: flags['work-root'] ? path.resolve(flags['work-root']) : config().workRoot,
-        ...(isSplit ? { dataRoot: targetDataRoot } : {}),
+        ...(isSplit ? { dataRoots: { [name]: { path: targetDataRoot } }, current: name } : {}),
         identities: Object.fromEntries(orgs.map(o => [o, email])),
         secrets: {},
       }
     }
     const next = { ...prev }
-    if (flags['data-root'] && !sameDir(previousRoot, targetDataRoot)) { next.dataRoot = targetDataRoot; changes.push('dataRoot') }
+    // The one-root form becomes a registry of one, the first time init writes. The machine
+    // half is gitignored, so this is a normalisation and never a migration — nothing else on
+    // any machine has to be told, and `rootsOf` reads both forms either way.
+    if (next.dataRoot && !next.dataRoots) {
+      next.dataRoots = { [DEFAULT_ROOT_NAME]: { path: next.dataRoot } }
+      next.current = next.current || DEFAULT_ROOT_NAME
+      delete next.dataRoot
+      changes.push('dataRoots')
+    }
+    if (flags['data-root'] && !sameDir(previousRoot, targetDataRoot)) {
+      const name = named || next.current || DEFAULT_ROOT_NAME
+      next.dataRoots = { ...(next.dataRoots || {}), [name]: { ...(next.dataRoots?.[name] || {}), path: targetDataRoot } }
+      next.current = name
+      changes.push(`dataRoots.${name}`)
+    } else if (named && next.current !== named) { next.current = named; changes.push(`current = ${named}`) }
     if (email) {
       next.identities = { ...next.identities }
       for (const o of orgs) if (!next.identities[o]) { next.identities[o] = email; changes.push(`identity for ${o}`) }
@@ -1332,7 +1373,51 @@ cmds.init = ({ flags }) => {
   say('Then: `rig doctor`, then `rig new <id> --title "..."`.')
 }
 
+// Moves `current`, and nothing else. It never creates, joins or repairs a data root —
+// `rig init` does that — so the only question it answers is whether the one being switched
+// to can be worked in, asked before the switch rather than at the next mutating command's
+// write refusal. Reads the registry directly rather than through `where`, because a
+// `current` naming a root that has gone is exactly what this command is for and resolving
+// it would die first.
+cmds.use = ({ positional }) => {
+  const reg = registry(RIG_ROOT)
+  const names = Object.keys(reg.roots)
+  const name = positional[0]
+  if (!name) {
+    if (!names.length) die(`no data roots configured in ${reg.localFile} — run \`rig prompt setup\``)
+    say('Data roots on this machine:')
+    // What is marked is the root that would be resolved, not literally what `current` says:
+    // the one-root form has no pointer and never needed one, and a listing that marked
+    // nothing would read as "none of these".
+    const inHand = reg.current ?? (names.length === 1 ? names[0] : null)
+    for (const n of names) {
+      const mark = n === inHand ? C.green('*') : ' '
+      say(`  ${mark} ${n}  ${C.dim(reg.roots[n].path)}`)
+    }
+    return
+  }
+  const entry = reg.roots[name]
+  if (!entry) die(`no data root "${name}" in ${reg.localFile}${names.length ? ` — it has ${names.join(', ')}` : ''}`)
+  if (!exists(entry.path)) die(`data root "${name}" is ${entry.path}, which is not there — fix dataRoots.${name} in ${reg.localFile}`)
+  const loc = withDataRoot({ toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }, entry.path)
+  if (!loc.split) die(`data root "${name}" is inside the tool checkout — knowledge must not live in a public tool's tree; run \`rig prompt setup\``)
+  if (!exists(loc.orgFile)) die(`data root "${name}" has no rig.json at ${loc.orgFile} — \`rig init --data-root ${entry.path}\` makes one`)
+  const cfgJson = readOrg(loc) ?? {}
+  if (stampUnreadable(cfgJson)) {
+    die(`data root "${name}" records writtenBy ${JSON.stringify(cfgJson.writtenBy)}, which is not a record format any rig wrote — fix it by hand; rig will not guess.`)
+  }
+  if (writesBlocked(cfgJson)) {
+    die(`data root "${name}" is at record format ${dataMajor(cfgJson)} and this rig writes ${MAJOR} — run \`rig update\` before switching to it.`)
+  }
+  if (reg.current === name) { ok(`already on data root ${name} ${C.dim(entry.path)}`); return }
+  writeMachine({ localFile: reg.localFile }, prev => ({ ...(prev ?? {}), current: name }))
+  ok(`data root ${name} ${C.dim(entry.path)}${reg.current ? C.dim(` (was ${reg.current})`) : ''}`)
+  const pending = pendingMigrations(cfgJson)
+  if (pending.length) warn(`${name} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
+}
+
 cmds.new = async ({ flags, positional }) => {
+  sayCurrentRoot()
   const cfg = config()
   const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
 
@@ -1363,6 +1448,18 @@ cmds.new = async ({ flags, positional }) => {
   }
 
   if (existing) die(`work "${id}" already exists (${recordFile(id)})`)
+
+  // One work root, shared by every data root on this machine, so two roots can want the same
+  // folder. The `.rig/data` marker detects the clash but cannot fix it — renaming a folder
+  // another root's records point at would break that work — so the id is refused and the root
+  // that owns it is named. This is the whole cost of not giving every data root a work root
+  // of its own, and it is paid at the one moment a name is being chosen anyway.
+  const folder = workDir(cfg, id)
+  if (exists(folder)) {
+    const owner = anchoredRoot(folder)
+    const whose = owner && owner !== where().name ? ` and belongs to data root "${owner}"` : ''
+    die(`${folder} already exists${whose} — pick another id`)
+  }
 
   // A Jira `--key` needs no piped brief any more: rig fetches summary/description
   // itself, used as a default wherever `--title`/stdin didn't already supply one.
@@ -1784,6 +1881,7 @@ const listPayload = (cfg, live) => ({
 const listing = live => listPayload(config(), live)
 
 cmds.list = ({ flags }) => {
+  sayCurrentRoot()
   const cfg = config()
   const live = flags.prs !== false && !flags.quick
 
@@ -1872,6 +1970,7 @@ function sinceFlag (value) {
 const OPENERS = { win32: ['cmd', ['/c', 'start', '']], darwin: ['open', []] }
 
 cmds.dash = ({ flags }) => {
+  sayCurrentRoot()
   const from = typeof flags.from === 'string' ? flags.from : null
   const opts = { org: typeof flags.org === 'string' ? flags.org : null, since: sinceFlag(flags.since) }
   // `--from` renders a payload captured earlier (`rig list --json > x.json`). The live path
@@ -2493,6 +2592,7 @@ cmds.backfill = ({ flags }) => {
 }
 
 cmds.catalog = ({ flags, positional }) => {
+  sayCurrentRoot()
   const entries = loadCatalog().sort((a, b) => a.repo.localeCompare(b.repo))
   if (positional[0]) {
     const e = entries.find(x => x.repo.toLowerCase() === positional[0].toLowerCase())
@@ -2530,7 +2630,7 @@ cmds.prompt = ({ positional }) => {
 // both. A local-only data root reaches 'current' without the question ever being asked.
 // What to do about changes in the way, which is the one thing the two checkouts differ on:
 // the data root is committed by rig, and the tool checkout is yours.
-const how = (label, root) => label === 'data root' ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
+const how = (label, root) => label.startsWith('data root') ? ', run `rig save`' : ` — \`git -C ${root} status\` shows them`
 
 function updateCheckout (label, root) {
   const state = co.describe(root)
@@ -2616,33 +2716,49 @@ cmds.update = ({ flags }) => {
     }
   }
 
-  const root = dataRoot()
-  let dataRootReady = false
-  if (!where().split) { warn('data root is inside the tool checkout — not set up; run `rig prompt setup`'); problems++ }
-  else if (!exists(root)) { warn(`data root ${root} is missing — check dataRoot in rig.local.json`); problems++ }
-  else {
-    const data = updateCheckout('data root', root)
-    if (data.status === 'failed') problems++
-    // Clean and current, the two halves of "safe to migrate in".
-    dataRootReady = data.clean && data.status !== 'failed'
-  }
+  // Every configured data root, not the one in hand. The write refusal is per data root, so
+  // migrating only the current one leaves the others to refuse the next mutating command
+  // mid-work — which is the whole reason this is one installation rather than three. Read
+  // from the registry rather than `where`, so a broken `current` does not stop the roots that
+  // are fine from being brought forward.
+  const reg = registry(RIG_ROOT)
+  const names = Object.keys(reg.roots)
+  const base = { toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }
+  const targets = names.length
+    ? names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path) }))
+    : [{ name: null, loc: where() }]
 
-  if (exists(repoConfigFile())) {
-    const pending = pendingMigrations(repoConfigJson())
-    if (pending.length && !dataRootReady) {
+  for (const { name, loc } of targets) {
+    // Named only when there is more than one: a single-root installation has never had to
+    // say which, and every message it prints would grow a word for nothing.
+    const label = names.length > 1 ? `data root ${name}` : 'data root'
+    const root = loc.dataRoot
+    let ready = false
+    if (!loc.split) { warn(`${label} is inside the tool checkout — not set up; run \`rig prompt setup\``); problems++ }
+    else if (!exists(root)) { warn(`${label} ${root} is missing — check ${name ? `dataRoots.${name}` : 'dataRoot'} in ${reg.localFile}`); problems++ }
+    else {
+      const data = updateCheckout(label, root)
+      if (data.status === 'failed') problems++
+      // Clean and current, the two halves of "safe to migrate in".
+      ready = data.clean && data.status !== 'failed'
+    }
+
+    if (!exists(loc.orgFile)) continue
+    const pending = pendingMigrations(readOrg(loc) ?? {})
+    if (pending.length && !ready) {
       // `commitDataRoot` stages the whole tree, so migrating a dirty data root would publish
       // whatever it was refused an update for — under a message claiming to be a migration.
       // And it rebases onto origin before it pushes, so migrating a diverged or unfetchable
       // one would replay the migration on top of records another machine may already have
       // migrated (docs/adr/0002).
-      warn(`${pending.length} migration(s) pending, not run — the data root has to be clean and current first`)
+      warn(`${label}: ${pending.length} migration(s) pending, not run — it has to be clean and current first`)
       problems++
     } else if (pending.length) {
-      const { ran } = writeOrgMigrations()
-      for (const name of ran) ok(`migrated: ${name}`)
+      const { ran } = writeOrgMigrations(loc)
+      for (const ranName of ran) ok(`${label} migrated: ${ranName}`)
       // Committed here rather than through `main`, because the doctor checks run below and a
       // health verdict must not report the data root dirty with the change just made.
-      commitDataRoot(`rig update: record format ${MAJOR}`)
+      commitDataRoot(`rig update: record format ${MAJOR}`, loc)
     }
   }
 
@@ -2820,6 +2936,7 @@ cmds.help = () => {
 
   rig init                        one-time setup; "rig prompt setup" asks the questions
        --data-repo owner/name      join that private data repo, or create it if absent
+       --name <name>               what to call this data root; it becomes the current one
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
        [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY] -> rig.json (the data root)
   rig new <id> --title "..."      create a work (reads a brief on stdin)
@@ -2829,6 +2946,8 @@ cmds.help = () => {
        --ticket creates in the org's tracker (rig.json); --dry-run previews and
        creates nothing; --no-ticket records a declined ticket
        [--type feat] [--repos a,b] [--setup]
+  rig use [<name>]                which knowledge is in hand; bare, it lists the data
+                                  roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
@@ -2872,6 +2991,9 @@ Commands that act on "the current work" find it by walking up from the cwd,
 or take --work <id>. Every command that changes a work ends by committing the
 whole data root, and pushing it when it has an upstream.
 
+Which data root a command reads, first hit wins: --data <name>, RIG_DATA_ROOT,
+the work folder the command runs in, then the current one (rig use).
+
 rig ${version()} — the major is the record format; \`rig doctor\` reports how far
 this installation is behind its remote, \`rig update\` brings it forward.`)
 }
@@ -2907,6 +3029,9 @@ if (isMain) {
   currentCommand = cmdName
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
+    // Before the first `where()`: the data root a command names decides every path it reads.
+    if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
+    if (typeof args.flags.data === 'string') requestedData = args.flags.data
     if (MUTATING.has(cmdName)) prepareDataRoot()
     await cmd(args)
   } catch (e) {

@@ -157,6 +157,20 @@ The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`
 
 **Stopping a work you did not finish.** `rig close --abandoned` is the honest exit. It runs the same teardown and drops only the checks that ask whether the work landed — an unmerged PR and unpushed commits are what being abandoned looks like — while uncommitted changes still refuse, because unsaved work is the one thing a teardown can destroy. The ticket is told and left open, and open PRs are named and left alone.
 
+`rig.local.json` names every data root this machine knows, under `dataRoots`, with `current` saying which one is in hand:
+
+```json
+{
+  "dataRoots": {
+    "hugoforte": { "path": "D:\\rig-data" },
+    "employer": { "path": "D:\\employer\\rig-data", "identities": { "employer": "you@work" } }
+  },
+  "current": "hugoforte"
+}
+```
+
+They are separate repos because they have separate readers: an employer's repo names sitting in a personal repo is the same leak as knowledge sitting in a public tool's tree, pointed sideways. One installation reads them all — one `rig update`, one freshness answer — and which one a command reads is the first of these that answers: `--data <name>`, `RIG_DATA_ROOT`, the work folder the command is running in (`.rig/data`, beside `.rig/id`), then `current`. So a command run inside a work is right without a flag, and the rootless ones — `new`, `list`, `catalog`, `dash` — say which root `current` chose for them. `rig use` lists them and moves `current`, refusing a root whose directory has gone, that has no `rig.json`, or that is at a record format this rig cannot write; `rig init --name <name>` adds one; and `rig update` brings every configured root forward, because the write refusal is per data root. One work root serves them all, so `rig new` refuses a work id whose folder another root already owns. A machine file with a single bare `dataRoot` is the one-root form and still reads — `init` normalises it into `dataRoots` the first time it writes, which is a normalisation and not a migration, because the machine half is gitignored.
+
 `RIG_LOCAL_CONFIG` names `rig.local.json` somewhere other than beside the tool — for a second installation sharing one checkout, or for a test — and a relative `dataRoot` inside it is read against that file's own directory. A key belonging to the org half is ignored in the machine file, and `rig doctor` says so. There is no override for the tool checkout: freshness and `rig update` measure the code that is running, and one that could say otherwise would point `update` at someone else's clone.
 
 ### Tickets

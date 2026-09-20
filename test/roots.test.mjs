@@ -26,7 +26,9 @@ const fixture = ({ machine, org, dataRoot = 'rig-data', env = {} } = {}, body) =
     fs.mkdirSync(dataDir, { recursive: true })
     if (machine) fs.writeFileSync(path.join(toolRoot, 'rig.local.json'), JSON.stringify(machine))
     if (org) fs.writeFileSync(path.join(dataDir, 'rig.json'), JSON.stringify(org))
-    body({ tmp, toolRoot, dataDir, location: locate(toolRoot, env) })
+    // `cwd` is pinned to the fixture: `locate` resolves a data root partly from the folder
+    // it is called in, and these tests run from inside a rig work folder.
+    body({ tmp, toolRoot, dataDir, location: locate(toolRoot, env, { cwd: tmp }) })
   } finally { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) }
 }
 
@@ -43,7 +45,7 @@ test('the data root named in the machine file is where rig.json is looked for', 
   fixture({}, ({ tmp, toolRoot }) => {
     const dataDir = path.join(tmp, 'rig-data')
     fs.writeFileSync(path.join(toolRoot, 'rig.local.json'), JSON.stringify({ dataRoot: dataDir }))
-    const location = locate(toolRoot)
+    const location = locate(toolRoot, {}, { cwd: tmp })
     assert.equal(location.dataRoot, dataDir)
     assert.equal(location.orgFile, path.join(dataDir, 'rig.json'))
     assert.equal(location.split, true)
@@ -68,7 +70,7 @@ test(`${LOCAL_CONFIG_ENV} moves the machine file without moving the tool`, () =>
     const elsewhere = path.join(tmp, 'elsewhere', 'rig.local.json')
     fs.mkdirSync(path.dirname(elsewhere), { recursive: true })
     fs.writeFileSync(elsewhere, JSON.stringify({ workRoot: path.join(tmp, 'w'), dataRoot: '../rig-data' }))
-    const location = locate(toolRoot, { [LOCAL_CONFIG_ENV]: elsewhere })
+    const location = locate(toolRoot, { [LOCAL_CONFIG_ENV]: elsewhere }, { cwd: tmp })
     assert.equal(location.toolRoot, toolRoot, 'the tool is still measured where the code runs from')
     assert.equal(location.localFile, elsewhere)
     assert.equal(location.dataRoot, path.join(tmp, 'rig-data'), 'relative to the file that named it')
@@ -189,9 +191,9 @@ test('the writers hand the editor the file as it is, and null when there is none
 test('writing the machine file creates it, and load reads back what was written', () => {
   fixture({}, ({ tmp, toolRoot }) => {
     const file = path.join(tmp, 'elsewhere', 'rig.local.json')
-    const location = locate(toolRoot, { [LOCAL_CONFIG_ENV]: file })
+    const location = locate(toolRoot, { [LOCAL_CONFIG_ENV]: file }, { cwd: tmp })
     writeMachine(location, prev => ({ ...prev, workRoot: 'W' }))
-    assert.equal(load(locate(toolRoot, { [LOCAL_CONFIG_ENV]: file })).workRoot, 'W',
+    assert.equal(load(locate(toolRoot, { [LOCAL_CONFIG_ENV]: file }, { cwd: tmp })).workRoot, 'W',
       'the directory was made on the way, not assumed')
   })
 })
