@@ -23,14 +23,21 @@ export const QUIET_COMMANDS = new Set(['prompt', 'help', 'doctor', 'update', 'fr
 // location, so the copy inside a work's `rig` worktree would compare a feature branch
 // against the default branch and warn on every command for the life of the work.
 export function skipReason (state) {
-  if (!state?.repo) return 'the tool is not a git checkout'
-  if (state.nested) return 'the tool is a directory inside another checkout'
+  // `repo` is the enum `checkouts.mjs` answers in — 'none', 'nested' or 'own'. It used to
+  // be a boolean here and an enum there, which is the class of bug one state shape exists
+  // to prevent: `'none'` is truthy, so a checkout-less tool read as a checkout.
+  if (state?.repo !== 'own') {
+    return state?.repo === 'nested'
+      ? 'the tool is a directory inside another checkout'
+      : 'the tool is not a git checkout'
+  }
   if (state.linked) return 'the tool is running from a linked worktree'
   if (!state.branch) return 'the tool checkout is on a detached HEAD'
   // `defaultBranch` is null unless the tool could confirm the ref still exists — see
-  // `toolState`. An unconfirmed one must not veto: git never refreshes `origin/HEAD`, so
-  // after the remote renames its default branch it names one that is gone, and vetoing on it
-  // switched the check off for good while blaming the user's branch.
+  // `identify` in `checkouts.mjs`. An unconfirmed one must not veto: git never refreshes
+  // `origin/HEAD`, so after the remote renames its default branch it names one that is
+  // gone, and vetoing on it switched the check off for good while blaming the user's
+  // branch.
   if (state.defaultBranch && state.branch !== state.defaultBranch) {
     return `the tool checkout is on ${state.branch}, not ${state.defaultBranch}`
   }
