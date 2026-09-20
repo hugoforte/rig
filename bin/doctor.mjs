@@ -184,9 +184,10 @@ export function doctorFindings (snap = {}) {
   // used to reach the tool checkout first and die there when git was absent, saying nothing.
   out.push(ok('node', snap.node))
   out.push(check('git', !!snap.git, { ok: snap.git, bad: 'not on PATH' }))
-  // The mark *is* the version (ADR 0004), so it is said once. A checkout with no release in
-  // its history has no version to name and says where it is instead.
-  out.push(note(`rig ${snap.rig?.mark ? `${snap.rig.mark} ` : ''}at ${snap.rig?.root}`))
+  // The mark *is* the version (ADR 0004), so it is said once. With no mark at all — no git on
+  // PATH, or a copy of the tool with no `.git` — the sentence would otherwise lose its subject
+  // and read `rig at C:\rig`, so it falls back to the one fact that needs nothing to derive.
+  out.push(note(`rig ${snap.rig?.mark ?? `record format ${snap.rig?.recordFormat}`} at ${snap.rig?.root}`))
 
   // The asymmetry is deliberate: a machine that was never going to answer costs a note,
   // while one that tried and failed counts. "Nothing to measure here" and "the fetch broke"

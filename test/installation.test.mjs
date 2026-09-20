@@ -264,6 +264,20 @@ test('a command that needs no git still finishes on a machine with no git on PAT
   assert.doesNotMatch(out, /not found on PATH/, 'and nothing leaked out of the epilogue')
 })
 
+test('the machine-readable surface answers on a machine with no git on PATH', () => {
+  // `release` is the one field in the payload that needs git, and the records are the rest of
+  // it. A missing release is how the payload says so; dying is not.
+  const noGit = { ...env }
+  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
+  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
+  const r = spawnRig(['list', '--json', '--quick'], noGit)
+  const out = strip(r.stdout)
+  assert.equal(r.status, 0, out + strip(r.stderr))
+  const payload = JSON.parse(out)
+  assert.equal(payload.release, null, 'no git, so no release to name')
+  assert.equal(typeof payload.recordFormat, 'number', 'and the format still answers, needing nothing')
+})
+
 test('doctor reaches its verdict on a machine with no git on PATH', () => {
   // doctor is the command you run *because* something is broken, so every git-dependent
   // check is skipped rather than attempted. It used to die partway and lose everything

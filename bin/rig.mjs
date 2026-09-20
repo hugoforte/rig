@@ -1926,7 +1926,14 @@ const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
 // inside a command somebody ran on purpose — never in `toolState`, which every command's
 // epilogue already pays eight spawns for (ADR 0003). `head` is not passed: without a tag there
 // is no release to name, and a sha in a field called `release` would be a different claim.
-const releaseHere = () => releaseMark({ describe: git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
+//
+// Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`):
+// `run` dies when the command is not there, and `rig list --json` on a machine with no git
+// has a full answer to give about the records — which release wrote it is the one field that
+// needs git, and a missing field is the right way to say so.
+const releaseHere = () => (onPath('git')
+  ? releaseMark({ describe: git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
+  : null)
 
 // The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
 // renders it; neither reads the records a second way.

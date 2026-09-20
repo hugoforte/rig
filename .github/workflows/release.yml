@@ -31,11 +31,15 @@ jobs:
         with:
           node-version: 20
 
-      # One entry per commit in the range, each carrying the pull request it came from or null.
-      # Asked of the API per commit rather than parsed out of commit messages: a squash subject
-      # carries `(#12)` and a merge commit does not, and neither is a record.
+      # One entry per commit in the range, each carrying every pull request GitHub associates
+      # with it. Asked of the API per commit rather than parsed out of commit messages: a squash
+      # subject carries `(#12)` and a merge commit does not, and neither is a record.
       #
-      # A commit that resolves to no pull request stays in the list as a null rather than being
+      # All of a commit's pull requests are kept, not the first: a commit that reached main
+      # through two of them would otherwise be sized by whichever the API listed first, and the
+      # other would vanish from the notes. `bin/release.mjs` deduplicates by number.
+      #
+      # A commit that resolves to none stays in the list with an empty array rather than being
       # dropped, because the next step has to refuse on it. Silently folding the bumps that did
       # come back is how a feature ships inside a patch release.
       - name: the pull requests this push contains
@@ -45,9 +49,9 @@ jobs:
           previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
           echo "PREVIOUS=$previous" >> "$GITHUB_ENV"
           for sha in $(git rev-list "${previous:+$previous..}HEAD"); do
-            pull=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
-              --jq 'map({number, title, url: .html_url, body, headRefName: .head.ref, labels: [.labels[].name]}) | first // null')
-            jq -n --arg sha "$sha" --argjson pull "${pull:-null}" '{sha: $sha, pull: $pull}'
+            pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
+              --jq 'map({number, title, url: .html_url, body, headRefName: .head.ref, labels: [.labels[].name]})')
+            jq -n --arg sha "$sha" --argjson pulls "${pulls:-[]}" '{sha: $sha, pulls: $pulls}'
           done | jq -s '.' > commits.json
 
       - name: is this push a release, and of what

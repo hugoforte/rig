@@ -12,8 +12,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // A PR that would land as a minor: what `rig new --type feat` writes, and no labels.
 const featPr = { branch: 'feat/name-the-release', labels: [] }
 
-// One commit carrying one pull request, which is the shape the workflow gathers.
-const commit = (sha, pull) => ({ sha, pull })
+// One commit and every pull request GitHub associates with it, which is the shape the workflow
+// gathers. `commit(sha, null)` is the commit it could name none for.
+const commit = (sha, ...pulls) => ({ sha, pulls: pulls.filter(Boolean) })
 const pr = (number, branch, labels = []) => ({ number, title: `PR ${number}`, url: `u/${number}`, body: '', headRefName: branch, labels })
 
 test('a tag names a version whether or not it wears the v', () => {
@@ -226,6 +227,16 @@ test('a pull request spread over several commits gets one section, not one each'
   const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], commits)
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout.match(/## PR 4/g)?.length, 1, r.stdout)
+})
+
+test('a commit belonging to two pull requests counts both, and keeps both in the notes', () => {
+  // The bug this pins: taking the first pull request GitHub lists would size this release as
+  // a patch and drop #2 from the notes entirely.
+  const commits = [commit('aaa', pr(1, 'fix/one'), pr(2, 'feat/two'))]
+  assert.equal(bumpOfRelease(commits).bump, 'minor')
+  const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], JSON.stringify(commits))
+  assert.match(r.stdout, /PR 1/)
+  assert.match(r.stdout, /PR 2/)
 })
 
 // ---------------------------------------------------------------- the release itself

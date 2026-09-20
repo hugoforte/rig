@@ -44,6 +44,13 @@ const PREFIX_BUMPS = {
 // Strongest first: a release containing a feature is a minor release, whatever else is in it.
 const STRENGTH = ['minor', 'patch', 'none']
 
+// The prefixes that ask for one particular bump, for the message that has to teach someone
+// whose branch named none of them. Grouped rather than listed flat: seven prefixes in one
+// string reads as seven equivalent choices, and two of them mean something quite different
+// from the other five.
+const prefixesAsking = bump => Object.entries(PREFIX_BUMPS)
+  .filter(([, b]) => b === bump).map(([p]) => `\`${p}/\``).join(', ')
+
 const LABEL = 'release:'
 
 // The version a release tag names, or null for anything that is not one. Tags are the record
@@ -81,7 +88,7 @@ export function bumpFor ({ branch, labels = [] }) {
   if (bump) return { bump, reason: `the branch prefix \`${prefix}/\`` }
   return {
     bump: null,
-    reason: `\`${branch}\` names no bump: branch from ${Object.keys(PREFIX_BUMPS).map(p => `\`${p}/\``).join(' or ')} — what \`rig new --type\` writes — or label the PR ${BUMPS.map(b => `\`${LABEL}${b}\``).join(', ')}`,
+    reason: `\`${branch}\` names no bump: branch from ${prefixesAsking('minor')} for a minor or ${prefixesAsking('patch')} for a patch — what \`rig new --type\` writes — or from ${prefixesAsking('none')} to ask for nothing, or label the PR ${BUMPS.map(b => `\`${LABEL}${b}\``).join(', ')}`,
   }
 }
 
@@ -112,9 +119,12 @@ export function checkBump ({ branch, labels = [] }) {
   return { ok: true, bump, message: `this PR asks for ${bump} (${reason})` }
 }
 
-// The bump a whole release asks for: the strongest its pull requests asked for, or a refusal
-// naming what could not be read. `commits` is one entry per commit in the range, each carrying
-// the pull request it came from or `null` when the lookup found none.
+// The bump a whole release asks for: the strongest any of its pull requests asked for, or a
+// refusal naming what could not be read. `commits` is one entry per commit in the range, each
+// carrying every pull request GitHub associates with it — usually one, empty when it knows of
+// none, and more than one for a commit that reached `main` through two of them. All of them
+// count: taking one and discarding the rest is how the release ends up sized by whichever the
+// API happened to list first.
 //
 // The refusals are the point. A commit with no pull request, or a pull request whose bump does
 // not parse, would otherwise fold away to a *smaller* bump than the truth and ship a feature
@@ -122,13 +132,13 @@ export function checkBump ({ branch, labels = [] }) {
 // 0003 made this call once already, failing rather than skipping so a release note could not be
 // dropped in silence; nothing is tagged before the set is known, so re-running is safe.
 export function bumpOfRelease (commits = []) {
-  const orphans = commits.filter(c => !c?.pull).map(c => String(c?.sha ?? '?').slice(0, 7))
+  const orphans = commits.filter(c => !c?.pulls?.length).map(c => String(c?.sha ?? '?').slice(0, 7))
   if (orphans.length) {
     return { ok: false, bump: null, message: `${orphans.length} commit(s) in this range resolve to no pull request (${orphans.join(', ')}) — the set this release is computed from could not be read, so no version is safe to publish; re-run once GitHub answers for them` }
   }
   const unreadable = []
   let strongest = 'none'
-  for (const { pull } of commits) {
+  for (const pull of pullsOf(commits)) {
     const { bump, reason } = bumpFor({ branch: pull.headRefName, labels: pull.labels ?? [] })
     if (!bump) { unreadable.push(`#${pull.number}: ${reason}`); continue }
     if (STRENGTH.indexOf(bump) < STRENGTH.indexOf(strongest)) strongest = bump
@@ -138,6 +148,14 @@ export function bumpOfRelease (commits = []) {
   }
   return { ok: true, bump: strongest, message: `this release asks for ${strongest}` }
 }
+
+// Every pull request in the range, once each. A pull request reaches this more than once
+// whenever a merge method keeps several commits for it, and a commit reaches it under two
+// numbers when it belongs to two — both are deduplicated here, so the notes carry one section
+// per pull request and the bump fold counts each one once.
+export const pullsOf = commits => [
+  ...new Map((commits ?? []).flatMap(c => c?.pulls ?? []).filter(Boolean).map(p => [p.number, p])).values(),
+]
 
 // The merge gate: is this push to `main` a release, and of what? The version is worked out
 // here, from the bumps of the pull requests the push contains, because here is the only place
@@ -217,11 +235,12 @@ export function releaseMark ({ describe, head }) {
 //
 // `verdict` and `notes` read the same stdin shape, one entry per commit in the range:
 //
-//   [{ "sha": "abc1234", "pull": { "number": 7, "title": "…", "url": "…", "body": "…",
-//                                  "headRefName": "feat/x", "labels": ["release:none"] } }]
+//   [{ "sha": "abc1234", "pulls": [{ "number": 7, "title": "…", "url": "…", "body": "…",
+//                                    "headRefName": "feat/x", "labels": ["release:none"] }] }]
 //
-// `pull` is null for a commit GitHub could not name a pull request for, which `verdict`
-// refuses on rather than folding away.
+// `pulls` is empty for a commit GitHub could not name a pull request for, which `verdict`
+// refuses on rather than folding away. It holds more than one for a commit that belongs to
+// more than one, and every entry counts.
 
 const flags = argv => Object.fromEntries(
   argv.flatMap((a, i) => (a.startsWith('--') ? [[a.slice(2), argv[i + 1]?.startsWith('--') ? '' : argv[i + 1] ?? '']] : [])),
@@ -248,11 +267,7 @@ function main (argv) {
     return v.ok ? 0 : 1
   }
   if (command === 'notes') {
-    // One section per pull request, not per commit: a merge method that keeps more than one
-    // commit for a PR would otherwise print its description once per commit. `bumpOfRelease`
-    // needs no such care — folding the same bump twice is the same answer.
-    const byNumber = new Map(commitsFromStdin().map(c => c?.pull).filter(Boolean).map(p => [p.number, p]))
-    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls: [...byNumber.values()] }))
+    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls: pullsOf(commitsFromStdin()) }))
     return 0
   }
   console.error('usage: node bin/release.mjs check --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0 < commits.json\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name < commits.json')

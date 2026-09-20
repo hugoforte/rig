@@ -36,7 +36,7 @@ const snap = (over = {}) => ({
   strayOrgKeys: [],
   node: 'v20.11.0',
   git: 'git version 2.47.0',
-  rig: { version: '3.4.0', root: 'C:\\rig', mark: 'v3.4.0' },
+  rig: { recordFormat: 3, root: 'C:\\rig', mark: 'v3.4.0' },
   freshness: { behind: 0, upstream: 'origin/main' },
   gh: 'ok',
   jira: { needed: false, present: false },
@@ -200,6 +200,13 @@ test('pending migrations are reported and never run', () => {
   const found = doctorFindings(snap({ dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: ['stamp the data root', 'phase replaces status'], major: 3 } } })] }))
   assert.match(only(found, /pending migration/).says, /2 pending migration\(s\) — run `rig update`: stamp the data root; phase replaces status/)
   assert.equal(problemCount(found), 1)
+})
+
+test('a checkout with no release to name still has a subject in that sentence', () => {
+  // The mark is the version now, so with no mark — no git on PATH, or a copy of the tool with
+  // no `.git` — the line would read `rig at C:\rig` and have lost what it is about.
+  const found = doctorFindings(snap({ rig: { recordFormat: 3, root: 'C:\\rig', mark: null } }))
+  assert.match(only(found, /^rig /).says, /^rig record format 3 at /)
 })
 
 test('a data root at the format this rig writes is a note, and names the format once', () => {
