@@ -203,6 +203,15 @@ test('a data root at the format this rig writes is a note naming what stamped it
   assert.match(only(found, /record format 3/).says, /stamped by rig 3\.4\.0/)
 })
 
+test('a data root written before stamping existed says so, rather than showing undefined', () => {
+  // The oldest data roots carry no `writtenBy` at all. The fallback is the only reason that
+  // reads as a fact about the record rather than as a bug in the line printing it.
+  const found = doctorFindings(snap({
+    repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: [], major: 3 } },
+  }))
+  assert.match(only(found, /record format 3/).says, /stamped by rig from before stamping existed/)
+})
+
 test('an org with no mirror yet is a note: there is nothing to ask git about', () => {
   const found = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: null, source: 'unknown' }, tracker: null }] }))
   assert.equal(only(found, /identity for acme/).verdict, 'note')
