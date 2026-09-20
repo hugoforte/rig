@@ -146,6 +146,11 @@ function rootFindings (root) {
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
 //   strayOrgKeys      keys of the org half left behind in the machine file
+//   selection         { error } — why no data root could be resolved, or null when one was.
+//                     The only field here that is a *failure* to gather rather than a thing
+//                     gathered, and the reason is decision 83's: everything else comes from
+//                     the registry and the machine half, which answer whether or not a root
+//                     was chosen
 //   node, git         the version strings; `git` null when it is not on PATH
 //   rig               { version, root, mark } — the release this checkout stands on, or null
 //   freshness         { skipped, fetchError, behind, upstream }, measured live by the caller
@@ -222,6 +227,18 @@ export function doctorFindings (snap = {}) {
   out.push(check('work root', wr.exists, { ok: wr.path, bad: `${wr.path} missing` }))
   const mr = snap.mirrorRoot || {}
   out.push(check('mirror root', mr.exists, { ok: mr.path, bad: `${mr.path} missing` }))
+
+  // Which root is in hand, when the machine cannot say. Everywhere else this refusal is fatal
+  // — a command that carried on would work in a root nobody chose — and here it is a finding,
+  // because a configuration doctor cannot resolve is the class of problem doctor exists to
+  // report, and dying on it is how it came to report nothing at all. Said immediately before
+  // the roots, which are read from the registry and so are all still checked below.
+  //
+  // The message is `bin/roots.mjs`'s own, carried rather than reworded: it is written for a
+  // person, it already names the fix, and there are several distinct refusals behind it that
+  // wording this again would have to enumerate. `freshness.fetchError` is the same bargain —
+  // this module narrates the frame and carries the detail.
+  if (snap.selection?.error) out.push(bad(snap.selection.error))
 
   // Every configured root, each checked in full, because the roots nobody looks at are the
   // ones that rot. Named when there is more than one, and silent when there is not: a

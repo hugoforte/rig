@@ -2958,13 +2958,39 @@ function doctorRoot (name, loc, hasGit) {
 // Every data root this installation configures, in the order the machine file names them.
 // Read from the registry and not from `where`, the way `rig update` visits them: a `current`
 // pointing at nothing must not hide the roots that are fine. A machine that configures none
-// falls back to the one `where` resolved, which is the not-set-up layout doctor reports on.
-function doctorRootLocations () {
+// falls back to the location doctor resolved, which is the not-set-up layout it reports on.
+function doctorRootLocations (fallback) {
   const reg = registry(RIG_ROOT)
   const names = Object.keys(reg.roots)
   const base = { toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }
-  if (!names.length) return [{ name: null, loc: where() }]
+  if (!names.length) return [{ name: null, loc: fallback }]
   return names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path, { name }) }))
+}
+
+// Which data root is in hand, or why there is none. Everywhere else an unresolvable selection
+// is fatal, and rightly: a command that carried on would write a work's records into a root
+// nobody chose. `doctor` is the exception, because a selection it cannot make is exactly the
+// class of broken configuration it exists to report, and dying on it is the one way to report
+// nothing at all. So the refusal is caught and carried as a finding.
+//
+// The fallback is the tool checkout, which is what `locate` already falls back to on a machine
+// that configures no data root at all: the org half of a root nobody chose must not be guessed
+// at, and everything the snapshot still reads off it — the work root, the mirror root, the
+// secrets — is the machine half's to answer, which reads either way. `freshness` sits in
+// both halves, so the fallback does drop a root's own policy; it costs nothing because
+// `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`. The roots
+// themselves come from the registry (`doctorRootLocations`) wherever it has any.
+function doctorSelection () {
+  try { return { loc: where(), error: null } }
+  catch (e) {
+    if (!(e instanceof RigError)) throw e   // a bug: not doctor's to swallow
+    const reg = registry(RIG_ROOT)
+    return {
+      loc: withDataRoot({ toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }, RIG_ROOT,
+        { name: null, source: 'fallback', entry: null }),
+      error: e.message,
+    }
+  }
 }
 
 // What is directly under the work root, minus the two things rig keeps there itself. Whether
@@ -2978,12 +3004,15 @@ function workRootEntries (cfg) {
 }
 
 function doctorSnapshot () {
-  const localFile = localConfigFile()
-  // Nothing below can be asked of an installation that has no config at all, and `config()`
-  // is the first thing that would die trying.
+  // The one command that gathers its location rather than asking for it, and then carries on
+  // whether or not it got one.
+  const { loc, error: selectionError } = doctorSelection()
+  const localFile = loc.localFile
+  // Nothing below can be asked of an installation that has no config at all, and `load` is
+  // the first thing that would die trying.
   if (!exists(localFile)) return { setUp: false, localFile }
 
-  const cfg = config()
+  const cfg = load(loc)
   const gv = onPath('git') ? run('git', ['--version']) : { code: 1, out: '' }
   const hasGit = gv.code === 0
   const tool = toolState()
@@ -2992,7 +3021,7 @@ function doctorSnapshot () {
   // for here and not in `toolState`, which runs in every command's epilogue and is already
   // eight spawns dear; doctor is the one caller that can afford a ninth.
   const describe = hasGit ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
-  const roots = doctorRootLocations().map(({ name, loc }) => doctorRoot(name, loc, hasGit))
+  const roots = doctorRootLocations(loc).map(root => doctorRoot(root.name, root.loc, hasGit))
   const disk = freeSpace(cfg.workRoot)
   // Needed if *any* root tracks in Jira: twg is one tool on one machine, so the question is
   // about the installation and not about whichever knowledge happens to be in hand.
@@ -3005,7 +3034,10 @@ function doctorSnapshot () {
     // Asked of the files, not carried on `cfg`: which keys the org half owns is
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
-    strayOrgKeys: strayOrgKeys(where()),
+    strayOrgKeys: strayOrgKeys(loc),
+    // Why there is no root in hand, when there is not. Carried rather than reworded:
+    // bin/roots.mjs writes that sentence for a person and it already names the fix.
+    selection: { error: selectionError },
     node: process.version,
     git: hasGit ? gv.out : null,
     rig: { recordFormat: MAJOR, root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
