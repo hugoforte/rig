@@ -171,11 +171,18 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, then `current`. The third is
-the one that matters: `C:\w\<id>\.rig\data` names the root a work's records live in, so
-every command run inside a work folder is right without a flag, and `current` decides only
-for the ones with no work to anchor them — `new`, `list`, `catalog`, `dash` — which say so
-when it did.
+`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**,
+then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
+root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
+first time it saw that repo — names the root that repo belongs to. So `rig new <id> --repos
+Payments` lands in Payments' root, a command run in a checkout of a catalogued repo answers
+for that repo's root, and `current` decides only for what neither can place — `new` with no
+repos, `list`, `catalog`, `dash` — which say so when it did.
+
+**A work lives in one data root.** One `work.json`, one `context.md`, and two roots with
+different readers, so it cannot span them: `rig new --repos a,b` refuses when a and b are
+catalogued in different roots, and `rig attach` refuses a repo belonging to another root
+rather than drafting its entry into this one. Two works, one per root, is the answer.
 
 Two consequences worth holding on to:
 

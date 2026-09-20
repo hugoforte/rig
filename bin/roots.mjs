@@ -145,6 +145,29 @@ export function registry (toolRoot, env = process.env) {
   return { toolRoot, localFile, roots: rootsOf(machine, localFile), current: machine?.current ?? null }
 }
 
+// Which configured roots hold a catalogue entry for a repo. A repo is catalogued in exactly
+// one data root — `rig attach` drafts the entry the first time it sees the repo, in whichever
+// root the work was in — so this is a binding that already exists rather than a new thing to
+// configure. Returned as a list because two roots cataloguing one repo is a real state, and
+// guessing between them would put a work's records in the wrong repo.
+//
+// Matched case-insensitively: the file is named for the repo, and NTFS does not distinguish.
+export function rootsCataloguing (roots, repo) {
+  const wanted = `${String(repo).toLowerCase()}.md`
+  const hits = []
+  for (const [name, entry] of Object.entries(roots)) {
+    const catalog = path.join(entry.path, 'catalog')
+    let orgs
+    try { orgs = fs.readdirSync(catalog) } catch { continue }   // no catalogue yet is not an error
+    const found = orgs.some(org => {
+      try { return fs.readdirSync(path.join(catalog, org)).some(f => f.toLowerCase() === wanted) }
+      catch { return false }   // a file where an org directory was expected
+    })
+    if (found) hits.push(name)
+  }
+  return hits
+}
+
 // The data root the work folder above the cwd belongs to, or null outside one. Walks up
 // exactly as `findWorkId` does, and reads the marker beside the one it reads.
 export function anchoredRoot (from) {
@@ -159,6 +182,26 @@ export function anchoredRoot (from) {
     if (up === dir) return null
     dir = up
   }
+}
+
+// The root a set of repos places this command in, or null when none of them is catalogued
+// anywhere. Every repo that *is* catalogued has to agree: a work spanning two roots is not a
+// thing rig can assemble, and picking one of them silently is how half a work's records end
+// up somewhere nobody looks.
+function fromRepos (reg, repos, said) {
+  let chosen = null
+  for (const repo of repos) {
+    const hits = rootsCataloguing(reg.roots, repo)
+    if (!hits.length) continue
+    if (hits.length > 1) {
+      throw new RigError(`"${repo}" is catalogued in more than one data root (${hits.join(', ')}) — pass --data <name> to say which`)
+    }
+    if (chosen && chosen.name !== hits[0]) {
+      throw new RigError(`${chosen.repo} is catalogued in data root "${chosen.name}" and ${repo} in "${hits[0]}" — one work cannot span two data roots`)
+    }
+    chosen ??= { name: hits[0], repo, source: 'repo', said }
+  }
+  return chosen && { name: chosen.name, source: chosen.source }
 }
 
 // Which root is in hand, and what decided it. First hit wins, and the order is the point:
@@ -181,6 +224,17 @@ function chooseRoot (reg, env, opts) {
   if (pinned) return known(pinned, 'env', DATA_ROOT_ENV)
   const anchored = anchoredRoot(opts.cwd ?? process.cwd())
   if (anchored) return known(anchored, 'cwd', `${MARKER_DIR}/${DATA_ANCHOR} in the work folder above the current directory`)
+  // The repos the command named, then the repo the command is standing in. Both answer the
+  // same question — which knowledge is this repo's — and both are asked before `current`,
+  // because a repo that has been attached once already said where it belongs and having to
+  // remember it afterwards is the thing this is for.
+  const byRepos = fromRepos(reg, opts.repos ?? [], 'named on the command')
+  if (byRepos) return byRepos
+  // A function, not a value: finding the repo the cwd is in costs a subprocess, and by here
+  // it is the only question left unanswered — every cheaper one has already missed.
+  const here = opts.repoAt?.()
+  const byCwd = here ? fromRepos(reg, [here], 'the repo the current directory is in') : null
+  if (byCwd) return byCwd
   if (reg.current) return known(reg.current, 'current', `"current" in ${reg.localFile}`)
   if (names.length === 1) return { name: names[0], source: 'only' }
   if (names.length > 1) {

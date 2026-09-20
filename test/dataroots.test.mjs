@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { locate, registry, load, anchoredRoot, dataAnchorFile, DATA_ROOT_ENV, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
+import { locate, registry, load, anchoredRoot, rootsCataloguing, dataAnchorFile, DATA_ROOT_ENV, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 import { makeInstall, strip } from './harness.mjs'
 
 // A tool checkout and as many data roots beside it as the machine file names. Nothing here
@@ -31,6 +31,14 @@ const fixture = (machine, body) => {
     fs.writeFileSync(path.join(toolRoot, 'rig.local.json'), JSON.stringify(resolved))
     body({ tmp, toolRoot, machine: resolved })
   } finally { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) }
+}
+
+// What `rig attach` drafts the first time it sees a repo, reduced to the part that binds it
+// to a root: a file at catalog/<org>/<repo>.md.
+const catalogue = (root, org, repo) => {
+  fs.mkdirSync(path.join(root, 'catalog', org), { recursive: true })
+  fs.writeFileSync(path.join(root, 'catalog', org, `${repo}.md`),
+    `---\nrepo: ${repo}\norg: ${org}\nrole: whatever\n---\n`)
 }
 
 const THREE = {
@@ -94,6 +102,76 @@ test('the shell beats the work folder: a pinned shell was pinned on purpose', ()
 test('outside any work folder there is no anchor to read', () => {
   fixture(THREE, ({ tmp }) => {
     assert.equal(anchoredRoot(path.join(tmp, 'w')), null)
+  })
+})
+
+// ------------------------------------------------- the repo says which knowledge is its own
+
+test('a repo named on the command puts the work in the root that catalogues it', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
+    const location = locate(toolRoot, {}, { cwd: tmp, repos: ['Payments'] })
+    assert.equal(location.name, 'linenmaster', 'and not `current`, which is hugoforte')
+    assert.equal(location.source, 'repo')
+  })
+})
+
+test('the repo the current directory is in answers when nothing named one', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
+    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'notes' })
+    assert.equal(location.name, 'personal')
+    assert.equal(location.source, 'repo')
+  })
+})
+
+test('finding the repo the cwd is in costs a subprocess, so it is not asked when something cheaper answered', () => {
+  fixture(THREE, ({ tmp, toolRoot }) => {
+    let asked = 0
+    locate(toolRoot, {}, { cwd: tmp, data: 'personal', repoAt: () => { asked++; return 'notes' } })
+    assert.equal(asked, 0)
+  })
+})
+
+test('the work folder still beats the repo: the work already said where it lives', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
+    const work = path.join(tmp, 'w', 'a-work')
+    fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
+    fs.writeFileSync(dataAnchorFile(work), 'personal\n')
+    assert.equal(locate(toolRoot, {}, { cwd: work, repos: ['Payments'] }).name, 'personal')
+  })
+})
+
+test('a repo nothing catalogues falls through to the current root', () => {
+  fixture(THREE, ({ tmp, toolRoot }) => {
+    const location = locate(toolRoot, {}, { cwd: tmp, repos: ['never-seen'] })
+    assert.equal(location.name, 'hugoforte')
+    assert.equal(location.source, 'current')
+  })
+})
+
+test('two repos in two roots is one work that cannot exist, and says so', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
+    catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
+    assert.throws(() => locate(toolRoot, {}, { cwd: tmp, repos: ['Payments', 'notes'] }),
+      /one work cannot span two data roots/)
+  })
+})
+
+test('a repo catalogued in two roots is ambiguous, not a coin toss', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
+    catalogue(machine.dataRoots.personal.path, 'acme', 'Payments')
+    assert.throws(() => locate(toolRoot, {}, { cwd: tmp, repos: ['Payments'] }),
+      /catalogued in more than one data root \(personal, linenmaster\) — pass --data/)
+  })
+})
+
+test('a root with no catalogue at all is not an error, it simply has no repos', () => {
+  fixture(THREE, ({ machine }) => {
+    assert.deepEqual(rootsCataloguing({ personal: { path: machine.dataRoots.personal.path } }, 'anything'), [])
   })
 })
 
@@ -261,6 +339,26 @@ test('a work id another root already owns is refused, and that root is named', (
   assert.equal(r.code, 1)
   assert.match(r.out, /belongs to data root "hugoforte"/)
   assert.ok(!fs.existsSync(path.join(second, 'work', 'only-here')), 'and nothing was recorded for it')
+})
+
+test('rig new --repos puts the work in the root that catalogues the repo', () => {
+  // The binding `rig attach` would have written the first time it saw this repo.
+  fs.mkdirSync(path.join(second, 'catalog', 'acme'), { recursive: true })
+  fs.writeFileSync(path.join(second, 'catalog', 'acme', 'ledger.md'),
+    '---\nrepo: ledger\norg: acme\nrole: the ledger\n---\n')
+  assert.equal(rig(['use', 'hugoforte']).code, 0, 'current is the other root')
+  const r = rig(['new', 'ledger-work', '--title', 'Ledger work', '--no-ticket', '--repos', 'ledger'])
+  assert.match(strip(r.out), /data root: personal/, 'the repo chose, and the command said so')
+  assert.ok(fs.existsSync(path.join(second, 'work', 'ledger-work', 'work.json')))
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'ledger-work')), 'and nothing landed in the current root')
+})
+
+test('a repo belonging to another root cannot be attached to this work', () => {
+  const r = rig(['attach', 'ledger', '--work', 'only-here', '--data', 'hugoforte'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /catalogued in data root "personal".*one work cannot span two data roots/s)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'catalog', 'acme', 'ledger.md')),
+    'and no entry for it was drafted into this root')
 })
 
 test('--data with no name is a typo, not a request', () => {

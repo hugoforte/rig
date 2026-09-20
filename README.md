@@ -206,18 +206,29 @@ rig list --data personal            # one command
 $env:RIG_DATA_ROOT = 'personal'     # a whole shell, until you close it
 ```
 
+**Mostly you never say which root.** A repo belongs to a data root from the first time you attach it — that is what the catalogue entry `rig attach` drafts *is* — and rig reads that binding back:
+
+```powershell
+rig new refunds --repos Payments      # goes in whichever root catalogues Payments
+cd D:\code\Payments; rig list          # answers for that repo's root, wherever you cd'd from
+```
+
 **Which root a command reads**, first one that answers:
 
 1. `--data <name>` on the command
 2. `RIG_DATA_ROOT` in the environment
 3. **the work folder you are standing in** — `C:\w\<work>\.rig\data` records the root that work's records live in
-4. `current`, moved by `rig use`
+4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue
+5. `current`, moved by `rig use`
 
-Rule 3 is the one that matters day to day: inside a work folder you never pass a flag and never think about which root is current. The commands that have no work to anchor them — `new`, `list`, `catalog`, `dash` — print which root `current` chose for them, so a switch you forgot about is visible rather than silent.
+Rules 3 and 4 are why this stays out of your way: inside a work folder, or inside a repo you have used before, you never pass a flag and never think about which root is current. The commands that fall through to `current` — `new`, `list`, `catalog`, `dash` — print which root chose for them, so a switch you forgot about is visible rather than silent.
+
+**One work lives in one data root.** Its record is a single `work.json` and a single `context.md`, and the two roots have different readers, so a work cannot span them. rig says so rather than half-doing it: `rig new --repos a,b` refuses when `a` and `b` are catalogued in different roots, and `rig attach` refuses a repo belonging to another root — which is what stops an employer's repo name being drafted into a personal catalogue. Two related works, one per root, is the answer.
 
 **Two things that bite, both on purpose:**
 
 - **One work root serves every data root**, so a work id is unique across all of them. `rig new` refuses an id whose folder already exists and names the root that owns it. Renaming a folder another root's records point at would break that work, so the id is what gives.
+- **A repo catalogued in two roots is ambiguous**, and rig asks rather than guesses: pass `--data <name>` once, and the work folder remembers it from then on.
 - **`rig update` brings every configured root forward**, not just the current one. The write refusal is per data root, so migrating one and leaving the others means the next `rig save` in another root refuses, mid-work.
 
 **A commit identity per root.** `identities` on a root entry beats the machine-wide map, which is what you want the first time the same org name means a different person in two roots:

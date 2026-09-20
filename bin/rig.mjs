@@ -19,7 +19,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -142,15 +142,36 @@ let location
 // `where` wants the same answer, and threading it through all of them would be a second way
 // to be wrong about which knowledge is in hand.
 let requestedData = null
-const where = () => (location ??= locate(RIG_ROOT, process.env, { data: requestedData }))
+let requestedRepos = []
+
+// The repo the command is standing in, for the one step of the resolution order that needs to
+// ask git. Named by its remote rather than its folder, because a clone can be called anything
+// and the catalogue is keyed by the repo's real name. Null for anywhere that is not a checkout,
+// or a checkout with no origin — both of which simply mean this step has no answer.
+function repoAtCwd () {
+  // `run` dies when the command is not there, and this is ambient work on behalf of whatever
+  // the user actually asked for — `rig doctor` on a machine with no git has to live long
+  // enough to say so, which it cannot if resolving the data root killed it first.
+  if (!onPath('git')) return null
+  const top = run('git', ['rev-parse', '--show-toplevel'])
+  if (top.code !== 0) return null
+  const url = run('git', ['remote', 'get-url', 'origin'])
+  if (url.code !== 0 || !url.out) return path.basename(top.out)
+  return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
+}
+
+const where = () => (location ??= locate(RIG_ROOT, process.env, {
+  data: requestedData, repos: requestedRepos, repoAt: repoAtCwd,
+}))
 
 // `current` chose this root, and no flag, shell or work folder did. Said by the commands
 // that have no work folder to anchor them, and only when there is more than one root to
 // have chosen between — a pointer that could only point one way is not invisible state.
+const CHOSE_QUIETLY = { current: 'current', repo: 'the repo it is about' }
 function sayCurrentRoot () {
   const w = where()
-  if (w.source === 'current' && Object.keys(w.roots).length > 1) {
-    say(C.dim(`· data root: ${w.name} (${w.dataRoot})`))
+  if (CHOSE_QUIETLY[w.source] && Object.keys(w.roots).length > 1) {
+    say(C.dim(`· data root: ${w.name} (${CHOSE_QUIETLY[w.source]})`))
   }
 }
 const dataRoot = () => where().dataRoot
@@ -1539,6 +1560,17 @@ async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   if (work.repos.some(r => r.repo.toLowerCase() === repoName.toLowerCase())) {
     say(`${repoName} already attached — nothing to do`)
     return
+  }
+  // The other side of a repo naming its data root. A work lives in exactly one root — one
+  // `work.json`, one `context.md` — so a repo catalogued in a different one cannot join it.
+  // Without this, `attach` would draft an entry for an employer's repo into a personal
+  // catalogue: the leak the separation exists to stop, arriving by the back door.
+  const here = where().name
+  const elsewhere = here ? rootsCataloguing(where().roots, repoName).filter(n => n !== here) : []
+  if (elsewhere.length) {
+    die(`"${repoName}" is catalogued in data root ${elsewhere.map(n => `"${n}"`).join(' and ')}, ` +
+      `and ${work.id} is in "${here}" — one work cannot span two data roots. ` +
+      `Open a separate work there (\`rig new <id> --data ${elsewhere[0]}\`), or move this one.`)
   }
   const { org, repo, language } = resolveOrg(cfg, repoName)
   const dest = path.join(workDir(cfg, work.id), repo)
@@ -3032,6 +3064,12 @@ if (isMain) {
     // Before the first `where()`: the data root a command names decides every path it reads.
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
     if (typeof args.flags.data === 'string') requestedData = args.flags.data
+    // `rig new --repos a,b` is the one command that names repos before there is a work folder
+    // to anchor it, and it is the command whose choice of root matters most — it is the one
+    // that writes the record.
+    if (typeof args.flags.repos === 'string') {
+      requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
+    }
     if (MUTATING.has(cmdName)) prepareDataRoot()
     await cmd(args)
   } catch (e) {
