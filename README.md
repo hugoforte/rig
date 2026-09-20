@@ -302,6 +302,8 @@ So branching the way `rig new` already branches is the whole contribution. The l
 
 **Every merge to `main` is a release, or says why it is not.** The merge workflow collects the pull requests since the previous tag, reads a bump from each, takes the strongest, and applies it to that tag. Then it tags the commit and publishes the notes, which are those pull requests' descriptions.
 
+`main` has a merge queue, so a landing is a whole merge group rather than one pull request, and a release is whatever that group contained. You do not queue anything by hand: merge as usual and GitHub tests your change against `main` plus everything ahead of it in the queue, which is the state it will actually land in. That is why there is no "branch is out of date" to fix — [ADR 0005](docs/adr/0005-a-merge-queue-replaces-the-up-to-date-rule.md) has the reasoning, including the measurements behind the group size.
+
 The version therefore exists in exactly one place — the tag — and is worked out at the one moment the whole set of changes is known. `package.json` reads `0.0.0-development` and is not a version; a checkout names itself from the tag, which is what `rig doctor` prints.
 
 The major is never asked for; it is the record format ([ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md)). Why the version is worked out at the release rather than carried by the branch is [ADR 0004](docs/adr/0004-the-pr-carries-a-bump-not-a-version.md). It reverses one decision in [ADR 0003](docs/adr/0003-the-pr-carries-its-own-version.md) — where the version is computed — and leaves the rest of it standing: the bump signal, the notes, and the major.
