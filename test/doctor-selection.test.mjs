@@ -11,8 +11,8 @@
 // no subprocess, and that the command lives long enough to print it, against a real
 // installation with two roots and no current.
 //
-// Every fixture name here starts `doctor-sel-`: the work root is shared by every suite on
-// the machine and by every branch being tested beside this one.
+// Every fixture name here starts `doctor-sel-`: the names travel into temp directories and
+// into assertions, and a suite that greps for `one` or `orphan` matches half the tree.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -160,11 +160,16 @@ test('the work records are still read, from whichever root holds them', () => {
   assert.match(rig(['doctor']).out, /doctor-sel-orphan: work folder missing but not closed/)
 })
 
-test('saying which root is in hand is all it takes to clear the finding', () => {
+test('saying which root is in hand is all it takes to clear the finding', (t) => {
+  // Registered before the mutation and run whether or not the assertion holds: this is
+  // the one test here that moves the installation's selection, and every test after it
+  // wants it back. `rig use` mirrors the choice into the legacy `dataRoot` key too.
+  t.after(() => {
+    const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+    delete machine.current
+    delete machine.dataRoot
+    fs.writeFileSync(localConfig, JSON.stringify(machine))
+  })
   assert.equal(rig(['use', 'doctor-sel-one']).code, 0)
-  const out = rig(['doctor']).out
-  assert.doesNotMatch(out, /none is current/)
-  const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
-  delete machine.current
-  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  assert.doesNotMatch(rig(['doctor']).out, /none is current/)
 })

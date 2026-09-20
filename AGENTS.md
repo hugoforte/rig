@@ -198,8 +198,11 @@ Two consequences worth holding on to:
   shared, so a folder the current root has no record for is usually another root's live work
   rather than junk. It is also the one command that **reports a selection it cannot make**
   rather than dying on it: two roots and no `current` is a finding like any other, and every
-  check that did not need a root in hand still runs. Every other command dies there, and
-  should — with no root in hand there is no answer to give.
+  check that did not need a root in hand still runs. `list`, `status`, `catalog` and `next`
+  die there, and should — each answers a question about a root's *contents*, and with none
+  in hand there is no answer to give, only a misleading empty one. `rig use` is the
+  exception that makes the finding actionable: it reads the registry directly, so the
+  selection you are told to fix is always fixable.
 
 A name selects which knowledge is in hand and **nothing else**. There are no per-root flags
 and no per-root defaults for ceremony — that would be the declared-track mistake rejected in

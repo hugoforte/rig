@@ -2959,9 +2959,11 @@ function doctorRootLocations (fallback) {
 //
 // The fallback is the tool checkout, which is what `locate` already falls back to on a machine
 // that configures no data root at all: the org half of a root nobody chose must not be guessed
-// at, and everything the snapshot still wants — the work root, the mirror root, the secrets,
-// the freshness policy — is the machine half's to answer, which reads either way. The roots
-// themselves come from the registry (`doctorRootLocations`) and never from here.
+// at, and everything the snapshot still reads off it — the work root, the mirror root, the
+// secrets — is the machine half's to answer, which reads either way. `freshness` sits in
+// both halves, so the fallback does drop a root's own policy; it costs nothing because
+// `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`. The roots
+// themselves come from the registry (`doctorRootLocations`) wherever it has any.
 function doctorSelection () {
   try { return { loc: where(), error: null } }
   catch (e) {
