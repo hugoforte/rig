@@ -17,6 +17,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
+import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir } from './roots.mjs'
 
@@ -45,10 +46,6 @@ const ok = s => console.log(`${C.green('✓')} ${s}`)
 // one report that means "rig has a bug" reading like the eleven that mean "push your data
 // root".
 const bad = s => console.log(`${C.red('✗')} ${s}`)
-
-// Where a `✗` sends you. rig's own tracker, because a contradiction is rig's bug and not the
-// reader's — see `docs/agents/issue-tracker.md`.
-const ISSUES_URL = 'https://github.com/hugoforte/rig/issues'
 
 const die = msg => { throw new RigError(msg) }
 
@@ -2654,7 +2651,10 @@ cmds.update = ({ flags }) => {
   if (!skipReason(after)) writeFreshness(cfg, measureFreshness(after))
 
   say('')
-  cmds.doctor({ flags: {}, positional: [] })
+  // The checks this update ends in are findings now, so their count is arithmetic rather than
+  // an exit code read back off the process — an update that moved nothing and a doctor that
+  // found nothing are two facts, added together here.
+  problems += problemCount(cmds.doctor({ flags: {}, positional: [] }))
   if (problems) process.exitCode = 1
 }
 
@@ -2679,207 +2679,140 @@ cmds['freshness-refresh'] = () => {
   writeFreshness(cfg, measureFreshness(state))
 }
 
-cmds.doctor = () => {
-  if (!exists(localConfigFile())) {
-    warn(`not set up — no ${localConfigFile()}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`)
-    process.exitCode = 1
-    return
-  }
+// Everything doctor asks of this machine and these records, in one plain object that
+// `bin/doctor.mjs` turns into findings. The impure half, and the only half that can die on a
+// probe — which is why the crippled-PATH tests still spawn the real command.
+//
+// It carries doctor's one mutation: the fetch and the freshness cache it writes. `doctor` is
+// the command that refuses to report what the cache last saw, because a health check you
+// asked for should answer about now.
+function doctorFreshness (cfg, tool) {
+  const skipped = skipReason(tool)
+  if (skipped) return { skipped }
+  const fetched = co.fetch(RIG_ROOT)
+  if (!fetched.ok) return { fetchError: fetched.error }
+  const measured = measureFreshness(tool)
+  writeFreshness(cfg, measured)
+  return { behind: measured.behind, upstream: tool.upstream }
+}
+
+// The record-format reading, in the order the three answers exclude each other: a stamp
+// nothing wrote cannot be compared, and a data root this rig may not write to has no
+// migrations of ours to run.
+function doctorStamp (written) {
+  if (stampUnreadable(written)) return { unreadable: true, writtenBy: written.writtenBy }
+  if (writesBlocked(written)) return { blocked: true, major: MAJOR, dataMajor: dataMajor(written) }
+  return { pending: pendingMigrations(written).map(m => m.name), writtenBy: written.writtenBy, major: MAJOR }
+}
+
+// One work, as doctor sees it: what the record contradicts, and what is under its folder that
+// rig did not put there. A closed work keeps its contradictions and loses the rest — its
+// worktrees are gone on purpose.
+function doctorWork (cfg, id) {
+  const work = loadWork(cfg, id)
+  const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
+  if (out.closed) return out
+  const wd = workDir(cfg, id)
+  if (!exists(wd)) return { ...out, folderMissing: true }
+  const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
+  out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
+  out.repos = work.repos.map(r => {
+    const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo) : null
+    return {
+      repo: r.repo,
+      worktreeMissing: !exists(r.path),
+      secretsUnconfigured: !!(cat?.body && /secrets|\.env/i.test(cat.body)),
+    }
+  })
+  return out
+}
+
+function doctorSnapshot () {
+  const localFile = localConfigFile()
+  // Nothing below can be asked of an installation that has no config at all, and `config()`
+  // is the first thing that would die trying.
+  if (!exists(localFile)) return { setUp: false, localFile }
+
   const cfg = config()
-  let problems = 0
-  // Asked of the files, not carried on `cfg`: which keys the org half owns is bin/roots.mjs's
-  // to know, and a diagnostic riding on a config value had exactly one reader — this one.
-  for (const key of strayOrgKeys(where())) {
-    warn(`${localConfigFile()} has "${key}" — ignored; it lives in rig.json. Remove it.`); problems++
-  }
-  // detail.ok shows when the check passes, detail.bad when it fails.
-  const check = (label, good, detail = {}) => {
-    if (good) ok(`${label}${detail.ok ? ` ${C.dim(detail.ok)}` : ''}`)
-    else { warn(`${label}${detail.bad ? ` — ${detail.bad}` : ''}`); problems++ }
-  }
-
-  // The two things everything below needs, reported before anything that needs them: doctor
-  // used to reach `toolState` first and die there when git was absent, saying nothing at all.
-  check('node', true, { ok: process.version })
   const gv = onPath('git') ? run('git', ['--version']) : { code: 1, out: '' }
-  check('git', gv.code === 0, { ok: gv.out, bad: 'not on PATH' })
-
+  const hasGit = gv.code === 0
   const tool = toolState()
   // Which *release* this is, when the checkout stands on one — a version and a sha name the
   // same build twice and neither says whether it was ever published. The describe is asked
   // for here and not in `toolState`, which runs in every command's epilogue and is already
   // eight spawns dear; doctor is the one caller that can afford a ninth.
-  const describe = gv.code === 0 ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
-  const mark = releaseMark({ describe, head: tool.head })
-  say(`${C.dim('·')} ${C.dim(`rig ${version()} at ${RIG_ROOT}${mark ? ` (${mark})` : ''}`)}`)
-  // The one command that fetches before answering: a health check you asked for should
-  // report now, not what the cache last saw.
-  const skipped = skipReason(tool)
-  if (skipped) say(`${C.dim('·')} ${C.dim(`freshness not checked — ${skipped}`)}`)
-  else {
-    const fetched = co.fetch(RIG_ROOT)
-    if (!fetched.ok) {
-      warn(`freshness not checked — could not fetch (${fetched.error})`); problems++
-    } else {
-      const measured = measureFreshness(tool)
-      writeFreshness(cfg, measured)
-      if (measured.behind === null) {
-        warn(`freshness not checked — git could not measure the distance from ${tool.upstream}`); problems++
-      } else {
-        check('installed rig', measured.behind === 0, {
-          ok: `up to date with ${tool.upstream}`,
-          bad: `${measured.behind} commit(s) behind ${tool.upstream} — run \`rig update\``,
-        })
-      }
-    }
-  }
-
-  const auth = github().auth()
-  check('gh authenticated', auth === 'ok',
-    { bad: auth === 'missing' ? 'gh not on PATH' : 'PR state and org resolution will not work' })
-  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'jira')) {
-    check('twg present', jira().present(), { bad: 'Jira ticket creation, fetch and write-back will not work' })
-  }
-
-  // Skipped rather than attempted without git: doctor is the command you run *because*
-  // something is wrong, so it has to reach the end and report everything it can.
-  if (gv.code === 0) {
-    const lp = run('git', ['config', '--global', 'core.longpaths'])
-    check('core.longpaths', lp.out === 'true',
-      { bad: 'run `rig init`; deep node_modules paths will break without it' })
-
-    const sym = run('git', ['config', '--get', 'core.symlinks'])
-    if (sym.out === 'false') say(`${C.dim('·')} ${C.dim('core.symlinks=false — by design, rig never symlinks')}`)
-  }
-
-  check('config file', exists(localConfigFile()), { bad: `${localConfigFile()} missing — run \`rig init\`` })
-  check('work root', exists(cfg.workRoot), { ok: cfg.workRoot, bad: `${cfg.workRoot} missing` })
-  check('mirror root', exists(cfg.mirrorRoot), { ok: cfg.mirrorRoot, bad: `${cfg.mirrorRoot} missing` })
+  const describe = hasGit ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
   const split = where().split
-  check('data root', split && exists(dataRoot()), {
-    ok: dataRoot(),
-    bad: split
-      ? `${dataRoot()} missing — check dataRoot in rig.local.json`
-      : 'is inside the tool checkout — not set up; knowledge must not live inside a public tool\'s tree. Run `rig prompt setup`',
-  })
-  if (split && exists(dataRoot()) && gv.code === 0) {
-    const state = co.describe(dataRoot())
-    check('data root is a git checkout of its own', state.repo === 'own', {
-      bad: state.repo === 'nested'
-        ? `it is a directory inside ${state.top} — rig will not commit there, since \`git add -A\` would stage all of it`
-        : 'records written there are not versioned',
-    })
-    if (state.repo === 'own') {
-      // rig commits after its own commands; an edit made outside rig waits for `rig save`.
-      // `dirty` is null when git could not read the tree, which is neither clean nor a
-      // count — a green tick on the strength of a command that failed is the one thing
-      // this check must never print.
-      const dirty = state.dirty
-      if (dirty === null) { warn(`data root: git could not read the working tree — \`git -C ${dataRoot()} status\` says why`); problems++ }
-      else if (dirty) warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`)
-      if (!state.branch) { warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'); problems++ }
-      else if (!state.upstream) say(`${C.dim('·')} ${C.dim('data root has no upstream — local only; push it to a private repo when ready')}`)
-      else if (state.ahead) warn(`data root has ${state.ahead} unpushed commit(s)`)
-      else if (dirty === 0) ok('data root is committed and pushed')
-      // Measured against the last fetch, which a mutating command does for itself.
-      if (state.behind) { warn(`data root is ${state.behind} commit(s) behind origin — \`rig update\` fast-forwards it`); problems++ }
-    }
-  }
-  check('rig.json', exists(repoConfigFile()),
-    { ok: repoConfigFile(), bad: `missing in ${dataRoot()} — not set up; run \`rig prompt setup\`` })
-  if (exists(repoConfigFile()) && !cfg.orgs.length) {
-    warn('rig.json has no orgs — not set up; run `rig prompt setup`'); problems++
-  }
-  // Reported, never run: doctor does not mutate, which is what makes it the command you can
-  // always run to ask a question without answering it.
-  if (exists(repoConfigFile())) {
-    const written = repoConfigJson()
-    if (stampUnreadable(written)) {
-      warn(`data root records writtenBy ${JSON.stringify(written.writtenBy)}, which is not a record format any rig wrote — mutating commands refuse until it is fixed by hand`); problems++
-    } else if (writesBlocked(written)) {
-      warn(`data root is at record format ${dataMajor(written)}, this rig writes ${MAJOR} — mutating commands refuse until this rig is updated`); problems++
-    } else {
-      const pending = pendingMigrations(written)
-      if (pending.length) {
-        warn(`${pending.length} pending migration(s) — run \`rig update\`: ${pending.map(m => m.name).join('; ')}`); problems++
-      } else {
-        say(`${C.dim('·')} ${C.dim(`record format ${MAJOR}, stamped by rig ${written.writtenBy ?? 'from before stamping existed'}`)}`)
-      }
-    }
-  }
-
-  for (const org of cfg.orgs) {
-    const id = effectiveIdentity(cfg, org)
-    if (id.source === 'unknown') {
-      say(`${C.dim('·')} ${C.dim(`identity for ${org}: no mirror yet — git decides once one is cloned`)}`)
-    } else {
-      check(`identity for ${org}`, !!id.email,
-        { ok: `${id.email}${id.source === 'git' ? ' — from git, not rig' : ''}`,
-          bad: 'git has no user.email to commit with' })
-    }
-    const t = cfg.tracker?.[org]
-    const desc = t?.kind ? `${t.kind}${t.repo ? ' ' + t.repo : ''}${t.project ? ' ' + t.project : ''}` : 'none — `rig new --ticket` unavailable (rig.json)'
-    say(`${C.dim('·')} ${C.dim(`tracker for ${org}: ${desc}`)}`)
-  }
-
-  // Contradictions: a recorded gate that reality denies. Since the phase is derived, drift is
-  // no longer possible — the only way one of these fires is a bug in rig or a hand-edited
-  // record, which is why they are `✗` and say so. Omissions are deliberately *not* here: a
-  // work with no design gate recorded is an ordinary work, `rig next` is where the offer to
-  // record one belongs, and a doctor that warns about every one of them is a doctor nobody
-  // reads.
-  //
-  // Asked of the records alone, with no PR lookup: doctor already fetches once and runs over
-  // every work, and a GitHub call per repo per work would make the command too slow to be the
-  // one you reach for. The contradictions that need live state are caught by `rig status`,
-  // which looks them up anyway — it says so here because it now does, which it did not when
-  // this comment was first written.
-  for (const id of listWorkIds()) {
-    for (const message of contradictions(loadWork(cfg, id))) {
-      bad(`${message} — this should not be possible; please file an issue at ${ISSUES_URL}`)
-      problems++
-    }
-  }
-
-  // Strays: anything directly under a work folder that rig did not create.
-  for (const id of listWorkIds()) {
-    const work = loadWork(cfg, id)
-    if (work.closedAt) continue
-    const wd = workDir(cfg, id)
-    if (!exists(wd)) { warn(`${id}: work folder missing but not closed`); problems++; continue }
-    const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
-    for (const e of fs.readdirSync(wd)) {
-      if (known.has(e)) continue
-      warn(`${id}: unmanaged entry "${e}" under the work root — rig owns this folder`)
-      problems++
-    }
-    for (const r of work.repos) {
-      if (!exists(r.path)) { warn(`${id}: ${r.repo} is attached but its worktree is gone`); problems++ }
-      if (cfg.secrets?.[r.repo] === undefined) {
-        const cat = findCatalog(r.repo)
-        if (cat?.body && /secrets|\.env/i.test(cat.body)) {
-          warn(`${id}: ${r.repo} mentions secrets in its catalogue entry but has no source in rig.local.json`)
-          problems++
-        }
-      }
-    }
-  }
-
-  const drafts = loadCatalog().filter(e => e.draft)
-  if (drafts.length) say(`${C.yellow('!')} ${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.map(d => d.repo).join(', ')}`)
-
-  // The label comes from the probe, not from the path: a drive letter on Windows, the mount
-  // point the work root actually sits on anywhere else.
+  const dataRootPath = dataRoot()
+  const dataRootExists = exists(dataRootPath)
+  const repoConfigExists = exists(repoConfigFile())
   const disk = freeSpace(cfg.workRoot)
-  if (disk) {
-    const freeGb = Math.round(disk.bytes / 1e9)
-    check(`disk on ${disk.label}`, freeGb > 20,
-      { ok: `${freeGb} GB free`, bad: `only ${freeGb} GB free` })
-  }
+  const jiraTracked = Object.values(cfg.tracker || {}).some(t => t.kind === 'jira')
 
+  return {
+    setUp: true,
+    localFile,
+    configFileExists: exists(localFile),
+    // Asked of the files, not carried on `cfg`: which keys the org half owns is
+    // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
+    // reader — this one.
+    strayOrgKeys: strayOrgKeys(where()),
+    node: process.version,
+    git: hasGit ? gv.out : null,
+    rig: { version: version(), root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
+    freshness: doctorFreshness(cfg, tool),
+    gh: github().auth(),
+    jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
+    // Skipped rather than attempted without git: doctor is the command you run *because*
+    // something is wrong, so it has to reach the end and report everything it can.
+    gitConfig: hasGit
+      ? {
+          longpaths: run('git', ['config', '--global', 'core.longpaths']).out,
+          symlinks: run('git', ['config', '--get', 'core.symlinks']).out,
+        }
+      : null,
+    workRoot: { path: cfg.workRoot, exists: exists(cfg.workRoot) },
+    mirrorRoot: { path: cfg.mirrorRoot, exists: exists(cfg.mirrorRoot) },
+    dataRoot: {
+      path: dataRootPath,
+      split,
+      exists: dataRootExists,
+      state: split && dataRootExists && hasGit ? co.describe(dataRootPath) : null,
+    },
+    repoConfig: {
+      path: repoConfigFile(),
+      exists: repoConfigExists,
+      orgs: cfg.orgs.length,
+      stamp: repoConfigExists ? doctorStamp(repoConfigJson()) : null,
+    },
+    orgs: cfg.orgs.map(org => ({ org, identity: effectiveIdentity(cfg, org), tracker: cfg.tracker?.[org] || null })),
+    works: listWorkIds().map(id => doctorWork(cfg, id)),
+    drafts: loadCatalog().filter(e => e.draft).map(e => e.repo),
+    disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
+  }
+}
+
+// A finding, printed. The four verdicts are the four channels the output already had; only a
+// passing check carries a dim detail, because a failing one has folded it into the sentence.
+function render (finding) {
+  switch (finding.verdict) {
+    case 'ok': return ok(`${finding.says}${finding.dim ? ` ${C.dim(finding.dim)}` : ''}`)
+    case 'warn': return warn(finding.says)
+    case 'bad': return bad(finding.says)
+    default: return say(`${C.dim('·')} ${C.dim(finding.says)}`)
+  }
+}
+
+// Gather, decide, print, count — and return the findings, because `rig update` ends in these
+// checks and counts them rather than reading an exit code back out of the process.
+cmds.doctor = () => {
+  const found = doctorFindings(doctorSnapshot())
+  for (const finding of found) render(finding)
+  const problems = problemCount(found)
   say('')
   say(problems ? C.yellow(`${problems} thing(s) to look at`) : C.green('all clear'))
   if (problems) process.exitCode = 1
+  return found
 }
 
 cmds.help = () => {

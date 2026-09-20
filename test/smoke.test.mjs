@@ -722,11 +722,17 @@ test('doctor after setup reports the data root state, and says so in its exit co
   assert.match(r.out, /data root is a git checkout/)
   assert.doesNotMatch(r.out, /uncommitted change/, 'every mutating command committed as it went')
   assert.match(r.out, /no upstream — local only/)
-  // Everything above a check has already printed by the time that check dies, so the exit
-  // code is the only thing that catches a crash on the way down — `doctor` used to die on
-  // the free-space probe and this test never noticed. Free space is the host's business and
-  // not this run's, so a genuinely full disk is the one complaint allowed to stand.
-  assert.equal(r.code, /only \d+ GB free/.test(r.out) ? 1 : 0, r.out)
+  // The one test watching the whole wire: a snapshot gathered off a real installation, turned
+  // into findings, rendered, counted, and the count becoming the exit code. A snapshot built
+  // wrong leaves every fixture in test/doctor.test.mjs passing and doctor wrong on every real
+  // machine, and everything above a check has already printed by the time that check dies —
+  // `doctor` used to die on the free-space probe and nothing noticed.
+  //
+  // The verdict line is asked what it counted rather than the output being grepped for a
+  // complaint this host might legitimately have: free space is the host's business and not
+  // this run's, and what must hold is that the two agree.
+  const counted = Number(/(\d+) thing\(s\) to look at/.exec(r.out)?.[1] ?? 0)
+  assert.equal(r.code, counted ? 1 : 0, r.out)
 })
 
 test('doctor names a key of the org half left behind in the machine file', () => {
