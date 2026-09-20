@@ -196,7 +196,10 @@ Two consequences worth holding on to:
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
   shared, so a folder the current root has no record for is usually another root's live work
-  rather than junk.
+  rather than junk. It is also the one command that **reports a selection it cannot make**
+  rather than dying on it: two roots and no `current` is a finding like any other, and every
+  check that did not need a root in hand still runs. Every other command dies there, and
+  should — with no root in hand there is no answer to give.
 
 A name selects which knowledge is in hand and **nothing else**. There are no per-root flags
 and no per-root defaults for ceremony — that would be the declared-track mistake rejected in
