@@ -17,6 +17,17 @@ const checkout = (over = {}) => ({
   ahead: 0, behind: 0, dirty: 0, modified: 0, ...over,
 })
 
+// One data root with nothing wrong with it. Unnamed, because an installation that knows only
+// one never says which — the tests that care about the labelling pass a name.
+const root = (over = {}) => ({
+  name: null, path: 'C:\\rig-data', split: true, exists: true, state: checkout(),
+  repoConfig: {
+    path: 'C:\\rig-data\\rig.json', exists: true, orgs: 1,
+    stamp: { pending: [], writtenBy: '3.4.0', major: 3 },
+  },
+  orgs: [], drafts: [], ...over,
+})
+
 // A machine with nothing wrong with it. Every test below breaks exactly one thing.
 const snap = (over = {}) => ({
   setUp: true,
@@ -30,16 +41,10 @@ const snap = (over = {}) => ({
   gh: 'ok',
   jira: { needed: false, present: false },
   gitConfig: { longpaths: 'true', symlinks: 'false' },
-  workRoot: { path: 'C:\\w', exists: true },
+  workRoot: { path: 'C:\\w', exists: true, entries: [] },
   mirrorRoot: { path: 'C:\\w\\.mirrors', exists: true },
-  dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout() },
-  repoConfig: {
-    path: 'C:\\rig-data\\rig.json', exists: true, orgs: 1,
-    stamp: { pending: [], writtenBy: '3.4.0', major: 3 },
-  },
-  orgs: [],
+  dataRoots: [root()],
   works: [],
-  drafts: [],
   disk: { label: 'C:', freeGb: 190 },
   ...over,
 })
@@ -64,7 +69,7 @@ test('an installation with no config at all says so and asks nothing else', () =
 })
 
 test('the exit code is the findings that count, not the findings there are', () => {
-  const found = doctorFindings(snap({ drafts: ['billing'], gh: 'missing' }))
+  const found = doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })], gh: 'missing' }))
   assert.ok(found.length > 2)
   assert.equal(problemCount(found), 1, 'a draft entry is not a problem; an absent gh is')
 })
@@ -77,7 +82,7 @@ test('a key of the org half left in the machine file is named, one line each', (
 })
 
 test('git missing is said, and every check that needs git is dropped rather than failed', () => {
-  const found = doctorFindings(snap({ git: null, gitConfig: null, dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: null } }))
+  const found = doctorFindings(snap({ git: null, gitConfig: null, dataRoots: [root({ state: null })] }))
   assert.match(only(found, /^git/).says, /git — not on PATH/)
   assert.equal(matching(found, /core\.longpaths/).length, 0, 'not asked without git')
   assert.equal(matching(found, /data root is a git checkout/).length, 0)
@@ -126,73 +131,73 @@ test('core.longpaths unset is a problem; core.symlinks=false is by design', () =
 })
 
 test('a data root inside the tool checkout is not set up, and says why that is not allowed', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig\\data', split: false, exists: true, state: null } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ path: 'C:\\rig\\data', split: false, exists: true, state: null })] }))
   assert.match(only(found, /^data root/).says, /is inside the tool checkout — not set up/)
 })
 
 test('a data root that is a directory inside another checkout names the checkout it is inside', () => {
   const state = checkout({ repo: 'nested', top: 'C:\\everything' })
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\everything\\rig-data', split: true, exists: true, state } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ path: 'C:\\everything\\rig-data', split: true, exists: true, state })] }))
   assert.match(only(found, /checkout of its own/).says, /it is a directory inside C:\\everything/)
   assert.equal(problemCount(found), 1)
 })
 
 test('an unversioned data root says records written there are not versioned', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ repo: 'none' }) } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ repo: 'none' }) })] }))
   assert.match(only(found, /checkout of its own/).says, /records written there are not versioned/)
 })
 
 test('an edit made outside rig warns and does not count — it is waiting for `rig save`, not broken', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ dirty: 2 }) } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ dirty: 2 }) })] }))
   assert.equal(only(found, /uncommitted change/).verdict, 'warn')
   assert.equal(problemCount(found), 0)
 })
 
 test('a working tree git could not read is never given the green tick', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ dirty: null }) } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ dirty: null }) })] }))
   assert.match(only(found, /could not read the working tree/).says, /git -C C:\\rig-data status/)
   assert.equal(matching(found, /committed and pushed/).length, 0)
   assert.equal(problemCount(found), 1)
 })
 
 test('a data root on a detached HEAD counts, because rig commits there go nowhere', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ branch: null }) } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ branch: null }) })] }))
   assert.match(only(found, /detached HEAD/).says, /check out main/)
   assert.equal(problemCount(found), 1)
 })
 
 test('a local-only data root is a note, and unpushed commits warn without counting', () => {
-  const local = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ upstream: null }) } }))
+  const local = doctorFindings(snap({ dataRoots: [root({ state: checkout({ upstream: null }) })] }))
   assert.equal(only(local, /no upstream — local only/).verdict, 'note')
-  const ahead = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ ahead: 2 }) } }))
+  const ahead = doctorFindings(snap({ dataRoots: [root({ state: checkout({ ahead: 2 }) })] }))
   assert.equal(only(ahead, /2 unpushed commit\(s\)/).verdict, 'warn')
   assert.equal(problemCount(ahead), 0)
 })
 
 test('a data root behind its origin counts, and names the command that fast-forwards it', () => {
-  const found = doctorFindings(snap({ dataRoot: { path: 'C:\\rig-data', split: true, exists: true, state: checkout({ behind: 4 }) } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ behind: 4 }) })] }))
   assert.match(only(found, /behind origin/).says, /`rig update` fast-forwards it/)
   assert.equal(problemCount(found), 1)
 })
 
 test('a rig.json with no orgs is not set up', () => {
-  const found = doctorFindings(snap({ repoConfig: { path: 'C:\\rig-data\\rig.json', exists: true, orgs: 0, stamp: { pending: [], major: 3 } } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ repoConfig: { path: 'C:\\rig-data\\rig.json', exists: true, orgs: 0, stamp: { pending: [], major: 3 } } })] }))
   assert.match(only(found, /no orgs/).says, /run `rig prompt setup`/)
 })
 
 test('a stamp no rig wrote is reported as something to fix by hand, never migrated', () => {
-  const found = doctorFindings(snap({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { unreadable: true, writtenBy: 42 } } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { unreadable: true, writtenBy: 42 } } })] }))
   assert.match(only(found, /writtenBy/).says, /which is not a record format any rig wrote/)
   assert.equal(problemCount(found), 1)
 })
 
 test('a data root written by a newer rig says the mutating commands are the ones that refuse', () => {
-  const found = doctorFindings(snap({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { blocked: true, major: 3, dataMajor: 4 } } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { blocked: true, major: 3, dataMajor: 4 } } })] }))
   assert.match(only(found, /record format 4/).says, /mutating commands refuse until this rig is updated/)
 })
 
 test('pending migrations are reported and never run', () => {
-  const found = doctorFindings(snap({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: ['stamp the data root', 'phase replaces status'], major: 3 } } }))
+  const found = doctorFindings(snap({ dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: ['stamp the data root', 'phase replaces status'], major: 3 } } })] }))
   assert.match(only(found, /pending migration/).says, /2 pending migration\(s\) — run `rig update`: stamp the data root; phase replaces status/)
   assert.equal(problemCount(found), 1)
 })
@@ -207,33 +212,75 @@ test('a data root written before stamping existed says so, rather than showing u
   // The oldest data roots carry no `writtenBy` at all. The fallback is the only reason that
   // reads as a fact about the record rather than as a bug in the line printing it.
   const found = doctorFindings(snap({
-    repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: [], major: 3 } },
+    dataRoots: [root({ repoConfig: { path: 'p', exists: true, orgs: 1, stamp: { pending: [], major: 3 } } })],
   }))
   assert.match(only(found, /record format 3/).says, /stamped by rig from before stamping existed/)
 })
 
 test('an org with no mirror yet is a note: there is nothing to ask git about', () => {
-  const found = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: null, source: 'unknown' }, tracker: null }] }))
+  const found = doctorFindings(snap({ dataRoots: [root({ orgs: [{ org: 'acme', identity: { email: null, source: 'unknown' }, tracker: null }] })] }))
   assert.equal(only(found, /identity for acme/).verdict, 'note')
   assert.equal(problemCount(found), 0)
 })
 
 test('an org git has no address for cannot commit, and that is the one identity worth a warning', () => {
-  const found = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: null, source: 'none' }, tracker: null }] }))
+  const found = doctorFindings(snap({ dataRoots: [root({ orgs: [{ org: 'acme', identity: { email: null, source: 'none' }, tracker: null }] })] }))
   assert.match(only(found, /identity for acme/).says, /git has no user\.email to commit with/)
   assert.equal(problemCount(found), 1)
 })
 
 test('an address git resolved says so, so nobody goes looking for it in rig.local.json', () => {
-  const found = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: 'dev@acme.example', source: 'git' }, tracker: null }] }))
+  const found = doctorFindings(snap({ dataRoots: [root({ orgs: [{ org: 'acme', identity: { email: 'dev@acme.example', source: 'git' }, tracker: null }] })] }))
   assert.equal(only(found, /identity for acme/).dim, 'dev@acme.example — from git, not rig')
 })
 
 test('the tracker for an org is reported, including when there is none', () => {
-  const none = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: 'a@b', source: 'rig' }, tracker: null }] }))
+  const none = doctorFindings(snap({ dataRoots: [root({ orgs: [{ org: 'acme', identity: { email: 'a@b', source: 'rig' }, tracker: null }] })] }))
   assert.match(only(none, /tracker for acme/).says, /none — `rig new --ticket` unavailable \(rig\.json\)/)
-  const jira = doctorFindings(snap({ orgs: [{ org: 'acme', identity: { email: 'a@b', source: 'rig' }, tracker: { kind: 'jira', project: 'KTLO' } }] }))
+  const jira = doctorFindings(snap({ dataRoots: [root({ orgs: [{ org: 'acme', identity: { email: 'a@b', source: 'rig' }, tracker: { kind: 'jira', project: 'KTLO' } }] })] }))
   assert.match(only(jira, /tracker for acme/).says, /jira KTLO/)
+})
+
+test('an installation that knows one root never names it — there is nothing to tell it from', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ name: 'hugoforte' })] }))
+  assert.equal(only(found, /^data root$/).dim, 'C:\\rig-data')
+  assert.equal(matching(found, /^hugoforte: /).length, 0)
+})
+
+test('every configured root is checked in full, and every line says which root it is about', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [
+      root({ name: 'hugoforte' }),
+      root({
+        name: 'personal',
+        path: 'C:\\rig-data-personal',
+        state: checkout({ dirty: 3 }),
+        drafts: ['notes'],
+        repoConfig: {
+          path: 'C:\\rig-data-personal\\rig.json', exists: true, orgs: 1,
+          stamp: { pending: ['stamp the data root'], major: 3 },
+        },
+      }),
+    ],
+  }))
+  assert.match(only(found, /uncommitted change/).says, /^personal: data root has 3 uncommitted/)
+  assert.match(only(found, /committed and pushed/).says, /^hugoforte: /)
+  assert.match(only(found, /pending migration/).says, /^personal: /)
+  assert.match(only(found, /draft catalogue/).says, /^personal: /)
+  assert.equal(matching(found, /rig\.json/).length, 2, 'each root carries its own')
+  assert.equal(matching(found, /^data root/).length, 0, 'and none of it is said unlabelled')
+})
+
+test('a root whose directory has gone is one finding, and the roots after it are still checked', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [
+      root({ name: 'gone', path: 'C:\\rig-data-gone', exists: false, state: null }),
+      root({ name: 'personal' }),
+    ],
+  }))
+  const one = only(found, /^gone: /)
+  assert.match(one.says, /C:\\rig-data-gone missing — check dataRoots\.gone in rig\.local\.json/)
+  assert.match(says(found), /personal: data root is committed and pushed/)
 })
 
 test('a contradiction is an error, not a warning, and says where to report it', () => {
@@ -268,6 +315,26 @@ test('rig owns the work folder, so anything it did not put there is named', () =
   assert.equal(problemCount(found), 2)
 })
 
+test('a work folder is accounted for by whichever root holds its record, not by the current one', () => {
+  // The work root is shared, so the question is asked once over every root's records. Asked
+  // per root instead, each would report the other's live work folder as junk.
+  const work = (id) => ({ id, closed: false, contradictions: [], folderMissing: false, strays: [], repos: [] })
+  const found = doctorFindings(snap({
+    dataRoots: [root({ name: 'hugoforte' }), root({ name: 'personal', path: 'C:\\rig-data-personal' })],
+    workRoot: { path: 'C:\\w', exists: true, entries: ['refunds', 'notes-tidy', 'scratch'] },
+    works: [work('refunds'), work('notes-tidy')],
+  }))
+  assert.match(only(found, /unmanaged entry/).says, /"scratch" in C:\\w — no data root has a work record for it/)
+  assert.equal(problemCount(found), 1)
+})
+
+test('an unclosed work is warned about whichever root holds its record', () => {
+  const found = doctorFindings(snap({
+    works: [{ id: 'in-the-other-root', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [] }],
+  }))
+  assert.match(only(found, /^in-the-other-root:/).says, /work folder missing but not closed/)
+})
+
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {
   const found = doctorFindings(snap({
     works: [{
@@ -282,7 +349,7 @@ test('an attached repo whose worktree is gone is named, and so is one whose secr
 })
 
 test('draft catalogue entries are an invitation, not a fault: they warn and do not count', () => {
-  const found = doctorFindings(snap({ drafts: ['billing', 'orders'] }))
+  const found = doctorFindings(snap({ dataRoots: [root({ drafts: ['billing', 'orders'] })] }))
   const one = only(found, /draft catalogue/)
   assert.equal(one.verdict, 'warn')
   assert.match(one.says, /2 draft catalogue entries: billing, orders/)
@@ -290,7 +357,7 @@ test('draft catalogue entries are an invitation, not a fault: they warn and do n
 })
 
 test('one draft entry is singular, because the line is read by a person', () => {
-  assert.match(only(doctorFindings(snap({ drafts: ['billing'] })), /draft catalogue/).says, /1 draft catalogue entry: billing/)
+  assert.match(only(doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })] })), /draft catalogue/).says, /1 draft catalogue entry: billing/)
 })
 
 test('a free-space probe this machine does not have costs one line, not the verdict (decision 54)', () => {
@@ -308,7 +375,7 @@ test('a nearly full disk counts, and says how little is left', () => {
 test('every finding is one of the four channels, and only a passing check carries a dim detail', () => {
   const found = doctorFindings(snap({
     gh: 'missing',
-    drafts: ['billing'],
+    dataRoots: [root({ drafts: ['billing'] })],
     works: [{ id: 'w', closed: false, contradictions: ['w: impossible'], repos: [] }],
     freshness: { skipped: 'the tool is not a git checkout' },
   }))

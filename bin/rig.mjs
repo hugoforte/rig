@@ -224,8 +224,11 @@ function trackerFailure (call) {
 const config = () => load(where())
 
 const workDir = (cfg, id) => path.join(cfg.workRoot, id)
-const recordDir = id => path.join(dataRoot(),'work', id)
-const recordFile = id => path.join(recordDir(id), 'work.json')
+// The data root is the current one unless a caller names another. `doctor` is the only one
+// that does: every other command works in the root it resolved, and one that reached past it
+// would be writing a work's records somewhere its work folder does not point.
+const recordDir = (id, root = dataRoot()) => path.join(root, 'work', id)
+const recordFile = (id, root = dataRoot()) => path.join(recordDir(id, root), 'work.json')
 const contextFile = id => path.join(recordDir(id), 'context.md')
 const planFile = id => path.join(recordDir(id), 'rollout-testing-plan.md')
 
@@ -448,9 +451,9 @@ function findWorkId (cfg, explicit) {
   die('not inside a work (no .rig/id found). Pass --work <id> or cd into one.')
 }
 
-function loadWork (cfg, id) {
-  if (!exists(recordFile(id))) die(`no work record for "${id}" at ${recordFile(id)}`)
-  const w = readJson(recordFile(id))
+function loadWork (cfg, id, root = dataRoot()) {
+  if (!exists(recordFile(id, root))) die(`no work record for "${id}" at ${recordFile(id, root)}`)
+  const w = readJson(recordFile(id, root))
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
   w.repos = w.repos || []
@@ -520,11 +523,11 @@ function saveWork (cfg, work) {
   else if (!work.closedAt) warn(`${work.id}: work folder ${workDir(cfg, work.id)} is missing — its AGENTS.md was not regenerated`)
 }
 
-function listWorkIds () {
-  const root = path.join(dataRoot(),'work')
+function listWorkIds (dataRootPath = dataRoot()) {
+  const root = path.join(dataRootPath, 'work')
   if (!exists(root)) return []
   return fs.readdirSync(root, { withFileTypes: true })
-    .filter(d => d.isDirectory() && exists(recordFile(d.name)))
+    .filter(d => d.isDirectory() && exists(recordFile(d.name, dataRootPath)))
     .map(d => d.name)
 }
 
@@ -564,8 +567,8 @@ function parseFrontmatter (text) {
 
 const strip = s => s.trim().replace(/^["'](.*)["']$/, '$1')
 
-function loadCatalog () {
-  const root = path.join(dataRoot(),'catalog')
+function loadCatalog (dataRootPath = dataRoot()) {
+  const root = path.join(dataRootPath, 'catalog')
   if (!exists(root)) return []
   const entries = []
   for (const org of fs.readdirSync(root)) {
@@ -591,8 +594,8 @@ function loadCatalog () {
   return entries
 }
 
-const findCatalog = (name) =>
-  loadCatalog().find(e => e.repo.toLowerCase() === name.toLowerCase())
+const findCatalog = (name, dataRootPath = dataRoot()) =>
+  loadCatalog(dataRootPath).find(e => e.repo.toLowerCase() === name.toLowerCase())
 
 // Which org a repo belongs to: the catalogue first, then GitHub. The language comes
 // along from GitHub for the catalogue stub `rig attach` drafts on first sight.
@@ -2887,9 +2890,11 @@ function doctorStamp (written) {
 
 // One work, as doctor sees it: what the record contradicts, and what is under its folder that
 // rig did not put there. A closed work keeps its contradictions and loses the rest — its
-// worktrees are gone on purpose.
-function doctorWork (cfg, id) {
-  const work = loadWork(cfg, id)
+// worktrees are gone on purpose. The record and the catalogue entry it reads are the data
+// root's, and the work folder is the machine's, which is the whole shape of a shared work
+// root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
+function doctorWork (cfg, id, root) {
+  const work = loadWork(cfg, id, root)
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
   if (out.closed) return out
   const wd = workDir(cfg, id)
@@ -2897,7 +2902,7 @@ function doctorWork (cfg, id) {
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
   out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
   out.repos = work.repos.map(r => {
-    const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo) : null
+    const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {
       repo: r.repo,
       worktreeMissing: !exists(r.path),
@@ -2905,6 +2910,55 @@ function doctorWork (cfg, id) {
     }
   })
   return out
+}
+
+// One data root, gathered: where it is, what git makes of it, the org half it carries and the
+// catalogue in it. Everything here is answerable from this root alone — the work records are
+// not, which is why they are collected into one list a level up.
+function doctorRoot (name, loc, hasGit) {
+  const root = loc.dataRoot
+  const there = exists(root)
+  const orgFileExists = exists(loc.orgFile)
+  // The merged config of *this* root, for the two things that differ between them: the orgs
+  // rig.json declares, and the identity per org, which a root may override for its own.
+  const cfg = there ? load(loc) : null
+  return {
+    name,
+    path: root,
+    split: loc.split,
+    exists: there,
+    state: loc.split && there && hasGit ? co.describe(root) : null,
+    repoConfig: {
+      path: loc.orgFile,
+      exists: orgFileExists,
+      orgs: cfg?.orgs.length ?? 0,
+      stamp: orgFileExists ? doctorStamp(readOrg(loc) ?? {}) : null,
+    },
+    orgs: (cfg?.orgs ?? []).map(org => ({ org, identity: effectiveIdentity(cfg, org), tracker: cfg.tracker?.[org] || null })),
+    drafts: loadCatalog(root).filter(e => e.draft).map(e => e.repo),
+  }
+}
+
+// Every data root this installation configures, in the order the machine file names them.
+// Read from the registry and not from `where`, the way `rig update` visits them: a `current`
+// pointing at nothing must not hide the roots that are fine. A machine that configures none
+// falls back to the one `where` resolved, which is the not-set-up layout doctor reports on.
+function doctorRootLocations () {
+  const reg = registry(RIG_ROOT)
+  const names = Object.keys(reg.roots)
+  const base = { toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }
+  if (!names.length) return [{ name: null, loc: where() }]
+  return names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path, { name }) }))
+}
+
+// What is directly under the work root, minus the two things rig keeps there itself. Whether
+// an entry is accounted for is `bin/doctor.mjs`'s to decide, over every root's work records
+// at once — one work root, several places to look a folder up.
+function workRootEntries (cfg) {
+  if (!exists(cfg.workRoot)) return []
+  const ours = new Set([WORK_FOLDER.marker])
+  if (insideDir(cfg.mirrorRoot, cfg.workRoot)) ours.add(path.relative(cfg.workRoot, cfg.mirrorRoot).split(path.sep)[0])
+  return fs.readdirSync(cfg.workRoot).filter(e => !ours.has(e))
 }
 
 function doctorSnapshot () {
@@ -2922,12 +2976,11 @@ function doctorSnapshot () {
   // for here and not in `toolState`, which runs in every command's epilogue and is already
   // eight spawns dear; doctor is the one caller that can afford a ninth.
   const describe = hasGit ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
-  const split = where().split
-  const dataRootPath = dataRoot()
-  const dataRootExists = exists(dataRootPath)
-  const repoConfigExists = exists(repoConfigFile())
+  const roots = doctorRootLocations().map(({ name, loc }) => doctorRoot(name, loc, hasGit))
   const disk = freeSpace(cfg.workRoot)
-  const jiraTracked = Object.values(cfg.tracker || {}).some(t => t.kind === 'jira')
+  // Needed if *any* root tracks in Jira: twg is one tool on one machine, so the question is
+  // about the installation and not about whichever knowledge happens to be in hand.
+  const jiraTracked = roots.some(r => r.orgs.some(o => o.tracker?.kind === 'jira'))
 
   return {
     setUp: true,
@@ -2951,23 +3004,13 @@ function doctorSnapshot () {
           symlinks: run('git', ['config', '--get', 'core.symlinks']).out,
         }
       : null,
-    workRoot: { path: cfg.workRoot, exists: exists(cfg.workRoot) },
+    workRoot: { path: cfg.workRoot, exists: exists(cfg.workRoot), entries: workRootEntries(cfg) },
     mirrorRoot: { path: cfg.mirrorRoot, exists: exists(cfg.mirrorRoot) },
-    dataRoot: {
-      path: dataRootPath,
-      split,
-      exists: dataRootExists,
-      state: split && dataRootExists && hasGit ? co.describe(dataRootPath) : null,
-    },
-    repoConfig: {
-      path: repoConfigFile(),
-      exists: repoConfigExists,
-      orgs: cfg.orgs.length,
-      stamp: repoConfigExists ? doctorStamp(repoConfigJson()) : null,
-    },
-    orgs: cfg.orgs.map(org => ({ org, identity: effectiveIdentity(cfg, org), tracker: cfg.tracker?.[org] || null })),
-    works: listWorkIds().map(id => doctorWork(cfg, id)),
-    drafts: loadCatalog().filter(e => e.draft).map(e => e.repo),
+    dataRoots: roots,
+    // Every root's works in one list, because the two checks made of them are made of the work
+    // root, which is shared. A work id is unique across the roots, so the union needs no
+    // tie-breaking and the findings need not say which root a work came from.
+    works: roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path))),
     disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
   }
 }
@@ -3046,7 +3089,7 @@ cmds.help = () => {
                                   openedAt, firstCommitAt, firstReviewAt, approvedAt,
                                   mergedAt) in work.json, so list/dash never re-ask GitHub
                                   for them; --force refreshes what is already stored
-  rig doctor                      environment + consistency checks
+  rig doctor                      environment + consistency checks, over every data root
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
   rig prompt [name]               print an agent prompt

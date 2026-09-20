@@ -192,6 +192,11 @@ Two consequences worth holding on to:
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
   next mutating command, mid-work.
+- **`rig doctor` checks every configured root**, in full, each finding labelled with the
+  root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
+  the exception and are asked once against every root's records at once: the work root is
+  shared, so a folder the current root has no record for is usually another root's live work
+  rather than junk.
 
 A name selects which knowledge is in hand and **nothing else**. There are no per-root flags
 and no per-root defaults for ceremony — that would be the declared-track mistake rejected in

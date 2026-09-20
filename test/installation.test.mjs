@@ -23,6 +23,15 @@ const { tmp, origin, install, dataRoot, workRoot, env, rig, git, cleanup } = mak
   github: { auth: 'missing' },
 })
 
+// The tool spawned directly, for the four tests that need the streams apart or an environment
+// the harness's runner will not build. `cwd` is the temp directory for the same reason the
+// runner defaults to it: rig resolves its data root partly from the folder it runs in, and
+// this suite is itself run from inside a rig work folder often enough that inheriting would
+// let that folder's `.rig/data` name a root the temp installation does not configure.
+const spawnRig = (args, spawnEnv = env) =>
+  spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), ...args],
+    { encoding: 'utf8', env: spawnEnv, cwd: tmp })
+
 const cacheFile = () => path.join(workRoot, '.rig', 'freshness.json')
 
 // The refresh is detached, so its cache appears after the command has already returned.
@@ -130,7 +139,7 @@ test('doctor writes the cache it measured, so the next command speaks from a liv
 test('the next command prints the stale line on stderr, from the cache alone', () => {
   // The cache doctor just wrote: one behind, checked seconds ago, so nothing is due and no
   // refresh is armed — the line comes from the file or not at all.
-  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'list', '--quick'], { encoding: 'utf8', env })
+  const r = spawnRig(['list', '--quick'])
   assert.equal(r.status, 0, r.stderr)
   assert.match(strip(r.stderr), /rig is 1 commit behind origin\/main — `rig update`/)
   assert.doesNotMatch(strip(r.stdout), /behind/, 'never in the stdout someone is piping')
@@ -251,8 +260,7 @@ test('a command that needs no git still finishes on a machine with no git on PAT
   const noGit = { ...env }
   for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
   noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
-  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'help'],
-    { encoding: 'utf8', env: noGit })
+  const r = spawnRig(['help'], noGit)
   const out = strip(r.stdout + r.stderr)
   assert.equal(r.status, 0, out)
   assert.match(out, /cross-repo work harness/, 'the command itself answered')
@@ -266,8 +274,7 @@ test('doctor reaches its verdict on a machine with no git on PATH', () => {
   const noGit = { ...env }
   for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
   noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
-  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'doctor'],
-    { encoding: 'utf8', env: noGit })
+  const r = spawnRig(['doctor'], noGit)
   const out = strip(r.stdout + r.stderr)
   assert.match(out, /git — not on PATH/, 'it says what is wrong')
   assert.match(out, /thing\(s\) to look at|all clear/, 'and still reaches its verdict')
@@ -282,8 +289,7 @@ test('doctor reaches its verdict on a machine with neither free-space probe', ()
   const bare = { ...env }
   for (const k of Object.keys(bare)) if (k.toLowerCase() === 'path') delete bare[k]
   bare.PATH = path.dirname(process.execPath)
-  const r = spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'doctor'],
-    { encoding: 'utf8', env: bare })
+  const r = spawnRig(['doctor'], bare)
   const out = strip(r.stdout + r.stderr)
   assert.doesNotMatch(out, /disk on/, 'a check it cannot make is dropped')
   assert.doesNotMatch(out, /not found on PATH \(spawnSync/, 'and it did not die making it')
