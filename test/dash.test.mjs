@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { percentile, median, isoWeek, reduceWork, summarize, renderDash, duration } from '../bin/dash.mjs'
-import { MAJOR, toolVersion } from '../bin/version.mjs'
+import { MAJOR } from '../bin/version.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -163,14 +163,19 @@ const workById = (payload, id) => payload.works.find(w => w.id === id)
 
 // --------------------------------------------------------------------- tests
 
-test('the payload names the tool that wrote it, and the record format it wrote', async () => {
+test('the payload names the record format it wrote, and the release that wrote it', async () => {
   // The drift this file was rewritten for: a hand-written payload said `recordFormat: 1` and
   // `rig: '1.3.0'` for two majors, and nothing could notice. What this pins is that both
   // fields are still read off the tool rather than written out as literals — what `MAJOR`
   // itself should be is test/version.test.mjs's to assert, and it does.
+  //
+  // `release` replaced `rig`, which held the record format a second time in a semver's shape
+  // (ADR 0004). It is whatever `git describe` says, so the assertion is on its shape: a tag,
+  // or a distance past one, or null in a checkout that has no release in its history at all.
   const p = await produce([work()])
   assert.equal(p.recordFormat, MAJOR, 'the record format is the major version (ADR 0002)')
-  assert.equal(p.rig, toolVersion(JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8'))))
+  assert.ok(p.release === null || /^v\d+\.\d+\.\d+$|^\d+ past v\d+\.\d+\.\d+/.test(p.release), `release reads ${JSON.stringify(p.release)}`)
+  assert.equal(p.rig, undefined, 'the version that was the format twice is gone')
 })
 
 test('the works are least recently touched first, so the last one is the work in hand', async () => {

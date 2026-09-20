@@ -1,7 +1,8 @@
-# Every merge to main is a release, or says why it is not. The version was decided on the PR
-# (see version.yml), so there is nothing to bump here: this tags the commit that carries it
-# and publishes the notes. main's ruleset admits no bypass actors, and nothing below needs
-# one — a tag is not a commit.
+# Every push to main is a release, or says why it is not. The version is worked out here and
+# nowhere else (ADR 0004): this gathers the pull requests the push contains and asks
+# `bin/release.mjs` what they add up to, then tags that commit and publishes the notes.
+#
+# main's ruleset admits no bypass actors, and nothing below needs one — a tag is not a commit.
 
 name: release
 
@@ -11,7 +12,7 @@ on:
 
 permissions:
   contents: write       # the tag and the release
-  pull-requests: read   # the descriptions the notes are made of
+  pull-requests: read   # the bumps and the descriptions the notes are made of
 
 # Two merges in quick succession must not both try to cut a release.
 concurrency:
@@ -30,37 +31,47 @@ jobs:
         with:
           node-version: 20
 
-      - name: is this merge a release
+      # One entry per commit in the range, each carrying every pull request GitHub associates
+      # with it. Asked of the API per commit rather than parsed out of commit messages: a squash
+      # subject carries `(#12)` and a merge commit does not, and neither is a record.
+      #
+      # All of a commit's pull requests are kept, not the first: a commit that reached main
+      # through two of them would otherwise be sized by whichever the API listed first, and the
+      # other would vanish from the notes. `bin/release.mjs` deduplicates by number.
+      #
+      # A commit that resolves to none stays in the list with an empty array rather than being
+      # dropped, because the next step has to refuse on it. Silently folding the bumps that did
+      # come back is how a feature ships inside a patch release.
+      - name: the pull requests this push contains
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
+          echo "PREVIOUS=$previous" >> "$GITHUB_ENV"
+          for sha in $(git rev-list "${previous:+$previous..}HEAD"); do
+            pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
+              --jq 'map({number, title, url: .html_url, body, headRefName: .head.ref, labels: [.labels[].name]})')
+            jq -n --arg sha "$sha" --argjson pulls "${pulls:-[]}" '{sha: $sha, pulls: $pulls}'
+          done | jq -s '.' > commits.json
+
+      - name: is this push a release, and of what
         id: verdict
         run: |
-          tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
-          # Exits non-zero when package.json landed *below* the latest release, which is two
-          # PRs having computed the same next version. Failing here is the point: the second
-          # one's changes would otherwise ship with no release of their own.
-          verdict=$(node bin/release.mjs verdict --tag "$tag")
+          # Exits non-zero when the set could not be read — a commit with no pull request, or a
+          # pull request naming no bump. Nothing is tagged before the set is known, so failing
+          # here costs a re-run and never a wrong version.
+          verdict=$(node bin/release.mjs verdict --tag "$PREVIOUS" < commits.json)
           echo "release=$(jq -r .release <<< "$verdict")" >> "$GITHUB_OUTPUT"
           echo "tag=$(jq -r '.tag // ""' <<< "$verdict")" >> "$GITHUB_OUTPUT"
           echo "previous=$(jq -r '.previousTag // ""' <<< "$verdict")" >> "$GITHUB_OUTPUT"
-
-      - name: the pull requests since the last release
-        if: steps.verdict.outputs.release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIOUS: ${{ steps.verdict.outputs.previous }}
-        run: |
-          # Asked of the API per commit rather than parsed out of commit messages: a squash
-          # subject carries `(#12)` and a merge commit does not, and neither is a record.
-          for sha in $(git rev-list "${PREVIOUS:+$PREVIOUS..}HEAD"); do
-            gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
-              --jq '.[] | {number, title, url: .html_url, body}'
-          done | jq -s 'unique_by(.number)' > pulls.json
 
       - name: tag it and publish the notes
         if: steps.verdict.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.verdict.outputs.tag }}
-          PREVIOUS: ${{ steps.verdict.outputs.previous }}
+          PREVIOUS_TAG: ${{ steps.verdict.outputs.previous }}
         run: |
-          node bin/release.mjs notes --tag "$TAG" --previous "$PREVIOUS" --repo "$GITHUB_REPOSITORY" < pulls.json > notes.md
+          node bin/release.mjs notes --tag "$TAG" --previous "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" \
+            < commits.json > notes.md
           gh release create "$TAG" --target "$GITHUB_SHA" --title "rig ${TAG#v}" --notes-file notes.md

@@ -1,20 +1,24 @@
-// Releases: what version a PR lands as, and whether a merge to `main` is a release.
+// Releases: what bump a PR asks for, and what a push to `main` releases.
 //
-// The shape this automates: **the PR carries its own version.** A required check fails until
-// `package.json` says what the PR will land as, and the merge only tags that commit and
-// publishes the notes. The adjacent design — a workflow that bumps and commits on `main`
-// after the merge — needs a bypass actor cut into `main`'s ruleset and puts a second commit
-// on `main` per PR, which every installation then measures itself behind (freshness,
-// decisions 45-49). Here `main` gains tags and nothing else, and `package.json` is truthful
-// at every commit on it.
+// The shape this automates: **the PR carries a bump, not a version** (ADR 0004). A required
+// check asks one question about the pull request alone — does it name a bump? — and the push
+// works the version out from the bumps of the pull requests it contains, then tags that commit
+// and publishes the notes. The version is a fold over the whole set, so it is computed at the
+// only place the set is known; a branch cannot see the other branches, and a check that asked
+// it there went red every time somebody else merged.
 //
-// Everything here is a decision about state someone else gathered — no git, no fs, no
-// network — so the rules are testable without a checkout, a tag or a PR. The gathering is
-// the workflow's job; the CLI at the bottom is the seam between the two.
+// The adjacent design — a workflow that bumps and commits on `main` after the merge — needs a
+// bypass actor cut into `main`'s ruleset and puts a second commit on `main` per PR, which every
+// installation then measures itself behind (freshness, decisions 45-49). That rejection stands
+// from ADR 0003. What changed is only where the number is worked out. `main` still gains tags
+// and nothing else, and `package.json` no longer carries a version at all.
+//
+// Everything here is a decision about state someone else gathered — no git, no network — so the
+// rules are testable without a checkout, a tag or a PR. The gathering is the workflow's job; the
+// CLI at the bottom is the seam between the two, and `fs` appears there only to read stdin.
 
 import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { MAJOR } from './version.mjs'
 
 // The bumps a PR may ask for. `major` is absent on purpose: it is `MIGRATIONS.length`
@@ -23,8 +27,29 @@ import { MAJOR } from './version.mjs'
 const BUMPS = ['minor', 'patch', 'none']
 
 // What `rig new --type` writes into a branch name, which is why the prefix is a signal at
-// all: it is already there, on every PR, without anyone adopting a convention for it.
-const PREFIX_BUMPS = { feat: 'minor', fix: 'patch' }
+// all: it is already there, on every PR, without anyone adopting a convention for it. The
+// prefixes that ask for nothing are listed rather than assumed: an unrecognised branch still
+// fails, because defaulting it to `none` is how a feature branched `chore/add-retry` ships
+// inside somebody else's patch release with nobody told (ADR 0004).
+const PREFIX_BUMPS = {
+  feat: 'minor',
+  fix: 'patch',
+  docs: 'none',
+  chore: 'none',
+  test: 'none',
+  ci: 'none',
+  refactor: 'none',
+}
+
+// Strongest first: a release containing a feature is a minor release, whatever else is in it.
+const STRENGTH = ['minor', 'patch', 'none']
+
+// The prefixes that ask for one particular bump, for the message that has to teach someone
+// whose branch named none of them. Grouped rather than listed flat: seven prefixes in one
+// string reads as seven equivalent choices, and two of them mean something quite different
+// from the other five.
+const prefixesAsking = bump => Object.entries(PREFIX_BUMPS)
+  .filter(([, b]) => b === bump).map(([p]) => `\`${p}/\``).join(', ')
 
 const LABEL = 'release:'
 
@@ -63,7 +88,7 @@ export function bumpFor ({ branch, labels = [] }) {
   if (bump) return { bump, reason: `the branch prefix \`${prefix}/\`` }
   return {
     bump: null,
-    reason: `\`${branch}\` names no bump: branch from ${Object.keys(PREFIX_BUMPS).map(p => `\`${p}/\``).join(' or ')} — what \`rig new --type\` writes — or label the PR ${BUMPS.map(b => `\`${LABEL}${b}\``).join(', ')}`,
+    reason: `\`${branch}\` names no bump: branch from ${prefixesAsking('minor')} for a minor or ${prefixesAsking('patch')} for a patch — what \`rig new --type\` writes — or from ${prefixesAsking('none')} to ask for nothing, or label the PR ${BUMPS.map(b => `\`${LABEL}${b}\``).join(', ')}`,
   }
 }
 
@@ -84,48 +109,74 @@ export function expectedVersion ({ latestTag, bump, major = MAJOR }) {
   return latest
 }
 
-// The PR gate: does `package.json` say what this PR will land as? One verdict, one message,
-// whichever of the three ways it can fail happened.
-export function checkVersion ({ pkgVersion, latestTag, branch, labels = [], major = MAJOR }) {
+// The PR gate, and the whole of it: does this pull request name a bump? A question about this
+// PR alone, so no other merge can change the answer — which is what stops a required check
+// being a queue (ADR 0004). What the PR *lands as* is not asked here, because that is a
+// question about the whole set and the set is not knowable from a branch.
+export function checkBump ({ branch, labels = [] }) {
   const { bump, reason } = bumpFor({ branch, labels })
-  if (!bump) return { ok: false, bump: null, expected: null, message: reason }
-
-  const expected = expectedVersion({ latestTag, bump, major })
-  if (!expected) {
-    return { ok: false, bump, expected: null, message: `the latest release ${latestTag} is a major above the ${major} these migrations derive — it was cut from something this branch does not contain, so there is no next version to compute` }
-  }
-  if (pkgVersion === expected) return { ok: true, bump, expected, message: `this PR lands as ${expected} (${bump}, ${reason})` }
-  return {
-    ok: false,
-    bump,
-    expected,
-    message: `package.json says ${pkgVersion}, but this PR lands as ${expected} (${bump}, ${reason}) — set "version": "${expected}"`,
-  }
+  if (!bump) return { ok: false, bump: null, message: reason }
+  return { ok: true, bump, message: `this PR asks for ${bump} (${reason})` }
 }
 
-// The merge gate: is this commit on `main` a release, and of what? A held version is a
-// `release:none` merge and releases nothing. A version *below* the latest tag fails instead
-// of skipping: that is two PRs having computed the same next version, and skipping would drop
-// the second one's notes silently.
-export function releaseVerdict ({ pkgVersion, latestTag }) {
-  const version = versionFromTag(pkgVersion)
-  if (!version) return { ok: false, release: false, tag: null, previousTag: null, message: `package.json says ${pkgVersion}, which is not a version to release` }
+// The bump a whole release asks for: the strongest any of its pull requests asked for, or a
+// refusal naming what could not be read. `commits` is one entry per commit in the range, each
+// carrying every pull request GitHub associates with it — usually one, empty when it knows of
+// none, and more than one for a commit that reached `main` through two of them. All of them
+// count: taking one and discarding the rest is how the release ends up sized by whichever the
+// API happened to list first.
+//
+// The refusals are the point. A commit with no pull request, or a pull request whose bump does
+// not parse, would otherwise fold away to a *smaller* bump than the truth and ship a feature
+// inside a patch release with nobody told — the same silent wrong answer, in a new place. ADR
+// 0003 made this call once already, failing rather than skipping so a release note could not be
+// dropped in silence; nothing is tagged before the set is known, so re-running is safe.
+export function bumpOfRelease (commits = []) {
+  const orphans = commits.filter(c => !c?.pulls?.length).map(c => String(c?.sha ?? '?').slice(0, 7))
+  if (orphans.length) {
+    return { ok: false, bump: null, message: `${orphans.length} commit(s) in this range resolve to no pull request (${orphans.join(', ')}) — the set this release is computed from could not be read, so no version is safe to publish; re-run once GitHub answers for them` }
+  }
+  const unreadable = []
+  let strongest = 'none'
+  for (const pull of pullsOf(commits)) {
+    const { bump, reason } = bumpFor({ branch: pull.headRefName, labels: pull.labels ?? [] })
+    if (!bump) { unreadable.push(`#${pull.number}: ${reason}`); continue }
+    if (STRENGTH.indexOf(bump) < STRENGTH.indexOf(strongest)) strongest = bump
+  }
+  if (unreadable.length) {
+    return { ok: false, bump: null, message: `pull request(s) in this release name no bump, so the release cannot be sized:\n  ${unreadable.join('\n  ')}` }
+  }
+  return { ok: true, bump: strongest, message: `this release asks for ${strongest}` }
+}
+
+// Every pull request in the range, once each. A pull request reaches this more than once
+// whenever a merge method keeps several commits for it, and a commit reaches it under two
+// numbers when it belongs to two — both are deduplicated here, so the notes carry one section
+// per pull request and the bump fold counts each one once.
+export const pullsOf = commits => [
+  ...new Map((commits ?? []).flatMap(c => c?.pulls ?? []).filter(Boolean).map(p => [p.number, p])).values(),
+]
+
+// The merge gate: is this push to `main` a release, and of what? The version is worked out
+// here, from the bumps of the pull requests the push contains, because here is the only place
+// the set is known (ADR 0004).
+export function releaseVerdict ({ commits = [], latestTag, major = MAJOR }) {
+  const asked = bumpOfRelease(commits)
+  if (!asked.ok) return { ok: false, release: false, tag: null, previousTag: null, version: null, message: asked.message }
+
+  const version = expectedVersion({ latestTag, bump: asked.bump, major })
+  if (!version) {
+    return { ok: false, release: false, tag: null, previousTag: null, version: null, message: `the latest release ${latestTag} is a major above the ${major} these migrations derive — it was cut from something this commit does not contain, so there is no next version to compute` }
+  }
 
   const previous = versionFromTag(latestTag)
   const tag = `v${version}`
   const previousTag = previous ? latestTag : null
-  if (!previous) return { ok: true, release: true, tag, previousTag, message: `the first release: ${tag}` }
-
-  const order = compare(version, previous)
-  if (order > 0) return { ok: true, release: true, tag, previousTag, message: `releasing ${tag}, the first since ${latestTag}` }
-  if (order === 0) return { ok: true, release: false, tag: null, previousTag, message: `package.json is still at ${version}, already released as ${latestTag} — nothing to release` }
-  return {
-    ok: false,
-    release: false,
-    tag: null,
-    previousTag,
-    message: `package.json says ${version}, behind the latest release ${latestTag} — this merge computed its version before ${latestTag} was cut, so its changes would ship with no release of their own; bump package.json above ${previous}`,
-  }
+  if (!previous) return { ok: true, release: true, tag, previousTag, version, message: `the first release: ${tag}` }
+  // `expectedVersion` never goes backwards, so the only way to land on the latest tag is a
+  // release every pull request in it asked nothing of.
+  if (compare(version, previous) === 0) return { ok: true, release: false, tag: null, previousTag, version, message: `every pull request since ${latestTag} asked for none — nothing to release` }
+  return { ok: true, release: true, tag, previousTag, version, message: `releasing ${tag}, the first since ${latestTag} (${asked.bump})` }
 }
 
 // ------------------------------------------------------------------------- the notes
@@ -177,41 +228,49 @@ export function releaseMark ({ describe, head }) {
 // ------------------------------------------------------------------ the workflow's seam
 //
 // `check` is the PR's required status check, `verdict` is what the merge workflow reads to
-// decide whether to tag, and `notes` turns the pull requests it gathered into a release
-// body. All three take the gathered state as flags or stdin and read `package.json`
-// themselves, so a workflow step is one line and every rule above stays pure.
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// decide whether to tag and of what, and `notes` turns the pull requests it gathered into a
+// release body. All three take the gathered state as flags or on stdin, so a workflow step is
+// one line and every rule above stays pure. None of them reads `package.json`: it no longer
+// carries a version (ADR 0004).
+//
+// `verdict` and `notes` read the same stdin shape, one entry per commit in the range:
+//
+//   [{ "sha": "abc1234", "pulls": [{ "number": 7, "title": "…", "url": "…", "body": "…",
+//                                    "headRefName": "feat/x", "labels": ["release:none"] }] }]
+//
+// `pulls` is empty for a commit GitHub could not name a pull request for, which `verdict`
+// refuses on rather than folding away. It holds more than one for a commit that belongs to
+// more than one, and every entry counts.
 
 const flags = argv => Object.fromEntries(
   argv.flatMap((a, i) => (a.startsWith('--') ? [[a.slice(2), argv[i + 1]?.startsWith('--') ? '' : argv[i + 1] ?? '']] : [])),
 )
 
+// A release's worth of descriptions is far past what a command line holds, so the set arrives
+// on stdin.
+const commitsFromStdin = () => JSON.parse(fs.readFileSync(0, 'utf8') || '[]')
+
 function main (argv) {
   const [command, ...rest] = argv
   const f = flags(rest)
-  const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
-  const labels = (f.labels || '').split(',').map(s => s.trim()).filter(Boolean)
 
   if (command === 'check') {
-    const v = checkVersion({ pkgVersion, latestTag: f.tag || null, branch: f.branch, labels })
+    const labels = (f.labels || '').split(',').map(s => s.trim()).filter(Boolean)
+    const v = checkBump({ branch: f.branch, labels })
     console.log(v.message)
     return v.ok ? 0 : 1
   }
   if (command === 'verdict') {
-    const v = releaseVerdict({ pkgVersion, latestTag: f.tag || null })
+    const v = releaseVerdict({ commits: commitsFromStdin(), latestTag: f.tag || null })
     console.error(v.message)
-    console.log(JSON.stringify({ release: v.release, tag: v.tag, previousTag: v.previousTag, version: pkgVersion }))
+    console.log(JSON.stringify({ release: v.release, tag: v.tag, previousTag: v.previousTag, version: v.version }))
     return v.ok ? 0 : 1
   }
   if (command === 'notes') {
-    // The pull requests arrive on stdin as the JSON array the workflow assembled, because a
-    // release's worth of descriptions is far past what a command line holds.
-    const pulls = JSON.parse(fs.readFileSync(0, 'utf8') || '[]')
-    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls }))
+    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls: pullsOf(commitsFromStdin()) }))
     return 0
   }
-  console.error('usage: node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name < pulls.json')
+  console.error('usage: node bin/release.mjs check --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0 < commits.json\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name < commits.json')
   return 2
 }
 

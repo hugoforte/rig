@@ -1,18 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  versionFromTag, bumpFor, expectedVersion, checkVersion, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
+  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
 } from '../bin/release.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 
 // A PR that would land as a minor: what `rig new --type feat` writes, and no labels.
 const featPr = { branch: 'feat/name-the-release', labels: [] }
+
+// One commit and every pull request GitHub associates with it, which is the shape the workflow
+// gathers. `commit(sha, null)` is the commit it could name none for.
+const commit = (sha, ...pulls) => ({ sha, pulls: pulls.filter(Boolean) })
+const pr = (number, branch, labels = []) => ({ number, title: `PR ${number}`, url: `u/${number}`, body: '', headRefName: branch, labels })
 
 test('a tag names a version whether or not it wears the v', () => {
   assert.equal(versionFromTag('v1.2.3'), '1.2.3')
@@ -35,11 +38,19 @@ test('a release label overrides the prefix, because the prefix is a default not 
   assert.equal(bumpFor({ branch: 'fix/typo', labels: ['release:none'] }).bump, 'none')
 })
 
+test('the prefixes that ask for nothing say so, instead of needing a label each time', () => {
+  for (const prefix of ['docs', 'chore', 'test', 'ci', 'refactor']) {
+    assert.equal(bumpFor({ branch: `${prefix}/tidy-the-tests`, labels: [] }).bump, 'none', prefix)
+  }
+})
+
 test('a branch prefix rig never writes asks for a label rather than guessing', () => {
-  const { bump, reason } = bumpFor({ branch: 'chore/tidy-the-tests', labels: [] })
+  // Listing the none-prefixes is not the same as defaulting to none: a branch nobody named
+  // still fails, because a feature branched `wip/…` must not ship inside a patch release.
+  const { bump, reason } = bumpFor({ branch: 'wip/tidy-the-tests', labels: [] })
   assert.equal(bump, null)
   assert.match(reason, /release:minor/)
-  assert.match(reason, /chore\/tidy-the-tests/)
+  assert.match(reason, /wip\/tidy-the-tests/)
 })
 
 test('two release labels are a contradiction to resolve, not a race to read', () => {
@@ -72,90 +83,160 @@ test('the first release is the derived major at zero', () => {
   assert.equal(expectedVersion({ latestTag: null, bump: 'minor', major: 1 }), '1.0.0')
 })
 
-test('a package.json that already says what this PR lands as passes', () => {
-  const v = checkVersion({ pkgVersion: '1.5.0', latestTag: 'v1.4.2', ...featPr, major: 1 })
+// ------------------------------------------------------------------------ the PR gate
+
+test('the check asks whether the PR named a bump, and nothing about the version', () => {
+  const v = checkBump(featPr)
   assert.equal(v.ok, true)
-  assert.equal(v.expected, '1.5.0')
   assert.equal(v.bump, 'minor')
+  // Deliberately absent: no expected version, no tag read. Whatever else merges cannot make
+  // this answer wrong, which is the whole reason the check is safe to require (ADR 0004).
+  assert.equal(v.expected, undefined)
 })
 
-test('a package.json that disagrees fails naming the value to write', () => {
-  const v = checkVersion({ pkgVersion: '1.4.2', latestTag: 'v1.4.2', ...featPr, major: 1 })
+test('a PR naming no bump fails the check, naming the options', () => {
+  const v = checkBump({ branch: 'wip/x', labels: [] })
   assert.equal(v.ok, false)
-  assert.equal(v.expected, '1.5.0')
-  assert.match(v.message, /1\.4\.2/)
-  assert.match(v.message, /1\.5\.0/)
-})
-
-test('a PR whose bump cannot be read fails on that, not on the version', () => {
-  const v = checkVersion({ pkgVersion: '1.4.2', latestTag: 'v1.4.2', branch: 'chore/x', labels: [], major: 1 })
-  assert.equal(v.ok, false)
-  assert.equal(v.expected, null)
+  assert.equal(v.bump, null)
   assert.match(v.message, /release:minor/)
+})
+
+// ------------------------------------------------------------- the bump a release asks for
+
+test('a release asks for the strongest bump its pull requests asked for', () => {
+  const b = bumpOfRelease([
+    commit('aaa', pr(1, 'fix/one')),
+    commit('bbb', pr(2, 'feat/two')),
+    commit('ccc', pr(3, 'docs/three')),
+  ])
+  assert.equal(b.ok, true)
+  assert.equal(b.bump, 'minor')
+})
+
+test('a release every pull request asked nothing of asks for nothing', () => {
+  const b = bumpOfRelease([commit('aaa', pr(1, 'docs/one')), commit('bbb', pr(2, 'chore/two'))])
+  assert.equal(b.ok, true)
+  assert.equal(b.bump, 'none')
+})
+
+test('a commit with no pull request refuses the release rather than folding away', () => {
+  // Folding what the API happened to return is how a feature ships inside a patch release
+  // with nobody told — the same silent wrong answer ADR 0004 exists to remove.
+  const b = bumpOfRelease([commit('abc1234def', pr(1, 'feat/one')), commit('deadbeefcafe', null)])
+  assert.equal(b.ok, false)
+  assert.equal(b.bump, null)
+  assert.match(b.message, /deadbee/)
+})
+
+test('a pull request naming no bump refuses the release, naming the pull request', () => {
+  const b = bumpOfRelease([commit('aaa', pr(1, 'feat/one')), commit('bbb', pr(7, 'wip/two'))])
+  assert.equal(b.ok, false)
+  assert.match(b.message, /#7/)
+})
+
+// ---------------------------------------------------------------------- the merge gate
+
+test('a release is the latest tag moved by what its pull requests asked for', () => {
+  const r = releaseVerdict({ commits: [commit('aaa', pr(1, 'feat/one'))], latestTag: 'v1.4.2', major: 1 })
+  assert.equal(r.release, true)
+  assert.equal(r.tag, 'v1.5.0')
+  assert.equal(r.version, '1.5.0')
+  assert.equal(r.previousTag, 'v1.4.2')
+})
+
+test('a push whose pull requests all asked for none releases nothing and says so', () => {
+  const r = releaseVerdict({ commits: [commit('aaa', pr(1, 'docs/one'))], latestTag: 'v1.4.2', major: 1 })
+  assert.equal(r.release, false)
+  assert.equal(r.ok, true)
+  assert.match(r.message, /nothing to release/)
+})
+
+test('a set that could not be read fails the release instead of publishing a guess', () => {
+  const r = releaseVerdict({ commits: [commit('abc1234def', null)], latestTag: 'v1.4.2', major: 1 })
+  assert.equal(r.ok, false)
+  assert.equal(r.release, false)
+  assert.equal(r.tag, null)
+})
+
+test('adding a migration takes the release to the derived major, whatever its PRs asked', () => {
+  const r = releaseVerdict({ commits: [commit('aaa', pr(1, 'docs/one'))], latestTag: 'v1.4.2', major: 2 })
+  assert.equal(r.release, true)
+  assert.equal(r.tag, 'v2.0.0')
 })
 
 test('a release cut from a format this code does not contain is a broken state, not a bump', () => {
   // The major only ever grows, so a tag ahead of `MIGRATIONS.length` means the tag came from
-  // something this branch is missing — reporting a next version over the top of that would
-  // release a downgrade under a higher number.
-  const v = checkVersion({ pkgVersion: '1.5.0', latestTag: 'v2.0.0', ...featPr, major: 1 })
-  assert.equal(v.ok, false)
-  assert.match(v.message, /v2\.0\.0/)
-})
-
-test('a merge whose version is ahead of the latest tag is the release', () => {
-  const r = releaseVerdict({ pkgVersion: '1.5.0', latestTag: 'v1.4.2' })
-  assert.equal(r.release, true)
-  assert.equal(r.tag, 'v1.5.0')
-  assert.equal(r.previousTag, 'v1.4.2')
-})
-
-test('a merge that held the version releases nothing and says so', () => {
-  const r = releaseVerdict({ pkgVersion: '1.4.2', latestTag: 'v1.4.2' })
-  assert.equal(r.release, false)
-  assert.equal(r.ok, true)
-  assert.match(r.message, /release:none|already released|nothing to release/)
-})
-
-test('a merge that landed behind the latest release fails loudly instead of skipping', () => {
-  // Two PRs computed the same next version and both merged: the second carries a version that
-  // is already tagged content. Skipping would lose its release note silently.
-  const r = releaseVerdict({ pkgVersion: '1.4.0', latestTag: 'v1.4.2' })
-  assert.equal(r.release, false)
+  // something this commit is missing — releasing over the top of it would publish a downgrade
+  // under a higher number.
+  const r = releaseVerdict({ commits: [commit('aaa', pr(1, 'feat/one'))], latestTag: 'v2.0.0', major: 1 })
   assert.equal(r.ok, false)
-  assert.match(r.message, /1\.4\.0/)
-  assert.match(r.message, /v1\.4\.2/)
+  assert.match(r.message, /v2\.0\.0/)
 })
 
 test('the first release of all has no previous tag and still releases', () => {
-  const r = releaseVerdict({ pkgVersion: '1.0.0', latestTag: null })
+  const r = releaseVerdict({ commits: [commit('aaa', pr(1, 'feat/one'))], latestTag: null, major: 1 })
   assert.equal(r.release, true)
   assert.equal(r.tag, 'v1.0.0')
   assert.equal(r.previousTag, null)
 })
 
-// The seam the workflow actually runs: `node bin/release.mjs`, reading this package.json.
-// Both cases are stated relative to the version in the file, so they keep meaning something
-// after a release moves it.
+// The seam the workflow actually runs: `node bin/release.mjs`. Nothing here reads
+// `package.json` — the check takes its whole question from the event, and the verdict takes
+// its set from stdin.
 
-const run = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin', 'release.mjs'), ...args], { encoding: 'utf8' })
+const run = (args, input) => spawnSync(process.execPath, [path.join(ROOT, 'bin', 'release.mjs'), ...args], { encoding: 'utf8', input: input ?? '' })
 
-test('the check passes when package.json already says what the PR lands as', () => {
-  const r = run('check', '--tag', `v${pkg.version}`, '--branch', 'feat/x', '--labels', 'release:none')
+test('the check passes a PR that named a bump', () => {
+  const r = run(['check', '--branch', 'feat/x', '--labels', 'release:none'])
   assert.equal(r.status, 0, r.stdout + r.stderr)
-  assert.ok(r.stdout.includes(`lands as ${pkg.version}`), r.stdout)
+  assert.match(r.stdout, /asks for none/)
 })
 
-test('the check exits non-zero and names the version to write when it does not', () => {
-  const r = run('check', '--tag', `v${pkg.version}`, '--branch', 'feat/x')
+test('the check exits non-zero and names the options when the PR named nothing', () => {
+  const r = run(['check', '--branch', 'wip/x'])
   assert.equal(r.status, 1)
-  assert.match(r.stdout, /set "version"/)
+  assert.match(r.stdout, /release:minor/)
 })
 
 test('the verdict prints what the merge workflow reads, on stdout, alone', () => {
-  const r = run('verdict', '--tag', `v${pkg.version}`)
+  const commits = JSON.stringify([commit('aaa', pr(1, 'feat/x'))])
+  const r = run(['verdict', '--tag', 'v1.4.2'], commits)
   assert.equal(r.status, 0, r.stderr)
-  assert.deepEqual(JSON.parse(r.stdout), { release: false, tag: null, previousTag: `v${pkg.version}`, version: pkg.version })
+  const read = JSON.parse(r.stdout)
+  assert.equal(read.release, true)
+  assert.equal(read.previousTag, 'v1.4.2')
+  assert.match(read.tag, /^v\d+\.\d+\.\d+$/)
+})
+
+test('the verdict exits non-zero on a set it could not read, and tags nothing', () => {
+  const r = run(['verdict', '--tag', 'v1.4.2'], JSON.stringify([commit('abc1234def', null)]))
+  assert.equal(r.status, 1)
+  assert.equal(JSON.parse(r.stdout).tag, null)
+})
+
+test('the notes read the same stdin the verdict did, and skip the commits with no PR', () => {
+  const commits = JSON.stringify([commit('aaa', pr(1, 'feat/x')), commit('bbb', null)])
+  const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], commits)
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /PR 1/)
+})
+
+test('a pull request spread over several commits gets one section, not one each', () => {
+  // The merge method decides this: squash keeps one commit per PR, rebase can keep several.
+  const commits = JSON.stringify([commit('aaa', pr(4, 'feat/x')), commit('bbb', pr(4, 'feat/x'))])
+  const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], commits)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout.match(/## PR 4/g)?.length, 1, r.stdout)
+})
+
+test('a commit belonging to two pull requests counts both, and keeps both in the notes', () => {
+  // The bug this pins: taking the first pull request GitHub lists would size this release as
+  // a patch and drop #2 from the notes entirely.
+  const commits = [commit('aaa', pr(1, 'fix/one'), pr(2, 'feat/two'))]
+  assert.equal(bumpOfRelease(commits).bump, 'minor')
+  const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], JSON.stringify(commits))
+  assert.match(r.stdout, /PR 1/)
+  assert.match(r.stdout, /PR 2/)
 })
 
 // ---------------------------------------------------------------- the release itself

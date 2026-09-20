@@ -198,11 +198,13 @@ export function releaseTags () {
   return r.stdout.split('\n').map(s => s.trim()).filter(Boolean)
 }
 
-// The release before this one, skipping a tag that names the version this checkout already
-// carries — on `main` just after a release those are the same commit, and a "previous
-// release" that is this code tests nothing.
+// The release before this one, skipping a tag that points at the commit this checkout is on —
+// on `main` just after a release those are the same commit, and a "previous release" that is
+// this code tests nothing. Asked of git rather than of `package.json`, which no longer carries
+// a version to compare (ADR 0004); `--exact-match` answers only when HEAD *is* a release.
 export function previousReleaseTag () {
-  const here = `v${readJson(path.join(SRC, 'package.json')).version}`
+  const r = spawnSync('git', ['-C', SRC, 'describe', '--tags', '--exact-match', '--match', 'v[0-9]*'], { encoding: 'utf8' })
+  const here = r.status === 0 ? r.stdout.trim() : null
   return releaseTags().find(t => t !== here) ?? null
 }
 
