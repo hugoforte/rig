@@ -131,14 +131,14 @@ export function checkBump ({ branch, labels = [] }) {
 // inside a patch release with nobody told — the same silent wrong answer, in a new place. ADR
 // 0003 made this call once already, failing rather than skipping so a release note could not be
 // dropped in silence; nothing is tagged before the set is known, so re-running is safe.
-export function bumpOfRelease (commits = []) {
+export function bumpOfRelease (commits = [], { base = null } = {}) {
   const orphans = commits.filter(c => !c?.pulls?.length).map(c => String(c?.sha ?? '?').slice(0, 7))
   if (orphans.length) {
     return { ok: false, bump: null, message: `${orphans.length} commit(s) in this range resolve to no pull request (${orphans.join(', ')}) — the set this release is computed from could not be read, so no version is safe to publish; re-run once GitHub answers for them` }
   }
   const unreadable = []
   let strongest = 'none'
-  for (const pull of pullsOf(commits)) {
+  for (const pull of pullsOf(commits, { base })) {
     const { bump, reason } = bumpFor({ branch: pull.headRefName, labels: pull.labels ?? [] })
     if (!bump) { unreadable.push(`#${pull.number}: ${reason}`); continue }
     if (STRENGTH.indexOf(bump) < STRENGTH.indexOf(strongest)) strongest = bump
@@ -149,19 +149,34 @@ export function bumpOfRelease (commits = []) {
   return { ok: true, bump: strongest, message: `this release asks for ${strongest}` }
 }
 
-// Every pull request in the range, once each. A pull request reaches this more than once
-// whenever a merge method keeps several commits for it, and a commit reaches it under two
-// numbers when it belongs to two — both are deduplicated here, so the notes carry one section
-// per pull request and the bump fold counts each one once.
-export const pullsOf = commits => [
-  ...new Map((commits ?? []).flatMap(c => c?.pulls ?? []).filter(Boolean).map(p => [p.number, p])).values(),
+// Every pull request that landed **on the branch being released**, once each.
+//
+// Two deduplications and one filter, and the filter is the one worth explaining. A pull request
+// reaches this more than once whenever a merge method keeps several commits for it, and a commit
+// reaches it under two numbers when it belongs to two — that second case is the ordinary shape of
+// a staged work, where each commit is in its stage's pull request *and* in the work branch's.
+//
+// Both are real pull requests and only one of them landed here. A stage merged into the work
+// branch; the work branch merged into `main`. Taking both would describe one change twice over —
+// three stage descriptions and the work branch's own — in a release that contains it once. So a
+// release is made of the pull requests whose base is the branch it is a release of, which is
+// also exactly what "this release contains these pull requests" means.
+//
+// `base` is optional: with no base named, every pull request counts, which is what a caller with
+// no opinion should get rather than an empty release.
+export const pullsOf = (commits, { base = null } = {}) => [
+  ...new Map((commits ?? [])
+    .flatMap(c => c?.pulls ?? [])
+    .filter(Boolean)
+    .filter(p => !base || p.baseRefName === base)
+    .map(p => [p.number, p])).values(),
 ]
 
 // The merge gate: is this push to `main` a release, and of what? The version is worked out
 // here, from the bumps of the pull requests the push contains, because here is the only place
 // the set is known (ADR 0004).
-export function releaseVerdict ({ commits = [], latestTag, major = MAJOR }) {
-  const asked = bumpOfRelease(commits)
+export function releaseVerdict ({ commits = [], latestTag, base = null, major = MAJOR }) {
+  const asked = bumpOfRelease(commits, { base })
   if (!asked.ok) return { ok: false, release: false, tag: null, previousTag: null, version: null, message: asked.message }
 
   const version = expectedVersion({ latestTag, bump: asked.bump, major })
@@ -188,7 +203,20 @@ export function releaseVerdict ({ commits = [], latestTag, major = MAJOR }) {
 // What an agent signs at the end of a PR description. It belongs to the PR, not the release.
 const ATTRIBUTION = /^[ \t]*(🤖 Generated with \[Claude Code\].*|Co-authored-by:.*)$/gmi
 
-const descriptionOf = body => String(body ?? '').replace(/\r/g, '').replace(ATTRIBUTION, '').trim()
+// A pull request description writes its own headings at `##`, and so does the title this wraps
+// it in — which left the notes flat, with `## Why` indistinguishable from the pull request it
+// belonged to. Every heading in a body moves down one level so the titles stay above them.
+// Fenced code is skipped: `#` at the start of a line inside a fence is a shell comment, and
+// deepening it would edit somebody's example.
+function demoteHeadings (body) {
+  let fenced = false
+  return body.split('\n').map(line => {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return line }
+    return fenced ? line : line.replace(/^(#{1,5}) /, '#$1 ')
+  }).join('\n')
+}
+
+const descriptionOf = body => demoteHeadings(String(body ?? '').replace(/\r/g, '').replace(ATTRIBUTION, '')).trim()
 
 export function releaseNotes ({ tag, previousTag, repo, pulls = [] }) {
   // Oldest first: a release reads as the order things happened in, not the order an API
@@ -261,16 +289,16 @@ function main (argv) {
     return v.ok ? 0 : 1
   }
   if (command === 'verdict') {
-    const v = releaseVerdict({ commits: commitsFromStdin(), latestTag: f.tag || null })
+    const v = releaseVerdict({ commits: commitsFromStdin(), latestTag: f.tag || null, base: f.base || null })
     console.error(v.message)
     console.log(JSON.stringify({ release: v.release, tag: v.tag, previousTag: v.previousTag, version: v.version }))
     return v.ok ? 0 : 1
   }
   if (command === 'notes') {
-    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls: pullsOf(commitsFromStdin()) }))
+    console.log(releaseNotes({ tag: f.tag, previousTag: f.previous || null, repo: f.repo, pulls: pullsOf(commitsFromStdin(), { base: f.base || null }) }))
     return 0
   }
-  console.error('usage: node bin/release.mjs check --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0 < commits.json\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name < commits.json')
+  console.error('usage: node bin/release.mjs check --branch feat/x --labels a,b\n       node bin/release.mjs verdict --tag v1.0.0 --base main < commits.json\n       node bin/release.mjs notes --tag v1.1.0 --previous v1.0.0 --repo owner/name --base main < commits.json')
   return 2
 }
 

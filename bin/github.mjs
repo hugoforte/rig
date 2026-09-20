@@ -68,6 +68,23 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
+    // Every pull request a commit belongs to, for assembling a release. Asked of the API per
+    // commit rather than parsed out of commit messages: a squash subject carries `(#12)` and a
+    // merge commit does not, and neither is a record.
+    //
+    // **All of them, not the first.** A commit reaches a branch under two numbers whenever it
+    // is in a stage's pull request and in the work branch's, which is the ordinary shape of a
+    // staged work — taking one would size a release by whichever the API listed first and drop
+    // the other from the notes. An empty list is a real answer and stays one: it is what
+    // `bin/release.mjs` refuses on rather than folding away.
+    pullsForCommit (org, name, sha) {
+      const r = gh(['api', `repos/${org}/${name}/commits/${sha}/pulls`, '--jq',
+        'map({number, title, url: .html_url, body, headRefName: .head.ref, baseRefName: .base.ref, labels: [.labels[].name]})'])
+      if (r.code !== 0 || !r.out) return []
+      const pulls = parseJson(r.out, 'gh api commits/pulls')
+      if (!Array.isArray(pulls)) fail(`gh api commits/pulls returned something that is not a list: ${firstLine(r.out)}`)
+      return pulls
+    },
     // The PR, not the branch, because a merged PR's branch is usually deleted — this is the
     // only place the first commit of finished work can still be read. Commits and reviews
     // come back in one call: a second round trip per repo is what makes a listing unusable.
@@ -149,6 +166,23 @@ export function githubInMemory (state) {
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
       return pr ? { number: pr.number, state: pr.state, base: pr.base || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+    },
+    // Every pull request whose `commits` list contains this sha, in the order the fixture
+    // declares them — a commit in two of them answers with both, which is the case the real
+    // adapter's `map(...)` exists for and the one a release has to get right.
+    pullsForCommit (org, name, sha) {
+      if (!answers()) return []
+      return (lookup(`${org}/${name}`)?.repo.prs || [])
+        .filter(p => (p.commits || []).includes(sha))
+        .map(p => ({
+          number: p.number,
+          title: p.title || `PR ${p.number}`,
+          url: p.url || `https://github.com/${org}/${name}/pull/${p.number}`,
+          body: p.body || '',
+          headRefName: p.branch || null,
+          baseRefName: p.base || null,
+          labels: p.labels || [],
+        }))
     },
     prTimeline (org, name, number) {
       if (!answers()) return null

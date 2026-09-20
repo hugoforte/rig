@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
+  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, pullsOf, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
 } from '../bin/release.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -15,7 +15,7 @@ const featPr = { branch: 'feat/name-the-release', labels: [] }
 // One commit and every pull request GitHub associates with it, which is the shape the workflow
 // gathers. `commit(sha, null)` is the commit it could name none for.
 const commit = (sha, ...pulls) => ({ sha, pulls: pulls.filter(Boolean) })
-const pr = (number, branch, labels = []) => ({ number, title: `PR ${number}`, url: `u/${number}`, body: '', headRefName: branch, labels })
+const pr = (number, branch, labels = [], over = {}) => ({ number, title: `PR ${number}`, url: `u/${number}`, body: '', headRefName: branch, baseRefName: 'main', labels, ...over })
 
 test('a tag names a version whether or not it wears the v', () => {
   assert.equal(versionFromTag('v1.2.3'), '1.2.3')
@@ -132,6 +132,48 @@ test('a pull request naming no bump refuses the release, naming the pull request
   const b = bumpOfRelease([commit('aaa', pr(1, 'feat/one')), commit('bbb', pr(7, 'wip/two'))])
   assert.equal(b.ok, false)
   assert.match(b.message, /#7/)
+})
+
+
+// ------------------------------------------------- the pull requests a release is made of
+
+test('a release is made of the pull requests that landed on the branch it releases', () => {
+  // The ordinary shape of a staged work: every commit is in its stage's pull request and in
+  // the work branch's. Only the second landed on `main`, and counting both would describe one
+  // change several times over in the notes of a release that contains it once.
+  const commits = [commit('aaa', pr(1, 'feat/stage-one', [], { baseRefName: 'feat/the-work' }), pr(9, 'feat/the-work'))]
+  assert.deepEqual(pullsOf(commits, { base: 'main' }).map(p => p.number), [9])
+})
+
+test('with no base named, every pull request counts', () => {
+  const commits = [commit('aaa', pr(1, 'feat/one', [], { baseRefName: 'feat/the-work' }), pr(9, 'feat/the-work'))]
+  assert.deepEqual(pullsOf(commits).map(p => p.number).sort(), [1, 9])
+})
+
+test('the bump is folded over the pull requests that landed here, not the ones below', () => {
+  // The stage asked for a minor and never landed on this branch; the work branch asked for a
+  // patch and did. A release of `main` is a patch.
+  const commits = [commit('aaa', pr(1, 'feat/stage', [], { baseRefName: 'feat/the-work' }), pr(9, 'fix/the-work'))]
+  assert.equal(bumpOfRelease(commits, { base: 'main' }).bump, 'patch')
+  assert.equal(bumpOfRelease(commits).bump, 'minor', 'and everything, when no base is named')
+})
+
+// ------------------------------------------------------------- the shape of the notes
+
+test("a pull request's own headings sit below its title, not beside it", () => {
+  const body = ['# Top', '', '## Why', '', 'text', '', '### Detail'].join('\n')
+  const notes = releaseNotes({ tag: 'v1.2.0', previousTag: 'v1.1.0', repo: 'o/r', pulls: [pr(1, 'feat/x', [], { body })] })
+  assert.match(notes, /^## PR 1 /m, 'the title stays at two')
+  assert.match(notes, /^## Top$/m)
+  assert.match(notes, /^### Why$/m)
+  assert.match(notes, /^#### Detail$/m)
+})
+
+test('a heading inside a fence is a shell comment and is left alone', () => {
+  const body = ['before', '', '```bash', '# not a heading', '```', '', '## after'].join('\n')
+  const notes = releaseNotes({ tag: 'v1.2.0', previousTag: 'v1.1.0', repo: 'o/r', pulls: [pr(1, 'feat/x', [], { body })] })
+  assert.match(notes, /^# not a heading$/m, 'a shell comment is not deepened')
+  assert.match(notes, /^### after$/m)
 })
 
 // ---------------------------------------------------------------------- the merge gate
