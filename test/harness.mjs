@@ -22,6 +22,12 @@
 // `RIG_FAKE_TWG`, each naming a JSON state file the tool reads on start and writes back on
 // exit. Pass `github`/`twg` to seed one; read the file back to see what the tool did. The
 // real `gh` and `twg` are never spawned.
+//
+// Below `makeInstall` is what drives an installation through a *sequence* rather than one
+// command: `scenario` walks a machine through named steps with nothing restored between
+// them, and `previousRelease` puts the tool as the previous release shipped it beside the
+// installation, so one machine file can be driven by two versions of rig.
+import { test } from 'node:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -139,4 +145,90 @@ export function makeInstall ({
     localConfig: localConfigFile, githubStateFile, twgStateFile, remotesDir,
     env, rig, git, gitMust, cleanup,
   }
+}
+
+// ---------------------------------------------------------------------------- scenarios
+
+// A journey: one temp machine, walked through a named list of steps in order, with nothing
+// restored between them. What a scenario is for is the state that carries forward — the bugs
+// it exists to catch are in the *second* command against a machine that already had state,
+// and a suite that puts its fixture back around every assertion cannot see one.
+//
+// A step that fails stops the journey and the rest are skipped naming it: a step run on state
+// the previous step failed to produce asserts nothing, and would bury the real failure under
+// its own. Each step is a subtest, so the step that died is named by the runner rather than
+// having to be read out of an assertion message.
+//
+// A step is handed the machine `makeInstall` built and its own test context. The machine is
+// the state that carries: the temp directory, the roots, the files rig has written into them —
+// and anything a step hangs on it for the steps after, which is a path or two, never an
+// assertion's worth of derived fact.
+export const step = (name, run) => ({ name, run })
+
+// `options` are `makeInstall`'s, plus `skip` for a journey this checkout cannot walk at all —
+// the cross-version one, on a clone with no release tags in it.
+export function scenario (name, { skip = false, ...install } = {}, steps = []) {
+  return test(name, { skip }, async t => {
+    const machine = makeInstall(install)
+    try {
+      let died = null
+      for (const s of steps) {
+        if (died) {
+          await t.test(s.name, { skip: `the journey stopped at "${died}"` }, () => {})
+          continue
+        }
+        let failed = false
+        // The throw is re-raised so node:test records the subtest as failed, and caught so
+        // the loop — not an exception — decides what happens to the steps after it.
+        await t.test(s.name, async st => {
+          try { await s.run(machine, st) } catch (e) { failed = true; throw e }
+        })
+        if (failed) died = s.name
+      }
+    } finally { machine.cleanup() }
+  })
+}
+
+// Every release tag in the checkout under test, newest first, and empty when there are none
+// to find: a shallow clone carries no tags and a downloaded tarball has no `.git` at all. A
+// scenario that cannot be walked says so rather than inventing a release to walk it against.
+export function releaseTags () {
+  const r = spawnSync('git', ['-C', SRC, 'tag', '--list', 'v[0-9]*', '--sort=-v:refname'], { encoding: 'utf8' })
+  if (r.status !== 0) return []
+  return r.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+}
+
+// The release before this one, skipping a tag that names the version this checkout already
+// carries — on `main` just after a release those are the same commit, and a "previous
+// release" that is this code tests nothing.
+export function previousReleaseTag () {
+  const here = `v${readJson(path.join(SRC, 'package.json')).version}`
+  return releaseTags().find(t => t !== here) ?? null
+}
+
+// The tool as the previous release shipped it, beside the installation, for the half of
+// cross-version the suite could not express: `test/installation.test.mjs` fabricates a
+// *newer* rig by pushing a clone that carries an extra migration, and this is the reverse —
+// the rig still on PATH, run against a machine file the current code just wrote. That window
+// is open on every machine at every release, because the change being installed is the one
+// that would have updated it.
+//
+// A clone rather than a copy, because a tag is the only honest way to say "the previous
+// release"; its `.git` goes for the reason `copyTool` leaves one out — a tool checkout git
+// can measure would put `rig update` and the freshness paths back in the middle of a
+// scenario. Pass it to `rig()` as `root`.
+export function previousRelease ({ tmp, gitMust }, tag = previousReleaseTag()) {
+  if (!tag) return null
+  const root = path.join(tmp, `rig-${tag}`)
+  // One checkout per tag per machine: a journey asks for the same release from more than one
+  // step, and cloning it again would cost seconds the scenario count is rationed by.
+  if (!fs.existsSync(root)) {
+    // `--no-hardlinks`, because a local clone links its objects by default and the checkout
+    // and the temp directory are not always on one volume — on the Windows runner the repo is
+    // on D: and the temp directory on C:, and git dies with "Improper link".
+    gitMust(tmp, 'clone', '-q', '--no-hardlinks', SRC, root)
+    gitMust(root, 'checkout', '-q', '--detach', tag)
+    fs.rmSync(path.join(root, '.git'), { recursive: true, force: true, maxRetries: 5 })
+  }
+  return { root, tag, version: readJson(path.join(root, 'package.json')).version }
 }

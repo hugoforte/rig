@@ -18,6 +18,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The release tags: test/scenarios.test.mjs runs the previous release against a
+          # machine file this one wrote, and a shallow clone carries no tags to find it by.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
