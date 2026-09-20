@@ -231,14 +231,13 @@ test('update hands over to the code that arrived, not the code that started it',
   // the arrived code knows about the migration pushed below.
   const clone = path.join(tmp, 'push-migration')
   assert.equal(git(tmp, 'clone', '-q', origin, clone).status, 0)
-  const versionFile = path.join(clone, 'bin', 'version.mjs')
-  const before = fs.readFileSync(versionFile, 'utf8')
-  assert.match(before, /^\]$/m, 'the marker the test appends to still exists')
-  // Appended, not prepended: a migration's position in the list *is* its major.
-  fs.writeFileSync(versionFile, before.replace(/^\]$/m,
-    "  { name: 'a migration that arrived with the update' },\n]"))
-  // Appending the migration is the whole fabrication: the major is `MIGRATIONS.length` and the
-  // stamp is derived from it, so nothing else in the clone has to be edited to agree (ADR 0004).
+  // Adding the file is the whole fabrication. The major is the number of files in
+  // `bin/migrations` and the stamp is derived from it, so nothing else in the clone has to be
+  // edited to agree — which is the point of both changes: a release that adds a migration
+  // touches one new file and no shared list.
+  const next = String(MAJOR + 1).padStart(4, '0')
+  fs.writeFileSync(path.join(clone, 'bin', 'migrations', `${next}-arrived-with-the-update.mjs`),
+    "export default { name: 'a migration that arrived with the update' }\n")
   assert.equal(git(clone, 'add', '-A').status, 0)
   assert.equal(git(clone, 'commit', '-q', '-m', 'a release that adds a migration').status, 0)
   assert.equal(git(clone, 'push', '-q').status, 0)

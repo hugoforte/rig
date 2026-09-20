@@ -5,12 +5,15 @@
 // hand as a label for humans. Major is *derived* — it is the number of migrations — because
 // a forgotten major bump means silently writing a record neither version can read, and that
 // is not a thing to leave to memory: the format cannot change without a migration being
-// added here, and adding one moves the major. See
+// added to `bin/migrations`, and adding one moves the major. See
 // docs/adr/0002-the-major-version-is-the-record-format.md.
 //
 // Migrations are record-only and idempotent. Each transforms files in the data root and
 // never touches a worktree, which is why a work in progress survives one.
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { RigError } from './errors.mjs'
 
 // The hooks a migration may carry: `config` transforms `rig.json`, and a migration with no
@@ -23,58 +26,32 @@ const HOOKS = new Set(['name', 'config'])
 // so that gap is worth failing on rather than papering over.
 export const unrunnableHook = migration => Object.keys(migration).find(k => !HOOKS.has(k)) ?? null
 
-export const MIGRATIONS = [
-  {
-    // No hook: the format change *is* that the format is now recorded, and the stamp is
-    // written by `applyMigrations` for every migration rather than by this one. Additive on
-    // purpose. This is the one major bump the write refusal cannot protect: a rig from before
-    // this check has never heard of `writtenBy`, so when the first machine migrates, the
-    // second does not refuse — that code is not in it. Adding a key and changing nothing
-    // else means the old rig reads a field it ignores and stays correct.
-    name: 'stamp the data root with the version that wrote it',
-  },
-  {
-    // No hook, and no transform of any file: the field this adds (`repos[].pr`, a merged
-    // PR's terminal facts — DESIGN.md decision 60) is optional, and its absence already means
-    // "not yet known", which is exactly what `rig backfill` looks for. So the migration's only
-    // job, like migration 1's, is moving the major — a work.json with `pr` on some entries and
-    // not others is valid on both sides of this bump, so an old rig reading a backfilled
-    // record ignores a key it does not know and stays correct. Additive is not forced here the
-    // way it was on migration 1 — every installation refuses to write below its format now
-    // (ADR-0002) — it is just what this change needs.
-    name: 'allow repos[].pr, the terminal PR facts backfill and close record',
-  },
-  {
-    // **Two record changes, one migration, because they shipped together.** The SDLC epic
-    // (hugoforte/rig#9) moved `work.json` twice — the phase replacing `status`, and stages
-    // giving every branch its own base and PR — and both landed in one release. A migration
-    // is a *format someone's data root can be in*, not a changelog of shape edits, and there
-    // is no reachable format between these two: nothing was ever stamped with it, because the
-    // intermediate state existed only on a work branch. Two entries here would claim four
-    // formats when only three are reachable, and would leave a hole in the published majors
-    // where nothing ever lived. So they are one, named for both.
-    //
-    // No hook, for the reason migration 2 had none and one this repo has to live with: there
-    // is no mechanism to transform `work/*/work.json` (see `unrunnableHook`), and both
-    // changes are entirely in that file. So the record moves on the read path, in `loadWork`,
-    // losslessly:
-    //
-    //   - `status` is dropped and its one meaningful value (`designed`) becomes the
-    //     `designedAt` gate; the other three were observable facts and `phaseOf` reproduces
-    //     them exactly.
-    //   - `repos[].base` and `repos[].pr` become the first entry of `repos[].branches[]`, and
-    //     `work.stages` defaults to empty — a work with no stages is exactly the work rig
-    //     modelled before stages existed.
-    //
-    // What this migration is *for* is moving the major, and the major is what stops an older
-    // rig **writing**. Reading the new shape would survive; writing it back would reintroduce
-    // `status` and drop `branches[]` and `stages[]` on the floor, because an old rig spreads
-    // the entry it read and knows none of those keys on the way out. Additive on the read side
-    // is not enough when the write side is lossy, which is precisely what the write refusal is
-    // for.
-    name: 'phase replaces status, and stages give every branch its own base and PR',
-  },
-]
+// Every migration in `bin/migrations`, in order. One file each, numbered, and the number *is*
+// the record format that migration produces — `0003-…` is the third, and a data root stamped 3
+// has been through it.
+//
+// The order comes from the file names rather than from a list anyone maintains, so adding a
+// migration is adding a file and touching nothing else. What that gives up is git telling two
+// pull requests they collided: two branches that each add an `0004-` merge cleanly, because
+// they are different files. What catches it instead is `test/version.test.mjs`, which asserts
+// the numbers are unique and contiguous — a *semantic* conflict rather than a textual one, and
+// so exactly the kind `main`'s merge queue exists to catch, by running the suite against the
+// combined state before either lands (ADR-0005). The guard moved from git to the tests; it did
+// not go away.
+//
+// Loaded with a top-level await so that everything downstream stays synchronous. There is no
+// synchronous `import` in ESM, and `MAJOR` is read at module scope all over this tool.
+const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations')
+
+// `0004-what-it-does.mjs`: four digits, a dash, a slug. Anything else in the directory is not a
+// migration and is not counted — a stray file must not be able to move the record format.
+export const MIGRATION_FILES = fs.readdirSync(DIR).filter(f => /^\d{4}-.+\.mjs$/.test(f)).sort()
+
+export const migrationNumber = file => Number(String(file).slice(0, 4))
+
+export const MIGRATIONS = await Promise.all(
+  MIGRATION_FILES.map(f => import(pathToFileURL(path.join(DIR, f)).href).then(m => m.default)),
+)
 
 export const MAJOR = MIGRATIONS.length
 

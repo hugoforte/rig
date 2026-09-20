@@ -4,13 +4,28 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  MIGRATIONS, MAJOR, FORMAT_STAMP, majorOf, dataMajor, stampUnreadable, unrunnableHook, pendingMigrations, writesBlocked, applyMigrations,
+  MIGRATIONS, MIGRATION_FILES, migrationNumber, MAJOR, FORMAT_STAMP, majorOf, dataMajor, stampUnreadable, unrunnableHook, pendingMigrations, writesBlocked, applyMigrations,
 } from '../bin/version.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 test('the stamp is the record format and carries nothing else', () => {
   assert.equal(FORMAT_STAMP, `${MAJOR}.0.0`)
+})
+
+test('the migrations are numbered uniquely and contiguously from one', () => {
+  // This is the guard that replaced git's. One file per migration means two branches that each
+  // add an `0004-` merge cleanly — different files, no textual conflict — and land two
+  // migrations claiming the same record format, with `MAJOR` jumping by two. Nothing else would
+  // notice. `main`'s merge queue runs this suite against the combined state before either
+  // lands, which is what makes a semantic conflict as blocking as a textual one (ADR 0005).
+  const numbers = MIGRATION_FILES.map(migrationNumber)
+  assert.deepEqual(numbers, numbers.map((_, i) => i + 1),
+    `bin/migrations is numbered ${numbers.join(', ')} — two migrations sharing a number is two pull requests that each added one`)
+})
+
+test('every migration names itself, because the name is what rig reports as pending', () => {
+  for (const m of MIGRATIONS) assert.equal(typeof m.name, 'string', JSON.stringify(m))
 })
 
 test('what a data root is stamped with is readable as its record format', () => {
