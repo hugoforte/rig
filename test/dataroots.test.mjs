@@ -269,6 +269,32 @@ test('init names the root it set up, and normalises nothing away in doing so', (
   assert.equal(machine.current, 'personal', 'the root just set up is the one in hand')
 })
 
+test('naming the root you already have renames it, and never invents a second entry', () => {
+  // The one-root form normalises to `default`; `--name` is how it stops being that. Setting
+  // `current` to a name with no entry would leave a machine file that refuses every command.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  fs.writeFileSync(localConfig, JSON.stringify({ ...JSON.parse(saved), dataRoots: undefined, current: undefined, dataRoot }))
+  assert.equal(rig(['init', '--data-root', dataRoot, '--name', 'hugoforte']).code, 0)
+  const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+  assert.deepEqual(Object.keys(machine.dataRoots), ['hugoforte'], 'renamed, not added alongside default')
+  assert.equal(machine.current, 'hugoforte')
+  assert.equal(rig(['use']).code, 0, 'and the machine file still resolves')
+  fs.writeFileSync(localConfig, saved)
+})
+
+test('--data-repo --name adds a second root rather than refusing to move the first', () => {
+  // The README's own recipe for adding one. It used to die on the guard against switching
+  // data roots by accident, and land both roots on one directory named for the repo.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const r = rig(['init', '--data-repo', 'acme/rig-data', '--name', 'third', '--orgs', 'acme'])
+  assert.equal(r.code, 0, r.out)
+  const machine = JSON.parse(fs.readFileSync(localConfig, 'utf8'))
+  assert.ok(machine.dataRoots.third, 'the second root was added')
+  assert.match(machine.dataRoots.third.path, /rig-data-third$/, 'in a directory named for it, not for the repo')
+  assert.notEqual(path.resolve(machine.dataRoots.third.path), path.resolve(dataRoot), 'and not on top of the first')
+  fs.writeFileSync(localConfig, saved)
+})
+
 test('rig use lists every root and marks the current one', () => {
   const r = rig(['use'])
   assert.equal(r.code, 0)

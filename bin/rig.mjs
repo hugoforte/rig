@@ -1206,15 +1206,19 @@ function ensureDataRootCheckout (target) {
 // `init --data-repo owner/name`: join the data repo if it exists on GitHub, create it
 // (private) if not. Either way it ends up cloned beside the tool, with a first commit,
 // and becomes the data root. Returns the local path.
-function joinOrCreateDataRepo (spec) {
+function joinOrCreateDataRepo (spec, named) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(spec) || /\/\.\.?$/.test(spec)) die(`--data-repo wants owner/name, got "${spec}"`)
   const [owner, name] = spec.split('/')
-  const target = path.join(path.dirname(RIG_ROOT), name)
+  // Every data repo is called `rig-data` by convention, so the repo's own name cannot place
+  // the second one — both would land on the same directory. A named root is put in a
+  // directory named for it; the unnamed first root keeps the path it has always had.
+  const target = path.join(path.dirname(RIG_ROOT), named ? `${name}-${named}` : name)
 
-  // Already pointed somewhere else? Switching data roots is deliberate, not a side effect
-  // of joining a repo.
-  if (where().split && !sameDir(dataRoot(), target)) {
-    die(`dataRoot is already ${dataRoot()}. Switching data roots is deliberate: use --data-root.`)
+  // Already pointed somewhere else? Switching data roots is deliberate, not a side effect of
+  // joining a repo — but `--name` *is* that deliberate act, and refusing it would make the
+  // documented way to add a second root impossible.
+  if (!named && where().split && !sameDir(dataRoot(), target)) {
+    die(`dataRoot is already ${dataRoot()}. Switching data roots is deliberate: use --data-root, or --name to add a second.`)
   }
 
   if (exists(target)) {
@@ -1263,7 +1267,9 @@ cmds.init = ({ flags }) => {
   if (flags['data-repo'] === true) die('--data-repo wants owner/name')
   if (typeof flags['data-repo'] === 'string') {
     if (flags['data-root']) die('--data-repo and --data-root are alternatives; pass one')
-    flags['data-root'] = joinOrCreateDataRepo(flags['data-repo'])
+    if (flags.name === true) die('--name wants a name for the data root')
+    flags['data-root'] = joinOrCreateDataRepo(flags['data-repo'],
+      typeof flags.name === 'string' && flags.name ? flags.name : null)
   }
   // The data root is decided here, before anything reads config, and the location every
   // helper below resolves against moves with it. This is the only reassignment there is:
@@ -1335,11 +1341,24 @@ cmds.init = ({ flags }) => {
       delete next.dataRoot
       changes.push('dataRoots')
     }
-    if (flags['data-root'] && !sameDir(previousRoot, targetDataRoot)) {
+    if (flags['data-root']) {
       const name = named || next.current || DEFAULT_ROOT_NAME
-      next.dataRoots = { ...(next.dataRoots || {}), [name]: { ...(next.dataRoots?.[name] || {}), path: targetDataRoot } }
+      next.dataRoots = { ...(next.dataRoots || {}) }
+      // A name given for a path another entry already holds is a **rename**, not a second
+      // entry. Two names for one data root would make `rig use` a coin toss and the name a
+      // work folder records meaningless. This is the path that names the one-root form:
+      // normalisation above called it `default`, and `--name` is how it stops being that.
+      for (const [n, e] of Object.entries(next.dataRoots)) {
+        if (n === name || !e?.path) continue
+        if (sameDir(path.resolve(path.dirname(localConfigFile()), e.path), targetDataRoot)) {
+          delete next.dataRoots[n]
+          changes.push(`renamed ${n} to ${name}`)
+        }
+      }
+      next.dataRoots[name] = { ...(next.dataRoots[name] || {}), path: targetDataRoot }
+      if (next.current !== name) changes.push(`current = ${name}`)
       next.current = name
-      changes.push(`dataRoots.${name}`)
+      if (!changes.some(c => c.startsWith('renamed'))) changes.push(`dataRoots.${name}`)
     } else if (named && next.current !== named) { next.current = named; changes.push(`current = ${named}`) }
     if (email) {
       next.identities = { ...next.identities }
