@@ -76,6 +76,10 @@ _Avoid_: rig (when the checkout is meant), binary
 One checkout of the tool on one machine, with its `rig.local.json`. Distinct from the tool (the repo) and from the data root.
 _Avoid_: copy, instance
 
+**Finding**:
+One thing `rig doctor` has to say about an installation: a verdict, the line it says, and whether it counts toward the exit code. Counting is a separate question from severity — a data root waiting for `rig save` and a draft catalogue entry both warn without counting.
+_Avoid_: check (that is the question, not the answer), problem, issue, error
+
 **Work root**:
 The disposable tree worktrees are assembled under, with the mirrors and caches beside them. Machine-owned; nothing in it is durable.
 _Avoid_: workspace, scratch
