@@ -92,56 +92,74 @@ export function buildGraph (catalog) {
 }
 
 // How big a node is drawn. A busy repo gets a bigger dot, which is the one piece of the
-// catalogue's shape you can read without clicking anything. Exported because the layout has to
-// know it: the force pass works on points and would happily settle two 18px circles 30px
-// apart, which is a tidy graph made of overlapping blobs.
+// catalogue's shape you can read without clicking anything.
 export const nodeRadius = node => 9 + Math.min(9, node.degree * 2)
 
-// The force pass is about topology and knows nothing about how wide a label is. This is the
-// one pass that looks at the drawing: any two nodes whose circles would touch are pushed
-// apart, repeatedly, until they do not. It moves nodes by a few pixels and never reorders
-// them, so the clusters the forces found survive it.
-function separate (placed, { width, height, pad, rounds = 60, margin = 14 }) {
-  for (let round = 0; round < rounds; round++) {
-    let moved = false
-    for (let i = 0; i < placed.length; i++) {
-      for (let j = i + 1; j < placed.length; j++) {
-        const a = placed[i]
-        const b = placed[j]
-        const want = nodeRadius(a) + nodeRadius(b) + margin
-        let dx = b.x - a.x
-        let dy = b.y - a.y
-        let d = Math.hypot(dx, dy)
-        if (d >= want) continue
-        // Exactly coincident has no direction to push along; any fixed one will do, and a
-        // fixed one keeps the result reproducible.
-        if (d < 0.01) { dx = 1; dy = 0; d = 0.01 }
-        const shift = (want - d) / 2
-        const ux = (dx / d) * shift
-        const uy = (dy / d) * shift
-        a.x -= ux; a.y -= uy
-        b.x += ux; b.y += uy
-        moved = true
-      }
-    }
-    if (!moved) break
+// What a node actually occupies once it is drawn, as half-extents. The circle is the small
+// part: `texo-frontend-admin-portal-app` is thirty characters of label and nearly four times
+// the width of the dot it sits under. A layout that separates circles produces exactly the
+// picture this one did on the first attempt — tidy dots, labels lying across each other.
+//
+// The width is estimated from the character count rather than measured, because measuring
+// means a browser and this module renders without one. A mean advance slightly over-estimates
+// the common case, which is the direction to be wrong in: it costs a little air between nodes
+// and never costs a collision.
+const LABEL_SIZE = 11
+const LABEL_ADVANCE = 0.55 * LABEL_SIZE
+export const halfBox = node => ({
+  x: Math.max(nodeRadius(node), (node.id.length * LABEL_ADVANCE) / 2),
+  y: nodeRadius(node) + LABEL_SIZE,
+})
+
+// Which nodes can reach each other. Everything below treats a component as the unit, because
+// the force pass has nothing to say about two nodes with no path between them: repulsion pushes
+// them apart and no edge ever pulls them back, so one sim over a disconnected catalogue flings
+// its pieces into the corners and leaves the middle empty. That is not a layout, it is an
+// artifact of running the wrong algorithm over the wrong thing.
+export function components (nodes, edges) {
+  const near = new Map(nodes.map(n => [n.id.toLowerCase(), []]))
+  for (const e of edges) {
+    near.get(e.a.toLowerCase())?.push(e.b.toLowerCase())
+    near.get(e.b.toLowerCase())?.push(e.a.toLowerCase())
   }
-  // Pushing apart can walk a node off the edge. Clamping is the last word: a node half out of
-  // the viewBox is worse than two that are a little closer than asked.
-  return placed.map(node => ({
-    ...node,
-    x: Math.round(Math.min(width - pad, Math.max(pad, node.x)) * 10) / 10,
-    y: Math.round(Math.min(height - pad, Math.max(pad, node.y)) * 10) / 10,
-  }))
+  const seen = new Set()
+  const out = []
+  for (const start of nodes) {
+    const key = start.id.toLowerCase()
+    if (seen.has(key)) continue
+    const members = []
+    const queue = [key]
+    seen.add(key)
+    while (queue.length) {
+      const at = queue.shift()
+      members.push(at)
+      for (const next of near.get(at) || []) if (!seen.has(next)) { seen.add(next); queue.push(next) }
+    }
+    const inside = new Set(members)
+    out.push({
+      nodes: nodes.filter(n => inside.has(n.id.toLowerCase())),
+      edges: edges.filter(e => inside.has(e.a.toLowerCase())),
+    })
+  }
+  // Biggest first: the cluster someone is meant to look at should be the one in the top-left,
+  // where reading starts, rather than wherever the catalogue happened to list it.
+  return out.sort((x, y) => y.nodes.length - x.nodes.length)
 }
 
-// Force-directed rather than a circle, because the clusters are the argument: the four repos
-// that turn out to sit around the payment path should end up next to each other without
-// anyone having said so. Fixed iteration count and a fixed seed keep it reproducible.
-export function layout (graph, { width = 1000, height = 620, iterations = 600, seed = 20260921 } = {}) {
-  const { nodes, edges } = graph
+// One component, laid out around the origin. Fruchterman-Reingold with a fixed seed and a
+// fixed iteration count, so the same catalogue always lays out the same way — a demo that
+// rearranged itself between the rehearsal and the room would be a bad demo, and a layout
+// nobody can reproduce is untestable besides.
+//
+// `SPACING` is shared by every component rather than derived from each one's size, which is
+// what keeps two repos in a pair as far apart as two repos inside the big cluster. Scaled
+// per component, a pair of nodes would sprawl to the same area as a cluster of seven and read
+// as the more important of the two.
+const SPACING = 132
+
+function layoutComponent ({ nodes, edges }, seed) {
   const n = nodes.length
-  if (!n) return { width, height, nodes: [], edges: [] }
+  if (n === 1) return [{ x: 0, y: 0 }]
 
   const rand = seeded(seed)
   const pos = nodes.map((_, i) => {
@@ -149,23 +167,20 @@ export function layout (graph, { width = 1000, height = 620, iterations = 600, s
     // first repulsion step explode; starting at random makes the result depend on the seed far
     // more than on the edges.
     const angle = (i / n) * Math.PI * 2
-    return { x: Math.cos(angle) * 220 + (rand() - 0.5) * 40, y: Math.sin(angle) * 220 + (rand() - 0.5) * 40 }
+    const r = SPACING * Math.max(1, n / 6)
+    return { x: Math.cos(angle) * r + (rand() - 0.5) * 20, y: Math.sin(angle) * r + (rand() - 0.5) * 20 }
   })
   const index = new Map(nodes.map((node, i) => [node.id.toLowerCase(), i]))
   const links = edges
     .map(e => [index.get(e.a.toLowerCase()), index.get(e.b.toLowerCase())])
     .filter(([a, b]) => a !== undefined && b !== undefined)
 
-  const area = width * height
-  // The ideal edge length. Higher than the textbook `sqrt(area/n)` because these nodes carry
-  // labels: two circles 26px apart is a legible graph and an illegible set of repo names, and
-  // the names are the part the audience reads.
-  const k = Math.sqrt(area / n) * 0.78
-
+  const k = SPACING
+  const iterations = 400
   for (let step = 0; step < iterations; step++) {
     // Cooling: big moves early to untangle, small moves late to settle. Without it the layout
     // never stops shivering and the last iteration is as arbitrary as the first.
-    const temp = k * 0.15 * (1 - step / iterations)
+    const temp = k * 0.12 * (1 - step / iterations)
     const disp = pos.map(() => ({ x: 0, y: 0 }))
 
     for (let i = 0; i < n; i++) {
@@ -197,48 +212,180 @@ export function layout (graph, { width = 1000, height = 620, iterations = 600, s
       const d = Math.max(0.01, Math.hypot(disp[i].x, disp[i].y))
       pos[i].x += (disp[i].x / d) * Math.min(d, temp)
       pos[i].y += (disp[i].y / d) * Math.min(d, temp)
-      // A weak pull to the middle. Otherwise a repo with no edges at all drifts off the
-      // viewBox and has to be scaled back in, squashing everything that does have edges.
-      pos[i].x -= pos[i].x * 0.005
-      pos[i].y -= pos[i].y * 0.005
+      // A weak pull to the middle, so a long chain curls up instead of stretching off into a
+      // line nothing else can be packed beside.
+      pos[i].x -= pos[i].x * 0.004
+      pos[i].y -= pos[i].y * 0.004
     }
   }
+  return pos
+}
 
-  // Normalise into the viewBox last, so the layout above never has to know the page size.
+// The unconnected repos, in reading order, wrapped into a few rows. Wider than tall on
+// purpose: this block is the one most likely to end up as the last shelf, and a wide one fills
+// the bottom of the page rather than leaving a column of air beside it.
+function gridOut (nodes) {
+  const columns = Math.max(1, Math.min(nodes.length, Math.ceil(Math.sqrt(nodes.length * 2.4))))
+  const cell = Math.max(...nodes.map(n => halfBox(n).x)) * 2 + 34
+  const row = Math.max(...nodes.map(n => halfBox(n).y)) * 2 + 26
+  return nodes.map((_, i) => ({ x: (i % columns) * cell, y: Math.floor(i / columns) * row }))
+}
+
+// Shelf packing: each component as a block, laid left to right and wrapped onto a new row when
+// the row is full, tallest first so the rows stay tight. It is the simplest packing that fills
+// a rectangle, and with a handful of components there is nothing to gain from a better one.
+function shelve (blocks, rowWidth, gap) {
+  let x = 0
+  let y = 0
+  let shelf = 0
+  let row = []
+  const rows = []
+  const closeRow = () => { if (row.length) rows.push({ y, height: shelf, blocks: row }); row = []; }
+  for (const block of blocks) {
+    if (x > 0 && x + block.w > rowWidth) { closeRow(); x = 0; y += shelf + gap; shelf = 0 }
+    row.push({ ...block, at: { x, y } })
+    x += block.w + gap
+    shelf = Math.max(shelf, block.h)
+  }
+  closeRow()
+  // Blocks are centred in their row rather than hung from its top edge. A short block beside a
+  // tall one otherwise sits against the ceiling with its own height of dead space underneath,
+  // which is most of what made the first packing look like a page with a hole in it.
+  return rows.flatMap(r => r.blocks.map(block =>
+    ({ ...block, at: { x: block.at.x, y: block.at.y + (r.height - block.h) / 2 } })))
+}
+
+// Which shelf width to pack at. Estimating one from the total area is the textbook answer and
+// it was wrong here by a whole row: shelf waste depends on the shapes, and two tall thin
+// components plus a wide short one waste nothing like the average. With a handful of blocks
+// there is no reason to estimate — pack at every width that could change the answer, and keep
+// whichever result comes out closest to the proportions asked for. The candidate widths are
+// the cumulative ones, because a shelf only breaks differently when it crosses a block edge.
+function packed (blocks, shape, gap = 46) {
+  const widest = Math.max(...blocks.map(b => b.w))
+  const candidates = blocks.map((_, i) =>
+    Math.max(widest, blocks.slice(0, i + 1).reduce((sum, b) => sum + b.w, 0) + gap * i))
+
+  let best = null
+  for (const rowWidth of candidates) {
+    const laid = shelve(blocks, rowWidth, gap)
+    const w = Math.max(...laid.map(b => b.at.x + b.w))
+    const h = Math.max(...laid.map(b => b.at.y + b.h))
+    // Scored on the log ratio so that twice too wide and half as wide cost the same. Judging
+    // it on the difference would quietly prefer tall layouts, which are the ones that make the
+    // page scroll.
+    const off = Math.abs(Math.log((w / Math.max(1, h)) / shape))
+    if (!best || off < best.off) best = { off, laid }
+  }
+  return best.laid
+}
+
+// The pass that looks at the drawing rather than the topology: any two nodes whose *boxes*
+// overlap — circle and label together — are pushed apart along whichever axis needs the least
+// movement, repeatedly, until none do. It moves nodes by a few pixels and never reorders them,
+// so the clusters the forces found survive it.
+function separate (placed, { rounds = 160, gap = 12 }) {
+  for (let round = 0; round < rounds; round++) {
+    let moved = false
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) {
+        const a = placed[i]
+        const b = placed[j]
+        const ha = halfBox(a)
+        const hb = halfBox(b)
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        const overlapX = ha.x + hb.x + gap - Math.abs(dx)
+        const overlapY = ha.y + hb.y + gap - Math.abs(dy)
+        if (overlapX <= 0 || overlapY <= 0) continue
+        // Exactly coincident has no direction to push along; a fixed one keeps it reproducible.
+        if (dx === 0 && dy === 0) dx = 1
+        if (overlapX < overlapY) {
+          const shift = (Math.sign(dx) || 1) * overlapX / 2
+          a.x -= shift; b.x += shift
+        } else {
+          const shift = (Math.sign(dy) || 1) * overlapY / 2
+          a.y -= shift; b.y += shift
+        }
+        moved = true
+      }
+    }
+    if (!moved) break
+  }
+  return placed
+}
+
+// Every node, placed. Components are laid out one at a time, packed into rows, separated so no
+// label crosses anything, and only then scaled into the viewBox — in that order, because
+// scaling first would undo the separation and separating first would undo the packing.
+// `shape` is the proportion the packing aims for, not the size of anything: a graph packed
+// towards the page's own proportions needs the least scaling to sit on it. The box that comes
+// out is measured from the result.
+export function layout (graph, { shape = 1000 / 560, seed = 20260921 } = {}) {
+  const { nodes, edges } = graph
+  if (!nodes.length) return { width: 620, height: 260, nodes: [], edges: [] }
+
+  // Repos with no recorded relationship are gathered into one block and laid out as a grid,
+  // rather than packed as a dozen separate one-node components. Two reasons, and the second is
+  // the real one: scattered singletons are what leaves a packed layout full of holes, and a
+  // repo that talks to nothing is a claim worth making *together* — a tidy row of them is the
+  // catalogue saying plainly where it has not been filled in yet.
+  const parts = components(nodes, edges)
+  const linked = parts.filter(c => c.nodes.length > 1)
+  const alone = parts.filter(c => c.nodes.length === 1).map(c => c.nodes[0])
+
+  const blocks = [...linked, ...(alone.length ? [{ nodes: alone, edges: [], grid: true }] : [])].map((comp, i) => {
+    const pos = comp.grid ? gridOut(comp.nodes) : layoutComponent(comp, seed + i * 977)
+    const members = comp.nodes.map((node, j) => ({ ...node, x: pos[j].x, y: pos[j].y }))
+    // The block is the component's *drawn* extent, labels included, so packing leaves room for
+    // the widest name rather than for the dot under it.
+    const left = Math.min(...members.map(m => m.x - halfBox(m).x))
+    const right = Math.max(...members.map(m => m.x + halfBox(m).x))
+    const top = Math.min(...members.map(m => m.y - halfBox(m).y))
+    const bottom = Math.max(...members.map(m => m.y + halfBox(m).y))
+    return { members, left, top, w: right - left, h: bottom - top }
+  })
+
+  const pad = 34
+  const laid = packed(blocks, shape)
+  const loose = separate(laid.flatMap(block => block.members.map(m => ({
+    ...m,
+    x: m.x - block.left + block.at.x,
+    y: m.y - block.top + block.at.y,
+  }))), {})
+
+  // **The viewBox is fitted to the drawing, not the drawing to the viewBox.** Packing a graph
+  // into a rectangle chosen in advance leaves whatever the shapes did not happen to fill, and
+  // for three components of very different proportions that is a quarter of the page with
+  // nothing in it. Measuring the content instead means there is no empty space to explain: the
+  // svg is `width: 100%`, so the page scales it to fit and the height simply follows.
   //
-  // Uniform scaling is the honest choice and it wastes half the page: a force layout settles
-  // into whatever aspect its edges want, which is rarely the one the page is. So each axis is
-  // allowed to stretch past the uniform scale, up to `STRETCH`. Distances stop being exactly
-  // comparable between the two axes — acceptable, because what anyone reads off this is which
-  // repos cluster and which are far from everything, not how far in pixels. The cap is what
-  // keeps it from becoming a smear; and since only the roomier axis is ever stretched, no pair
-  // of nodes is pushed closer together than the layout put them.
-  const STRETCH = 1.6
-  const pad = 74
-  const xs = pos.map(p => p.x)
-  const ys = pos.map(p => p.y)
-  const spanX = Math.max(1, Math.max(...xs) - Math.min(...xs))
-  const spanY = Math.max(1, Math.max(...ys) - Math.min(...ys))
-  const fitX = (width - pad * 2) / spanX
-  const fitY = (height - pad * 2) / spanY
-  const uniform = Math.min(fitX, fitY)
-  const scaleX = Math.min(fitX, uniform * STRETCH)
-  const scaleY = Math.min(fitY, uniform * STRETCH)
-  const minX = Math.min(...xs)
-  const minY = Math.min(...ys)
-  const offX = (width - spanX * scaleX) / 2
-  const offY = (height - spanY * scaleY) / 2
+  // `MIN_BOX` is the one thing a fitted box still needs. A catalogue of three repos measures
+  // small, and a small viewBox stretched across the page magnifies everything in it — three
+  // enormous dots, reading as a diagram of something important rather than as a short list.
+  // Below that width the box stops shrinking and the drawing sits inside it at its own size.
+  const MIN_BOX = 620
+  const left = Math.min(...loose.map(n => n.x - halfBox(n).x))
+  const right = Math.max(...loose.map(n => n.x + halfBox(n).x))
+  const top = Math.min(...loose.map(n => n.y - halfBox(n).y))
+  const bottom = Math.max(...loose.map(n => n.y + halfBox(n).y))
+  const box = {
+    width: Math.max(MIN_BOX, right - left + pad * 2),
+    height: Math.max(MIN_BOX / 2.4, bottom - top + pad * 2),
+  }
+  const offX = (box.width - (right - left)) / 2 - left
+  const offY = (box.height - (bottom - top)) / 2 - top
 
-  const placed = separate(nodes.map((node, i) => ({
+  const placed = loose.map(node => ({
     ...node,
-    x: (pos[i].x - minX) * scaleX + offX,
-    y: (pos[i].y - minY) * scaleY + offY,
-  })), { width, height, pad })
+    x: Math.round((node.x + offX) * 10) / 10,
+    y: Math.round((node.y + offY) * 10) / 10,
+  }))
   const at = new Map(placed.map(p => [p.id.toLowerCase(), p]))
 
   return {
-    width,
-    height,
+    width: Math.round(box.width),
+    height: Math.round(box.height),
     nodes: placed,
     edges: edges.map(e => ({ ...e, from: at.get(e.a.toLowerCase()), to: at.get(e.b.toLowerCase()) })).filter(e => e.from && e.to),
   }
@@ -530,21 +677,28 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 tbody th { font-weight: 500; }
 
 /* ---- graph */
-.graph { width: 100%; height: auto; display: block; touch-action: manipulation; }
-.edge { stroke: var(--edge); stroke-width: 1.4; transition: stroke .12s, stroke-width .12s; }
+.graph { width: 100%; height: auto; display: block; touch-action: manipulation; margin: .3rem 0 .1rem; }
+.edge { stroke: var(--edge); stroke-width: 2; transition: stroke .12s, stroke-width .12s; }
 .edge.lit { stroke: var(--accent); stroke-width: 2.6; }
 .graph.picking .edge:not(.lit) { stroke: var(--edge); opacity: .32; }
 .node circle { fill: var(--raise); stroke: var(--good); stroke-width: 2; transition: fill .12s, stroke .12s; }
-.node text { fill: var(--dim); font: 500 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+/* The halo. Labels are wider than the dots they belong to, so one will eventually cross an
+   edge or a neighbour however well the layout separates them; a stroke in the page colour,
+   painted under the glyphs, means that crossing is never the thing that makes a name
+   unreadable. */
+.node text {
+  fill: var(--text); font: 500 11.5px ui-sans-serif, system-ui, sans-serif; text-anchor: middle;
+  paint-order: stroke fill; stroke: var(--bg); stroke-width: 3.5px; stroke-linejoin: round;
+}
 .node { cursor: pointer; }
 .node:hover circle, .node:focus circle { fill: var(--good); }
 .node:focus { outline: none; }
-.node:focus text { fill: var(--text); }
+.node:focus text { fill: var(--good); }
 .node.unknown circle { stroke: var(--dim); stroke-dasharray: 3 3; }
 .node.lit circle { fill: var(--accent); stroke: var(--accent); }
 .node.lit text { fill: var(--text); font-weight: 600; }
-.graph.picking .node:not(.lit):not(.near) circle { opacity: .35; }
-.graph.picking .node:not(.lit):not(.near) text { opacity: .35; }
+.graph.picking .node:not(.lit):not(.near) circle { opacity: .45; }
+.graph.picking .node:not(.lit):not(.near) text { opacity: .5; }
 .card { border-top: 1px solid var(--edge); margin-top: 1rem; padding-top: .9rem; }
 .card .role { margin: .1rem 0 .3rem; font-size: .9rem; }
 .card .stack { margin: 0 0 .5rem; font-size: .8rem; color: var(--dim); }

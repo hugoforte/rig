@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { buildGraph, layout, nodeRadius, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { buildGraph, components, layout, nodeRadius, halfBox, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -103,16 +103,72 @@ test('layout: every node lands inside the viewBox', () => {
   assert.deepEqual(stray, [])
 })
 
-test('layout: no two circles overlap', () => {
-  const placed = layout(buildGraph(sampleCatalog()))
-  const touching = []
+// The invariant is about *labels*, not circles. `texo-frontend-admin-portal-app` is nearly four
+// times the width of the dot it sits under, so a layout that only keeps circles apart produces
+// tidy dots with their names lying across each other — which is what the first one did.
+const clashes = placed => {
+  const out = []
   for (let i = 0; i < placed.nodes.length; i++) {
     for (let j = i + 1; j < placed.nodes.length; j++) {
       const [a, b] = [placed.nodes[i], placed.nodes[j]]
-      if (Math.hypot(a.x - b.x, a.y - b.y) < nodeRadius(a) + nodeRadius(b)) touching.push([a.id, b.id])
+      const [ha, hb] = [halfBox(a), halfBox(b)]
+      if (Math.abs(a.x - b.x) < ha.x + hb.x && Math.abs(a.y - b.y) < ha.y + hb.y) out.push(`${a.id}/${b.id}`)
     }
   }
-  assert.deepEqual(touching, [])
+  return out
+}
+
+test('layout: no two labels overlap', () => {
+  assert.deepEqual(clashes(layout(buildGraph(sampleCatalog()))), [])
+})
+
+test('layout: a repo with a very long name does not land on top of its neighbours', () => {
+  const long = 'texo-frontend-admin-portal-app-with-an-even-longer-name'
+  assert.deepEqual(clashes(layout(buildGraph([
+    entry('a', [{ repo: long, how: 'x' }, { repo: 'b', how: 'y' }]), entry(long), entry('b'),
+  ]))), [])
+})
+
+// Big enough that the minimum-size floor is not what decides the answer.
+const wideCatalog = () => [
+  entry('billing', [{ repo: 'orders', how: 'a' }, { repo: 'ledger', how: 'b' }]),
+  entry('orders', [{ repo: 'web', how: 'c' }, { repo: 'warehouse', how: 'd' }]),
+  entry('ledger', [{ repo: 'reporting', how: 'e' }]),
+  entry('web'), entry('warehouse'), entry('reporting'),
+  entry('pricing', [{ repo: 'catalogue-service', how: 'f' }]), entry('catalogue-service'),
+  entry('identity', [{ repo: 'gateway', how: 'g' }]), entry('gateway'),
+]
+
+test('layout: the box is measured from the drawing, not chosen in advance', () => {
+  const placed = layout(buildGraph(wideCatalog()))
+  const right = Math.max(...placed.nodes.map(n => n.x + halfBox(n).x))
+  const bottom = Math.max(...placed.nodes.map(n => n.y + halfBox(n).y))
+  // Within the padding on both axes: any more slack than that is empty page with nothing in it.
+  assert.ok(placed.width - right < 80 && placed.height - bottom < 80,
+    `drawing ends at ${right}x${bottom} in a ${placed.width}x${placed.height} box`)
+})
+
+test('layout: a drawing smaller than the floor is not blown up to fill the page', () => {
+  const placed = layout(buildGraph([entry('a', [{ repo: 'b', how: 'x' }]), entry('b')]))
+  assert.ok(placed.width >= 620, `a two-repo catalogue got a ${placed.width}-wide box`)
+})
+
+test('layout: repos with no relationships do not stretch the drawing into a strip', () => {
+  const catalog = [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'),
+    ...['p', 'q', 'r', 's', 't', 'u'].map(id => entry(id))]
+  const placed = layout(buildGraph(catalog))
+  const aspect = placed.width / placed.height
+  assert.ok(aspect > 0.5 && aspect < 3.5, `aspect was ${aspect.toFixed(2)}`)
+})
+
+test('components: repos with no path between them are separate components', () => {
+  const { nodes, edges } = buildGraph([entry('a', [{ repo: 'b', how: 'x' }]), entry('b'), entry('lonely')])
+  assert.equal(components(nodes, edges).length, 2)
+})
+
+test('components: the biggest comes first, so reading starts where the most is happening', () => {
+  const { nodes, edges } = buildGraph([entry('lonely'), entry('a', [{ repo: 'b', how: 'x' }]), entry('b')])
+  assert.equal(components(nodes, edges)[0].nodes.length, 2)
 })
 
 test('layout: an empty catalogue lays out nothing rather than dividing by zero', () => {
