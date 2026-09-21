@@ -392,7 +392,9 @@ strongest bump among them, tags the commit, and publishes notes made of the PR d
 write the description as the release note. `package.json` reads `0.0.0-development` and is not a version.
 `main` still requires a branch to be up to date before it merges, so with several PRs open you
 will be asked to update yours and wait for its checks again. A merge queue is the way out of that
-and rig cannot have one — GitHub gates them to organization-owned repositories, and this one
-belongs to a user account. Expect to rebase; do not expect a queue. README's "Releases",
+and this repository does not have one *yet* — GitHub gates them to organization-owned repositories
+and this one belongs to a user account. That is a fact about where rig lives rather than a
+permanent one: a free organization lifts it at no cost, and moving there is agreed but not done
+(hugoforte/rig#114). Until it is, expect to rebase. README's "Releases",
 `docs/adr/0004-the-pr-carries-a-bump-not-a-version.md` and
 `docs/adr/0005-a-merge-queue-replaces-the-up-to-date-rule.md`.
