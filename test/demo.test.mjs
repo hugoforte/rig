@@ -153,12 +153,10 @@ test('layout: a drawing smaller than the floor is not blown up to fill the page'
   assert.ok(placed.width >= 620, `a two-repo catalogue got a ${placed.width}-wide box`)
 })
 
-test('layout: repos with no relationships do not stretch the drawing into a strip', () => {
-  const catalog = [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'),
-    ...['p', 'q', 'r', 's', 't', 'u'].map(id => entry(id))]
-  const placed = layout(buildGraph(catalog))
+test('layout: the drawing keeps page-like proportions rather than becoming a strip', () => {
+  const placed = layout(buildGraph(wideCatalog()))
   const aspect = placed.width / placed.height
-  assert.ok(aspect > 0.5 && aspect < 3.5, `aspect was ${aspect.toFixed(2)}`)
+  assert.ok(aspect > 0.7 && aspect < 3.5, `aspect was ${aspect.toFixed(2)}`)
 })
 
 test('components: repos with no path between them are separate components', () => {
@@ -175,9 +173,34 @@ test('layout: an empty catalogue lays out nothing rather than dividing by zero',
   assert.deepEqual(layout(buildGraph([])).nodes, [])
 })
 
-test('layout: a repo with no relationships at all still lands on the page', () => {
-  const placed = layout(buildGraph([entry('lonely')]))
-  assert.equal(placed.nodes.filter(n => Number.isFinite(n.x) && Number.isFinite(n.y)).length, 1)
+test('layout: a repo with no relationships is left out of the drawing', () => {
+  assert.deepEqual(layout(buildGraph([entry('lonely')])).nodes, [],
+    'every place to put it in a relationship graph is a claim, and none of them is true')
+})
+
+test('summarize: a repo with no relationships is listed instead', () => {
+  const s = summarize({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'), entry('lonely')] })
+  assert.deepEqual(s.unlinked.map(n => n.id), ['lonely'])
+})
+
+test('renderDemo: an unconnected repo is named on the page, and stays clickable', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'), entry('lonely')] })
+  assert.match(html, /class="chip"[^>]*data-repo="lonely"/)
+})
+
+test('renderDemo: an unconnected repo still has a card to open', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'), entry('lonely')] })
+  assert.match(html, /data-for="lonely"/)
+})
+
+test('renderDemo: a catalogue where nothing is connected still renders the repos', () => {
+  const html = page({ catalog: [entry('a'), entry('b')], works: [] })
+  assert.match(html, /no relationships recorded yet/)
+})
+
+test('summarize: the counts are the whole catalogue, not just what got drawn', () => {
+  const s = summarize({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b'), entry('lonely')] })
+  assert.equal(s.counts.repos, 3)
 })
 
 // ------------------------------------------------------------------- the example

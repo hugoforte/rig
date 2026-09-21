@@ -212,23 +212,18 @@ function layoutComponent ({ nodes, edges }, seed) {
       const d = Math.max(0.01, Math.hypot(disp[i].x, disp[i].y))
       pos[i].x += (disp[i].x / d) * Math.min(d, temp)
       pos[i].y += (disp[i].y / d) * Math.min(d, temp)
-      // A weak pull to the middle, so a long chain curls up instead of stretching off into a
-      // line nothing else can be packed beside.
-      pos[i].x -= pos[i].x * 0.004
-      pos[i].y -= pos[i].y * 0.004
+      // A pull to the middle, so a chain curls up instead of stretching off into a diagonal
+      // nothing else can be packed beside. Most of this catalogue is chains and trees, which is
+      // the shape force-directed layout sprawls on worst, and the first value here was far too
+      // weak: components came out as long thin diagonals and two of them packed to a square
+      // page that had to be scrolled. Stronger is not simply better — past about 0.03 the
+      // components collapse until the drawing hits its minimum size and reads as cramped — so
+      // this sits at the compact end of the range that still leaves the clusters distinct.
+      pos[i].x -= pos[i].x * 0.008
+      pos[i].y -= pos[i].y * 0.008
     }
   }
   return pos
-}
-
-// The unconnected repos, in reading order, wrapped into a few rows. Wider than tall on
-// purpose: this block is the one most likely to end up as the last shelf, and a wide one fills
-// the bottom of the page rather than leaving a column of air beside it.
-function gridOut (nodes) {
-  const columns = Math.max(1, Math.min(nodes.length, Math.ceil(Math.sqrt(nodes.length * 2.4))))
-  const cell = Math.max(...nodes.map(n => halfBox(n).x)) * 2 + 34
-  const row = Math.max(...nodes.map(n => halfBox(n).y)) * 2 + 26
-  return nodes.map((_, i) => ({ x: (i % columns) * cell, y: Math.floor(i / columns) * row }))
 }
 
 // Shelf packing: each component as a block, laid left to right and wrapped onto a new row when
@@ -325,17 +320,17 @@ export function layout (graph, { shape = 1000 / 560, seed = 20260921 } = {}) {
   const { nodes, edges } = graph
   if (!nodes.length) return { width: 620, height: 260, nodes: [], edges: [] }
 
-  // Repos with no recorded relationship are gathered into one block and laid out as a grid,
-  // rather than packed as a dozen separate one-node components. Two reasons, and the second is
-  // the real one: scattered singletons are what leaves a packed layout full of holes, and a
-  // repo that talks to nothing is a claim worth making *together* — a tidy row of them is the
-  // catalogue saying plainly where it has not been filled in yet.
-  const parts = components(nodes, edges)
-  const linked = parts.filter(c => c.nodes.length > 1)
-  const alone = parts.filter(c => c.nodes.length === 1).map(c => c.nodes[0])
+  // **A repo with no relationships is not part of a relationship graph.** Placed in the
+  // drawing it has to go *somewhere*, and every somewhere is a claim: floating beside a cluster
+  // reads as "nearly connected to that", and a corner reads as "banished". It is neither — it
+  // is a repo the catalogue has not been filled in for. So it leaves the drawing altogether and
+  // is listed under it, where saying that plainly costs nothing and reads as the finding it is.
+  // The drawing gets the two components it actually has, and packs far better for losing them.
+  const linked = components(nodes, edges).filter(c => c.nodes.length > 1)
+  if (!linked.length) return { width: 620, height: 200, nodes: [], edges: [] }
 
-  const blocks = [...linked, ...(alone.length ? [{ nodes: alone, edges: [], grid: true }] : [])].map((comp, i) => {
-    const pos = comp.grid ? gridOut(comp.nodes) : layoutComponent(comp, seed + i * 977)
+  const blocks = linked.map((comp, i) => {
+    const pos = layoutComponent(comp, seed + i * 977)
     const members = comp.nodes.map((node, j) => ({ ...node, x: pos[j].x, y: pos[j].y }))
     // The block is the component's *drawn* extent, labels included, so packing leaves room for
     // the widest name rather than for the dot under it.
@@ -510,7 +505,10 @@ export function walkthrough (work, { workRoot = 'w', dataRoot = 'rig-data' } = {
 // ---------------------------------------------------------------- the model
 
 export function summarize ({ catalog = [], works = [], generatedAt = null, root = null, example = null } = {}) {
-  const graph = layout(buildGraph(catalog))
+  const whole = buildGraph(catalog)
+  const graph = layout(whole)
+  // Listed rather than drawn, in reading order. `graph.nodes` is only what the drawing holds.
+  const unlinked = whole.nodes.filter(n => n.degree === 0).sort((a, b) => a.id.localeCompare(b.id))
   const chosen = pickExample(works, example)
   const orgs = [...new Set(catalog.map(e => e.org).filter(Boolean))]
   const spread = works.reduce((acc, w) => {
@@ -524,12 +522,14 @@ export function summarize ({ catalog = [], works = [], generatedAt = null, root 
     root,
     orgs,
     graph,
+    whole,
+    unlinked,
     example: chosen,
     steps: chosen ? walkthrough(chosen) : [],
     counts: {
       repos: catalog.length,
-      uncatalogued: graph.nodes.filter(n => !n.catalogued).length,
-      edges: graph.edges.length,
+      uncatalogued: whole.nodes.filter(n => !n.catalogued).length,
+      edges: whole.edges.length,
       works: works.length,
       crossRepo: works.filter(w => (w.repos || []).length > 1).length,
     },
@@ -593,6 +593,19 @@ function repoCards (graph) {
   }).join('\n')
 }
 
+// The repos the drawing has nothing to say about. A quiet strip rather than a warning: a
+// catalogue is filled in as work touches each repo, so a thin entry is the normal state of one
+// nobody has needed yet — not a fault to flag. They stay clickable, because their entry is
+// still worth reading.
+function renderUnlinked (unlinked) {
+  if (!unlinked?.length) return ''
+  return `<div class="loose">
+    <h4>no relationships recorded yet <span>${unlinked.length} of them</span></h4>
+    <div class="chips">${unlinked.map(n =>
+      `<button type="button" class="chip${n.catalogued ? '' : ' unknown'}" data-repo="${esc(n.id)}">${esc(n.id)}</button>`).join('')}</div>
+  </div>`
+}
+
 function renderSteps (steps) {
   return steps.map(s => `<section class="step" data-step="${s.n}" hidden>
     <div class="cmd"><span class="prompt">$</span> ${esc(s.command)}</div>
@@ -634,6 +647,7 @@ const STYLE = `
   --bg: #12201a; --panel: #18291f; --raise: #1e3a2b; --edge: #2b4634;
   --text: #e6efe8; --dim: #8ba795;
   --accent: #e0559a; --good: #3ec98a; --amber: #e8b93a; --link: #6aa9e0;
+  --line: #4e7a61;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -641,6 +655,7 @@ const STYLE = `
     --bg: #fbfdfb; --panel: #f2f6f3; --raise: #e7efe9; --edge: #d3e0d7;
     --text: #16241c; --dim: #5d7767;
     --accent: #b5246c; --good: #1d7d55; --amber: #9a6f00; --link: #2a6aa8;
+    --line: #9dbaa8;
   }
 }
 * { box-sizing: border-box; }
@@ -678,9 +693,9 @@ tbody th { font-weight: 500; }
 
 /* ---- graph */
 .graph { width: 100%; height: auto; display: block; touch-action: manipulation; margin: .3rem 0 .1rem; }
-.edge { stroke: var(--edge); stroke-width: 2; transition: stroke .12s, stroke-width .12s; }
+.edge { stroke: var(--line); stroke-width: 2; transition: stroke .12s, stroke-width .12s; }
 .edge.lit { stroke: var(--accent); stroke-width: 2.6; }
-.graph.picking .edge:not(.lit) { stroke: var(--edge); opacity: .32; }
+.graph.picking .edge:not(.lit) { stroke: var(--line); opacity: .3; }
 .node circle { fill: var(--raise); stroke: var(--good); stroke-width: 2; transition: fill .12s, stroke .12s; }
 /* The halo. Labels are wider than the dots they belong to, so one will eventually cross an
    edge or a neighbour however well the layout separates them; a stroke in the page colour,
@@ -707,6 +722,18 @@ tbody th { font-weight: 500; }
 .edges li { font-size: .85rem; color: var(--dim); margin: .45rem 0; padding-left: .8rem; border-left: 2px solid var(--edge); }
 .dir { display: block; color: var(--good); font: 600 .72rem ui-monospace, SFMono-Regular, Consolas, monospace; margin-bottom: .1rem; }
 .hint { color: var(--dim); font-size: .8rem; margin: .6rem 0 0; text-align: center; }
+.loose { border-top: 1px solid var(--edge); margin-top: 1.1rem; padding-top: .85rem; }
+.loose h4 { margin-bottom: .5rem; }
+.loose h4 span { color: var(--dim); }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.chip {
+  font: 500 .82rem ui-sans-serif, system-ui, sans-serif; color: var(--text);
+  background: var(--raise); border: 1px solid var(--edge); border-radius: 999px;
+  padding: .22rem .7rem; cursor: pointer;
+}
+.chip:hover, .chip:focus { border-color: var(--good); outline: none; }
+.chip.lit { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.unknown { border-style: dashed; color: var(--dim); }
 
 /* ---- walkthrough */
 .stepper { display: flex; align-items: center; gap: .5rem; margin: .8rem 0 .2rem; flex-wrap: wrap; }
@@ -739,29 +766,41 @@ pre { margin: 0; font: .82rem/1.55 ui-monospace, SFMono-Regular, Consolas, monos
 const SCRIPT = `
 (function () {
   var svg = document.querySelector('.graph');
-  if (svg) {
-    var cards = document.querySelectorAll('.card');
+  var cards = document.querySelectorAll('.card');
+  var chips = document.querySelectorAll('.chip');
+  if (svg || chips.length) {
     var picked = null;
     function pick (repo) {
       picked = picked === repo ? null : repo;
-      svg.classList.toggle('picking', Boolean(picked));
       var near = {};
-      svg.querySelectorAll('.edge').forEach(function (e) {
-        var on = Boolean(picked) && (e.dataset.a === picked || e.dataset.b === picked);
-        e.classList.toggle('lit', on);
-        if (on) { near[e.dataset.a] = 1; near[e.dataset.b] = 1; }
-      });
-      svg.querySelectorAll('.node').forEach(function (n) {
-        n.classList.toggle('lit', n.dataset.repo === picked);
-        n.classList.toggle('near', Boolean(near[n.dataset.repo]));
-      });
+      if (svg) {
+        svg.classList.toggle('picking', Boolean(picked));
+        svg.querySelectorAll('.edge').forEach(function (e) {
+          var on = Boolean(picked) && (e.dataset.a === picked || e.dataset.b === picked);
+          e.classList.toggle('lit', on);
+          if (on) { near[e.dataset.a] = 1; near[e.dataset.b] = 1; }
+        });
+        svg.querySelectorAll('.node').forEach(function (n) {
+          n.classList.toggle('lit', n.dataset.repo === picked);
+          n.classList.toggle('near', Boolean(near[n.dataset.repo]));
+        });
+      }
+      chips.forEach(function (c) { c.classList.toggle('lit', c.dataset.repo === picked); });
       cards.forEach(function (c) { c.hidden = c.dataset.for !== picked; });
     }
-    svg.querySelectorAll('.node').forEach(function (n) {
-      n.addEventListener('click', function () { pick(n.dataset.repo); });
-      n.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(n.dataset.repo); }
+    // A node in the drawing and a chip under it are two ways of naming the same repo, so both
+    // go through one selection and a second click on either closes the card again.
+    // (No backticks anywhere in here: this whole script is a template literal.)
+    if (svg) {
+      svg.querySelectorAll('.node').forEach(function (n) {
+        n.addEventListener('click', function () { pick(n.dataset.repo); });
+        n.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(n.dataset.repo); }
+        });
       });
+    }
+    chips.forEach(function (c) {
+      c.addEventListener('click', function () { pick(c.dataset.repo); });
     });
   }
 
@@ -847,7 +886,8 @@ ${renderPrs(ex)}`
   repo you forget is almost always one hop from a repo you remembered.</p>
   ${renderGraph(s.graph)}
   <p class="hint">Click a repo to see what it talks to, and how.</p>
-  ${repoCards(s.graph)}
+  ${renderUnlinked(s.unlinked)}
+  ${repoCards(s.whole)}
 </section>
 
 ${walk}
