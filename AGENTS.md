@@ -390,8 +390,9 @@ Working *on* rig rather than with it: **never write a version number.** Your PR 
 asks only whether it names one. The merge collects the PRs since the previous tag, takes the
 strongest bump among them, tags the commit, and publishes notes made of the PR descriptions, so
 write the description as the release note. `package.json` reads `0.0.0-development` and is not a version.
-`main` has a merge queue, so your branch is never "out of date" and never needs rebasing before
-it merges — GitHub tests it against `main` plus everything ahead of it in the queue. A landing is
-a merge group, and a release is what that group contained. README's "Releases",
+`main` still requires a branch to be up to date before it merges, so with several PRs open you
+will be asked to update yours and wait for its checks again. A merge queue is the way out of that
+and rig cannot have one — GitHub gates them to organization-owned repositories, and this one
+belongs to a user account. Expect to rebase; do not expect a queue. README's "Releases",
 `docs/adr/0004-the-pr-carries-a-bump-not-a-version.md` and
 `docs/adr/0005-a-merge-queue-replaces-the-up-to-date-rule.md`.

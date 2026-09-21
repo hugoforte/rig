@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted, 2026-09-20. Stage 2 of hugoforte/rig#105, following ADR 0004.
+Accepted 2026-09-20 as stage 2 of hugoforte/rig#105, following ADR 0004. **Blocked on 2026-09-21:
+GitHub will not enable a merge queue on this repository.** Everything below stands as the
+decision, and none of it is reachable yet — see "Why this is not on" at the end, which is the
+only part written after the attempt.
 
 ## Context
 
@@ -112,3 +115,45 @@ commit-to-pull-request association `release.yml` reads the set by does not exist
   which is the batching ADR 0004 predicted and needs no further decision.
 - The ruleset change is not a pull request. It is repository configuration, applied separately,
   and it is the one part of this work that cannot be reviewed as a diff.
+
+## Why this is not on
+
+Written 2026-09-21, after trying to apply it. The ruleset update was refused:
+
+```
+422 Validation Failed — Invalid rule 'merge_queue':
+```
+
+The message names nothing, and the reason is not in the rule. GitHub's own gated-features data
+says: *"Pull request merge queues are available in any public repository **owned by an
+organization**, or in private repositories owned by organizations using GitHub Enterprise
+Cloud."* `hugoforte/rig` is public and owned by a **user account**, so it meets one of the two
+conditions and the API refuses the rule.
+
+This was not checked before the stage was designed, and the cost of that is this section.
+Nothing was half-applied — the ruleset PUT is atomic, so `strict_required_status_checks_policy`
+is still `true` and `main` is exactly as it was.
+
+What survives, and what does not:
+
+- **The up-to-date rule stays on**, so the N²/2 serialisation this ADR exists to remove is still
+  there. That is the whole loss, and it is the throughput half.
+- **`test` being a required check stands.** That was applied on its own and closed a real hole —
+  before it, the matrix suite was advisory and a red pull request could merge.
+- **The `merge_group` triggers stay.** They are inert without a queue and cost nothing, and
+  removing them would guarantee the stall they exist to prevent on the day one is switched on.
+- **Decision 87's guard is not lost, and this ADR overstated the dependency.** One file per
+  migration made the two-branches-same-number case a semantic conflict rather than a textual
+  one, which needs *something* to test a change in the state it lands in. A merge queue is one
+  such thing; **the up-to-date rule is the other**, and it is the one that is on. A second
+  migration branch must update onto the first before it can merge, and the contiguity test then
+  fails on its own pull request. The guard holds today.
+
+Three ways forward, none of them free:
+
+1. **Move the repository to an organization.** The only route to a native queue, and a change to
+   where the project lives rather than to how it builds.
+2. **A third-party queue** — Mergify, Aviator, Trunk — which run as GitHub Apps and do not have
+   GitHub's ownership gate. A service and a dependency for a repository that has neither.
+3. **Leave it.** With one author and rarely two open pull requests, the serialisation costs
+   almost nothing today. The reason to act is the fleet this work anticipated, not the present.
