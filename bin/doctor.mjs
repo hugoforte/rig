@@ -145,6 +145,8 @@ function rootFindings (root) {
 //
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
+//   legacyLocalFile   { home } when that path is the one inside the tool tree, else null —
+//                     `home` being where it belongs instead
 //   strayOrgKeys      keys of the org half left behind in the machine file
 //   selection         { error } — why no data root could be resolved, or null when one was.
 //                     The only field here that is a *failure* to gather rather than a thing
@@ -179,6 +181,14 @@ export function doctorFindings (snap = {}) {
   if (!snap.setUp) {
     out.push(warn(`not set up — no ${snap.localFile}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`))
     return out
+  }
+
+  // A note rather than a warning: the old location still works, and warnings here are for
+  // contradictions. What makes it worth saying at all is that it stops working silently —
+  // rig installed from the registry owns the directory it runs from and replaces it on every
+  // upgrade, so a machine file left there goes with it, taking the roots and the identities.
+  if (snap.legacyLocalFile) {
+    out.push(note(`${snap.localFile} is beside the tool — move it to ${snap.legacyLocalFile.home}, where an upgrade cannot delete it`))
   }
 
   for (const key of snap.strayOrgKeys || []) {

@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { scenario, step, previousRelease, previousReleaseTag, releaseTags, readJson, strip } from './harness.mjs'
+import { scenario, step, previousRelease, previousReleaseTag, releaseTags, readJson, strip, copyTool } from './harness.mjs'
 import { dataAnchorFile, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 const ORG = 'e2e-acme'
@@ -292,5 +292,90 @@ scenario('splitting a data root', {
     assert.match(r.out, /one work cannot span two data roots/)
     assert.ok(!fs.existsSync(path.join(m.dataRoot, 'catalog', ORG, 'e2e-ledger.md')),
       'and no entry for it was drafted back into this root')
+  }),
+])
+
+// ------------------------------------------- the machine file survives a packaged upgrade
+
+// The regression decision 92 exists to prevent, and the only shape of test that can see it:
+// an installation is set up, the directory the tool runs from is **replaced wholesale** — what
+// `npm i -g @hugoforte/rig@latest` does to a package it owns — and the machine is asked
+// whether it still knows anything. With `rig.local.json` beside `package.json` the answer was
+// no, silently, with no evidence left that there had ever been a config.
+//
+// `localConfig: false` on purpose: `RIG_LOCAL_CONFIG` would pin the file somewhere the upgrade
+// cannot reach and the journey would pass without testing anything. The harness pins `HOME`,
+// so the default lands under the temp machine's own home.
+scenario('a packaged upgrade replaces the tool, and the machine keeps its config', {
+  prefix: 'e2e-upgrade-',
+  localConfig: false,
+  github: { auth: 'ok', repos: {} },
+}, [
+  step('init writes the machine file under the home directory, not into the tool', m => {
+    const r = m.rig(['init', '--data-root', m.dataRoot, '--work-root', m.workRoot,
+      '--orgs', ORG, '--tracker', `${ORG}=none`, '--email', 'hugo@e2e.invalid'])
+    assert.equal(r.code, 0, r.out)
+
+    m.homeFile = path.join(m.env.USERPROFILE, '.rig', 'rig.local.json')
+    assert.ok(fs.existsSync(m.homeFile), `init wrote no ${m.homeFile}`)
+    assert.ok(!fs.existsSync(path.join(m.install, 'rig.local.json')),
+      'and nothing was written where an upgrade would delete it')
+    assert.ok(samePath(readJson(m.homeFile).dataRoot, m.dataRoot))
+  }),
+
+  step('a work exists, so there is something to lose', m => {
+    const r = m.rig(['new', 'e2e-upgrade-work', '--title', 'Before the upgrade', '--no-ticket'])
+    assert.equal(r.code, 0, r.out)
+  }),
+
+  step('npm replaces the directory the tool runs from', m => {
+    // Removed and written again rather than copied over: an upgrade does not merge into what
+    // was there, which is the whole reason a config living there does not survive one.
+    fs.rmSync(m.install, { recursive: true, force: true, maxRetries: 5 })
+    copyTool(m.install)
+    assert.ok(!fs.existsSync(path.join(m.install, 'rig.local.json')),
+      'the tool directory is genuinely new')
+  }),
+
+  step('the installation still knows its roots, its work and its identity', m => {
+    const r = m.rig(['list'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /e2e-upgrade-work/, 'the work survived the upgrade')
+    assert.ok(samePath(readJson(m.homeFile).dataRoot, m.dataRoot), 'and so did the data root it lives in')
+
+    const d = m.rig(['doctor'])
+    assert.doesNotMatch(d.out, /not set up/, 'an upgraded installation is not a fresh one')
+  }),
+])
+
+// ------------------------------------------ an installation made before the file moved
+
+// The other half of decision 92: the tool tree is still *read*, so a clone install that
+// predates the move keeps working with nothing done to it — and is told where the file
+// belongs, once, before an upgrade is the thing that tells it.
+scenario('a machine file left beside the tool is read, and named by doctor', {
+  prefix: 'e2e-legacy-config-',
+  localConfig: false,
+  github: { auth: 'ok', repos: {} },
+}, [
+  step('init, then the file is put back where an older rig would have written it', m => {
+    assert.equal(m.rig(['init', '--data-root', m.dataRoot, '--work-root', m.workRoot,
+      '--orgs', ORG, '--tracker', `${ORG}=none`, '--email', 'hugo@e2e.invalid']).code, 0)
+
+    const home = path.join(m.env.USERPROFILE, '.rig', 'rig.local.json')
+    fs.cpSync(home, path.join(m.install, 'rig.local.json'))
+    fs.rmSync(home)
+  }),
+
+  step('the installation reads it and works', m => {
+    const r = m.rig(['list'])
+    assert.equal(r.code, 0, r.out)
+    assert.doesNotMatch(r.out, /not set up/)
+  }),
+
+  step('and doctor names it, without counting it as a problem', m => {
+    const r = m.rig(['doctor'])
+    assert.match(r.out, /is beside the tool — move it to .*\.rig/)
+    assert.equal(r.code, 0, `a location that still works is not a failure:\n${r.out}`)
   }),
 ])

@@ -10,7 +10,7 @@ how to *use* it.
 | | |
 |---|---|
 | `C:\rig` (this repo) | **The tool.** Committed, generic, public. |
-| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
+| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named in `~/.rig/rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
 | `C:\w` (the work root) | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
 
 Never put durable prose in the work root. Never put anything that names a real org, repo or

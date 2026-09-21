@@ -27,7 +27,10 @@ Three things are worth a minute before you go further: where rig puts what, how 
 ```mermaid
 flowchart LR
   subgraph tool["the tool — committed, generic, public"]
-    A["rig.local.json<br/>gitignored: the roots,<br/>identities, secrets sources"]
+    A["bin/, prompts/, templates/<br/>the command itself,<br/>installed or cloned"]
+  end
+  subgraph machine["this machine — not committed anywhere"]
+    M["~/.rig/rig.local.json<br/>the roots, identities,<br/>secrets sources"]
   end
   subgraph data["the data root — committed, private"]
     B["rig.json<br/>orgs, trackers,<br/>freshness policy"]
@@ -38,13 +41,14 @@ flowchart LR
     E[".mirrors/org/repo.git<br/>the bare clones<br/>worktrees are cut from"]
     F["work-id/repo/<br/>worktrees, all on<br/>one shared branch"]
   end
-  tool -->|names it| data
+  tool -->|reads it| machine
+  machine -->|names it| data
   data -->|assembles it| work
 ```
 
 Everything committed is worth keeping. Everything under the work root can be deleted tonight. That split is the whole design; [DESIGN.md](./DESIGN.md) says why, and its §3 has the layout path by path.
 
-rig reads its config from two files and no others: `rig.json` in the data root is the org half, committed and shared (orgs, trackers, the freshness policy, the record-format stamp); `rig.local.json` beside the tool is the machine half, gitignored (the roots, identities, secrets sources, a per-machine freshness override). The data root is never the tool's own checkout — knowledge inside a public tree is one `git add` from a leak, and `rig doctor` reports that layout as not set up.
+rig reads its config from two files and no others: `rig.json` in the data root is the org half, committed and shared (orgs, trackers, the freshness policy, the record-format stamp); `~/.rig/rig.local.json` is the machine half (the roots, identities, secrets sources, a per-machine freshness override). It sits under your home directory rather than beside the tool because an installation may own the directory it runs from and replace it on upgrade, which would take your roots and identities with it; a copy left beside the tool by an older install is still read, and `rig doctor` says where it belongs. The data root is never the tool's own checkout — knowledge inside a public tree is one `git add` from a leak, and `rig doctor` reports that layout as not set up.
 
 ### A work's life
 
@@ -133,7 +137,7 @@ rig init --data-root C:\rig-data --work-root C:\w --orgs your-org --tracker your
 rig doctor
 ```
 
-`init` creates the data root as a git checkout with a first commit, writes `rig.local.json` in the clone beside `package.json` (gitignored: the paths, your identity per org), creates the work root, and sets `core.longpaths` so deep `node_modules` paths do not break. `your-org` is a GitHub org or user; `--tracker your-org=none` means no ticket system yet. Re-running `init` is safe. `doctor` should come back clean. Without `--work-root`, `init` picks `D:\w` when a D: drive exists and `~\w` otherwise.
+`init` creates the data root as a git checkout with a first commit, writes `~/.rig/rig.local.json` (the paths, your identity per org), creates the work root, and sets `core.longpaths` so deep `node_modules` paths do not break. `your-org` is a GitHub org or user; `--tracker your-org=none` means no ticket system yet. Re-running `init` is safe. `doctor` should come back clean. Without `--work-root`, `init` picks `D:\w` when a D: drive exists and `~\w` otherwise.
 
 ```powershell
 rig new my-first-work --title "Trying rig"     # no prompt; a brief may be piped in
@@ -159,7 +163,7 @@ The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`
 
 One data root is the normal case. Keeping personal, open-source and employer knowledge apart needs more than one, which is [More than one data root](#more-than-one-data-root) below.
 
-`RIG_LOCAL_CONFIG` names `rig.local.json` somewhere other than beside the tool — for a second installation sharing one checkout, or for a test — and a relative `dataRoot` inside it is read against that file's own directory. A key belonging to the org half is ignored in the machine file, and `rig doctor` says so. There is no override for the tool checkout: freshness and `rig update` measure the code that is running, and one that could say otherwise would point `update` at someone else's clone.
+`RIG_LOCAL_CONFIG` names `rig.local.json` somewhere other than `~/.rig` — for a second installation sharing one checkout, or for a test — and a relative `dataRoot` inside it is read against that file's own directory, which is the reason to prefer an absolute one in a file you might move. A key belonging to the org half is ignored in the machine file, and `rig doctor` says so. There is no override for the tool checkout: freshness and `rig update` measure the code that is running, and one that could say otherwise would point `update` at someone else's clone.
 
 ### Tickets
 

@@ -20,7 +20,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, inToolTree, homeConfigFile, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -3075,6 +3075,9 @@ function doctorSnapshot () {
     setUp: true,
     localFile,
     configFileExists: exists(localFile),
+    // Only when it is the tool tree's copy: an installation carrying the one location a
+    // packaged upgrade deletes should hear so before the upgrade, not after.
+    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile() } : null,
     // Asked of the files, not carried on `cfg`: which keys the org half owns is
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
