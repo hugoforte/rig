@@ -3,9 +3,10 @@
 ## Status
 
 Accepted 2026-09-20 as stage 2 of hugoforte/rig#105, following ADR 0004. **Blocked on 2026-09-21:
-GitHub will not enable a merge queue on this repository.** Everything below stands as the
-decision, and none of it is reachable yet — see "Why this is not on" at the end, which is the
-only part written after the attempt.
+GitHub will not enable a merge queue on this repository** — and the block is **dissolvable and not
+priced in, as the same day established** (hugoforte/rig#114). Everything below stands as the
+decision, and none of it is reachable yet. The two sections written after the attempt are "Why this
+is not on" and "Revisited", both at the end; read them in that order.
 
 ## Context
 
@@ -157,3 +158,43 @@ Three ways forward, none of them free:
    GitHub's ownership gate. A service and a dependency for a repository that has neither.
 3. **Leave it.** With one author and rarely two open pull requests, the serialisation costs
    almost nothing today. The reason to act is the fleet this work anticipated, not the present.
+
+**"None of them free" is wrong about the first route**, as the next section establishes. The rest
+of this section stands.
+
+## Revisited: the gate is ownership, and leaving it costs nothing
+
+Written 2026-09-21 under hugoforte/rig#114, which went looking for the price of route 1 above and
+did not find one. "None of them free" was wrong, and so is every restatement of this block as
+permanent.
+
+- **The gate carries no plan condition.** The gated-features file quoted above conditions merge
+  queues on ownership and visibility and on nothing else. **GitHub Free for organizations is $0 a
+  month**, with unlimited public repositories and a full feature set.
+- **Actions stays free.** Public repositories on standard GitHub-hosted runners are unmetered; the
+  2,000 minutes a month a free organization advertises is the *private*-repo allowance and never
+  applies here. The Windows matrix job is not at risk.
+- **Every feature `main` depends on survives**, rulesets included — checked one at a time against
+  `data/reusables/gated-features/`. Multiple pull request reviewers are *gained*, since free user
+  accounts do not have them.
+- **Converting the `hugoforte` account itself is not a route.** GitHub deprecated user-to-org
+  conversion on GitHub.com in January 2026, and its side effects were severe regardless — the
+  account could never be signed into again and every commit stopped being linked to it. The
+  supported shape is a new organization with the repository transferred into it.
+
+**Decision: create a free organization and transfer this repository into it.** That does not turn
+the queue on. The throughput case has not changed and is still worth nothing at one pull request in
+flight, exactly as measured above; what the move removes is the reason the queue *could not* be
+turned on. It is being done now rather than later because the packaging work (hugoforte/rig#16)
+publishes an install address containing the owner, and `raw.githubusercontent.com` URLs never
+redirect — so the cost of moving grows with every installation made in between. The transfer is its
+own change and is not part of this ADR.
+
+One thing that transfer must not miss: **OAuth app access restrictions are on by default in a new
+organization, and `gh` is an OAuth app.** rig shells out to `gh` for every ticket, pull request and
+catalogue operation, and it will fail without naming this as the cause.
+
+A method note, because it generalises past this question: **the rendered GitHub docs pages cannot
+be trusted about gating.** Availability notes are reusables that the HTML-to-markdown conversion
+drops, so a gated feature reads as ungated. Ask the source instead —
+`gh api repos/github/docs/contents/data/reusables/gated-features/<feature>.md`.

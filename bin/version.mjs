@@ -34,10 +34,11 @@ export const unrunnableHook = migration => Object.keys(migration).find(k => !HOO
 // migration is adding a file and touching nothing else. What that gives up is git telling two
 // pull requests they collided: two branches that each add an `0004-` merge cleanly, because
 // they are different files. What catches it instead is `test/version.test.mjs`, which asserts
-// the numbers are unique and contiguous — a *semantic* conflict rather than a textual one, and
-// so exactly the kind `main`'s merge queue exists to catch, by running the suite against the
-// combined state before either lands (ADR-0005). The guard moved from git to the tests; it did
-// not go away.
+// the numbers are unique and contiguous — a *semantic* conflict rather than a textual one, so
+// catching it needs something that runs the suite against the state a change lands in. `main`'s
+// up-to-date rule is that something: the second branch must update onto the first, and the test
+// then fails on its own pull request. A merge queue would do the same across a group, and `main`
+// does not have one (ADR-0005). The guard moved from git to the tests; it did not go away.
 //
 // Loaded with a top-level await so that everything downstream stays synchronous. There is no
 // synchronous `import` in ESM, and `MAJOR` is read at module scope all over this tool.
