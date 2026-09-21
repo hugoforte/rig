@@ -271,6 +271,18 @@ rig list --json > payload.json   # once
 rig dash --from payload.json --org your-org --since 30d
 ```
 
+**Explaining rig to other people.** `rig demo` renders one self-contained interactive page that makes the case for rig *on the repos of whoever is watching*: the `talks_to` graph drawn from the catalogue, clickable to see what each relationship actually is — with the repos nothing is recorded about listed underneath rather than floating in it — and then one real work from the records walked through command by command — `new`, each `attach`, the design gate, `pr`, `close` — with what appeared in the work root and what was committed to the data root beside every step. It ends on that work's own pull-request timings, which are the argument that the durable half outlives the branch.
+
+Nothing in it is a mock-up. Every command, path, branch, base and PR number comes out of a record, which is the only version of this that does not start disagreeing with the tool the week after it is written. The example work is the one with the most repos that actually merged, or name another with `--example <work-id>`.
+
+Unlike `rig dash`, the page is written **into the data root** — `demo/index.html` by default, so it is committed and pushed with everything else, and `--out` puts it elsewhere. The difference is the input: the dashboard renders live PR state and is wrong by the next merge, while this reads the catalogue and the terminal facts of closed work, which cannot change again. It is a generated file, so the usual rule applies — never edit it, re-render it.
+
+```powershell
+rig demo                          # this data root, into <data root>/demo/index.html
+rig demo --data employer --no-open --out C:	mp
+ig.html
+```
+
 **Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`.
 
 ### Staying up to date

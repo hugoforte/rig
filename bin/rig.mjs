@@ -14,6 +14,7 @@ import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, wri
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
+import { renderDemo, summarize as demoModel } from './demo.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
@@ -346,7 +347,10 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close', 'backfill'])
+// `demo` is here because it writes into the data root by default, so it must fast-forward
+// before it reads: a page rendered from stale records and committed on top of them would be
+// wrong twice. It is the only member that changes no work.
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close', 'backfill', 'demo'])
 
 // Before a mutating command reads anything. rig pushes the data root but never pulled it, so
 // a second machine read stale records and wrote on top of them. Fast-forward only: a data
@@ -2087,6 +2091,46 @@ cmds.dash = ({ flags }) => {
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
+// The demo page, rendered from whichever data root is in hand. Unlike `dash` — which renders
+// live PR state and so writes to the temp root, being a picture of a moment — everything this
+// reads is durable: the catalogue, and the closed records whose facts are terminal. That is
+// what makes it a thing a data root can hold rather than a rendering that would be a lie by
+// the afternoon, and why the default output is `demo/index.html` inside the root itself.
+//
+// It is still a generated file, and rule 2 covers generated files: never edit one. `rig demo`
+// is the only writer of that path.
+cmds.demo = ({ flags }) => {
+  sayCurrentRoot()
+  const root = dataRoot()
+  const works = listWorkIds(root).map(id => readJson(recordFile(id, root)))
+  const catalog = loadCatalog(root)
+  if (!catalog.length) die(`no catalogue in ${root} — there is nothing to show. \`rig attach\` drafts an entry the first time it sees a repo.`)
+
+  const model = demoModel({
+    catalog,
+    works,
+    generatedAt: new Date().toISOString().replace('T', ' ').slice(0, 16) + 'Z',
+    root: where().name,
+    example: typeof flags.example === 'string' ? flags.example : null,
+  })
+
+  // `--out` is for a render you want somewhere else — a scratch path, a USB stick, a machine
+  // you are presenting from. The default keeps it beside the knowledge it was made from, and
+  // the data root's own commit sweeps it up like anything else.
+  const out = typeof flags.out === 'string' ? path.resolve(flags.out) : path.join(root, 'demo', 'index.html')
+  fs.mkdirSync(path.dirname(out), { recursive: true })
+  writeText(out, renderDemo(model))
+  ok(`demo at ${out}`)
+  say(C.dim(`  ${model.counts.repos} repos · ${model.counts.edges} relationships · ${model.steps.length} steps` +
+    `${model.example ? ` · walking through ${model.example.id}` : ''}`))
+  if (insideDir(out, root)) commitAs('', path.relative(root, out).replace(/\\/g, '/'))
+
+  if (flags['no-open']) return
+  const [cmd, args] = OPENERS[process.platform] || ['xdg-open', []]
+  const r = onPath(cmd) ? run(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
+  if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
+}
+
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -3112,6 +3156,11 @@ cmds.help = () => {
   rig dash [--org o] [--since w]  render throughput and cycle time as one HTML page
        [--from payload.json]       render a payload captured earlier, instead of looking up
        [--quick]                   look nothing up; recorded work still renders in full
+       [--no-open]                 write the page and print the path, open nothing
+  rig demo [--example <work>]     render one interactive page explaining rig on this data
+                                  root's own repos: the talks_to graph, and a real work
+                                  walked through command by command
+       [--out path.html]           write it elsewhere; the default is <data root>/demo/index.html
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
