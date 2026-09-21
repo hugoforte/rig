@@ -4,18 +4,46 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  MIGRATIONS, MAJOR, toolVersion, majorOf, dataMajor, stampUnreadable, unrunnableHook, pendingMigrations, writesBlocked, applyMigrations,
+  MIGRATIONS, MIGRATION_FILES, migrationNumber, MAJOR, FORMAT_STAMP, majorOf, dataMajor, stampUnreadable, unrunnableHook, pendingMigrations, writesBlocked, applyMigrations,
 } from '../bin/version.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-test('the major comes from the migrations, not from whatever package.json says', () => {
-  assert.equal(toolVersion({ version: '9.3.1' }), `${MAJOR}.3.1`)
+test('the stamp is the record format and carries nothing else', () => {
+  assert.equal(FORMAT_STAMP, `${MAJOR}.0.0`)
 })
 
-test('package.json agrees with the derived major', () => {
+test('the migrations are numbered uniquely and contiguously from one', () => {
+  // This is the guard that replaced git's. One file per migration means two branches that each
+  // add an `0004-` merge cleanly — different files, no textual conflict — and land two
+  // migrations claiming the same record format, with `MAJOR` jumping by two. Nothing else would
+  // notice. `main`'s merge queue runs this suite against the combined state before either
+  // lands, which is what makes a semantic conflict as blocking as a textual one (ADR 0005).
+  const numbers = MIGRATION_FILES.map(migrationNumber)
+  assert.deepEqual(numbers, numbers.map((_, i) => i + 1),
+    `bin/migrations is numbered ${numbers.join(', ')} — two migrations sharing a number is two pull requests that each added one`)
+})
+
+test('every migration names itself, because the name is what rig reports as pending', () => {
+  for (const m of MIGRATIONS) assert.equal(typeof m.name, 'string', JSON.stringify(m))
+})
+
+test('what a data root is stamped with is readable as its record format', () => {
+  assert.equal(majorOf(FORMAT_STAMP), MAJOR)
+})
+
+test('a stamp from before the format was derived still reads as its format', () => {
+  // Data roots in the wild carry a real minor and patch, from when the stamp was the whole
+  // version of the rig that migrated them. Both shapes have to keep meaning the same thing,
+  // which is why moving to the derived stamp needs no migration.
+  assert.equal(majorOf(`${MAJOR}.7.0`), MAJOR)
+})
+
+test('package.json carries no version for anything to read', () => {
+  // ADR 0004: the tag is the version. A value here that parsed as one would invite something
+  // to believe it, and the first believer was the record-format stamp.
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
-  assert.equal(majorOf(pkg.version), MAJOR, 'bump package.json when you add a migration')
+  assert.equal(majorOf(pkg.version), null, 'package.json must not look like a version')
 })
 
 test('a data root written before stamping existed is record format 0', () => {

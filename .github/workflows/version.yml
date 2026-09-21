@@ -1,12 +1,28 @@
-# The PR carries its own version: this check fails until `package.json` says what the PR will
-# land as, so the merge to `main` only has to tag it. Runs on label changes too — a label is
-# how a PR overrides the bump its branch prefix implies.
+# The PR names a bump. This check asks whether it named one, and nothing else — a question
+# about this pull request alone, so no other merge can turn it red (ADR 0004). What the PR
+# lands as is not asked here: that is a fold over every PR in the release, and a branch cannot
+# see the other branches. The merge works it out.
+#
+# Runs on label changes too — a label is how a PR overrides the bump its branch prefix implies.
+#
+# It also runs on `merge_group`, and there it has nothing to ask. That is not a preference:
+# GitHub keeps one list of required status checks and applies it to both the pull request and
+# the merge group, so a required check that never reports against the group's ref leaves every
+# entry stalled until the queue's timeout ejects it. There is no such thing as a PR-only
+# required check. Since each pull request answered this question on the way in — and `main`
+# admits no bypass actors, so there is no other way in — the group has nothing left to answer,
+# and the honest thing is to say so in one line rather than to re-derive it.
+#
+# Re-folding the bumps over the group was considered and is not possible here anyway: the queue
+# builds *new* commits on a temporary branch, so the commit-to-pull-request association the
+# release reads the set by does not exist for them (ADR 0005).
 
 name: version
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
 
 permissions:
   contents: read
@@ -16,20 +32,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # No history and no tags: the question is about the branch name and the labels, both of
+      # which arrive in the event. Only `bin/release.mjs` is needed from the checkout.
       - uses: actions/checkout@v4
-        with:
-          # The whole history, for the tags: the next version is computed from the latest
-          # release, and a shallow clone carries none of them.
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: the version this PR lands as
+      - name: the bump this PR asks for
+        if: github.event_name == 'pull_request'
         env:
           BRANCH: ${{ github.head_ref }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        run: |
-          # The newest release in the repo, not the newest one this branch contains: a branch
-          # cut before a release must still land above it.
-          tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1)
-          node bin/release.mjs check --tag "$tag" --branch "$BRANCH" --labels "$LABELS"
+        run: node bin/release.mjs check --branch "$BRANCH" --labels "$LABELS"
+      - name: a merge group has nothing to ask
+        if: github.event_name == 'merge_group'
+        run: echo 'every pull request in this group named its bump on the way in — this check reports so the queue is not left waiting for it'

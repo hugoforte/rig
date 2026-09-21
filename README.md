@@ -277,28 +277,39 @@ rig dash --from payload.json --org your-org --since 30d
 
 Nothing pulls a checkout for you, so rig measures its own freshness — how far the checkout is behind its remote — and prints one dim line when it is behind. `rig doctor` fetches and reports; `rig update` fast-forwards the tool and the data root, runs pending record migrations, and never merges or rebases. The major version is the record format, so an older rig refuses to write into a data root a newer one has migrated, and still reads it — see [ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md).
 
-`rig doctor` also names the release a checkout stands on, and the distance past it when it is past one:
+`rig doctor` also names the release a checkout stands on, and the distance past it when it is past one. That mark *is* the version, so it is said once and no number is repeated beside it:
 
 ```
-· rig 1.1.0 at C:\rig (v1.1.0)
-· rig 1.1.0 at C:\rig (3 past v1.1.0, abc1234)
+· rig v1.1.0 at C:\rig
+· rig 3 past v1.1.0, abc1234 at C:\rig
 ```
 
 ### Releases
 
-Every merge to `main` is a release, or says why it is not. The version is decided on the pull request, not after it: a required check computes what the PR lands as and fails until `package.json` says so, naming the value to write. The merge then tags that commit and publishes the notes, which are the descriptions of the pull requests since the previous tag.
+**You never write a version number.** A pull request names a *bump*; the release works out the version from the bumps it contains.
 
-| the PR | the bump |
+| the pull request | the bump |
 |---|---|
 | a `feat/…` branch — what `rig new --type feat` writes | minor |
 | a `fix/…` branch | patch |
+| a `docs/`, `chore/`, `test/`, `ci/` or `refactor/` branch | none |
 | a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
-| a migration added to `MIGRATIONS` | `MAJOR.0.0`, whatever the PR asked for |
+| a PR that adds a migration | `MAJOR.0.0`, whatever the PR asked for |
 
-The major is never asked for; it is the record format ([ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md)). Why the bump lives in the PR rather than in a bot commit on `main` is [ADR 0003](docs/adr/0003-the-pr-carries-its-own-version.md).
+So branching the way `rig new` already branches is the whole contribution. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
+
+**The check asks one question, about your PR alone: does it name a bump?** Nothing another pull request does can change that answer, so a merge elsewhere never turns your check red and never sends you back to rebase. That is the rule the whole design obeys: a pull request is only ever gated on questions about itself.
+
+**Every merge to `main` is a release, or says why it is not.** The merge workflow collects the pull requests since the previous tag, reads a bump from each, takes the strongest, and applies it to that tag. Then it tags the commit and publishes the notes, which are those pull requests' descriptions.
+
+`main` has a merge queue, so a landing is a whole merge group rather than one pull request, and a release is whatever that group contained. You do not queue anything by hand: merge as usual and GitHub tests your change against `main` plus everything ahead of it in the queue, which is the state it will actually land in. That is why there is no "branch is out of date" to fix — [ADR 0005](docs/adr/0005-a-merge-queue-replaces-the-up-to-date-rule.md) has the reasoning, including the measurements behind the group size.
+
+The version therefore exists in exactly one place — the tag — and is worked out at the one moment the whole set of changes is known. `package.json` reads `0.0.0-development` and is not a version; a checkout names itself from the tag, which is what `rig doctor` prints.
+
+The major is never asked for; it is the record format ([ADR 0002](docs/adr/0002-the-major-version-is-the-record-format.md)). Why the version is worked out at the release rather than carried by the branch is [ADR 0004](docs/adr/0004-the-pr-carries-a-bump-not-a-version.md). It reverses one decision in [ADR 0003](docs/adr/0003-the-pr-carries-its-own-version.md) — where the version is computed — and leaves the rest of it standing: the bump signal, the notes, and the major.
 
 ```
-node bin/release.mjs check --tag v1.0.0 --branch feat/x --labels release:none
+node bin/release.mjs check --branch feat/x --labels release:none
 ```
 
 ### Contributing

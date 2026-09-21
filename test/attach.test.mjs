@@ -139,7 +139,10 @@ test('detach removes the worktree and the record, and prunes the mirror', () => 
   // refuses that; --force is what carries it through to the prune.
   assert.equal(rig(['detach', 'orders', '--work', 't1', '--force']).code, 0)
   assert.equal(record().repos.length, 1)
-  assert.doesNotMatch(gitMust(mirrorOf('orders'), 'worktree', 'list'), /t1/)
+  // The work id as a *path segment*, not as a substring: `mkdtemp` hands out names like
+  // `rig-attach-t12cTO`, and a bare /t1/ fails on the temp directory rather than on a worktree
+  // that is still there. Flaky on the entropy of a directory name is still flaky.
+  assert.doesNotMatch(gitMust(mirrorOf('orders'), 'worktree', 'list'), /[\\/]t1[\\/]/)
 })
 
 test('detach refuses uncommitted work, and says how to get past it', () => {
@@ -172,7 +175,7 @@ test('close removes every worktree and the work folder once the work is pushed',
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /removed worktree billing/)
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
-  assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /t1/)
+  assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /[\\/]t1[\\/]/)
   assert.equal(record().closedAt !== undefined, true, 'closing records the gate and no status')
   // The mirror outlives the work: it is a cache under the work root, not part of the work.
   assert.ok(fs.existsSync(mirrorOf('billing')))

@@ -10,7 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
-import { MAJOR, toolVersion, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
+import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
@@ -232,10 +232,8 @@ const recordFile = (id, root = dataRoot()) => path.join(recordDir(id, root), 'wo
 const contextFile = id => path.join(recordDir(id), 'context.md')
 const planFile = id => path.join(recordDir(id), 'rollout-testing-plan.md')
 
-// ----------------------------------------------------- version & freshness
+// ----------------------------------------------- record format & freshness
 
-const packageFile = path.join(RIG_ROOT, 'package.json')
-const version = () => toolVersion(exists(packageFile) ? readJson(packageFile) : {})
 // rig.json as it sits on disk. `config()` merges it with the machine's file; the record
 // format is a property of the data root alone, so the gate reads it unmerged.
 const repoConfigJson = () => readOrg(where()) ?? {}
@@ -427,7 +425,7 @@ function checkWriteGate () {
 function writeOrgMigrations (loc = where()) {
   let ran = []
   writeOrg(loc, prev => {
-    const result = applyMigrations(prev ?? {}, version())
+    const result = applyMigrations(prev ?? {}, FORMAT_STAMP)
     ran = result.ran
     return result.config
   })
@@ -1184,7 +1182,7 @@ rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records 
   // Stamped at birth: a data root this rig just created is in this rig's record format, and
   // must not greet its owner with a pending migration. Written through the same module as
   // every other rig.json, at a location pointed at the target rather than at ours.
-  writeOrg(withDataRoot(where(), target), prev => prev ?? { orgs: [], tracker: {}, writtenBy: version() })
+  writeOrg(withDataRoot(where(), target), prev => prev ?? { orgs: [], tracker: {}, writtenBy: FORMAT_STAMP })
   // Every mutating command will `git add -A` here and push, so the hard guards against
   // a secret landing beside a context doc go in before the first commit.
   if (!exists(path.join(target, '.gitignore'))) {
@@ -1304,7 +1302,7 @@ cmds.init = ({ flags }) => {
     // there is nothing to judge, and the first commit stamps what this rig writes.
     if (repoJson) checkWriteGate()
     repoJson = writeOrg(where(), prev => {
-      const next = prev || { orgs: [], tracker: {}, writtenBy: version() }
+      const next = prev || { orgs: [], tracker: {}, writtenBy: FORMAT_STAMP }
       if (typeof flags.orgs === 'string') {
         const added = flags.orgs.split(',').map(s => s.trim()).filter(Boolean)
         next.orgs = [...new Set([...(next.orgs || []), ...added])]
@@ -1924,11 +1922,29 @@ const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
   .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   .map(([, work]) => work)
 
+// The release this checkout stands on, or null when nothing here was ever tagged. One spawn,
+// inside a command somebody ran on purpose — never in `toolState`, which every command's
+// epilogue already pays eight spawns for (ADR 0003). `head` is not passed: without a tag there
+// is no release to name, and a sha in a field called `release` would be a different claim.
+//
+// Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`):
+// `run` dies when the command is not there, and `rig list --json` on a machine with no git
+// has a full answer to give about the records — which release wrote it is the one field that
+// needs git, and a missing field is the right way to say so.
+const releaseHere = () => (onPath('git')
+  ? releaseMark({ describe: git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
+  : null)
+
 // The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
 // renders it; neither reads the records a second way.
+//
+// Two facts about the installation, and they are different kinds of thing: `recordFormat` is
+// derived and free and gates writes, `release` costs a spawn and names what was published.
+// There used to be a `rig` beside them holding `MAJOR.minor.patch`, which was the format said a
+// second time in a semver's clothing (ADR 0004).
 const listPayload = (cfg, live) => ({
-  rig: version(),
   recordFormat: MAJOR,
+  release: releaseHere(),
   generatedAt: new Date().toISOString(),
   live,
   works: worksByActivity(cfg).map(w => workJson(cfg, w, live)),
@@ -3024,7 +3040,7 @@ function doctorSnapshot () {
     selection: { error: selectionError },
     node: process.version,
     git: hasGit ? gv.out : null,
-    rig: { version: version(), root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
+    rig: { recordFormat: MAJOR, root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
     freshness: doctorFreshness(cfg, tool),
     gh: github().auth(),
     jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
@@ -3133,8 +3149,8 @@ whole data root, and pushing it when it has an upstream.
 Which data root a command reads, first hit wins: --data <name>, RIG_DATA_ROOT,
 the work folder the command runs in, then the current one (rig use).
 
-rig ${version()} — the major is the record format; \`rig doctor\` reports how far
-this installation is behind its remote, \`rig update\` brings it forward.`)
+rig record format ${MAJOR} — \`rig doctor\` names the release this checkout stands on and
+how far it is behind its remote, \`rig update\` brings it forward.`)
 }
 
 // --------------------------------------------------------------------- main
