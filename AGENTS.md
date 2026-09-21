@@ -314,6 +314,26 @@ an artifact deserves to exist, and the rollout plan failed it for its entire exi
 plan` wrote the file and nothing ever looked again. Now `rig next` compares the rendered table
 to the live stack and offers `rig plan --refresh` when they disagree.
 
+## Showing rig to people
+
+```bash
+rig demo                      # into <data root>/demo/index.html, then opens it
+rig demo --example <work-id>  # walk through a particular work rather than the chosen one
+```
+
+One interactive page, rendered from the data root in hand: the `talks_to` graph, and one real
+work walked through command by command. It exists because this repo is public and a page
+naming a real org's repos cannot live in it — so the generator is committed here and the page
+is committed wherever its data root is.
+
+**It is a generated file** (rule 2): never edit `demo/index.html`, re-render it. Unlike `rig
+dash`, it is written into the data root rather than a temp path, and the reason is the input —
+the dashboard renders live PR state, this reads the catalogue and the terminal facts of closed
+work, which cannot change again.
+
+The work it walks through is the one with the most repos that *merged*, not the most repos: a
+walkthrough that stops before the merge makes half the case.
+
 ## Opening the pull requests
 
 ```bash
