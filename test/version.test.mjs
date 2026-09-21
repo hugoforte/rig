@@ -17,8 +17,13 @@ test('the migrations are numbered uniquely and contiguously from one', () => {
   // This is the guard that replaced git's. One file per migration means two branches that each
   // add an `0004-` merge cleanly — different files, no textual conflict — and land two
   // migrations claiming the same record format, with `MAJOR` jumping by two. Nothing else would
-  // notice. `main`'s merge queue runs this suite against the combined state before either
-  // lands, which is what makes a semantic conflict as blocking as a textual one (ADR 0005).
+  // notice.
+  //
+  // What makes a semantic conflict as blocking as a textual one is anything that tests a change
+  // in the state it lands in. `main`'s up-to-date rule is that, and it is what is on: the second
+  // migration branch must update onto the first before it can merge, and this test then fails on
+  // its own pull request. A merge queue would do the same job — ADR 0005 wanted one and could not
+  // have one, which is why the rule it meant to replace is still what this rests on.
   const numbers = MIGRATION_FILES.map(migrationNumber)
   assert.deepEqual(numbers, numbers.map((_, i) => i + 1),
     `bin/migrations is numbered ${numbers.join(', ')} — two migrations sharing a number is two pull requests that each added one`)
