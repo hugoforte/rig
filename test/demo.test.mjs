@@ -397,3 +397,103 @@ test('rig demo: renders a page from a data root on disk, naming its repos', () =
   assert.match(html, /posts invoices/)
   assert.match(html, /rig attach billing/)
 })
+
+// -------------------------------------------------- what the works cost
+
+// The header counted inventory — repos, relationships, works — and nothing about what any of
+// it produced. These are read out of the terminal PR facts `rig close` stores, which is what
+// lets the page claim them without a network call and without going stale (decision 91).
+
+const landedWork = (id, ...repos) => work({
+  id,
+  repos: repos.map(([repo, firstCommitAt, mergedAt]) =>
+    ({ repo, org: 'acme', base: 'main', pr: pr({ firstCommitAt, mergedAt }) })),
+})
+
+test('outcome: a work lands when a pull request of its own merged, not when it was closed', () => {
+  const closedNothingMerged = work({ id: 'c', closedAt: '2026-02-01T00:00:00Z', repos: [{ repo: 'a', base: 'main' }] })
+  const s = summarize({ catalog: sampleCatalog(), works: [closedNothingMerged] })
+  assert.equal(s.outcome.landed, 0, 'closedAt is when the teardown ran, not evidence that anything shipped')
+})
+
+test('outcome: the cycle runs from the first commit anywhere to the last merge anywhere', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'],
+      ['b', '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'])],
+  })
+  assert.equal(s.outcome.cycleDays, 4, 'a cross-repo work is not finished until its last repo is')
+})
+
+test('outcome: the figure is a median, and carries the n it was taken over', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [
+      landedWork('w1', ['a', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z']),
+      landedWork('w2', ['a', '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z']),
+      landedWork('w3', ['a', '2026-01-01T00:00:00Z', '2026-01-11T00:00:00Z']),
+    ],
+  })
+  assert.deepEqual([s.outcome.landed, s.outcome.cycleDays], [3, 4])
+})
+
+test('outcome: repos per landed work is taken over the works that landed, not over all of them', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [
+      landedWork('w1', ['a', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'], ['b', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z']),
+      work({ id: 'open', repos: [1, 2, 3, 4, 5].map(n => ({ repo: `r${n}`, base: 'main' })) }),
+    ],
+  })
+  assert.deepEqual([s.outcome.landed, s.outcome.reposPerWork], [1, 2])
+})
+
+test('outcome: with nothing landed there is no figure, and the page says nothing rather than zero', () => {
+  const s = summarize({ catalog: sampleCatalog(), works: [work()] })
+  assert.deepEqual([s.outcome.landed, s.outcome.cycleDays], [0, null])
+  assert.doesNotMatch(renderDemo(s), /landed/)
+})
+
+test('outcome: the figures reach the page, with the n each was taken over', () => {
+  const html = page({ works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])] })
+  assert.match(html, /1<\/strong> of those works landed/)
+  assert.match(html, /2 days<\/strong> from the first commit to the last merge \(n=1\)/)
+  assert.doesNotMatch(html, /saved|faster than|would have/, 'no claim the records cannot support')
+})
+
+test('outcome: a cycle under a day is shown in hours, because zero days reads as a broken page', () => {
+  const html = page({ works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-01T03:00:00Z'])] })
+  assert.match(html, /3 hours<\/strong> from the first commit/)
+})
+
+test('outcome: a migrated record is read the same as a legacy one', () => {
+  const legacy = landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])
+  const migrated = work3(legacy)
+  assert.deepEqual(summarize({ catalog: sampleCatalog(), works: [migrated] }).outcome,
+    summarize({ catalog: sampleCatalog(), works: [legacy] }).outcome)
+})
+
+// ------------------------------------------------ direction in the drawing
+
+test('renderDemo: an edge with a stated direction is drawn with an arrowhead', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]), entry('b')] })
+  assert.match(html, /marker-end="url\(#arrow\)"/)
+})
+
+test('renderDemo: an edge nobody placed is drawn plain, so the drawing shows where the catalogue is thin', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b')] })
+  assert.doesNotMatch(html, /marker-end=|marker-start=/)
+})
+
+test('renderDemo: `both` is drawn with a head at each end', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'both' }]), entry('b')] })
+  assert.match(html, /marker-start="url\(#arrowback\)"[\s\S]*marker-end="url\(#arrow\)"|marker-end="url\(#arrow\)"[\s\S]*marker-start="url\(#arrowback\)"/)
+})
+
+test('renderDemo: two entries that disagree are drawn plain rather than pointed one way', () => {
+  const html = page({
+    catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]),
+      entry('b', [{ repo: 'a', how: 'y', direction: 'downstream' }])],
+  })
+  assert.doesNotMatch(html, /marker-end=/)
+})

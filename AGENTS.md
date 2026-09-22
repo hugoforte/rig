@@ -355,7 +355,9 @@ rig demo                      # into <data root>/demo/index.html, then opens it
 rig demo --example <work-id>  # walk through a particular work rather than the chosen one
 ```
 
-One interactive page, rendered from the data root in hand: the `talks_to` graph, and one real
+One interactive page, rendered from the data root in hand: the `talks_to` graph — arrowheads
+where a direction is stated, plain lines where it is not — the outcome figures for the works
+that landed, and one real
 work walked through command by command. It exists because this repo is public and a page
 naming a real org's repos cannot live in it — so the generator is committed here and the page
 is committed wherever its data root is.
