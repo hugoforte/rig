@@ -243,7 +243,16 @@ test('a draft catalogue entry for an attached repo is offered for correction', (
     drafts: ['a'],
   })
   assert.match(says(out), /catalogue entry for a is still a draft/)
-  assert.ok(commands(out).includes('rig catalog a'))
+})
+
+test('the correction carries no command, because editing prose is not one', () => {
+  // Same idiom as the design gate: an offer whose work is a conversation names no command. The
+  // line points at `rig catalog`, which shows the entry and names its file, and stops there —
+  // rig has no edit mode and should not grow one.
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
+  const catalogue = out.find(o => /catalogue/.test(o.says))
+  assert.equal(catalogue.command, null)
+  assert.match(catalogue.says, /`rig catalog a` names the file/)
 })
 
 test('several drafts are one offer, because they are one sitting of work', () => {
@@ -279,6 +288,26 @@ test('a closed work is not asked to correct anything: the worktrees are already 
   assert.deepEqual(out, [])
 })
 
+test('the catalogue offer comes above rig close, which ends the window it exists for', () => {
+  // Read top-down, a close offered first is a teardown run before the line that needed the
+  // worktrees. Same argument as ranking uncommitted changes first.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { merged: true, pr: { state: 'MERGED' } })],
+    drafts: ['a'],
+  })
+  const order = out.map(o => o.says)
+  const cat = order.findIndex(s => /catalogue/.test(s))
+  const close = order.findIndex(s => /every PR is merged/.test(s))
+  assert.ok(close !== -1, 'the close offer is reachable in this state')
+  assert.ok(cat < close, 'the correction is offered before the command that removes the trees')
+})
+
+test('a draft entry does not silence the line saying the code is yours to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
+  assert.match(says(out), /this part is yours to write/)
+  assert.match(says(out), /catalogue entry for a is still a draft/)
+})
 test('the catalogue offer comes after the work itself, never ahead of unsaved changes', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),

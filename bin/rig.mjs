@@ -603,7 +603,16 @@ const findCatalog = (name, dataRootPath = dataRoot()) =>
 // corrected. The repos of the work in hand rather than the whole root, because both readers
 // are about *now*: `rig next` offers the correction while the worktrees are still on disk, and
 // `rig close` makes the last call on the way out.
-const draftEntries = work => (work.repos || []).filter(r => findCatalog(r.repo)?.draft).map(r => r.repo)
+//
+// One scan, not one per repo. `findCatalog` re-reads and re-parses every entry in the root each
+// time it is called, so asking it per attached repo paid the whole catalogue over again for each
+// one — and a work with no drafts at all paid it anyway.
+function draftEntries (work) {
+  const attached = work?.repos || []
+  if (!attached.length) return []
+  const draft = new Set(loadCatalog().filter(e => e.draft).map(e => e.repo.toLowerCase()))
+  return draft.size ? attached.filter(r => draft.has(r.repo.toLowerCase())).map(r => r.repo) : []
+}
 
 // Which org a repo belongs to: the catalogue first, then GitHub. The language comes
 // along from GitHub for the catalogue stub `rig attach` drafts on first sight.
@@ -2663,13 +2672,17 @@ cmds.close = ({ flags }) => {
   ticketWriteBack(work, states, { abandoned, stages: stack })
   ok(`${abandoned ? 'abandoned' : 'closed'} ${id} — context doc kept at ${contextFile(id)}`)
   // The last call. `rig next` is where the correction is offered, because it runs while the
-  // worktrees are still on disk and this command has just removed them — close commits the data
-  // root above, before the teardown, and nothing here waits for a human. So this names the
-  // entries and stops: the catalogue outlives the work, and an entry nobody corrected is worth
-  // knowing about even once the cheap moment has passed.
+  // worktrees are still on disk and this command has just removed them: no rig command waits for
+  // a human, so close could never have collected the answer whatever order it did things in. So
+  // this names the entries and stops — the catalogue outlives the work, and an entry nobody
+  // corrected is worth knowing about even once the cheap moment has passed.
+  //
+  // `--work` is in the command because the work folder is gone by now, and `rig save` resolves
+  // the work from the folder it is run in. Printing the bare command would hand over one that
+  // dies with "not inside a work".
   const stillDraft = draftEntries(work)
   if (stillDraft.length) {
-    say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`rig save\``))
+    say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`rig save --work ${id} -m "catalogue corrections"\``))
   }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -2742,7 +2755,12 @@ cmds.catalog = ({ flags, positional }) => {
   if (positional[0]) {
     const e = entries.find(x => x.repo.toLowerCase() === positional[0].toLowerCase())
     if (!e) die(`no catalogue entry for "${positional[0]}"`)
-    return process.stdout.write(readText(e.file))
+    // The entry to stdout and the path to stderr, so a pipe still gets the entry alone. rig has
+    // no edit mode and should not grow one, so naming the file is the whole affordance — the
+    // same thing `rig attach` does when it drafts one, and what `rig next` points at when it
+    // offers the correction.
+    process.stdout.write(readText(e.file))
+    return aside(C.dim(e.file))
   }
   if (!entries.length) return say('catalogue is empty — entries are drafted on `rig attach`')
   for (const e of entries) {

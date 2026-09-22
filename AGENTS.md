@@ -107,8 +107,9 @@ rig attach orders-web
    your head — that is the only moment the knowledge is cheap. `rig next` offers it for the
    work in hand, through every phase in which the worktrees are still on disk, and `rig close`
    names what is still a draft on the way out. Neither refuses: prose that stays wrong destroys
-   nothing, and a close that could not commit the answer would be asking for the work after the
-   repos had been deleted.
+   nothing. The offer is on `next` rather than on `close` because no rig command waits for a
+   human — close tears the worktrees down and exits, so asking there would be asking for work on
+   repos it had already deleted.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
 ## The catalogue
