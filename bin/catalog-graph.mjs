@@ -102,6 +102,33 @@ function resolve (edge) {
   return claims.size === 1 ? { direction: [...claims][0], conflict: false } : { direction: null, conflict: claims.size > 1 }
 }
 
+// The **observed** graph: which repos have been attached to the same work, read straight out
+// of the records. `repos[]` is stored and not derived, so unlike `talks_to` this cannot be
+// wrong about what happened — and unlike `talks_to` it can only ever see repos somebody has
+// already worked on together, so it can never catch the fourth repo the first time.
+//
+// Every work is read, not only the closed ones. A work's repo set is as true the day it is
+// attached as it is the day it lands, and excluding the open ones would hide the pairing
+// happening right now, which is the one a reader can still act on.
+//
+// Pairs, never triples: a work holding three repos is evidence about each of the three
+// relationships and not about some three-way thing the catalogue has no way to record.
+export function coAttached (works) {
+  const pairs = new Map()
+  for (const w of works || []) {
+    const repos = [...new Map((w.repos || []).map(r => [lower(r.repo), r.repo])).values()]
+    for (let i = 0; i < repos.length; i++) {
+      for (let j = i + 1; j < repos.length; j++) {
+        const [a, b] = [repos[i], repos[j]].sort((x, y) => lower(x).localeCompare(lower(y)))
+        const key = `${lower(a)}\u0000${lower(b)}`
+        if (!pairs.has(key)) pairs.set(key, { a, b, works: [] })
+        if (!pairs.get(key).works.includes(w.id)) pairs.get(key).works.push(w.id)
+      }
+    }
+  }
+  return [...pairs.values()]
+}
+
 // What else a change in `repo` reaches: the repos one hop away, and the repos those reach.
 //
 // **Two hops, fixed.** §6's rule is about neighbours; three hops across a well-connected
@@ -112,7 +139,7 @@ function resolve (edge) {
 // break C, does not say that a change in A reaches C — B may well absorb it. So a two-hop
 // neighbour carries the hops it was reached through and the direction of *that* edge, and rig
 // draws no conclusion the catalogue did not state.
-export function impact (catalog, repo, { hops = 2 } = {}) {
+export function impact (catalog, repo, { hops = 2, works = [] } = {}) {
   const graph = buildGraph(catalog)
   const node = graph.nodes.find(n => lower(n.id) === lower(repo))
   const name = node ? node.id : repo
@@ -145,6 +172,23 @@ export function impact (catalog, repo, { hops = 2 } = {}) {
     }
   }
 
+  // The observed graph, beside the declared one rather than merged into it. `declared` is the
+  // whole point of printing them together: a pair the records keep making with no `talks_to`
+  // line between them is evidence that an entry is missing an edge, and it names which entry.
+  // Merging the two lists would lose exactly that, and would also put a claim nobody wrote
+  // into the same column as claims people did.
+  const declared = new Set(graph.edges.map(e => [lower(e.a), lower(e.b)].sort().join('\u0000')))
+  const observed = coAttached(works)
+    .filter(p => lower(p.a) === lower(name) || lower(p.b) === lower(name))
+    .map(p => ({
+      ...describe(lower(p.a) === lower(name) ? p.b : p.a),
+      works: p.works,
+      declared: declared.has([lower(p.a), lower(p.b)].sort().join('\u0000')),
+    }))
+    // Ordered by how often the two travelled together: the count is the strength of the
+    // evidence, and it is the only ranking the records can honestly support.
+    .sort((x, y) => y.works.length - x.works.length || x.repo.localeCompare(y.repo))
+
   return {
     repo: name,
     catalogued: Boolean(node?.catalogued),
@@ -152,5 +196,6 @@ export function impact (catalog, repo, { hops = 2 } = {}) {
     org: node?.org || '',
     hop1,
     hop2: [...second.values()].sort((x, y) => x.repo.localeCompare(y.repo)),
+    observed,
   }
 }

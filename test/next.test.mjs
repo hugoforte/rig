@@ -326,3 +326,64 @@ test('a draft entry alone is not "nothing to suggest"', () => {
   assert.ok(out.length >= 1)
   assert.match(says(out), /catalogue entry for a is still a draft/)
 })
+
+// -------------------------------------------------- the neighbours not attached
+
+// Rule 5's "attaching a fourth repo on day two is normal", with something behind it. The
+// gathering is the caller's — this asserts only what is worth offering, and that it stops
+// being worth offering once the pull requests are open.
+
+const near = (repo, via, direction = null) => ({ repo, via, direction })
+
+test('a repo the catalogue says talks to an attached one, and is not attached, is offered', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing', 'downstream')],
+  })
+  assert.match(says(out), /orders talks to billing/)
+  assert.ok(commands(out).includes('rig attach orders'))
+})
+
+test('the direction rides along when the catalogue states one, and is left out when it does not', () => {
+  const stated = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing', 'downstream')],
+  })
+  assert.match(says(stated), /a change in billing can break it/)
+
+  const silent = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(silent), /can break/)
+})
+
+test('several neighbours are one offer, not one each', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing'), near('ledger', 'billing')],
+  })
+  assert.equal(out.filter(o => /talks to/.test(o.says)).length, 1)
+})
+
+test('nothing is offered once the work is up for review — attaching a repo then is a different decision', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing', { pr: { number: 7, state: 'OPEN' }, pushed: true })],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /talks to/)
+})
+
+test('the offer is an offer: it never warns and never refuses', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /should|must|missing|forgot/i)
+})

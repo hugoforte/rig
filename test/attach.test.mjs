@@ -107,6 +107,36 @@ test('a configured identity is written onto the worktree as it is cut', () => {
   assert.equal(gitMust(worktree('orders'), 'config', 'user.email'), 'you@acme.example')
 })
 
+test('attaching a repo names what the catalogue says it talks to and is not attached', () => {
+  // Rule 5's fourth repo, offered rather than waited for. The entry is written before the
+  // attach so `draftCatalogEntry` leaves it alone — a hand-corrected entry is what the offer
+  // is only ever as good as (decision 27).
+  publish('web', 'main')
+  fs.writeFileSync(path.join(dataRoot, 'catalog', 'acme', 'web.md'), `---
+repo: web
+org: acme
+stack: TypeScript
+role: the storefront
+talks_to:
+  - repo: warehouse
+    how: reads stock levels
+    direction: upstream
+setup: []
+check: []
+---
+
+Prose.
+`)
+  const r = rig(['attach', 'web', '--work', 't1'])
+  assert.equal(r.code, 0, r.out)
+  const out = strip(r.out)
+  assert.match(out, /warehouse talks to web, and a change in it can break web — not attached \(`rig attach warehouse`\)/)
+  assert.doesNotMatch(out, /billing|orders/, 'a neighbour already attached is not offered back')
+
+  assert.equal(rig(['detach', 'web', '--work', 't1']).code, 0)
+  assert.equal(record().repos.length, 2, 'the suite carries on from two attached repos')
+})
+
 test('each repo is based on its own remote HEAD, not on one default for the work', () => {
   assert.equal(onWorkBranch('orders').base, 'trunk')
   assert.equal(onWorkBranch('billing').base, 'main')

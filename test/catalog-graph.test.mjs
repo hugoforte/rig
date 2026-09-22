@@ -6,7 +6,7 @@
 // left `bin/demo.mjs`. What is new below the divider is direction, and `impact`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildGraph, impact } from '../bin/catalog-graph.mjs'
+import { buildGraph, impact, coAttached } from '../bin/catalog-graph.mjs'
 
 const entry = (repo, talks_to = [], rest = {}) => ({
   repo, org: 'acme', role: `${repo} does things`, stack: 'Node',
@@ -208,4 +208,77 @@ test('impact: a contradiction survives the traversal instead of being resolved o
     entry('orders', [{ repo: 'billing', how: 'emits', direction: 'downstream' }]),
   ], 'billing')
   assert.deepEqual([answer.hop1[0].direction, answer.hop1[0].conflict], [null, true])
+})
+
+// ------------------------------------------------- the observed graph
+
+// The second graph over the same repos: which ones have been attached to the same work. It is
+// read out of the records rather than derived, so unlike `talks_to` it cannot be wrong about
+// what happened — and unlike `talks_to` it can only ever see repos already worked on together.
+// Neither is sufficient, which is why `impact` prints both and marks where they disagree.
+
+const work = (id, ...repos) => ({ id, repos: repos.map(repo => ({ repo, org: 'acme', base: 'main' })) })
+
+test('coAttached: two repos in one work are a pair, named by the work that paired them', () => {
+  assert.deepEqual(coAttached([work('w1', 'billing', 'orders')]),
+    [{ a: 'billing', b: 'orders', works: ['w1'] }])
+})
+
+test('coAttached: a work with one repo pairs it with nothing', () => {
+  assert.deepEqual(coAttached([work('w1', 'billing')]), [])
+})
+
+test('coAttached: three repos in one work are three pairs, not one triple', () => {
+  assert.equal(coAttached([work('w1', 'billing', 'orders', 'ledger')]).length, 3)
+})
+
+test('coAttached: a pair two works made counts both, so the evidence accumulates', () => {
+  const [pair] = coAttached([work('w1', 'billing', 'orders'), work('w2', 'orders', 'billing')])
+  assert.deepEqual(pair.works, ['w1', 'w2'])
+})
+
+test('coAttached: a repo named twice in one work does not pair with itself', () => {
+  assert.deepEqual(coAttached([work('w1', 'billing', 'billing')]), [])
+})
+
+test('impact: a repo the records put beside the subject is reported, with the works that did it', () => {
+  const answer = impact([entry('billing'), entry('ledger')], 'billing',
+    { works: [work('w1', 'billing', 'ledger'), work('w2', 'billing', 'ledger')] })
+  assert.deepEqual(answer.observed.map(o => [o.repo, o.works]), [['ledger', ['w1', 'w2']]])
+})
+
+test('impact: an observed pair the catalogue already explains is marked as declared', () => {
+  const answer = impact([entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]), entry('orders')],
+    'billing', { works: [work('w1', 'billing', 'orders')] })
+  assert.equal(answer.observed[0].declared, true)
+})
+
+test('impact: an observed pair with no talks_to line between them is the finding', () => {
+  const answer = impact([entry('billing'), entry('ledger')], 'billing',
+    { works: [work('w1', 'billing', 'ledger')] })
+  assert.equal(answer.observed[0].declared, false,
+    'they travel together and nothing in the catalogue says why — that names the entry to correct')
+})
+
+test('impact: observed is ordered by how often the two travelled together', () => {
+  const answer = impact([entry('billing')], 'billing', {
+    works: [work('w1', 'billing', 'ledger'), work('w2', 'billing', 'orders'), work('w3', 'billing', 'orders')],
+  })
+  assert.deepEqual(answer.observed.map(o => o.repo), ['orders', 'ledger'])
+})
+
+test('impact: the subject is matched against the records case-insensitively', () => {
+  const answer = impact([entry('Eternity-II')], 'eternity-ii',
+    { works: [work('w1', 'Eternity-II', 'ledger')] })
+  assert.deepEqual(answer.observed.map(o => o.repo), ['ledger'])
+})
+
+test('impact: a work that never held the subject says nothing about it', () => {
+  const answer = impact([entry('billing')], 'billing', { works: [work('w1', 'orders', 'ledger')] })
+  assert.deepEqual(answer.observed, [])
+})
+
+test('impact: with no records at all, observed is empty and the declared graph is untouched', () => {
+  const answer = impact([entry('billing', [{ repo: 'orders', how: 'a' }]), entry('orders')], 'billing')
+  assert.deepEqual([answer.observed, answer.hop1.map(n => n.repo)], [[], ['orders']])
 })

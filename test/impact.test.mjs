@@ -1,4 +1,4 @@
-// `rig impact` end to end — hugoforte/rig#130, stage 1.
+// `rig impact` end to end — hugoforte/rig#130, stages 1 and 2.
 //
 // The traversal itself is `bin/catalog-graph.mjs` and is tested against literals in
 // test/catalog-graph.test.mjs. What this file asserts is the half that only exists once the
@@ -133,4 +133,55 @@ test('impact with no repo refuses and says where the names are', () => {
   const r = rig(['impact'])
   assert.equal(r.code, 1)
   assert.match(strip(r.out), /rig impact wants a repo — `rig catalog` lists them/)
+})
+
+// -------------------------------------------------- the observed graph
+
+// Work records written by hand, in the shape `rig new` and `rig attach` write — the same claim
+// test/demo.test.mjs makes about its fixtures, and kept honest the same way: the suites that
+// drive the real commands fail here if the shape moves.
+
+const record = (id, ...repos) => {
+  fs.mkdirSync(path.join(dataRoot, 'work', id), { recursive: true })
+  fs.writeFileSync(path.join(dataRoot, 'work', id, 'work.json'), JSON.stringify({
+    id, title: id, type: 'feat', branch: `feat/${id}`, tickets: [],
+    repos: repos.map(repo => ({ repo, org: 'acme', base: 'main' })),
+    createdAt: '2026-01-01T00:00:00Z',
+  }))
+}
+
+test('records that keep putting two repos in one work', () => {
+  entry('billing', {
+    role: 'invoices and refunds',
+    talks_to: `
+  - repo: orders
+    how: pushes invoices as they settle
+    direction: downstream`,
+  })
+  entry('orders')
+  entry('ledger')
+  record('w1', 'billing', 'ledger')
+  record('w2', 'billing', 'ledger')
+  record('w3', 'billing', 'orders')
+})
+
+test('a pair the records keep making is reported, with the works that made it', () => {
+  const o = out('billing')
+  assert.match(o, /worked on together[\s\S]*ledger\s+2 works/)
+  assert.match(o, /w1, w2/)
+})
+
+test('a pair with no talks_to line between them is the finding, and names the file to correct', () => {
+  const o = out('billing')
+  assert.match(o, /ledger\s+2 works — and nothing in talks_to says why/)
+  assert.match(o, /`rig catalog billing` names the file to correct/)
+})
+
+test('a pair the catalogue already explains is shown, and not reported as a gap', () => {
+  assert.match(out('billing'), /orders\s+1 work — and talks_to says why/)
+})
+
+test('the pairs are ordered by how often the two travelled together', () => {
+  const section = out('billing').slice(out('billing').indexOf('worked on together'))
+  assert.ok(section.indexOf('ledger') < section.indexOf('orders'), 'two works outrank one')
 })

@@ -12,7 +12,7 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
-import { impact } from './catalog-graph.mjs'
+import { impact, coAttached } from './catalog-graph.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
@@ -1694,6 +1694,36 @@ cmds.attach = async ({ flags, positional }) => {
   const name = positional[0] || die('usage: rig attach <repo>')
   commitAs(work.id, name)
   await attachRepo(cfg, work, name, { setup: !!flags.setup })
+  offerNeighbours(work, name)
+}
+
+// What else this repo travels with, said once, at the moment the repo set is being chosen.
+// **Both graphs here, unlike `rig next`, which offers only the declared one.** The difference
+// is how often each command speaks: `attach` runs once per repo and is the moment the question
+// is live, so a co-attachment the records keep making is worth raising; `next` runs constantly
+// and has to stay quiet enough to be read.
+//
+// Offers, never blocks — nothing is attached for you, and the command has already done its job
+// by the time this prints.
+function offerNeighbours (work, name) {
+  const catalog = loadCatalog()
+  if (!catalog.length) return
+  const root = dataRoot()
+  const answer = impact(catalog, name, { works: listWorkIds(root).map(id => readJson(recordFile(id, root))) })
+  const have = new Set((work.repos || []).map(r => r.repo.toLowerCase()))
+  const said = repo => say(C.dim(`· ${repo}`))
+
+  for (const n of answer.hop1) {
+    if (have.has(n.repo.toLowerCase())) continue
+    const why = n.conflict ? '' : n.direction === 'downstream' ? `, and a change in ${name} can break it`
+      : n.direction === 'upstream' ? `, and a change in it can break ${name}`
+        : n.direction === 'both' ? ', and either can break the other' : ''
+    said(`${n.repo} talks to ${name}${why} — not attached (\`rig attach ${n.repo}\`)`)
+  }
+  for (const o of answer.observed) {
+    if (have.has(o.repo.toLowerCase()) || o.declared) continue
+    said(`${o.repo} has shared ${o.works.length} work${o.works.length === 1 ? '' : 's'} with ${name}, with nothing in talks_to to say why`)
+  }
 }
 
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
@@ -2252,6 +2282,28 @@ cmds.check = ({ flags, positional }) => {
   }
 }
 
+// The repos the catalogue says talk to one this work has attached, and which are not attached
+// themselves — §6's traversal, asked once per attached repo. One entry per repo however many
+// attached repos reach it: the offer names where it came from, and naming three of them makes
+// the line longer without making it truer.
+//
+// Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
+// offer is visibly only as good as the catalogue, and a thin one produces a thin offer rather
+// than a confident wrong answer.
+function unattachedNeighbours (work) {
+  const catalog = loadCatalog()
+  if (!catalog.length) return []
+  const have = new Set((work.repos || []).map(r => r.repo.toLowerCase()))
+  const found = new Map()
+  for (const r of work.repos || []) {
+    for (const n of impact(catalog, r.repo).hop1) {
+      if (have.has(n.repo.toLowerCase()) || found.has(n.repo.toLowerCase())) continue
+      found.set(n.repo.toLowerCase(), { repo: n.repo, via: r.repo, direction: n.conflict ? null : n.direction })
+    }
+  }
+  return [...found.values()].sort((a, b) => a.repo.localeCompare(b.repo))
+}
+
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
 // off the back of another command (decision 66). The gathering lives here; every decision
 // about what is worth offering is `bin/next.mjs`'s.
@@ -2282,6 +2334,7 @@ cmds.next = ({ flags }) => {
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
+    neighbours: unattachedNeighbours(work),
   })
 
   const phase = phaseOf(work, repos)
@@ -2792,7 +2845,8 @@ cmds.impact = ({ positional }) => {
   if (!name) die('rig impact wants a repo — `rig catalog` lists them')
   const entries = loadCatalog()
   if (!entries.length) die('catalogue is empty — entries are drafted on `rig attach`')
-  const answer = impact(entries, name)
+  const root = dataRoot()
+  const answer = impact(entries, name, { works: listWorkIds(root).map(id => readJson(recordFile(id, root))) })
 
   // Asked only about the repos in the answer, not the whole catalogue. The measure costs a git
   // spawn per entry that has a mirror, and a neighbourhood is a handful of repos where a
@@ -2846,6 +2900,26 @@ cmds.impact = ({ positional }) => {
     for (const n of answer.hop2) {
       const via = n.via.map(v => `${v.through}${v.conflict ? ' (disagreed)' : v.direction ? ` (${LABEL[v.direction]} of it)` : ''}`).join(', ')
       say(`  ${n.repo.padEnd(width)}  ${C.dim(`via ${via}`)}${caveat(n)}`)
+    }
+  }
+
+  // The observed graph, under the declared one and never merged into it. A pair the records
+  // keep making with nothing in `talks_to` to explain it is the finding — evidence that an
+  // entry is missing an edge, and it names which entry. A pair the catalogue already explains
+  // is still printed, because the count is how strong the declared edge turned out to be.
+  if (answer.observed.length) {
+    say('')
+    say(C.dim('worked on together'))
+    for (const o of answer.observed) {
+      const n = o.works.length
+      const count = `${n} work${n === 1 ? '' : 's'}`
+      say(`  ${o.repo.padEnd(width)}  ${C.dim(count)}${o.declared ? C.dim(' — and talks_to says why') : C.yellow(' — and nothing in talks_to says why')}`)
+      say(C.dim(`    ${o.works.join(', ')}`))
+    }
+    const quiet = answer.observed.filter(o => !o.declared)
+    if (quiet.length) {
+      say('')
+      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — \`rig catalog ${answer.repo}\` names the file to correct`))
     }
   }
 

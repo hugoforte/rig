@@ -281,6 +281,17 @@ claim made twice. Two entries that make *different* claims are reported as a dis
 never resolved by picking a side. It offers and never blocks: warnings live in `rig doctor`,
 and only for contradictions.
 
+Underneath, `rig impact` prints a second graph rig has always held and never read: which repos
+have been attached to the **same work**, and how often. That one comes out of the records, so
+it cannot be wrong about what happened — though it only ever sees repos already worked on
+together. Where the two graphs disagree is the useful part: a pair that keeps recurring with
+nothing in `talks_to` to explain it is an entry missing an edge, and rig names the file.
+
+The same traversal reaches the two commands that can act on it. `rig attach` names the repos
+that talk to the one you just attached and are not attached themselves — rule 5's fourth repo,
+offered rather than waited for — and `rig next` keeps offering them through planning, designing
+and building, then goes quiet once a pull request is open.
+
 ### Reading the works back out
 
 `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely — except a merged PR that has been recorded (below), which is read straight out of `work.json` and carries `recorded: true`, live or `--quick` alike.

@@ -32,6 +32,10 @@ _Avoid_: active profile, selected root, default (that is the name of the one-roo
 Which way a `talks_to` relationship runs, written on the item beside its `how` and named for the answer rather than the arrow: `downstream` means a change in this repo can break that one, `upstream` is the other way, `both` is both. Optional; absent means unstated, which is not the same as both ways. Either end may state it, and rig reads it relative to whichever end is asking.
 _Avoid_: in/out (ambiguous on a bus, where the calls and the data run opposite ways), depends_on, arrow
 
+**Observed graph**:
+Which repos have been attached to the same work, counted across the work records. Derived from what happened rather than written down, so it cannot be wrong about the past — and it can only ever see repos already worked on together. Read beside the **declared graph** `talks_to` makes; a pair the records keep making with no `talks_to` line between them is an entry missing an edge.
+_Avoid_: co-occurrence, implicit graph, inferred dependency
+
 **Disagreement**:
 Two catalogue entries making different claims about one relationship's direction. Reported by `rig impact` and never resolved by choosing a side, because which entry is right is not rig's answer.
 _Avoid_: conflict, mismatch, error

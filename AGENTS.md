@@ -136,6 +136,20 @@ claims are a **disagreement**: reported, never resolved by picking a side, becau
 disagreement is the thing worth seeing. `rig impact` offers and never blocks — warnings live
 in `rig doctor`.
 
+**Two graphs, and the disagreement is the output.** Beside the declared graph `talks_to` makes,
+`rig impact` reads an **observed** one out of the work records: which repos have been attached
+to the same work, and how many times. That one is a record rather than a derivation, so it
+cannot be wrong about what happened — but it can only ever see repos somebody has already
+worked on together, so it never catches the fourth repo the first time. A pair the records keep
+making with nothing in `talks_to` to explain it is the finding, and rig names the entry to
+correct.
+
+**Two commands offer the neighbours you have not attached.** `rig attach` names them once, at
+the moment the repo set is being chosen, from both graphs. `rig next` offers only the declared
+ones, through planning, designing and building, and goes quiet from `reviewing` on — once a
+pull request is open, adding a repo is a decision already taken. Neither blocks, and neither
+attaches anything for you.
+
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
 lint, its build. Both are commands and never results: no pass or fail is ever stored.
 
