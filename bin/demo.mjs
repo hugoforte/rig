@@ -406,7 +406,7 @@ export function pickExample (works, wanted = null) {
   const score = w => {
     const repos = w.repos || []
     return [
-      repos.filter(r => r.pr?.mergedAt).length,
+      repos.filter(r => repoBranch(r, w.branch).pr?.mergedAt).length,
       repos.length,
       w.closedAt ? 1 : 0,
       Date.parse(w.createdAt || 0) || 0,
@@ -421,11 +421,35 @@ export function pickExample (works, wanted = null) {
 
 const shortBranch = b => String(b || '')
 
+// What a repo contributes to this work: where its branch lands, and that branch's pull request
+// once it merged.
+//
+// Record format 3 moved both into `repos[].branches[]` — one entry per branch of this work the
+// repo holds, because a repo carries several once a work has stages, and a base belongs to the
+// branch it was cut for rather than to the repo. Before that they sat directly on the repo.
+//
+// Both shapes are live at once and will be for a while: records migrate when rig next writes
+// one, so a root holds a mix, and reading only the new shape would be exactly the bug this
+// replaces with the sides swapped. The failure was quiet, which is what made it expensive — a
+// work whose record had been rewritten read as a work with no pull requests, so it lost the
+// example ranking, its `rig pr` step vanished, its PR table came out empty and every base
+// printed `undefined`, and nothing anywhere failed.
+export function repoBranch (repo, workBranch = null) {
+  const entries = repo?.branches
+  if (Array.isArray(entries) && entries.length) {
+    return entries.find(b => b.branch === workBranch) || entries[0]
+  }
+  // The legacy shape, read as the one branch it could describe.
+  return { branch: workBranch, base: repo?.base, pr: repo?.pr }
+}
+
 // The walkthrough, derived. Every command, path, branch, base and PR number below comes out
 // of the record; only `note` is prose, and it is prose about the shape of the step rather
 // than about this particular work, so it stays true for whichever work gets picked.
 export function walkthrough (work, { workRoot = 'w', dataRoot = 'rig-data' } = {}) {
-  const repos = work.repos || []
+  // Each repo flattened to the branch this work has in it, so nothing below has to know which
+  // record format the work was written in.
+  const repos = (work.repos || []).map(r => ({ ...r, ...repoBranch(r, work.branch) }))
   const tickets = work.tickets || []
   const branch = shortBranch(work.branch)
   const steps = []
@@ -619,7 +643,9 @@ function renderSteps (steps) {
 }
 
 function renderPrs (work) {
-  const rows = (work.repos || []).filter(r => r.pr?.mergedAt).map(r => `<tr>
+  const rows = (work.repos || [])
+    .map(r => ({ ...r, ...repoBranch(r, work.branch) }))
+    .filter(r => r.pr?.mergedAt).map(r => `<tr>
     <th>${esc(r.repo)}</th>
     <td><code>${esc(r.base)}</code></td>
     <td>#${esc(r.pr.number)}</td>
