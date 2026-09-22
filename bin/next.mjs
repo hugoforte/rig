@@ -44,11 +44,12 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
+//   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], drafts = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -143,18 +144,47 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('landing', `${merged.length} of ${repos.length} merged — still out: ${left}`))
   }
 
+  // The floor: repos attached, design agreed, nothing written anywhere. There is only one
+  // thing left to do and rig is not the tool that does it. Asked here, before the two offers
+  // below are pushed, because both of them are about something other than the work itself: a
+  // draft entry must not silence the one line that says the code is yours to write.
+  const floor = !out.length && untouched.length === repos.length
+  if (floor) {
+    out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
+  }
+
+  // Correcting the catalogue, offered while the worktrees still exist — which is the only span
+  // in which the repos are both loaded in your head *and* on disk.
+  //
+  // `rig close` cannot be the moment, though it is the obvious guess. Not because of any
+  // ordering inside close — the teardown does run before `commitAs`, which only sets the commit
+  // dispatch makes after the command returns — but because **no rig command waits for a human**.
+  // Close tears the worktrees down and exits, so a close that printed the request would be
+  // asking for work to be done on repos it had already deleted. It keeps a last call naming the
+  // entries; the offer lives here, in the command whose whole job is what is available now.
+  //
+  // **Above the close offer**, for the reason the dirty-tree rung is ranked first: `rig close`
+  // ends the window this offer exists for, and a ladder read top-down would have run the
+  // teardown before reaching the line that needed the trees.
+  if (drafts.length) {
+    const many = drafts.length > 1
+    // Never a command. `rig catalog <repo>` shows an entry and names the file, but correcting
+    // one is editing prose — the design gate above sets the precedent for an offer whose work
+    // is a conversation and not a line to type.
+    out.push(offer(phase,
+      `the catalogue ${many ? `entries for ${drafts.join(', ')} are still drafts` : `entry for ${drafts[0]} is still a draft`}`
+      + ` — correct ${many ? 'them' : 'it'} while the repo${many ? 's are' : ' is'} still in your head`
+      + ` (\`rig catalog ${drafts[0]}\` names the file)`))
+  }
+
   // A slice still up for review is a refusal `close` makes, so offering it here would be a
   // command that fails and a second answer one line under the stage offer that just named the
   // slice. The stack was in hand the whole time; this asks it. Silence rather than a warning,
   // because the stage offer above has already said what is next.
+  //
+  // Last, because it is the one offer that takes the worktrees away.
   if (phase === 'landing' && !dirty.length && !stack.some(st => st.open)) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
-  }
-
-  // The floor: repos attached, design agreed, nothing written anywhere. There is only one
-  // thing left to do and rig is not the tool that does it.
-  if (!out.length && untouched.length === repos.length) {
-    out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
   }
 
   return out
