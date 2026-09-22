@@ -243,12 +243,38 @@ export function parseDescribe (out) {
   return m ? { tag: m[1], distance: Number(m[2]) } : null
 }
 
-// How to name this checkout: the release, the distance past it, or — with no release in its
-// history at all — the commit, which is all rig could say before there were releases.
-export function releaseMark ({ describe, head }) {
+// What `package.json` carries in the tree, and never in a published artifact: the version is
+// worked out at the release (ADR 0004), and injected into the package at publish. The suffix
+// is semantic-release's documented placeholder, kept for its stated reason — it "makes it
+// clear to contributors that the version is not kept up to date".
+export const PLACEHOLDER_VERSION = '0.0.0-development'
+
+// A version that names a release, as against the placeholder or junk. Deliberately strict:
+// a plain `major.minor.patch` and nothing else, because rig publishes no prereleases (there
+// is one stable channel and the clone is the other) and a value this cannot read is one to
+// say nothing about rather than to print.
+const releaseVersion = v => (/^\d+\.\d+\.\d+$/.test(String(v ?? '')) ? `v${v}` : null)
+
+// How to name this installation, in the order the answers can be trusted:
+//
+//   1. what `git describe` says — the release, or the distance past it;
+//   2. `package.json`'s version, for an installation that has no `.git` to ask. This is the
+//      published-package case, and the only thing it can say about itself;
+//   3. the commit, which is all rig could say before there were releases.
+//
+// **git comes first, and that is the load-bearing part of the order.** A development checkout
+// carries the placeholder *and* real history, so reading `package.json` ahead of git would
+// report a release the tree is not standing on — and once a release injects a real version,
+// would report it on every commit after it too.
+//
+// This is the one read of `package.json` in rig, and it is a *display* fact. `FORMAT_STAMP`
+// still reads nothing: ADR 0004 moved the record-format stamp off this file precisely so the
+// placeholder could not become an unparseable stamp and refuse every mutating command, and
+// nothing here reaches that path.
+export function releaseMark ({ describe, head, packageVersion }) {
   const at = parseDescribe(describe)
   const sha = head ? String(head).slice(0, 7) : null
-  if (!at) return sha
+  if (!at) return sha ?? releaseVersion(packageVersion)
   if (at.distance === 0) return at.tag
   return sha ? `${at.distance} past ${at.tag}, ${sha}` : `${at.distance} past ${at.tag}`
 }

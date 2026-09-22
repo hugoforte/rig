@@ -1,11 +1,22 @@
 {
-  "name": "rig",
+  "name": "@hugoforte/rig",
   "version": "0.0.0-development",
-  "private": true,
   "type": "module",
   "description": "Cross-repo work harness. Zero dependencies.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/hugoforte/rig.git" },
+  "homepage": "https://github.com/hugoforte/rig#readme",
+  "bugs": "https://github.com/hugoforte/rig/issues",
+  "keywords": ["git", "worktree", "monorepo", "cross-repo", "cli"],
   "engines": { "node": ">=18" },
   "bin": { "rig": "bin/rig.mjs" },
+  "files": [
+    "bin/",
+    "prompts/",
+    "templates/",
+    "docs/",
+    "AGENTS.md"
+  ],
   "scripts": {
     "test": "node --test"
   }

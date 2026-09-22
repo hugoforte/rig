@@ -72,9 +72,13 @@ const install = (script, target, prefix) => {
   return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') }
 }
 
-// Where `npm install -g` puts the package, under a prefix of our choosing.
+// Where `npm install -g` puts the package, under a prefix of our choosing. The name is read
+// rather than written down: it is scoped, so the path has a directory in it that a literal
+// here would have to be kept in step with — and the failure when it drifted looked like a
+// broken install script rather than a stale test.
+const PACKAGE_NAME = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).name
 const installedPackage = prefix =>
-  path.join(prefix, WINDOWS ? 'node_modules' : path.join('lib', 'node_modules'), 'rig')
+  path.join(prefix, WINDOWS ? 'node_modules' : path.join('lib', 'node_modules'), ...PACKAGE_NAME.split('/'))
 
 const place = name => ({ target: path.join(tmp, `${name}-checkout`), prefix: fs.mkdtempSync(path.join(tmp, `${name}-prefix-`)) })
 let sh, ps

@@ -1,10 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, pullsOf, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
+  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, pullsOf, releaseVerdict, releaseNotes, parseDescribe, releaseMark, PLACEHOLDER_VERSION,
 } from '../bin/release.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -342,4 +343,42 @@ test('a checkout past a release says how far past, and still names the commit', 
 test('a checkout with no release in its history is named by its commit, as before', () => {
   assert.equal(releaseMark({ describe: null, head: 'abc1234def' }), 'abc1234')
   assert.equal(releaseMark({ describe: null, head: null }), null)
+})
+
+// ------------------------------------------------ naming a package that has no git at all
+
+// An installation from the registry is a copy with no `.git`, so `git describe` answers
+// nothing and the two facts that named a checkout — the release and the sha — are both gone.
+// What it does have is a real version in `package.json`, injected at publish (ADR 0004 says
+// the version is worked out at the release; a published artifact is where it lands).
+
+test('a package with a real version is named by it when git describes nothing', () => {
+  assert.equal(releaseMark({ describe: null, head: null, packageVersion: '3.9.0' }), 'v3.9.0')
+})
+
+test('the placeholder version names nothing — it is not a release', () => {
+  assert.equal(releaseMark({ describe: null, head: null, packageVersion: PLACEHOLDER_VERSION }), null)
+  assert.equal(releaseMark({ describe: null, head: null, packageVersion: '0.0.0-development' }), null,
+    'and the literal, in case the constant ever stops being that string')
+})
+
+test('git wins over package.json: a clone is named by where it actually stands', () => {
+  // The case that makes the order matter. A development checkout carries the placeholder *and*
+  // real git history; naming it from `package.json` would report a release it is not on.
+  assert.equal(releaseMark({ describe: 'v1.1.0-3-gabc1234', head: 'abc1234def', packageVersion: '9.9.9' }),
+    '3 past v1.1.0, abc1234')
+  assert.equal(releaseMark({ describe: null, head: 'abc1234def', packageVersion: PLACEHOLDER_VERSION }),
+    'abc1234', 'a clone with no tags is still named by its commit')
+})
+
+test('a version that is not a plain release is not believed', () => {
+  for (const junk of [null, undefined, '', 'nope', '1.2', '1.2.0-rc.1']) {
+    assert.equal(releaseMark({ describe: null, head: null, packageVersion: junk }), null, `for ${junk}`)
+  }
+})
+
+test('package.json still carries the placeholder ADR 0004 requires', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(pkg.version, PLACEHOLDER_VERSION,
+    'the version is injected at publish; a real one committed here would name a release this tree is not')
 })
