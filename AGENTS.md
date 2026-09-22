@@ -408,6 +408,13 @@ are a coincidence, so wait for the third before naming the pattern. And **strong
 convictions, loosely held** — decide, write the reason down, and let evidence move you.
 Both are stated in full in DESIGN.md's "Principles".
 
+Adding a decision to DESIGN.md's log means filling its **Enforced by** cell: the test that
+would fail if the decision stopped holding — a path, then that test's own title — or `—` when
+nothing checks it. `test/design.test.mjs` resolves what you write and fails on a reference that
+has been renamed or deleted, so a rename is caught on the pull request that made it. An empty
+cell is a legitimate answer and the gaps are meant to be visible; naming a test that merely
+passes nearby is worse than leaving it empty.
+
 ### Releases
 
 Working *on* rig rather than with it: **never write a version number.** Your PR names a bump —
