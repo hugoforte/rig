@@ -86,6 +86,12 @@ test('attaching a repo the catalogue has never seen drafts an entry to correct',
   assert.match(fs.readFileSync(entry, 'utf8'), /^stack: JavaScript$/m)
 })
 
+
+test('next offers the draft entry for correction, while the worktree is still on disk', () => {
+  const r = rig(['next', '--work', 't1'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /catalogue entry for billing is still a draft/)
+})
 test('with no identity configured, the mirror is where git is asked what it would commit with', () => {
   assert.match(rig(['doctor']).out, /identity for acme.*git has no user\.email to commit with/)
   gitMust(mirrorOf('billing'), 'config', 'user.email', 'git-decided@acme.example')
@@ -174,9 +180,26 @@ test('close removes every worktree and the work folder once the work is pushed',
   const r = rig(['close', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /removed worktree billing/)
+  assert.match(r.out, /catalogue still a draft for billing — correct it and `rig save --work t1 -m "catalogue corrections"`/,
+    'the last call: next offers the correction while the trees exist, close names what nobody made')
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
   assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /[\\/]t1[\\/]/)
   assert.equal(record().closedAt !== undefined, true, 'closing records the gate and no status')
   // The mirror outlives the work: it is a cache under the work root, not part of the work.
   assert.ok(fs.existsSync(mirrorOf('billing')))
+})
+
+test('the command close hands over works after the work folder is gone', () => {
+  // The last call names `rig save --work <id>` and not a bare `rig save`, because `save`
+  // resolves its work from the folder it is run in and close has just deleted that folder.
+  // Closed is not a refusal here: only `--designed` is behind the gate.
+  assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'the folder a bare `rig save` would need')
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+  fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8')
+    .replace(/<!-- DRAFT: unreviewed[\s\S]*?-->/, 'Billing, corrected after the work closed.'))
+
+  const r = rig(['save', '--work', 't1', '-m', 'catalogue corrections'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(fs.readFileSync(entry, 'utf8'), /DRAFT: unreviewed/)
+  assert.equal(gitMust(dataRoot, 'status', '--porcelain'), '', 'and the correction is committed')
 })
