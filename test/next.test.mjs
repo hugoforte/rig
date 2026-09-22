@@ -231,3 +231,69 @@ test('every offer names the phase it belongs to', () => {
   assert.ok(out.length > 0)
   for (const o of out) assert.match(o.phase, /^(planning|designing|building|reviewing|landing)$/)
 })
+
+// Correcting the catalogue is offered while the worktrees still exist — through building,
+// reviewing and landing — because that is the only span in which the repos are both loaded in
+// the operator's head and present on disk. `rig close` cannot be the moment: it commits before
+// it removes the worktrees, and no rig command waits for a human.
+test('a draft catalogue entry for an attached repo is offered for correction', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a'), repo('b')],
+    drafts: ['a'],
+  })
+  assert.match(says(out), /catalogue entry for a is still a draft/)
+  assert.ok(commands(out).includes('rig catalog a'))
+})
+
+test('several drafts are one offer, because they are one sitting of work', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a'), repo('b')],
+    drafts: ['a', 'b'],
+  })
+  assert.equal(out.filter(o => /catalogue entr/.test(o.says)).length, 1)
+  assert.match(says(out), /catalogue entries for a, b are still drafts/)
+})
+
+test('correcting the catalogue is offered, never demanded', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    drafts: ['a'],
+  })
+  assert.doesNotMatch(says(out), /should|must|need to|failed/i)
+})
+
+test('no drafts means nothing is said about the catalogue', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: [] })
+  assert.doesNotMatch(says(out), /catalogue/)
+})
+
+test('a closed work is not asked to correct anything: the worktrees are already gone', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, closedAt: AT }),
+    repos: [repo('a', { merged: true })],
+    drafts: ['a'],
+  })
+  assert.deepEqual(out, [])
+})
+
+test('the catalogue offer comes after the work itself, never ahead of unsaved changes', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { dirty: 2 })],
+    drafts: ['a'],
+  })
+  const order = out.map(o => o.says)
+  assert.ok(order.findIndex(s => /uncommitted/.test(s)) < order.findIndex(s => /catalogue/.test(s)))
+})
+
+test('a draft entry alone is not "nothing to suggest"', () => {
+  // The floor case: everything attached and agreed, nothing written yet. Before the catalogue
+  // offer existed this work had one line; the point of the offer is that it is available in
+  // exactly the stretch where there is otherwise nothing to do but write code.
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
+  assert.ok(out.length >= 1)
+  assert.match(says(out), /catalogue entry for a is still a draft/)
+})

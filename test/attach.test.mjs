@@ -86,6 +86,12 @@ test('attaching a repo the catalogue has never seen drafts an entry to correct',
   assert.match(fs.readFileSync(entry, 'utf8'), /^stack: JavaScript$/m)
 })
 
+
+test('next offers the draft entry for correction, while the worktree is still on disk', () => {
+  const r = rig(['next', '--work', 't1'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /catalogue entry for billing is still a draft/)
+})
 test('with no identity configured, the mirror is where git is asked what it would commit with', () => {
   assert.match(rig(['doctor']).out, /identity for acme.*git has no user\.email to commit with/)
   gitMust(mirrorOf('billing'), 'config', 'user.email', 'git-decided@acme.example')
@@ -174,6 +180,8 @@ test('close removes every worktree and the work folder once the work is pushed',
   const r = rig(['close', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /removed worktree billing/)
+  assert.match(r.out, /catalogue still a draft for billing/,
+    'the last call: next offers the correction while the trees exist, close names what nobody made')
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
   assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /[\\/]t1[\\/]/)
   assert.equal(record().closedAt !== undefined, true, 'closing records the gate and no status')

@@ -104,7 +104,11 @@ rig attach orders-web
    lookup: `reviewing` and `landing` are said by `rig status`, never by a document.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
-   your head — that is the only moment the knowledge is cheap.
+   your head — that is the only moment the knowledge is cheap. `rig next` offers it for the
+   work in hand, through every phase in which the worktrees are still on disk, and `rig close`
+   names what is still a draft on the way out. Neither refuses: prose that stays wrong destroys
+   nothing, and a close that could not commit the answer would be asking for the work after the
+   repos had been deleted.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
 ## The catalogue

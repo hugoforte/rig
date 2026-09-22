@@ -44,11 +44,12 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
+//   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], drafts = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -155,6 +156,29 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // thing left to do and rig is not the tool that does it.
   if (!out.length && untouched.length === repos.length) {
     out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
+  }
+
+  // Correcting the catalogue, offered while the worktrees still exist — which is the only span
+  // in which the repos are both loaded in your head *and* on disk.
+  //
+  // `rig close` cannot be the moment, though it is the obvious guess: it commits the data root
+  // (`commitAs`) before it removes the worktrees, and no rig command waits for a human, so a
+  // close that asked would be asking for work to be done after the evidence had been deleted.
+  // Close keeps a last call naming the entries, and the offer lives here, in the command whose
+  // whole job is what is available now.
+  //
+  // Last in the ladder, and after the floor line on purpose. A draft entry is never the most
+  // immediate thing, and a work with nothing written yet should still hear that the code is the
+  // part that is theirs before it hears about prose.
+  if (drafts.length) {
+    const many = drafts.length > 1
+    // No command when there are several: correcting four entries is a sitting of work, not one
+    // line to type, and the design gate above already sets the precedent for an offer with
+    // nothing to run.
+    out.push(offer(phase,
+      `the catalogue ${many ? `entries for ${drafts.join(', ')} are still drafts` : `entry for ${drafts[0]} is still a draft`}`
+      + ` — correct ${many ? 'them' : 'it'} while the repo${many ? 's are' : ' is'} still in your head`,
+      many ? null : `rig catalog ${drafts[0]}`))
   }
 
   return out

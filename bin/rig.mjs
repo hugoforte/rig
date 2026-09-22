@@ -599,6 +599,12 @@ function loadCatalog (dataRootPath = dataRoot()) {
 const findCatalog = (name, dataRootPath = dataRoot()) =>
   loadCatalog(dataRootPath).find(e => e.repo.toLowerCase() === name.toLowerCase())
 
+// This work's attached repos whose catalogue entry `rig attach` drafted and nobody has
+// corrected. The repos of the work in hand rather than the whole root, because both readers
+// are about *now*: `rig next` offers the correction while the worktrees are still on disk, and
+// `rig close` makes the last call on the way out.
+const draftEntries = work => (work.repos || []).filter(r => findCatalog(r.repo)?.draft).map(r => r.repo)
+
 // Which org a repo belongs to: the catalogue first, then GitHub. The language comes
 // along from GitHub for the catalogue stub `rig attach` drafts on first sight.
 function resolveOrg (cfg, repo) {
@@ -2260,6 +2266,9 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
+    // root, and the question here is what is available on the work in hand.
+    drafts: draftEntries(work),
   })
 
   const phase = phaseOf(work, repos)
@@ -2653,6 +2662,15 @@ cmds.close = ({ flags }) => {
   saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as stopped
   ticketWriteBack(work, states, { abandoned, stages: stack })
   ok(`${abandoned ? 'abandoned' : 'closed'} ${id} — context doc kept at ${contextFile(id)}`)
+  // The last call. `rig next` is where the correction is offered, because it runs while the
+  // worktrees are still on disk and this command has just removed them — close commits the data
+  // root above, before the teardown, and nothing here waits for a human. So this names the
+  // entries and stops: the catalogue outlives the work, and an entry nobody corrected is worth
+  // knowing about even once the cheap moment has passed.
+  const stillDraft = draftEntries(work)
+  if (stillDraft.length) {
+    say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`rig save\``))
+  }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
     // Named rather than closed: closing someone's pull request is an outward-facing act, and
