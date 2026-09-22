@@ -65,7 +65,15 @@ function run (cmd, args, opts = {}) {
 
 // Is the command on PATH at all? `run` dies when it is not, which is right for every caller
 // that needs it — except the ones whose whole job is to report that it is missing.
-const onPath = cmd => !spawnSync(cmd, ['--version'], SPAWN_DEFAULTS).error
+//
+// Asked once per command name per process, because PATH cannot change inside one and the
+// answer was being bought again every time: a tenth of every process rig starts across the
+// test suite was `git --version`, asked to be told what the last one had already said.
+const onPathAnswers = new Map()
+const onPath = cmd => {
+  if (!onPathAnswers.has(cmd)) onPathAnswers.set(cmd, !spawnSync(cmd, ['--version'], SPAWN_DEFAULTS).error)
+  return onPathAnswers.get(cmd)
+}
 
 // `df -Pk`: a header line, then one line per filesystem — Filesystem, 1024-blocks, Used,
 // Available, Capacity, Mounted on. POSIX guarantees `-P` keeps each entry on a single line,

@@ -266,7 +266,9 @@ test('the merge is --ff-only, which is what holds when the count that would have
   gitMust(local, 'add', '-A')
   gitMust(local, 'commit', '-q', '-m', 'a record of my own')
   assert.equal(c().fetch(local).ok, true)
-  const blind = (cmd, args) => args.includes('@{u}..HEAD')
+  // Two knockouts, because one reading answers both counts: without the tree, `describe`
+  // falls back to a `rev-list` per direction, and this is the forward one.
+  const blind = (cmd, args) => args.includes('--porcelain=v2') || args.includes('@{u}..HEAD')
     ? { code: 1, out: '', err: 'fatal: bad revision' }
     : run(cmd, args)
 
@@ -363,20 +365,45 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
 
+test('describe reads a checkout in two git calls, and pays the old six only when the tree fails', () => {
+  // Pinned, because the symptom of it creeping back is invisible: six spawns answer the
+  // same questions as two and every test still passes, and the only thing that changes is
+  // that the suite takes another minute. A reading of a checkout runs at least twice per
+  // mutating command, so this is the tool's own latency as much as the suite's.
+  const { local } = cloned('counted')
+  const calls = []
+  const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
+  checkouts({ run: counting }).describe(local)
+  assert.deepEqual(calls.map(a => a.split(' ')[2]), ['rev-parse', 'status'], calls.join('\n'))
+
+  calls.length = 0
+  const noTree = (cmd, args) => { calls.push(args.join(' ')); return args.includes('--porcelain=v2') ? { code: 128, out: '', err: 'fatal: unable to read index' } : run(cmd, args) }
+  const state = checkouts({ run: noTree }).describe(local)
+  // The six it always cost, plus the one attempt that found out it had to. Bought on a
+  // path where git has already failed, which is the trade the fallback exists to make.
+  assert.equal(calls.length, 7, calls.join('\n'))
+  assert.deepEqual([state.dirty, state.modified], [null, null], 'the tree is the half that went')
+  assert.equal(state.branch, 'main', 'and the half that did not is still read')
+})
+
 test('a distance git could not measure is not a reason to move anything', () => {
-  // The one answer real git will not give on demand: an upstream that exists and a
-  // rev-list that fails. A confident "0 behind" here would report a checkout as current
-  // on the strength of a failed command.
-  const fake = (cmd, args) => {
-    const sub = args[2]
-    if (sub === 'rev-parse' && args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
-    if (sub === 'symbolic-ref') return { code: 0, out: 'main', err: '' }
-    if (sub === 'rev-parse' && args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
-    if (sub === 'status') return { code: 0, out: '', err: '' }
-    if (sub === 'rev-list') return { code: 1, out: '', err: 'fatal: bad revision' }
-    return { code: 1, out: '', err: `unexpected: ${args.join(' ')}` }
-  }
-  const r = checkouts({ run: fake }).fastForward(path.join(tmp, 'own'))
+  // Real git, where this used to need a fake. An upstream that is still configured and
+  // whose ref has gone is what a squash merge leaves behind, and `status --porcelain=v2
+  // --branch` says exactly that: `branch.upstream` names it, and `branch.ab` is absent
+  // because there is nothing to count against. `rev-parse @{u}` could not tell that from a
+  // branch that never had an upstream at all — it failed identically for both.
+  //
+  // A confident "0 behind" here would report a checkout as current on the strength of a
+  // question nothing answered.
+  const { bare, local } = cloned('unmeasurable')
+  gitMust(bare, 'branch', '-m', 'main', 'gone')
+  gitMust(local, 'fetch', '-q', '--prune', 'origin')
+
+  const state = c().describe(local)
+  assert.equal(state.upstream, 'origin/main', 'still configured; it is the ref that went')
+  assert.deepEqual([state.ahead, state.behind], [null, null])
+
+  const r = c().fastForward(local)
   assert.equal(r.outcome, 'unmeasurable')
   assert.equal(r.state.behind, null)
 })
