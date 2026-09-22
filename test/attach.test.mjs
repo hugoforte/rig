@@ -9,11 +9,12 @@
 // the next one expects it. test/harness.mjs builds it.
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { makeInstall, readJson } from './harness.mjs'
 
-const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
+const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, env, cleanup } = makeInstall({
   prefix: 'rig-attach-',
   author: 'rig attach',
   email: 'attach@example.invalid',
@@ -202,4 +203,49 @@ test('the command close hands over works after the work folder is gone', () => {
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(fs.readFileSync(entry, 'utf8'), /DRAFT: unreviewed/)
   assert.equal(gitMust(dataRoot, 'status', '--porcelain'), '', 'and the correction is committed')
+})
+
+// The catalogue's own freshness. `doctor` measures each entry against the mirror of the repo
+// it describes — no network, no rate limit — and the mirror is the reason this test lives here
+// rather than in test/doctor.test.mjs, which has fixtures where this has git.
+//
+// A draft entry is left out of the measure: `attach` already reports it as a draft, so the
+// entry is corrected first, which is what rule 4 asks for anyway.
+test('a catalogue entry is reported as behind once the repo it describes has moved on', () => {
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+  // Appended rather than substituted for the DRAFT marker: the test above already corrected
+  // this entry, so a marker-replace would be a no-op here and the commit would find nothing
+  // staged. These tests share one installation in order, and this is the edit that has to land
+  // whatever ran before it.
+  fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace(/<!-- DRAFT: unreviewed[\s\S]*?-->/, '')
+    + '\nBilling, as somebody who had read it describes it.\n')
+  gitMust(dataRoot, 'add', '-A')
+  gitMust(dataRoot, 'commit', '-q', '-m', 'correct the billing entry')
+
+  assert.doesNotMatch(rig(['doctor']).out, /catalogue entr\w+ behind/,
+    'the repo has not moved since the entry was written, and zero is not news')
+
+  // The repo moves on. The committer date is set rather than left to the clock: the measure is
+  // "commits since the entry's own commit", and on a fast machine both land in the same second.
+  const seed = path.join(tmp, 'seed', 'billing')
+  fs.writeFileSync(path.join(seed, 'MOVED.md'), 'the repo moved on\n')
+  gitMust(seed, 'add', '-A')
+  const later = new Date(Date.now() + 86400000).toISOString()
+  assert.equal(spawnSync('git', ['-C', seed, 'commit', '-q', '-m', 'billing: moved on'],
+    { encoding: 'utf8', env: { ...env, GIT_AUTHOR_DATE: later, GIT_COMMITTER_DATE: later } }).status, 0)
+  gitMust(seed, 'push', '-q', path.join(remotesDir, 'acme', 'billing.git'), 'main')
+  // doctor does not fetch a mirror — an attach does (decision 9) — so it measures as of the
+  // last fetch, which this stands in for.
+  gitMust(mirrorOf('billing'), 'fetch', '-q', '--prune', 'origin')
+
+  assert.match(rig(['doctor']).out,
+    /1 catalogue entry behind its repo: billing \(1 commit since \d{4}-\d{2}-\d{2}\)/)
+})
+
+test('the measure reads what the mirror last fetched, not the ref frozen at clone time', () => {
+  // The bug this pins: a mirror is cloned `--bare` and then given the refspec
+  // `+refs/heads/*:refs/remotes/origin/*`, so its own `refs/heads/main` never moves again.
+  // Measuring against it reported the drift as of the day the repo was first attached.
+  assert.equal(gitMust(mirrorOf('billing'), 'rev-list', '--count', 'refs/heads/main..refs/remotes/origin/main'), '1',
+    'the fetched ref is ahead of the frozen one, which is what makes the two distinguishable')
 })

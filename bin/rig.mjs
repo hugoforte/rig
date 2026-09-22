@@ -3018,6 +3018,8 @@ function doctorRoot (name, loc, hasGit) {
   // The merged config of *this* root, for the two things that differ between them: the orgs
   // rig.json declares, and the identity per org, which a root may override for its own.
   const cfg = there ? load(loc) : null
+  // Read once: both the draft list and the freshness measure are made of the same entries.
+  const entries = there ? loadCatalog(root) : []
   return {
     name,
     path: root,
@@ -3031,8 +3033,63 @@ function doctorRoot (name, loc, hasGit) {
       stamp: orgFileExists ? doctorStamp(readOrg(loc) ?? {}) : null,
     },
     orgs: (cfg?.orgs ?? []).map(org => ({ org, identity: effectiveIdentity(cfg, org), tracker: cfg.tracker?.[org] || null })),
-    drafts: loadCatalog(root).filter(e => e.draft).map(e => e.repo),
+    drafts: entries.filter(e => e.draft).map(e => e.repo),
+    catalogueFreshness: cfg ? catalogueFreshness(root, entries, cfg.mirrorRoot, hasGit) : [],
   }
+}
+
+// How far each catalogue entry is behind the repo it describes: commits on that repo's default
+// branch since the entry's own last commit in the data root. `talks_to`, `setup` and `check` are
+// facts about code that changes, and they were the fields decision 3's "durable facts only" rule
+// let through — the only signal about them was `DRAFT: unreviewed`, which says nothing about an
+// entry that was written, was right, and has been overtaken since.
+//
+// **Asked of the mirror, so it costs no network and no rate limit.** The alternative was a `gh`
+// call per entry, which would have made `doctor` O(catalogue) requests and broken the property
+// that every root check is answerable from that root alone. The cost is that a repo with no
+// mirror answers null: that is every repo nobody has attached, and an entry for a repo this
+// machine has never worked in is one nobody has had the chance to learn anything about anyway.
+// A mirror is only as current as its last fetch, and every `attach` fetches (decision 9), so the
+// measure is a floor — it never claims more drift than there is.
+//
+// Not an extension of `bin/freshness.mjs`: that module is about the tool checkout, down to the
+// detached HEADs and upstreams `skipReason` reasons about. Two similar things are a coincidence,
+// so the cache mechanism it documents waits for a third caller before anything is named.
+function catalogueFreshness (root, entries, mirrorRoot, hasGit) {
+  if (!hasGit || !mirrorRoot) return []
+  return entries.map(e => {
+    // The entry's own last commit, not the data root's: one file's history is what says when
+    // anybody last looked at this repo.
+    const rel = ['catalog', e.org, `${e.repo}.md`].join('/')
+    const written = git(root, 'log', '-1', '--format=%cI', '--', rel).out
+    const writtenAt = written ? written.slice(0, 10) : null
+    const mirror = path.join(mirrorRoot, e.org, `${e.repo}.git`)
+    // An entry with no commit of its own has just been drafted and not saved yet; a repo with
+    // no mirror has never been attached. Neither is a measurement, so neither is a zero.
+    if (!written || !exists(mirror)) return { repo: e.repo, writtenAt, commits: null }
+    const head = mirrorHead(mirror)
+    if (!head) return { repo: e.repo, writtenAt, commits: null }
+    const count = git(mirror, 'rev-list', '--count', `--since=${written}`, head)
+    const n = Number(count.out)
+    return { repo: e.repo, writtenAt, commits: count.code === 0 && Number.isInteger(n) ? n : null }
+  })
+}
+
+// What the mirror last saw the repo's default branch at. **Not the mirror's own `HEAD`**, which
+// is frozen at clone time: `bin/worktrees.mjs` gives a mirror the refspec
+// `+refs/heads/*:refs/remotes/origin/*`, so every fetch after the first lands under
+// `refs/remotes/origin/` and the local heads never move again. Measuring against `HEAD` would
+// have reported the drift as of the day the repo was first attached and called it current.
+//
+// The fallback list is `remoteHead`'s, for the same reason: the main/master mix across orgs
+// makes a global default wrong. A repo that answers for none of them is not measured, rather
+// than measured against a guess.
+function mirrorHead (mirror) {
+  const symbolic = git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')
+  if (symbolic.code === 0 && symbolic.out) return symbolic.out
+  return ['main', 'master', 'develop']
+    .map(b => `refs/remotes/origin/${b}`)
+    .find(r => git(mirror, 'rev-parse', '--verify', r).code === 0) || null
 }
 
 // Every data root this installation configures, in the order the machine file names them.

@@ -369,6 +369,61 @@ test('one draft entry is singular, because the line is read by a person', () => 
   assert.match(only(doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })] })), /draft catalogue/).says, /1 draft catalogue entry: billing/)
 })
 
+// One entry's freshness, as the caller measures it: how far the written entry is behind the
+// repo it describes. `commits` is null for an entry rig could not measure — no mirror to ask,
+// or no commit of its own yet — because decision 54's rule is that a check this machine could
+// not make arrives null rather than as a zero nobody can tell from a real one.
+const entry = (repo, commits, writtenAt = '2026-07-14') => ({ repo, commits, writtenAt })
+
+test('catalogue entries behind their repos warn and do not count, like drafts', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ catalogueFreshness: [entry('billing', 88), entry('orders', 12, '2026-09-02')] })],
+  }))
+  const one = only(found, /catalogue entr.* behind/)
+  assert.equal(one.verdict, 'warn')
+  assert.equal(problemCount(found), 0, 'an entry that has fallen behind is an invitation, not a fault')
+})
+
+test('the line names the number of commits and the date the entry was written', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', 88)] })] }))
+  assert.match(only(found, /catalogue entr.* behind/).says,
+    /1 catalogue entry behind its repo: billing \(88 commits since 2026-07-14\)/)
+})
+
+test('entries are named worst first, so the list reads as a ranking and not an inventory', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ catalogueFreshness: [entry('orders', 12), entry('pos', 412), entry('billing', 88)] })],
+  }))
+  assert.match(only(found, /catalogue entr.* behind/).says, /pos \(412 .*billing \(88 .*orders \(12 /)
+})
+
+test('an entry whose repo has not moved since it was written is not reported', () => {
+  // The measure is reported, never judged (CONTEXT.md's Freshness), but zero is not a measure
+  // worth a line: it is the answer for every entry anyone has just corrected.
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', 0)] })] }))
+  assert.equal(matching(found, /catalogue entr.* behind/).length, 0)
+})
+
+test('an entry rig could not measure costs no line and no verdict (decision 54)', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', null)] })] }))
+  assert.equal(matching(found, /catalogue entr.* behind/).length, 0)
+  assert.equal(problemCount(found), 0)
+})
+
+test('a draft entry is not also reported as behind: it is already an invitation to rewrite it', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ drafts: ['billing'], catalogueFreshness: [entry('billing', 88), entry('orders', 12)] })],
+  }))
+  assert.match(only(found, /catalogue entr.* behind/).says, /1 catalogue entry behind its repo: orders/)
+})
+
+test('a long list is capped, because the line is read by a person and the tail is the same news', () => {
+  const many = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((r, i) => entry(r, 100 - i))
+  const says = only(doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: many })] })), /catalogue entr.* behind/).says
+  assert.match(says, /^7 catalogue entries behind their repos: /)
+  assert.match(says, /e \(96 commits since 2026-07-14\), and 2 more$/)
+})
+
 test('a free-space probe this machine does not have costs one line, not the verdict (decision 54)', () => {
   const found = doctorFindings(snap({ disk: null }))
   assert.equal(matching(found, /disk on/).length, 0)
