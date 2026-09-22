@@ -89,7 +89,7 @@ The disposable tree worktrees are assembled under, with the mirrors and caches b
 _Avoid_: workspace, scratch
 
 **Freshness**:
-How far an installation is behind the remote it was cloned from. Measured, cached, and reported — never acted on without asking.
+How far something committed is behind what it describes — an installation behind the remote it was cloned from, a catalogue entry behind the repo it names. Measured, cached, and reported — never acted on without asking.
 _Avoid_: staleness, drift (those name the problem, not the measure)
 
 **Refresh**:

@@ -22,6 +22,11 @@
 // use it are contradictions, and this is the module that words them.
 export const ISSUES_URL = 'https://github.com/hugoforte/rig/issues'
 
+// How many entries the catalogue-freshness line names before it stops counting out loud. A
+// display bound and not a threshold: the count is always the whole population, and the tail of
+// a ranked list is the same news as its head.
+const CATALOGUE_NAMED = 5
+
 // One finding: the glyph it prints as, what it says, and whether it moves the exit code.
 //
 //   verdict  'ok' (✓), 'warn' (!), 'bad' (✗) or 'note' (·) — the four channels the output
@@ -134,6 +139,30 @@ function rootFindings (root) {
   if (drafts.length) {
     out.push(warn(`${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.join(', ')}`, { counts: false }))
   }
+
+  // An entry behind the repo it describes is the same kind of finding as a draft — an invitation
+  // to correct it, not a fault — so it warns and does not count. Drafts are left out: a stub
+  // nobody has written yet is already reported above, and saying it twice would make the shorter
+  // list the noisier one.
+  //
+  // **Reported, never judged**, which is what CONTEXT.md's Freshness has always meant. The line
+  // carries the count and the date and no opinion about either, because rig cannot know which
+  // commits touched what the entry claims: 400 in code the entry never described is not
+  // staleness, and 3 that moved a `talks_to` edge is. Zero is dropped all the same — it is the
+  // answer for every entry anyone has just corrected, and it is not news.
+  const behind = (root.catalogueFreshness || [])
+    .filter(e => e.commits > 0 && !drafts.includes(e.repo))
+    .sort((a, b) => b.commits - a.commits)
+  if (behind.length) {
+    const named = behind.slice(0, CATALOGUE_NAMED)
+    const rest = behind.length - named.length
+    const list = named.map(e => `${e.repo} (${e.commits} commit${e.commits === 1 ? '' : 's'} since ${e.writtenAt})`).join(', ')
+    const one = behind.length === 1
+    out.push(warn(
+      `${behind.length} catalogue entr${one ? 'y' : 'ies'} behind ${one ? 'its repo' : 'their repos'}: ${list}${rest ? `, and ${rest} more` : ''}`,
+      { counts: false },
+    ))
+  }
   return out
 }
 
@@ -162,11 +191,13 @@ function rootFindings (root) {
 //                     minus the two things rig keeps there itself
 //   mirrorRoot        { path, exists }
 //   dataRoots         one per root this installation configures, each
-//                     { name, path, split, exists, state, repoConfig, orgs, drafts }:
-//                     `state` is `checkouts.describe()` and null when there is nothing
-//                     readable to describe, `repoConfig` is { path, exists, orgs, stamp }
-//                     with `stamp` the record-format reading, and `orgs` is
-//                     [{ org, identity: { email, source }, tracker }]
+//                     { name, path, split, exists, state, repoConfig, orgs, drafts,
+//                     catalogueFreshness }: `state` is `checkouts.describe()` and null when
+//                     there is nothing readable to describe, `repoConfig` is
+//                     { path, exists, orgs, stamp } with `stamp` the record-format reading,
+//                     `orgs` is [{ org, identity: { email, source }, tracker }], and
+//                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
+//                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
 //                     folderMissing, strays, repos }]
 //   disk              { label, freeGb } or null
