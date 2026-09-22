@@ -3057,21 +3057,37 @@ function doctorRoot (name, loc, hasGit) {
 // so the cache mechanism it documents waits for a third caller before anything is named.
 function catalogueFreshness (root, entries, mirrorRoot, hasGit) {
   if (!hasGit || !mirrorRoot) return []
+  const unmeasured = repo => ({ repo, writtenAt: null, commits: null })
   return entries.map(e => {
-    // The entry's own last commit, not the data root's: one file's history is what says when
-    // anybody last looked at this repo.
-    const rel = ['catalog', e.org, `${e.repo}.md`].join('/')
-    const written = git(root, 'log', '-1', '--format=%cI', '--', rel).out
-    const writtenAt = written ? written.slice(0, 10) : null
+    // The mirror is asked about first, because the answer for a repo without one is null however
+    // old its entry is — and a catalogue is mostly repos nobody has attached. Reading the file's
+    // history first spent a git spawn per entry to compute a field the finding then discards.
     const mirror = path.join(mirrorRoot, e.org, `${e.repo}.git`)
-    // An entry with no commit of its own has just been drafted and not saved yet; a repo with
-    // no mirror has never been attached. Neither is a measurement, so neither is a zero.
-    if (!written || !exists(mirror)) return { repo: e.repo, writtenAt, commits: null }
+    if (!exists(mirror)) return unmeasured(e.repo)
     const head = mirrorHead(mirror)
-    if (!head) return { repo: e.repo, writtenAt, commits: null }
-    const count = git(mirror, 'rev-list', '--count', `--since=${written}`, head)
+    if (!head) return unmeasured(e.repo)
+
+    // The entry's own last commit, not the data root's: one file's history is what says when
+    // anybody last looked at this repo. Asked about the file `loadCatalog` actually read, rather
+    // than a path rebuilt from the frontmatter — an entry whose `repo:` or `org:` has drifted
+    // from where the file sits would answer for nothing at all, silently and for good.
+    const written = git(root, 'log', '-1', '--format=%cI', '--', path.relative(root, e.file)).out
+    // An entry with no commit of its own has just been drafted and not saved yet. Not a
+    // measurement, so not a zero.
+    if (!written) return unmeasured(e.repo)
+
+    // `--since` is `--max-age` and **inclusive**, so a commit stamped in the same second as the
+    // entry's own commit counts — and an entry corrected the moment a commit landed would report
+    // "1 commit since today", which is the zero-information line this measure drops. git stamps
+    // to the second, so one second past the cutoff is exactly "after".
+    const after = new Date(Date.parse(written) + 1000).toISOString()
+    const count = git(mirror, 'rev-list', '--count', `--since=${after}`, head)
     const n = Number(count.out)
-    return { repo: e.repo, writtenAt, commits: count.code === 0 && Number.isInteger(n) ? n : null }
+    return {
+      repo: e.repo,
+      writtenAt: written.slice(0, 10),
+      commits: count.code === 0 && Number.isInteger(n) ? n : null,
+    }
   })
 }
 
@@ -3084,12 +3100,17 @@ function catalogueFreshness (root, entries, mirrorRoot, hasGit) {
 // The fallback list is `remoteHead`'s, for the same reason: the main/master mix across orgs
 // makes a global default wrong. A repo that answers for none of them is not measured, rather
 // than measured against a guess.
+//
+// The symref is **resolved, not trusted**. `git remote set-head` is only re-run by
+// `worktrees.fetched()`, and doctor never fetches, so after an upstream renames its default
+// branch the symref still names the branch that is gone: `symbolic-ref` exits 0, the ref does
+// not resolve, and taking its word for it means the fallback is never reached even though
+// `refs/remotes/origin/main` is sitting right there.
 function mirrorHead (mirror) {
+  const resolves = r => git(mirror, 'rev-parse', '--verify', '--quiet', r).code === 0
   const symbolic = git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')
-  if (symbolic.code === 0 && symbolic.out) return symbolic.out
-  return ['main', 'master', 'develop']
-    .map(b => `refs/remotes/origin/${b}`)
-    .find(r => git(mirror, 'rev-parse', '--verify', r).code === 0) || null
+  if (symbolic.code === 0 && symbolic.out && resolves(symbolic.out)) return symbolic.out
+  return ['main', 'master', 'develop'].map(b => `refs/remotes/origin/${b}`).find(resolves) || null
 }
 
 // Every data root this installation configures, in the order the machine file names them.

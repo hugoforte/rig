@@ -249,3 +249,33 @@ test('the measure reads what the mirror last fetched, not the ref frozen at clon
   assert.equal(gitMust(mirrorOf('billing'), 'rev-list', '--count', 'refs/heads/main..refs/remotes/origin/main'), '1',
     'the fetched ref is ahead of the frozen one, which is what makes the two distinguishable')
 })
+
+test('a symref left pointing at a renamed default branch falls back rather than going unmeasured', () => {
+  // `git remote set-head` only runs on a fetch through rig, and doctor never fetches. So after an
+  // upstream renames its default branch the mirror's symref still names the branch that is gone:
+  // `symbolic-ref` exits 0 and the ref does not resolve. Taking its word for it left the entry
+  // unmeasured with `refs/remotes/origin/main` sitting right there.
+  gitMust(mirrorOf('billing'), 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/renamed-away')
+  try {
+    assert.match(rig(['doctor']).out, /1 catalogue entry behind its repo: billing \(1 commit since/)
+  } finally {
+    // In a `finally` because these tests share one installation in order: a mirror left with a
+    // broken symref makes every measure below it answer null, and the test after this one would
+    // pass for the wrong reason.
+    gitMust(mirrorOf('billing'), 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+  }
+})
+
+test('a commit landing in the same second as the entry is not one commit since it', () => {
+  // `--since` is `--max-age` and inclusive, so the cutoff itself counts. An entry corrected the
+  // moment a commit landed would report "1 commit since today", which is exactly the
+  // zero-information line the measure drops.
+  const head = gitMust(mirrorOf('billing'), 'log', '-1', '--format=%cI', 'refs/remotes/origin/main')
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+  fs.appendFileSync(entry, '\nCorrected again, in the same second as the commit.\n')
+  gitMust(dataRoot, 'add', '-A')
+  assert.equal(spawnSync('git', ['-C', dataRoot, 'commit', '-q', '-m', 'correct billing again'],
+    { encoding: 'utf8', env: { ...env, GIT_AUTHOR_DATE: head, GIT_COMMITTER_DATE: head } }).status, 0)
+
+  assert.doesNotMatch(rig(['doctor']).out, /catalogue entr\w+ behind/)
+})

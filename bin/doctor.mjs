@@ -191,11 +191,13 @@ function rootFindings (root) {
 //                     minus the two things rig keeps there itself
 //   mirrorRoot        { path, exists }
 //   dataRoots         one per root this installation configures, each
-//                     { name, path, split, exists, state, repoConfig, orgs, drafts }:
-//                     `state` is `checkouts.describe()` and null when there is nothing
-//                     readable to describe, `repoConfig` is { path, exists, orgs, stamp }
-//                     with `stamp` the record-format reading, and `orgs` is
-//                     [{ org, identity: { email, source }, tracker }]
+//                     { name, path, split, exists, state, repoConfig, orgs, drafts,
+//                     catalogueFreshness }: `state` is `checkouts.describe()` and null when
+//                     there is nothing readable to describe, `repoConfig` is
+//                     { path, exists, orgs, stamp } with `stamp` the record-format reading,
+//                     `orgs` is [{ org, identity: { email, source }, tracker }], and
+//                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
+//                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
 //                     folderMissing, strays, repos }]
 //   disk              { label, freeGb } or null
