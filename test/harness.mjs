@@ -42,7 +42,7 @@ export const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 
 // Everything a run of the tool needs that is not the tool: the code, the markdown it prints,
 // and the package.json it reads its version from.
-const copyTool = (dest, { gitignore = false } = {}) => {
+export const copyTool = (dest, { gitignore = false } = {}) => {
   for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(dest, d), { recursive: true })
   fs.cpSync(path.join(SRC, 'package.json'), path.join(dest, 'package.json'))
   // The real tool gitignores rig.local.json; without that the machine's own config would read
@@ -70,6 +70,14 @@ export function makeInstall ({
   // which is what the identity checks read.
   const env = { ...process.env }
   for (const key of Object.keys(env)) if (key.startsWith('RIG_')) delete env[key]
+  // The home directory, redirected for the same reason `GIT_CONFIG_GLOBAL` is below it. The
+  // machine file's default location is `~/.rig/rig.local.json`, so an installation left with
+  // the real home would read whatever data roots this machine happens to be configured with
+  // instead of the ones the test set up — and most tests here pass `localConfig: false`, so
+  // nothing else says where that file is. This used to be hermetic by accident: the file was
+  // looked for beside the tool, and the tool was already in the temp directory.
+  env.USERPROFILE = env.HOME = path.join(tmp, 'home')
+  fs.mkdirSync(env.USERPROFILE, { recursive: true })
   env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
   env.GIT_CONFIG_NOSYSTEM = '1'

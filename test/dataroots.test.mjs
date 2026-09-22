@@ -13,14 +13,26 @@ import path from 'node:path'
 import { locate, registry, load, anchoredRoot, rootsCataloguing, dataAnchorFile, DATA_ROOT_ENV, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 import { makeInstall, strip } from './harness.mjs'
 
+// The home directory every fixture below pins. The machine file's default location lives
+// under it, so a test that let the real one through would resolve against whatever data roots
+// this machine is configured with — and these are the tests about resolution. Both variables,
+// because `os.homedir()` reads `USERPROFILE` on Windows and `HOME` elsewhere.
+const pinHome = tmp => {
+  const home = path.join(tmp, 'home')
+  fs.mkdirSync(home, { recursive: true })
+  return { USERPROFILE: home, HOME: home }
+}
+
 // A tool checkout and as many data roots beside it as the machine file names. Nothing here
 // is a git checkout: resolution is a question about paths and JSON, and answering it should
-// not need a repo.
+// not need a repo. The machine file is written beside the tool — the legacy location, still
+// read — so that these tests are about resolution and not about where the file was found.
 const fixture = (machine, body) => {
   const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dataroots-')))
   try {
     const toolRoot = path.join(tmp, 'rig')
     fs.mkdirSync(toolRoot, { recursive: true })
+    const env = pinHome(tmp)
     const resolved = JSON.parse(JSON.stringify(machine).replaceAll('<tmp>', tmp.replaceAll('\\', '\\\\')))
     for (const entry of Object.values(resolved.dataRoots ?? {})) {
       if (!entry.path) continue   // the malformed-entry case: there is nothing to make
@@ -29,7 +41,7 @@ const fixture = (machine, body) => {
     }
     if (resolved.dataRoot) fs.mkdirSync(resolved.dataRoot, { recursive: true })
     fs.writeFileSync(path.join(toolRoot, 'rig.local.json'), JSON.stringify(resolved))
-    body({ tmp, toolRoot, machine: resolved })
+    body({ tmp, toolRoot, machine: resolved, env })
   } finally { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) }
 }
 
@@ -55,8 +67,8 @@ const THREE = {
 // ------------------------------------------------------------------ resolution order
 
 test('the current data root is the one in hand when nothing else says otherwise', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    const location = locate(toolRoot, {}, { cwd: tmp })
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    const location = locate(toolRoot, env, { cwd: tmp })
     assert.equal(location.name, 'hugoforte')
     assert.equal(location.dataRoot, path.join(tmp, 'rig-data'))
     assert.equal(location.source, 'current')
@@ -64,38 +76,38 @@ test('the current data root is the one in hand when nothing else says otherwise'
 })
 
 test('--data names a root and beats the current one', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    const location = locate(toolRoot, {}, { cwd: tmp, data: 'personal' })
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    const location = locate(toolRoot, env, { cwd: tmp, data: 'personal' })
     assert.equal(location.name, 'personal')
     assert.equal(location.source, 'flag')
   })
 })
 
 test(`${DATA_ROOT_ENV} pins a shell to one root, and --data still overrides it`, () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    const env = { [DATA_ROOT_ENV]: 'personal' }
-    assert.equal(locate(toolRoot, env, { cwd: tmp }).name, 'personal')
-    assert.equal(locate(toolRoot, env, { cwd: tmp, data: 'linenmaster' }).name, 'linenmaster')
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    const shell = { ...env, [DATA_ROOT_ENV]: 'personal' }
+    assert.equal(locate(toolRoot, shell, { cwd: tmp }).name, 'personal')
+    assert.equal(locate(toolRoot, shell, { cwd: tmp, data: 'linenmaster' }).name, 'linenmaster')
   })
 })
 
 test('a work folder says which root it belongs to, and that beats the current one', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
     const work = path.join(tmp, 'w', 'payments-refunds')
     fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
     fs.writeFileSync(dataAnchorFile(work), 'linenmaster\n')
-    const location = locate(toolRoot, {}, { cwd: path.join(work, 'billing', 'src') })
+    const location = locate(toolRoot, env, { cwd: path.join(work, 'billing', 'src') })
     assert.equal(location.name, 'linenmaster', 'resolved from a directory deep inside the work')
     assert.equal(location.source, 'cwd')
   })
 })
 
 test('the shell beats the work folder: a pinned shell was pinned on purpose', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
     const work = path.join(tmp, 'w', 'payments-refunds')
     fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
     fs.writeFileSync(dataAnchorFile(work), 'linenmaster\n')
-    assert.equal(locate(toolRoot, { [DATA_ROOT_ENV]: 'personal' }, { cwd: work }).name, 'personal')
+    assert.equal(locate(toolRoot, { ...env, [DATA_ROOT_ENV]: 'personal' }, { cwd: work }).name, 'personal')
   })
 })
 
@@ -108,63 +120,63 @@ test('outside any work folder there is no anchor to read', () => {
 // ------------------------------------------------- the repo says which knowledge is its own
 
 test('a repo named on the command puts the work in the root that catalogues it', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
-    const location = locate(toolRoot, {}, { cwd: tmp, repos: ['Payments'] })
+    const location = locate(toolRoot, env, { cwd: tmp, repos: ['Payments'] })
     assert.equal(location.name, 'linenmaster', 'and not `current`, which is hugoforte')
     assert.equal(location.source, 'repo')
   })
 })
 
 test('the repo the current directory is in answers when nothing named one', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
     catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
-    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'notes' })
+    const location = locate(toolRoot, env, { cwd: tmp, repoAt: () => 'notes' })
     assert.equal(location.name, 'personal')
     assert.equal(location.source, 'repo')
   })
 })
 
 test('finding the repo the cwd is in costs a subprocess, so it is not asked when something cheaper answered', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
     let asked = 0
-    locate(toolRoot, {}, { cwd: tmp, data: 'personal', repoAt: () => { asked++; return 'notes' } })
+    locate(toolRoot, env, { cwd: tmp, data: 'personal', repoAt: () => { asked++; return 'notes' } })
     assert.equal(asked, 0)
   })
 })
 
 test('the work folder still beats the repo: the work already said where it lives', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
     const work = path.join(tmp, 'w', 'a-work')
     fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
     fs.writeFileSync(dataAnchorFile(work), 'personal\n')
-    assert.equal(locate(toolRoot, {}, { cwd: work, repos: ['Payments'] }).name, 'personal')
+    assert.equal(locate(toolRoot, env, { cwd: work, repos: ['Payments'] }).name, 'personal')
   })
 })
 
 test('a repo nothing catalogues falls through to the current root', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    const location = locate(toolRoot, {}, { cwd: tmp, repos: ['never-seen'] })
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    const location = locate(toolRoot, env, { cwd: tmp, repos: ['never-seen'] })
     assert.equal(location.name, 'hugoforte')
     assert.equal(location.source, 'current')
   })
 })
 
 test('two repos in two roots is one work that cannot exist, and says so', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
     catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
-    assert.throws(() => locate(toolRoot, {}, { cwd: tmp, repos: ['Payments', 'notes'] }),
+    assert.throws(() => locate(toolRoot, env, { cwd: tmp, repos: ['Payments', 'notes'] }),
       /one work cannot span two data roots/)
   })
 })
 
 test('a repo catalogued in two roots is ambiguous, not a coin toss', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
     catalogue(machine.dataRoots.personal.path, 'acme', 'Payments')
-    assert.throws(() => locate(toolRoot, {}, { cwd: tmp, repos: ['Payments'] }),
+    assert.throws(() => locate(toolRoot, env, { cwd: tmp, repos: ['Payments'] }),
       /catalogued in more than one data root \(personal, linenmaster\) — pass --data/)
   })
 })
@@ -178,10 +190,10 @@ test('a root with no catalogue at all is not an error, it simply has no repos', 
 // ------------------------------------------------------------------ the one-root form
 
 test('a machine file with one bare dataRoot reads as a registry of exactly one', () => {
-  fixture({ dataRoot: '<tmp>/rig-data', workRoot: '<tmp>/w' }, ({ tmp, toolRoot }) => {
-    const reg = registry(toolRoot, {})
+  fixture({ dataRoot: '<tmp>/rig-data', workRoot: '<tmp>/w' }, ({ tmp, toolRoot, env }) => {
+    const reg = registry(toolRoot, env)
     assert.deepEqual(Object.keys(reg.roots), [DEFAULT_ROOT_NAME])
-    const location = locate(toolRoot, {}, { cwd: tmp })
+    const location = locate(toolRoot, env, { cwd: tmp })
     assert.equal(location.dataRoot, path.join(tmp, 'rig-data'))
     assert.equal(location.source, 'only', 'one root and no pointer: nothing was chosen invisibly')
   })
@@ -194,48 +206,48 @@ test('a relative path under dataRoots resolves against the machine file, not the
     fs.mkdirSync(toolRoot, { recursive: true })
     fs.writeFileSync(path.join(toolRoot, 'rig.local.json'),
       JSON.stringify({ dataRoots: { personal: { path: '../rig-data' } }, current: 'personal' }))
-    assert.equal(locate(toolRoot, {}, { cwd: tmp }).dataRoot, path.join(tmp, 'rig-data'))
+    assert.equal(locate(toolRoot, pinHome(tmp), { cwd: tmp }).dataRoot, path.join(tmp, 'rig-data'))
   } finally { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) }
 })
 
 // ------------------------------------------------------------------ what cannot be guessed
 
 test('a name nothing configures is fatal, and says what there is instead', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    assert.throws(() => locate(toolRoot, {}, { cwd: tmp, data: 'nope' }),
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    assert.throws(() => locate(toolRoot, env, { cwd: tmp, data: 'nope' }),
       /--data names data root "nope".*hugoforte, personal, linenmaster/s)
   })
 })
 
 test('several roots and no current is fatal rather than a guess', () => {
-  fixture({ ...THREE, current: undefined }, ({ tmp, toolRoot }) => {
-    assert.throws(() => locate(toolRoot, {}, { cwd: tmp }), /none is current/)
+  fixture({ ...THREE, current: undefined }, ({ tmp, toolRoot, env }) => {
+    assert.throws(() => locate(toolRoot, env, { cwd: tmp }), /none is current/)
   })
 })
 
 test('an entry with no path names the entry that is wrong', () => {
-  fixture({ dataRoots: { personal: { note: 'no path here' } } }, ({ toolRoot }) => {
-    assert.throws(() => registry(toolRoot, {}), /dataRoots\.personal .* has no "path"/)
+  fixture({ dataRoots: { personal: { note: 'no path here' } } }, ({ toolRoot, env }) => {
+    assert.throws(() => registry(toolRoot, env), /dataRoots\.personal .* has no "path"/)
   })
 })
 
 // ------------------------------------------------------------------ identities
 
 test('a root\'s identity for an org beats the machine-wide one', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    assert.equal(load(locate(toolRoot, {}, { cwd: tmp, data: 'linenmaster' })).identities.acme, 'hugo@work.invalid')
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    assert.equal(load(locate(toolRoot, env, { cwd: tmp, data: 'linenmaster' })).identities.acme, 'hugo@work.invalid')
   })
 })
 
 test('a root that says nothing about an org falls back to the machine-wide identity', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    assert.equal(load(locate(toolRoot, {}, { cwd: tmp, data: 'personal' })).identities.acme, 'hugo@personal.invalid')
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    assert.equal(load(locate(toolRoot, env, { cwd: tmp, data: 'personal' })).identities.acme, 'hugo@personal.invalid')
   })
 })
 
 test('the registry is the location\'s to answer, and never the merged config\'s', () => {
-  fixture(THREE, ({ tmp, toolRoot }) => {
-    const cfg = load(locate(toolRoot, {}, { cwd: tmp }))
+  fixture(THREE, ({ tmp, toolRoot, env }) => {
+    const cfg = load(locate(toolRoot, env, { cwd: tmp }))
     assert.equal(cfg.dataRoots, undefined)
     assert.equal(cfg.current, undefined)
     assert.equal(cfg.dataRootName, 'hugoforte')

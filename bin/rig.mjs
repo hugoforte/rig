@@ -20,7 +20,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, inToolTree, homeConfigFile, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -119,6 +119,18 @@ function readStdin () {
 
 const exists = p => fs.existsSync(p)
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
+
+// The version in this installation's own `package.json` — the placeholder in a checkout, a
+// real one in a package the release injected it into. The **only** read of that file in rig,
+// and it feeds `releaseMark` alone: it is how an installation with no `.git` names itself, and
+// it must never reach the record-format stamp, which ADR 0004 moved off this file so the
+// placeholder could not lock writes on every data root.
+//
+// Swallowed rather than thrown: naming the installation is a courtesy, and a tool that would
+// not run because it could not read its own version would be worse than one that says nothing.
+const toolPackageVersion = () => {
+  try { return readJson(path.join(RIG_ROOT, 'package.json')).version ?? null } catch { return null }
+}
 const writeJson = (p, v) => writeText(p, JSON.stringify(v, null, 2) + '\n')
 const readText = p => fs.readFileSync(p, 'utf8')
 // Writes only when the content differs: the record, its doc header and its folder are
@@ -1941,18 +1953,20 @@ const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
   .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   .map(([, work]) => work)
 
-// The release this checkout stands on, or null when nothing here was ever tagged. One spawn,
-// inside a command somebody ran on purpose — never in `toolState`, which every command's
-// epilogue already pays eight spawns for (ADR 0003). `head` is not passed: without a tag there
-// is no release to name, and a sha in a field called `release` would be a different claim.
+// The release this installation stands on, or null when there is nothing to name it by. One
+// spawn, inside a command somebody ran on purpose — never in `toolState`, which every
+// command's epilogue already pays eight spawns for (ADR 0003). `head` is not passed: without a
+// tag there is no release to name, and a sha in a field called `release` would be a different
+// claim.
 //
-// Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`):
-// `run` dies when the command is not there, and `rig list --json` on a machine with no git
-// has a full answer to give about the records — which release wrote it is the one field that
-// needs git, and a missing field is the right way to say so.
-const releaseHere = () => (onPath('git')
-  ? releaseMark({ describe: git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
-  : null)
+// Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`): `run`
+// dies when the command is not there. Without git the answer is no longer always null, though
+// — a package installed from the registry has no `.git` and names itself from the version the
+// release injected, which is the whole of what it knows.
+const releaseHere = () => releaseMark({
+  describe: onPath('git') ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null,
+  packageVersion: toolPackageVersion(),
+})
 
 // The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
 // renders it; neither reads the records a second way.
@@ -3111,6 +3125,9 @@ function doctorSnapshot () {
     setUp: true,
     localFile,
     configFileExists: exists(localFile),
+    // Only when it is the tool tree's copy: an installation carrying the one location a
+    // packaged upgrade deletes should hear so before the upgrade, not after.
+    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile() } : null,
     // Asked of the files, not carried on `cfg`: which keys the org half owns is
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
@@ -3120,7 +3137,7 @@ function doctorSnapshot () {
     selection: { error: selectionError },
     node: process.version,
     git: hasGit ? gv.out : null,
-    rig: { recordFormat: MAJOR, root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
+    rig: { recordFormat: MAJOR, root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head, packageVersion: toolPackageVersion() }) },
     freshness: doctorFreshness(cfg, tool),
     gh: github().auth(),
     jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
