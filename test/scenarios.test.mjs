@@ -297,7 +297,7 @@ scenario('splitting a data root', {
 
 // ------------------------------------------- the machine file survives a packaged upgrade
 
-// The regression decision 92 exists to prevent, and the only shape of test that can see it:
+// The regression decision 93 exists to prevent, and the only shape of test that can see it:
 // an installation is set up, the directory the tool runs from is **replaced wholesale** — what
 // `npm i -g @hugoforte/rig@latest` does to a package it owns — and the machine is asked
 // whether it still knows anything. With `rig.local.json` beside `package.json` the answer was
@@ -350,7 +350,7 @@ scenario('a packaged upgrade replaces the tool, and the machine keeps its config
 
 // ------------------------------------------ an installation made before the file moved
 
-// The other half of decision 92: the tool tree is still *read*, so a clone install that
+// The other half of decision 93: the tool tree is still *read*, so a clone install that
 // predates the move keeps working with nothing done to it — and is told where the file
 // belongs, once, before an upgrade is the thing that tells it.
 scenario('a machine file left beside the tool is read, and named by doctor', {
