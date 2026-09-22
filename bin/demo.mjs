@@ -24,7 +24,11 @@
 // does highlighting and stepping, nothing else. The page has to open from a file:// URL on a
 // machine with no network, because that is the machine it will be presented from.
 
-// ---------------------------------------------------------------- the graph
+// The graph itself is `bin/catalog-graph.mjs`, which `rig impact` reads too. What is left
+// here is the drawing of it: where a node goes, and how big.
+import { buildGraph } from './catalog-graph.mjs'
+
+// ------------------------------------------------------------- laying it out
 
 // A deterministic PRNG, so the same catalogue always lays out the same way. A demo that
 // rearranged itself between the rehearsal and the room would be a bad demo, and a layout
@@ -37,58 +41,6 @@ function seeded (seed) {
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t
     return ((t ^ t >>> 14) >>> 0) / 4294967296
   }
-}
-
-// `talks_to` is written from both ends: Payments says how it hears from the integration hub,
-// and the hub says how it pushes. Those are one relationship described twice, so the graph
-// draws one line and hangs both descriptions off it. Drawing two would say the systems are
-// more tangled than they are, which is the opposite of what the catalogue is for.
-export function buildGraph (catalog) {
-  const known = new Map(catalog.map(e => [e.repo.toLowerCase(), e]))
-  const nodes = new Map()
-  const edges = new Map()
-
-  const node = (repo, entry) => {
-    const key = repo.toLowerCase()
-    if (!nodes.has(key)) {
-      nodes.set(key, {
-        id: repo,
-        org: entry?.org || '',
-        role: entry?.role || '',
-        stack: entry?.stack || '',
-        // A neighbour named by someone else's `talks_to` with no entry of its own is a real
-        // finding, not a rendering problem: it is the catalogue telling you where it is thin.
-        // Dropping it would hide exactly the gap worth seeing.
-        catalogued: Boolean(entry),
-        draft: Boolean(entry?.draft),
-        degree: 0,
-      })
-    }
-    return nodes.get(key)
-  }
-
-  for (const entry of catalog) node(entry.repo, entry)
-
-  for (const entry of catalog) {
-    for (const link of entry.talks_to || []) {
-      const other = typeof link === 'string' ? link : link.repo
-      if (!other) continue
-      const how = typeof link === 'string' ? '' : (link.how || '')
-      const a = node(entry.repo, entry)
-      const b = node(other, known.get(String(other).toLowerCase()))
-      if (a.id === b.id) continue
-      const key = [a.id.toLowerCase(), b.id.toLowerCase()].sort().join('\u0000')
-      if (!edges.has(key)) edges.set(key, { a: a.id, b: b.id, says: [] })
-      if (how) edges.get(key).says.push({ from: a.id, to: b.id, how })
-    }
-  }
-
-  for (const e of edges.values()) {
-    nodes.get(e.a.toLowerCase()).degree++
-    nodes.get(e.b.toLowerCase()).degree++
-  }
-
-  return { nodes: [...nodes.values()], edges: [...edges.values()] }
 }
 
 // How big a node is drawn. A busy repo gets a bigger dot, which is the one piece of the

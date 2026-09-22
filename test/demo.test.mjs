@@ -13,7 +13,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { buildGraph, components, layout, nodeRadius, halfBox, repoBranch, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { components, layout, nodeRadius, halfBox, repoBranch, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { buildGraph } from '../bin/catalog-graph.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -52,51 +53,6 @@ const pr = (over = {}) => ({
   openedAt: '2026-01-02T10:00:00Z', firstCommitAt: '2026-01-02T09:00:00Z',
   firstReviewAt: '2026-01-02T11:00:00Z', approvedAt: '2026-01-02T12:00:00Z',
   mergedAt: '2026-01-02T13:00:00Z', ...over,
-})
-
-// ------------------------------------------------------------------- the graph
-
-test('buildGraph: a relationship both ends describe is one edge, not two', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]),
-    entry('orders', [{ repo: 'billing', how: 'emits OrderReturned' }]),
-  ])
-  assert.equal(graph.edges.length, 1)
-})
-
-test('buildGraph: that one edge keeps what each end said, with its direction', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]),
-    entry('orders', [{ repo: 'billing', how: 'emits OrderReturned' }]),
-  ])
-  assert.deepEqual(graph.edges[0].says.map(s => `${s.from}→${s.to}: ${s.how}`).sort(), [
-    'billing→orders: pushes invoices',
-    'orders→billing: emits OrderReturned',
-  ])
-})
-
-test('buildGraph: a neighbour with no entry of its own is kept, and marked', () => {
-  const graph = buildGraph([entry('billing', [{ repo: 'ancient-mainframe', how: 'nightly batch' }])])
-  const found = graph.nodes.find(n => n.id === 'ancient-mainframe')
-  assert.equal(found.catalogued, false, 'the catalogue being thin is a finding, not something to hide')
-})
-
-test('buildGraph: a repo naming itself gets no edge to itself', () => {
-  const graph = buildGraph([entry('billing', [{ repo: 'billing', how: 'talks to itself' }])])
-  assert.equal(graph.edges.length, 0)
-})
-
-test('buildGraph: degree counts relationships, not mentions of them', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'one way' }]),
-    entry('orders', [{ repo: 'billing', how: 'the other way' }]),
-  ])
-  assert.equal(graph.nodes.find(n => n.id === 'billing').degree, 1)
-})
-
-test('buildGraph: a bare string in talks_to is an edge with nothing said about it', () => {
-  const graph = buildGraph([entry('billing', ['orders']), entry('orders')])
-  assert.deepEqual([graph.edges.length, graph.edges[0].says.length], [1, 0])
 })
 
 // ------------------------------------------------------------------- the layout

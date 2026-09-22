@@ -12,6 +12,7 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
+import { impact } from './catalog-graph.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
@@ -637,6 +638,9 @@ org: ${org}
 stack: ${stack || 'unknown'}
 role: TODO — one line: what this repo is, in this org's terms
 talks_to: []
+# - repo: some-other-repo
+#   how: one line — what actually passes between them
+#   direction: downstream    # a change here can break it; upstream is the other way, both is both
 setup: []
 check: []
 ---
@@ -2772,6 +2776,86 @@ cmds.catalog = ({ flags, positional }) => {
   }
 }
 
+// What else a change in this repo reaches. DESIGN.md §6 already made this traversal a rule —
+// "for every selected repo, check its neighbours and say why each is or isn't in scope" — and
+// left the agent to carry it out against a graph rig could have computed. This is that rule
+// with a command behind it, which is also what makes correcting an entry change an outcome:
+// until something reads `talks_to` back, rule 4 asks for a correction and offers no reason.
+//
+// **Offers, never judges.** No verdict, no threshold, nothing attached for you — `rig list`'s
+// rule, information and not automation. The one thing it will not stay quiet about is a
+// contradiction: two entries that disagree about which way a relationship runs are reported as
+// a disagreement, never resolved by picking a side.
+cmds.impact = ({ positional }) => {
+  sayCurrentRoot()
+  const name = positional[0]
+  if (!name) die('rig impact wants a repo — `rig catalog` lists them')
+  const entries = loadCatalog()
+  if (!entries.length) die('catalogue is empty — entries are drafted on `rig attach`')
+  const answer = impact(entries, name)
+
+  // Asked only about the repos in the answer, not the whole catalogue. The measure costs a git
+  // spawn per entry that has a mirror, and a neighbourhood is a handful of repos where a
+  // catalogue is hundreds; `doctor` pays the full price because it reports on all of them.
+  const named = new Set([answer.repo, ...answer.hop1.map(n => n.repo), ...answer.hop2.map(n => n.repo)].map(r => r.toLowerCase()))
+  const cfg = config()
+  const age = new Map(catalogueFreshness(dataRoot(), entries.filter(e => named.has(e.repo.toLowerCase())), cfg.mirrorRoot, onPath('git'))
+    .map(f => [f.repo.toLowerCase(), f]))
+
+  // Everything a claim should be weighed against, in one dim parenthesis: no entry at all, an
+  // entry nobody has corrected, or one the repo has moved on from — decision 93's count and
+  // date, carrying no opinion about either.
+  const caveat = n => {
+    const bits = []
+    if (!n.catalogued) bits.push('no catalogue entry')
+    else if (n.draft) bits.push('draft entry')
+    const f = age.get(n.repo.toLowerCase())
+    if (f && f.commits > 0) bits.push(`entry ${f.commits} commit${f.commits === 1 ? '' : 's'} behind, since ${f.writtenAt}`)
+    return bits.length ? ` ${C.dim(`(${bits.join('; ')})`)}` : ''
+  }
+
+  const LABEL = { downstream: 'downstream', upstream: 'upstream', both: 'both ways' }
+  const label = n => (n.conflict ? C.yellow('disagreed') : C.dim(LABEL[n.direction] || 'unstated'))
+  const width = Math.max(12, ...[...answer.hop1, ...answer.hop2].map(n => n.repo.length))
+
+  say(`${C.bold(answer.repo)}${answer.org ? ` ${C.dim(answer.org)}` : ''}${answer.role ? ` — ${answer.role}` : ''}${caveat(answer)}`)
+
+  if (!answer.hop1.length) {
+    say('')
+    return say(C.dim('nothing in the catalogue talks to it, and it talks to nothing — `talks_to` in its entry is where that is said'))
+  }
+
+  say('')
+  say(C.dim('one hop'))
+  for (const n of answer.hop1) {
+    say(`  ${n.repo.padEnd(width)}  ${label(n)}${caveat(n)}`)
+    // Every end's own sentence, verbatim. The direction says which way it runs and the prose
+    // says what it is; neither replaces the other, and a disagreement is only legible when both
+    // claims can be read side by side.
+    for (const said of n.says) {
+      say(C.dim(`    ${said.from} → ${said.to}: ${said.how || '(nothing said)'}`) + (said.direction ? C.dim(` [${said.direction}]`) : ''))
+    }
+  }
+
+  if (answer.hop2.length) {
+    // No composed direction: two edges end to end are not a third edge, and the repo in the
+    // middle may well absorb what the first one does. What is printed is the route, and the
+    // direction of the far hop alone.
+    say('')
+    say(C.dim('two hops'))
+    for (const n of answer.hop2) {
+      const via = n.via.map(v => `${v.through}${v.conflict ? ' (disagreed)' : v.direction ? ` (${LABEL[v.direction]} of it)` : ''}`).join(', ')
+      say(`  ${n.repo.padEnd(width)}  ${C.dim(`via ${via}`)}${caveat(n)}`)
+    }
+  }
+
+  const thin = answer.hop1.filter(n => !n.catalogued || n.draft).map(n => n.repo)
+  if (thin.length) {
+    say('')
+    say(C.dim(`${thin.join(', ')} ${thin.length === 1 ? 'is' : 'are'} not written up yet — \`rig catalog <repo>\` names the file`))
+  }
+}
+
 cmds.prompt = ({ positional }) => {
   const name = positional[0]
   const dir = path.join(RIG_ROOT, 'prompts')
@@ -3287,6 +3371,9 @@ cmds.help = () => {
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
+  rig impact <repo>               what else a change in that repo reaches: the repos one and
+                                  two hops away in talks_to, each with what was said, which
+                                  way it runs, and how far behind its entry is
   rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
                                   re-renders its deploy order from the stack
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { makeInstall, readJson } from './harness.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, env, cleanup } = makeInstall({
   prefix: 'rig-attach-',
@@ -240,6 +240,26 @@ test('a catalogue entry is reported as behind once the repo it describes has mov
 
   assert.match(rig(['doctor']).out,
     /1 catalogue entry behind its repo: billing \(1 commit since \d{4}-\d{2}-\d{2}\)/)
+})
+
+test('rig impact weighs a neighbour by how far behind its entry is', () => {
+  // The same measure `doctor` reports, joined onto the edges `rig impact` prints — an edge
+  // asserted by an entry the repo has moved on from is a weaker claim, and the reader is the
+  // one who decides how much weaker (decision 93: the count and the date, and no verdict).
+  // Asserted here rather than in test/impact.test.mjs because the measure needs a mirror, and
+  // this installation is the one that has one.
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'orders.md')
+  fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8')
+    .replace(/^talks_to: \[\]$/m, `talks_to:
+  - repo: billing
+    how: settles against invoices
+    direction: upstream`))
+  gitMust(dataRoot, 'add', '-A')
+  gitMust(dataRoot, 'commit', '-q', '-m', 'orders talks to billing')
+
+  const out = strip(rig(['impact', 'orders']).out)
+  assert.match(out, /billing\s+upstream.*entry 1 commit behind, since \d{4}-\d{2}-\d{2}/,
+    'billing is upstream of orders, and its entry is a commit behind the repo it describes')
 })
 
 test('the measure reads what the mirror last fetched, not the ref frozen at clone time', () => {

@@ -119,7 +119,22 @@ One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`r
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
-traversal over it.
+traversal over it, and `rig impact <repo>` is that traversal as a command — the repos one and
+two hops away, what each end said about the relationship, which way it runs, and how far
+behind each entry is.
+
+```bash
+rig impact billing        # what a change in billing reaches, and what reaches it
+```
+
+A `talks_to` item may carry a `direction` beside its `how`: `downstream` means "a change in
+this repo can break that one", `upstream` is the other way, `both` is both. **Absent means
+unstated, which is not the same as both ways** — rig prints the edge and declines to place it.
+Either end may state it and rig reads it from whichever end is asking, so `downstream` in one
+entry and `upstream` in the other are one claim agreed twice. Two entries making different
+claims are a **disagreement**: reported, never resolved by picking a side, because the
+disagreement is the thing worth seeing. `rig impact` offers and never blocks — warnings live
+in `rig doctor`.
 
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
 lint, its build. Both are commands and never results: no pass or fail is ever stored.

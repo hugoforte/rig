@@ -28,6 +28,14 @@ _Avoid_: knowledge repo, rig-data (that is its conventional name, not the concep
 The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT` and the work folder the command is running in — so it decides only for the commands that have no work to anchor them, and those say when it did.
 _Avoid_: active profile, selected root, default (that is the name of the one-root form)
 
+**Direction**:
+Which way a `talks_to` relationship runs, written on the item beside its `how` and named for the answer rather than the arrow: `downstream` means a change in this repo can break that one, `upstream` is the other way, `both` is both. Optional; absent means unstated, which is not the same as both ways. Either end may state it, and rig reads it relative to whichever end is asking.
+_Avoid_: in/out (ambiguous on a bus, where the calls and the data run opposite ways), depends_on, arrow
+
+**Disagreement**:
+Two catalogue entries making different claims about one relationship's direction. Reported by `rig impact` and never resolved by choosing a side, because which entry is right is not rig's answer.
+_Avoid_: conflict, mismatch, error
+
 **Tracker**:
 The ticket system an org uses: GitHub Issues or Jira. Configured per org in `rig.json`.
 _Avoid_: issue tracker, Jira (when the kind is not fixed)

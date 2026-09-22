@@ -262,6 +262,25 @@ rig check                    # every attached repo, printed
 rig check billing --run      # run billing's
 ```
 
+### What a change reaches
+
+The catalogue's `talks_to` is a graph, and `rig impact <repo>` walks it: the repos one hop and
+two hops away, what each end wrote about the relationship, and — beside each one — how far
+behind that entry is, because an edge asserted by an entry the repo has moved on from is a
+weaker claim.
+
+```powershell
+rig impact billing
+```
+
+An item in `talks_to` can carry a `direction` beside its `how`. `downstream` means a change
+here can break that one, `upstream` is the other way, `both` is both, and leaving it out means
+unstated — which is not the same as both ways. Either end can say it and rig reads it from
+whichever end is asking, so `downstream` in one entry and `upstream` in the other are the same
+claim made twice. Two entries that make *different* claims are reported as a disagreement and
+never resolved by picking a side. It offers and never blocks: warnings live in `rig doctor`,
+and only for contradictions.
+
 ### Reading the works back out
 
 `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely — except a merged PR that has been recorded (below), which is read straight out of `work.json` and carries `recorded: true`, live or `--quick` alike.
