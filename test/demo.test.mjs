@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { buildGraph, components, layout, nodeRadius, halfBox, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { buildGraph, components, layout, nodeRadius, halfBox, repoBranch, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -27,6 +27,25 @@ const work = (over = {}) => ({
   repos: [{ repo: 'billing', org: 'acme', base: 'main' }],
   createdAt: '2026-01-01T00:00:00Z', ...over,
 })
+
+// The same work in record format 3, where a repo carries `branches[]` — one entry per branch
+// of this work it holds, each with its own base and, once merged, that PR's terminal facts.
+//
+// Both shapes exist in a live data root at the same time, because records migrate only when rig
+// next writes one. Every fixture in this file was the legacy shape for exactly that reason: it
+// is what the root on this machine happened to hold, and the whole suite passed while `rig demo`
+// could not read a migrated record at all. A fixture is a claim about a format, and a claim
+// nothing checks is the kind that is quietly wrong for a week.
+const work3 = (over = {}) => {
+  const { repos, ...rest } = work(over)
+  return {
+    ...rest,
+    repos: repos.map(({ base, pr: merged, ...repo }) => ({
+      ...repo,
+      branches: [{ branch: rest.branch, base, ...(merged ? { pr: merged } : {}) }],
+    })),
+  }
+}
 
 const pr = (over = {}) => ({
   number: 7, url: 'https://example.invalid/7',
@@ -319,6 +338,68 @@ test('renderDemo: a merged PR is reported with the stretches it spent, not a dur
   assert.match(html, /What survived the branch/)
 })
 
+// --------------------------------------------------------- both record formats
+
+test('repoBranch: reads the branch entry when the record has been migrated', () => {
+  const repo = { repo: 'a', branches: [{ branch: 'feat/x', base: 'uat', pr: pr() }] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'uat')
+})
+
+test('repoBranch: falls back to the legacy fields when it has not', () => {
+  assert.equal(repoBranch({ repo: 'a', base: 'develop', pr: pr() }, 'feat/x').base, 'develop')
+})
+
+test('repoBranch: picks the entry for this work’s branch, not merely the first', () => {
+  const repo = { repo: 'a', branches: [
+    { branch: 'feat/stage-one', base: 'main' },
+    { branch: 'feat/x', base: 'develop' },
+  ] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'develop')
+})
+
+test('repoBranch: a repo with no branch entry for this work still answers', () => {
+  const repo = { repo: 'a', branches: [{ branch: 'feat/other', base: 'main' }] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'main')
+})
+
+test('pickExample: a migrated record is ranked on its merged PRs like any other', () => {
+  const migrated = work3({ id: 'migrated', repos: [
+    { repo: 'a', org: 'acme', base: 'main', pr: pr() },
+    { repo: 'b', org: 'acme', base: 'uat', pr: pr() },
+  ] })
+  const legacy = work({ id: 'legacy', repos: [{ repo: 'c', org: 'acme', base: 'main', pr: pr() }] })
+  assert.equal(pickExample([legacy, migrated]).id, 'migrated',
+    'a migrated work used to score zero and lose to an unmigrated one')
+})
+
+test('walkthrough: a migrated record still knows where each repo lands', () => {
+  const steps = walkthrough(work3({ repos: [
+    { repo: 'a', org: 'acme', base: 'develop' },
+    { repo: 'b', org: 'acme', base: 'uat' },
+  ] }))
+  assert.match(steps.find(s => s.command === 'rig attach b').note, /`uat`, not `develop`/)
+})
+
+test('walkthrough: a migrated record never prints an undefined base', () => {
+  const steps = walkthrough(work3({ repos: [{ repo: 'a', org: 'acme', base: 'develop', pr: pr() }] }))
+  assert.doesNotMatch(JSON.stringify(steps), /undefined/)
+})
+
+test('walkthrough: a migrated record keeps its `rig pr` step', () => {
+  const steps = walkthrough(work3({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] }))
+  assert.equal(steps.filter(s => s.command === 'rig pr').length, 1)
+})
+
+test('renderDemo: a migrated record still reports what survived the branch', () => {
+  const html = page({ works: [work3({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] })] })
+  assert.match(html, /What survived the branch/)
+})
+
+test('both record formats describe the same work the same way', () => {
+  const repos = [{ repo: 'a', org: 'acme', base: 'develop', pr: pr() }, { repo: 'b', org: 'acme', base: 'uat', pr: pr() }]
+  assert.deepEqual(walkthrough(work3({ repos })), walkthrough(work({ repos })))
+})
+
 // ------------------------------------------------------------- the real command
 
 // The one test that touches disk. Everything above trusts a fixture to be the shape rig
@@ -337,7 +418,8 @@ test('rig demo: renders a page from a data root on disk, naming its repos', () =
     '---\nrepo: billing\norg: acme\nrole: Owns invoices\nstack: C#\ntalks_to:\n  - repo: orders\n    how: posts invoices\n---\nProse.\n')
   fs.writeFileSync(path.join(root, 'catalog', 'acme', 'orders.md'),
     '---\nrepo: orders\norg: acme\nrole: Owns orders\nstack: Node\ntalks_to: []\n---\nProse.\n')
-  fs.writeFileSync(path.join(root, 'work', 'w1', 'work.json'), JSON.stringify(work()))
+  // Written in the current record format, so this fails the day the demo stops reading it.
+  fs.writeFileSync(path.join(root, 'work', 'w1', 'work.json'), JSON.stringify(work3()))
 
   const localFile = path.join(tmp, 'rig.local.json')
   fs.writeFileSync(localFile, JSON.stringify({
