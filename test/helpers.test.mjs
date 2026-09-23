@@ -10,6 +10,7 @@ import {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
+  spawnFailure,
 } from '../bin/rig.mjs'
 import { makeInstall } from './harness.mjs'
 
@@ -367,6 +368,28 @@ test('freeSpace: a path the filesystem will not report on is null, so the check 
   // a check rig cannot make. Dropped, never fatal — doctor is the command you run because
   // something is already broken.
   assert.equal(freeSpace(path.join(os.tmpdir(), 'rig-no-such-directory-8f3a1c')), null)
+})
+
+// Node reports a spawn that never started as one error with a code, and three different things
+// wrong with the machine arrive that way. Only one of them is PATH's fault.
+const spawnError = code => Object.assign(new Error(`spawnSync git ${code}`), { code })
+
+test('a program that is not there is blamed on PATH', () => {
+  assert.equal(spawnFailure('git', ['status'], spawnError('ENOENT'), os.tmpdir()),
+    'git not found on PATH (spawnSync git ENOENT)')
+})
+
+test('a directory that is not there is not blamed on PATH, although Node reports it the same way', () => {
+  const gone = path.join(os.tmpdir(), 'rig-no-such-directory-8f3a1c')
+  assert.equal(spawnFailure('git', ['status'], spawnError('ENOENT'), gone),
+    `git could not start in ${gone}, which no longer exists`)
+})
+
+test('any other failure to start says which command failed and why, and nothing about PATH', () => {
+  // An output past spawnSync's buffer is the one seen in practice: a status over a tree with
+  // thousands of changes, which used to report git as missing.
+  assert.equal(spawnFailure('git', ['-C', 'root', 'status'], spawnError('ENOBUFS'), os.tmpdir()),
+    'git -C root status failed (spawnSync git ENOBUFS)')
 })
 
 test('activityAt: the newest stamp the record already holds, whichever field it is on', () => {

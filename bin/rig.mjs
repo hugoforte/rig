@@ -127,10 +127,21 @@ const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === R
 // what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
 // there, and a replacement would drop everything an isolated run depends on.
 function exec (cmd, args, { env: extra, ...opts } = {}) {
-  const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args,
-    { ...spawnDefaults(current.command), cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts })
-  if (r.error) die(`${cmd} not found on PATH (${r.error.message})`)
+  const options = { ...spawnDefaults(current.command), cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts }
+  const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args, options)
+  if (r.error) die(spawnFailure(cmd, args, r.error, options.cwd))
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
+}
+
+// Why a subprocess never ran, worded so that nobody goes looking at PATH for the wrong reason.
+// Node answers ENOENT both for a program PATH cannot find and for a directory to start in that
+// is not there, so the directory is looked at before PATH is blamed. Any other code — an
+// output past spawnSync's buffer, say — is neither, and the command and Node's reason are
+// all there is to say.
+const spawnFailure = (cmd, args, error, dir) => {
+  if (error.code !== 'ENOENT') return `${cmd} ${args.join(' ')} failed (${error.message})`
+  if (dir && !exists(dir)) return `${cmd} could not start in ${dir}, which no longer exists`
+  return `${cmd} not found on PATH (${error.message})`
 }
 
 // Git for Windows puts a **launcher** on PATH: `cmd\git.exe` is 46KB and starts
@@ -3872,6 +3883,7 @@ export {
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,
+  spawnFailure,
   listing,
 }
 
