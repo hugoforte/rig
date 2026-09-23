@@ -291,17 +291,23 @@ test('doctor reaches its verdict on a machine with no git on PATH', () => {
   assert.doesNotMatch(out, /git not found on PATH \(spawnSync/, 'it did not die on the way')
 })
 
-test('doctor reaches its verdict on a machine with neither free-space probe', () => {
-  // Free space is probed through PowerShell on Windows and `df` everywhere else. With
-  // neither on PATH the check is dropped, not attempted: `run` dies on a command that is
-  // not there, and this probe is the last check doctor makes, so dying here cost Linux and
-  // macOS the verdict line and a clean exit (hugoforte/rig#7).
+test('free space is answered with nothing on PATH at all, and never dies trying', () => {
+  // This check used to be the one that needed a program: PowerShell on Windows, `df`
+  // everywhere else. With neither on PATH it had to be dropped, because `run` dies on a
+  // command that is not there and this is the last check doctor makes — which cost Linux
+  // and macOS the verdict line and a clean exit (hugoforte/rig#7). `fs.statfsSync` is in
+  // the runtime, so the failure that bug was about no longer has a way to happen, and the
+  // answer arrives on a machine carrying nothing but node.
+  //
+  // Decision 54 is unchanged and still tested: a check rig cannot make is dropped rather
+  // than fatal, over a path the filesystem will not report on (`test/helpers.test.mjs`) and
+  // over a `disk: null` snapshot (`test/doctor.test.mjs`).
   const bare = { ...env }
   for (const k of Object.keys(bare)) if (k.toLowerCase() === 'path') delete bare[k]
   bare.PATH = path.dirname(process.execPath)
   const r = spawnRig(['doctor'], bare)
   const out = strip(r.stdout + r.stderr)
-  assert.doesNotMatch(out, /disk on/, 'a check it cannot make is dropped')
+  assert.match(out, /disk on .+\d+ GB free/, 'answered without a probe to be missing')
   assert.doesNotMatch(out, /not found on PATH \(spawnSync/, 'and it did not die making it')
   assert.match(out, /thing\(s\) to look at|all clear/, 'the verdict still lands')
 })
