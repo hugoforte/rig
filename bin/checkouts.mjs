@@ -121,10 +121,16 @@ export function checkouts ({ run, env = () => process.env }) {
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     return {
       ...state,
-      branch: place ? headBranch(place.gitDir) : gitBranch(dir),
+      branch: branchOf(dir, place),
       upstream: upstream.code === 0 ? upstream.out : null,
     }
   }
+
+  // Which branch a checkout is on, read one way by every reading here, so `identify`,
+  // `describe` and its fallback cannot disagree about it. Never from `branch.head` in the
+  // status header: git accepts a branch named `(wip)` and prints it there exactly as it
+  // prints its own `(detached)`.
+  const branchOf = (dir, place) => place ? headBranch(place.gitDir) : gitBranch(dir)
 
   const gitBranch = dir => {
     const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
@@ -132,10 +138,10 @@ export function checkouts ({ run, env = () => process.env }) {
   }
 
   // Everything the `--branch` header of `git status --porcelain=v2` answers, in one call:
-  // the head, the branch, the upstream, the distance both ways, and the two ways a tree can
-  // be untidy. That is five calls' worth — `symbolic-ref HEAD`, `rev-parse --abbrev-ref
-  // @{u}`, a `rev-list` per direction, and `status --porcelain` — and carrying the header is
-  // exactly what the v2 format is for.
+  // the head, the upstream, the distance both ways, and the two ways a tree can be untidy.
+  // That is five calls' worth — `rev-parse HEAD`, `rev-parse --abbrev-ref @{u}`, a
+  // `rev-list` per direction, and `status --porcelain` — and carrying the header is exactly
+  // what the v2 format is for.
   //
   // **`branch.ab` is absent whenever git could not count**, and with an upstream configured
   // that is two different states. The upstream's ref may have gone — what a
@@ -160,16 +166,14 @@ export function checkouts ({ run, env = () => process.env }) {
     }
     const configured = header['branch.upstream'] ?? null
     const ab = /^\+(\d+) -(\d+)$/.exec(header['branch.ab'] ?? '')
+    // `(initial)` is git's own word for "there is no commit here", and would otherwise be
+    // reported as though it were one.
     const unborn = header['branch.oid'] === '(initial)'
     const upstream = configured && (ab || (unborn && git(dir, 'rev-parse', '--abbrev-ref', '@{u}').code === 0))
       ? configured
       : null
-    // `(detached)` and `(initial)` are git's own words for "there is no name here", and
-    // both would otherwise be reported as though they were one.
-    const named = v => (v && !v.startsWith('(') ? v : null)
     return {
-      head: named(header['branch.oid']),
-      branch: named(header['branch.head']),
+      head: unborn ? null : header['branch.oid'] ?? null,
       upstream,
       ahead: upstream ? (ab ? Number(ab[1]) : null) : 0,
       behind: upstream ? (ab ? Number(ab[2]) : null) : 0,
@@ -193,17 +197,15 @@ export function checkouts ({ run, env = () => process.env }) {
     const place = discover(dir, env())
     const state = topOf(dir, place)
     if (state.repo !== 'own') return state
+    const branch = branchOf(dir, place)
     const status = branchStatus(dir)
-    if (status) return { ...state, ...status }
+    if (status) return { ...state, branch, ...status }
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     const tracking = upstream.code === 0 ? upstream.out : null
     const head = git(dir, 'rev-parse', 'HEAD')
     return {
       ...state,
-      // The same reading `identity` makes, so the two paths through this module cannot
-      // disagree about which branch a checkout is on — and the same one `branch.head` above
-      // gives, which `symbolic-ref --short` was the odd one out against.
-      branch: place ? headBranch(place.gitDir) : gitBranch(dir),
+      branch,
       upstream: tracking,
       head: head.code === 0 ? head.out : null,
       ahead: tracking ? countCommits(dir, '@{u}..HEAD') : 0,

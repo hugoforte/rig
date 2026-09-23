@@ -62,6 +62,13 @@ const goneUpstream = name => {
   gitMust(local, 'fetch', '-q', '--prune', 'origin')
   return local
 }
+// A checkout on a branch whose name starts with a parenthesis, tracking `main`. git accepts
+// the name, and prints it in `branch.head` exactly as it prints its own `(detached)`.
+const onWip = name => {
+  const { bare, local } = cloned(name)
+  gitMust(local, 'checkout', '-q', '-b', '(wip)', '--track', 'origin/main')
+  return { bare, local }
+}
 // Another machine pushes, as it would while you were not looking.
 const pushFromElsewhere = (bare, file, message) => {
   const theirs = path.join(tmp, `theirs-${path.basename(bare, '.git')}-${file}`)
@@ -295,6 +302,15 @@ test('the merge is --ff-only, which is what holds when the count that would have
   assert.match(r.error, /fast-forward/i, 'git refused, in its own words')
   assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'a record of my own')
   assert.equal(gitMust(local, 'rev-list', '--count', '--merges', 'HEAD'), '0', 'no merge commit')
+})
+
+test('a branch whose name starts with a parenthesis is a branch, and moves', () => {
+  // Read as detached, `rig update` refused to move it and `rig save` would not push from it.
+  const { bare, local } = onWip('paren')
+  pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
+  assert.equal(c().fetch(local).ok, true)
+
+  assert.equal(c().fastForward(local).outcome, 'moved')
 })
 
 test('an untracked file does not block a fast-forward', () => {
