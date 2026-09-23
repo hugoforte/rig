@@ -220,13 +220,16 @@ test('PATH is searched as a spawn searches it, and an entry it cannot read that 
   const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
   const real = layout('proper', 'mingw64', 'bin', 'git.exe')
   const own = path.dirname(layout('own', 'git.exe'))
+  const com = path.dirname(layout('com', 'git.com'))
   const script = path.dirname(layout('script', 'git.bat'))
   const split = path.dirname(layout('semi;colon', 'git.exe'))
   const searching = (...entries) => realGitFor(entries.join(';'))
 
   assert.equal(searching(`"${own}"`, proper), 'git', 'a quoted entry is still where the spawn finds its git')
+  assert.equal(searching(`${own}"`, proper), 'git', 'and so is one with a quote at one end only, which the spawn strips too')
   assert.equal(searching(`"${proper}"`), real, 'and a quoted launcher is still the launcher')
-  assert.equal(searching(script, proper), real, 'a git.bat is not a program the spawn would start')
+  assert.equal(searching(com, proper), 'git', 'a git.com is a program the spawn would start')
+  assert.equal(searching(script, proper), real, 'a git.bat is not')
   assert.equal(searching('relative', proper), 'git',
     'a relative entry is read against where the run stands, which is no part of this answer')
   assert.equal(searching(`"${split}"`, proper), 'git',
