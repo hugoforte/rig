@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  spawnDefaults, refreshSpawn, parseDf, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -233,6 +233,12 @@ test('parseDf: output it cannot read is null, so the check is dropped rather tha
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on'), null, 'a header and nothing else')
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 - - - - /'), null,
     'columns that are not numbers')
+})
+
+test('bytesFree: the blocks this user may still write, in bytes', () => {
+  // Every count different, so reading the wrong one fails: `bfree` includes the blocks
+  // reserved for root, `blocks` is the size of the disk, and a count on its own is not bytes.
+  assert.equal(bytesFree({ bavail: 10, bfree: 20, blocks: 100, bsize: 4096 }), 40960)
 })
 
 test('freeSpace: a real directory answers with bytes and the volume it measured', () => {

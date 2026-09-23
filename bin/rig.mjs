@@ -244,11 +244,13 @@ const volumeOf = dir => {
   return path.parse(real).root.replace(/[\\/]+$/, '') || dir
 }
 
+// `bavail` and not `bfree`: the blocks held back for root are not space this user can fill.
+const bytesFree = s => s.bavail * s.bsize
+
 function freeSpace (dir) {
   if (process.platform === 'win32') {
     try {
-      const s = fs.statfsSync(dir)
-      const bytes = s.bavail * s.bsize
+      const bytes = bytesFree(fs.statfsSync(dir))
       if (!Number.isFinite(bytes)) return null
       return { label: volumeOf(dir), bytes }
     } catch { return null }
@@ -3820,7 +3822,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, effectiveIdentity, parseDf, freeSpace, realGitFor,
+  spawnDefaults, refreshSpawn, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,
   listing,
 }
