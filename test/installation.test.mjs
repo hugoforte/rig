@@ -303,6 +303,12 @@ test('free space with nothing on PATH is answered on Windows, and never dies try
   const r = spawnRig(['doctor'], bare)
   const out = strip(r.stdout + r.stderr)
   if (process.platform === 'win32') assert.match(out, /disk on .+\d+ GB free/, 'answered without a probe to be missing')
+  // Off Windows, the check is dropped rather than answered from the runtime, whose block size
+  // is wrong on Linux. Only where node's own directory holds no `df`, which is every CI image
+  // (setup-node puts node in a tool cache) but not a machine with node in /usr/bin.
+  else if (!fs.existsSync(path.join(path.dirname(process.execPath), 'df'))) {
+    assert.doesNotMatch(out, /disk on/, 'no df, so no disk line')
+  }
   assert.doesNotMatch(out, /not found on PATH \(spawnSync/, 'and it did not die making it')
   assert.match(out, /thing\(s\) to look at|all clear/, 'the verdict still lands')
 })

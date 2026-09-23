@@ -236,8 +236,9 @@ test('parseDf: output it cannot read is null, so the check is dropped rather tha
 })
 
 test('bytesFree: the blocks this user may still write, in bytes', () => {
-  // Every count different, so reading the wrong one fails: `bfree` includes the blocks
-  // reserved for root, `blocks` is the size of the disk, and a count on its own is not bytes.
+  // Every count different, so reading the wrong one fails: `bfree` differs from `bavail`
+  // wherever blocks are held back, `blocks` is the size of the disk, and a count on its own is
+  // not bytes.
   assert.equal(bytesFree({ bavail: 10, bfree: 20, blocks: 100, bsize: 4096 }), 40960)
 })
 
@@ -260,12 +261,12 @@ test('freeSpace: a work root junctioned onto another drive is labelled with that
   if (!elsewhere) return t.skip('no second drive here for a junction to lead to')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-junction-'))
   const link = path.join(root, 'w')
-  fs.symlinkSync(elsewhere, link, 'junction')
   try {
+    fs.symlinkSync(elsewhere, link, 'junction')
     assert.equal(freeSpace(link).label, drive(elsewhere))
   } finally {
     // The junction alone: what it leads to is not this test's to remove.
-    fs.unlinkSync(link)
+    if (fs.existsSync(link)) fs.unlinkSync(link)
     fs.rmdirSync(root)
   }
 })

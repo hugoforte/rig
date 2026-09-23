@@ -220,14 +220,13 @@ function parseDf (out) {
 }
 
 // Free space where rig puts worktrees: asked of the runtime on Windows and of `df` everywhere
-// else. On Windows `fs.statfsSync` answers without a process, where the `Get-PSDrive` it
-// replaced started a PowerShell at 202ms a call — four times a `git`, and by some way the
-// most expensive thing rig ever started — and libuv counts the free blocks there in the
-// `bsize` it reports, so their product is bytes. Linux counts them in `f_frsize`, which Node
-// does not report, and on a FUSE mount the two differ: Docker Desktop's virtiofs has a 2MiB
-// `bsize` over 16KiB blocks (nodejs/node#62495), which reads as 128 times the free space and
-// turns a nearly full disk into a pass. `df` asks in the right unit, and off Windows it costs
-// about a millisecond.
+// else. On Windows `fs.statfsSync` answers without starting a process — the only other probe
+// there is a PowerShell, the dearest process rig could start (decision 54) — and libuv counts
+// the free blocks there in the `bsize` it reports, so their product is bytes. Linux counts
+// them in `f_frsize`, which Node does not report, and on a FUSE mount the two differ: Docker
+// Desktop's virtiofs has a 2MiB `bsize` over 16KiB blocks (nodejs/node#62495), which reads as
+// 128 times the free space and turns a nearly full disk into a pass. `df` asks in the right
+// unit, and off Windows it costs about a millisecond.
 //
 // Decision 54: a check rig cannot make is dropped, never fatal. So this answers null when the
 // probe is missing — no `df` on PATH, or a Node without `fs.statfsSync` — and when the path
@@ -237,14 +236,17 @@ function parseDf (out) {
 // is on; anywhere else the mount point `df` found the work root on. On Windows it is read off
 // the resolved path, because statfs follows a junction or a symlink and the path as written
 // would name the drive the link sits on — a work root moved off a full system drive by a
-// junction would report the other drive's space under the full one's letter.
+// junction would report the other drive's space under the full one's letter. A mapped drive
+// resolves the same way, to the share behind it, so it is named by the share.
 const volumeOf = dir => {
   let real
   try { real = fs.realpathSync.native(dir) } catch { real = dir }
   return path.parse(real).root.replace(/[\\/]+$/, '') || dir
 }
 
-// `bavail` and not `bfree`: the blocks held back for root are not space this user can fill.
+// The blocks this user may write, in bytes. Windows is the one place this runs, and libuv fills
+// `bavail` and `bfree` there with the same free-cluster count, so `bavail` is chosen for what it
+// means rather than for a difference it makes.
 const bytesFree = s => s.bavail * s.bsize
 
 function freeSpace (dir) {
