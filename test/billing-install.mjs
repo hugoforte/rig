@@ -1,16 +1,15 @@
 // One installation with `acme/billing` published and `rig init` run, and every move the tests
 // that drive `close`, `abandon`, `next`, `stage`, `pr` and `plan` make against it.
 //
-// All of that used to be one 1002-line `test/close.test.mjs` sharing a single installation
-// across six subjects. It shared one because an installation costs about three seconds to
-// build — `rig init` a second, `rig new` another, `rig attach` another — and paying that six
-// times looked like waste. It is not: `node --test` runs files in parallel and the tests
-// within one file in order, so six subjects in one file is six subjects on one core, and that
-// file alone set the wall clock of the whole suite. Six installations cost about eight seconds
-// of work and about one and a half of wall clock.
+// Each of those subjects is a file with an installation of its own, built from here, rather
+// than one file sharing one. `node --test` runs files in parallel and the tests within a file
+// in order, so subjects in one file wait on each other. Apart, each costs an installation of
+// extra work, and buys a subject that runs without the others and a suite CI can divide by
+// file into parts of a similar size. A full run gains less than that suggests: it is bound by
+// process creation and I/O rather than by cores.
 //
-// The subjects were independent already — each builds its own works, and nothing but the
-// installation crossed between them. What did cross is here.
+// The subjects are independent — each builds its own works, and nothing but the installation
+// crosses between them. What does cross is here.
 //
 // These helpers are this scenario's and not every scenario's, which is why they are not in
 // `test/harness.mjs`: five other test files publish a bare repo of their own, in five shapes,
