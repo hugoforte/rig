@@ -155,7 +155,10 @@ export function checkouts ({ run, env = () => process.env }) {
   // Null for a directory git would not answer about at all. Reading that as a clean tree is
   // the quiet wrong answer that matters most here: it is what `rig update` migrates on.
   function branchStatus (dir) {
-    const r = git(dir, 'status', '--porcelain=v2', '--branch')
+    // spawnSync keeps 1 MiB of output and fails the call past it, and a v2 entry carries
+    // three modes and two object ids beside its path: some seven thousand changed files fill
+    // that, and the reading every mutating command starts with would die of it.
+    const r = run('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'], { maxBuffer: 64 * 1024 * 1024 })
     if (r.code !== 0) return null
     const header = {}
     const entries = []

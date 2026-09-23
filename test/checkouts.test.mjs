@@ -244,6 +244,19 @@ test('a fetch may never stop to ask for credentials', () => {
   assert.equal(asked.args.includes('fetch'), true)
 })
 
+test('the status call keeps more output than a spawn keeps by default', () => {
+  // spawnSync keeps 1 MiB of a child's output and fails the call past it, and a v2 line
+  // carries three modes and two object ids beside each path: a rewrite of some seven thousand
+  // tracked files fills that, and every reading of the checkout would die with it.
+  let kept = null
+  const watching = (cmd, args, opts) => {
+    if (args.includes('status')) kept = opts?.maxBuffer
+    return run(cmd, args, opts)
+  }
+  c(watching).describe(own)
+  assert.ok(kept > 1024 * 1024, `maxBuffer: ${kept}`)
+})
+
 test('a checkout level with its upstream is current, and nothing moves', () => {
   const { local } = cloned('current')
   const r = c().fastForward(local)
