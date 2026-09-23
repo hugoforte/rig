@@ -398,6 +398,17 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
 
+test('a repository git refuses outright is no checkout, not one with no upstream', () => {
+  // A config git cannot parse, or an owner `safe.directory` turns away: the filesystem still
+  // finds the `.git`, and every git command fails. Read as a failed `@{u}`, that was a
+  // checkout confidently level with nothing, and doctor told a data root whose config names
+  // `origin/main` that it had no upstream.
+  const { local } = cloned('badconfig')
+  fs.appendFileSync(path.join(local, '.git', 'config'), 'this is not config\n')
+  assert.deepEqual(c().describe(local), unreadable())
+  assert.equal(c().fastForward(local).outcome, 'not-a-checkout')
+})
+
 test('describe reads a checkout in one git call, and pays the old six only when the tree fails', () => {
   // Pinned, because the symptom of it creeping back is invisible: six spawns answer the
   // same questions as one and every test still passes, and the only thing that changes is
@@ -412,9 +423,10 @@ test('describe reads a checkout in one git call, and pays the old six only when 
   calls.length = 0
   const noTree = (cmd, args) => { calls.push(args.join(' ')); return args.includes('--porcelain=v2') ? { code: 128, out: '', err: 'fatal: unable to read index' } : run(cmd, args) }
   const state = c(noTree).describe(local)
-  // The four the fallback costs, plus the one attempt that found out it had to. Bought on a
-  // path where git has already failed, which is the trade the fallback exists to make.
-  assert.equal(calls.length, 5, calls.join('\n'))
+  // The five the fallback costs, the first asking whether git will answer at all, plus the
+  // one attempt that found out it had to. Bought on a path where git has already failed,
+  // which is the trade the fallback exists to make.
+  assert.equal(calls.length, 6, calls.join('\n'))
   assert.deepEqual([state.dirty, state.modified], [null, null], 'the tree is the half that went')
   assert.equal(state.branch, 'main', 'and the half that did not is still read')
 })

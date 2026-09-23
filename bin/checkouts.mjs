@@ -191,7 +191,7 @@ export function checkouts ({ run, env = () => process.env }) {
   // `rev-list` does not, so a corrupt index is a tree git cannot read and a distance it
   // still can — and collapsing the readings into one call would have reported that as a
   // checkout nothing is known about, which stops `fastForward` before git gets to refuse in
-  // its own words. Four extra calls, on a path where git has already failed and speed is
+  // its own words. Five extra calls, on a path where git has already failed and speed is
   // buying nothing.
   function describe (dir) {
     const place = discover(dir, env())
@@ -200,6 +200,11 @@ export function checkouts ({ run, env = () => process.env }) {
     const branch = branchOf(dir, place)
     const status = branchStatus(dir)
     if (status) return { ...state, branch, ...status }
+    // `status` also fails for a repository git refuses outright — a config it cannot parse, an
+    // owner `safe.directory` turns away — and there a failed `@{u}` is not "no upstream". The
+    // filesystem found this checkout, so git is asked whether it will answer at all; where
+    // `place` is null, `topOf` has already asked it.
+    if (place && !gitTop(dir)) return { ...UNREAD }
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     const tracking = upstream.code === 0 ? upstream.out : null
     const head = git(dir, 'rev-parse', 'HEAD')
