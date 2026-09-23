@@ -174,6 +174,13 @@ test('a local-only data root is a note, and unpushed commits warn without counti
   assert.equal(problemCount(ahead), 0)
 })
 
+test('a distance git could not measure from the data root\'s upstream is never given the green tick', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ ahead: null, behind: null }) })] }))
+  assert.match(only(found, /could not measure the distance/).says, /origin\/main/)
+  assert.equal(matching(found, /committed and pushed/).length, 0)
+  assert.equal(problemCount(found), 1)
+})
+
 test('a data root behind its origin counts, and names the command that fast-forwards it', () => {
   const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ behind: 4 }) })] }))
   assert.match(only(found, /behind origin/).says, /`rig update` fast-forwards it/)

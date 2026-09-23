@@ -83,12 +83,14 @@ function rootFindings (root) {
       // rig commits after its own commands; an edit made outside rig waits for `rig save`.
       // `dirty` is null when git could not read the tree, which is neither clean nor a
       // count — a green tick on the strength of a command that failed is the one thing
-      // this check must never print.
+      // this check must never print. `ahead` is null the same way, when git could not count
+      // against the upstream, and that is not "nothing unpushed" either.
       const dirty = state.dirty
       if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
       else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
       if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
       else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
+      else if (state.ahead === null) out.push(warn(`data root: git could not measure the distance from ${state.upstream} — \`git -C ${root.path} status\` says why`))
       else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))
       else if (dirty === 0) out.push(ok('data root is committed and pushed'))
       // Measured against the last fetch, which a mutating command does for itself.
