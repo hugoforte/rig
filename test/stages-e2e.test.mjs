@@ -7,11 +7,10 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import path from 'node:path'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, git, gitMust, github, setGithub, commitWork, cutStage, worktree, record, planFile, cleanup } = billingInstall('rig-stages-')
+const { rig, github, setGithub, commitWork, cutStage, worktree, record, planFile, cleanup } = billingInstall('rig-stages-')
 
 after(cleanup)
 

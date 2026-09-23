@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { billingInstall, slicedWork } from './billing-install.mjs'
 
 const m = billingInstall('rig-stage-cut-')
-const { rig, git, gitMust, github, commitWork, seedPr, worktree, record, cleanup } = m
+const { rig, gitMust, commitWork, seedPr, worktree, record, cleanup } = m
 
 after(cleanup)
 

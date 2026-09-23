@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, github, commitWork, seedIssue, seedPr, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedPr, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
