@@ -365,25 +365,47 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
 
-test('describe reads a checkout in two git calls, and pays the old six only when the tree fails', () => {
+test('describe reads a checkout in one git call, and pays the old six only when the tree fails', () => {
   // Pinned, because the symptom of it creeping back is invisible: six spawns answer the
-  // same questions as two and every test still passes, and the only thing that changes is
+  // same questions as one and every test still passes, and the only thing that changes is
   // that the suite takes another minute. A reading of a checkout runs at least twice per
   // mutating command, so this is the tool's own latency as much as the suite's.
   const { local } = cloned('counted')
   const calls = []
   const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
   checkouts({ run: counting }).describe(local)
-  assert.deepEqual(calls.map(a => a.split(' ')[2]), ['rev-parse', 'status'], calls.join('\n'))
+  assert.deepEqual(calls.map(a => a.split(' ')[2]), ['status'], calls.join('\n'))
 
   calls.length = 0
   const noTree = (cmd, args) => { calls.push(args.join(' ')); return args.includes('--porcelain=v2') ? { code: 128, out: '', err: 'fatal: unable to read index' } : run(cmd, args) }
   const state = checkouts({ run: noTree }).describe(local)
-  // The six it always cost, plus the one attempt that found out it had to. Bought on a
+  // The four the fallback costs, plus the one attempt that found out it had to. Bought on a
   // path where git has already failed, which is the trade the fallback exists to make.
-  assert.equal(calls.length, 7, calls.join('\n'))
+  assert.equal(calls.length, 5, calls.join('\n'))
   assert.deepEqual([state.dirty, state.modified], [null, null], 'the tree is the half that went')
   assert.equal(state.branch, 'main', 'and the half that did not is still read')
+})
+
+test('placing a checkout costs no subprocess, and a directory that is none costs nothing at all', () => {
+  // The question this module asks most often is where the checkout is, and the filesystem
+  // answers it exactly: walking up for a `.git` entry is what git does. Pinned the same way
+  // and for the same reason as the count above — the symptom of it creeping back is an
+  // extra minute on the suite and nothing else.
+  const { local } = cloned('placed')
+  const calls = []
+  const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
+  const state = checkouts({ run: counting }).identify(local)
+  assert.deepEqual(state.branch, 'main', 'and the reading is still the reading')
+  assert.deepEqual(calls.map(a => a.split(' ').slice(2, 4).join(' ')), [
+    'rev-parse --abbrev-ref',            // the upstream, which is config and not a path
+    'symbolic-ref -q',                   // origin/HEAD
+    'rev-parse --verify',                // and whether the branch it names is still there
+    'rev-parse HEAD',
+  ], calls.join('\n'))
+
+  calls.length = 0
+  assert.deepEqual(checkouts({ run: counting }).identify(plain), unreadable())
+  assert.deepEqual(calls, [], 'a directory that is no checkout is not worth a spawn to find out')
 })
 
 test('a distance git could not measure is not a reason to move anything', () => {
