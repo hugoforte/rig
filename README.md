@@ -262,6 +262,36 @@ rig check                    # every attached repo, printed
 rig check billing --run      # run billing's
 ```
 
+### What a change reaches
+
+The catalogue's `talks_to` is a graph, and `rig impact <repo>` walks it: the repos one hop and
+two hops away, what each end wrote about the relationship, and — beside each one — how far
+behind that entry is, because an edge asserted by an entry the repo has moved on from is a
+weaker claim.
+
+```powershell
+rig impact billing
+```
+
+An item in `talks_to` can carry a `direction` beside its `how`. `downstream` means a change
+here can break that one, `upstream` is the other way, `both` is both, and leaving it out means
+unstated — which is not the same as both ways. Either end can say it and rig reads it from
+whichever end is asking, so `downstream` in one entry and `upstream` in the other are the same
+claim made twice. Two entries that make *different* claims are reported as a disagreement and
+never resolved by picking a side. It offers and never blocks, and `rig impact` is the only place
+a disagreement is reported — `rig doctor` does not look for them.
+
+Underneath, `rig impact` prints a second graph rig has always held and never read: which repos
+have been attached to the **same work**, and how often. That one comes out of the records, so
+it cannot be wrong about what happened — though it only ever sees repos already worked on
+together. Where the two graphs disagree is the useful part: a pair that keeps recurring with
+nothing in `talks_to` to explain it is an entry missing an edge, and rig names the file.
+
+The same traversal reaches the two commands that can act on it. `rig attach` names the repos
+that talk to the one you just attached and are not attached themselves — rule 5's fourth repo,
+offered rather than waited for — and `rig next` keeps offering them through planning, designing
+and building, then goes quiet once a pull request is open.
+
 ### Reading the works back out
 
 `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely — except a merged PR that has been recorded (below), which is read straight out of `work.json` and carries `recorded: true`, live or `--quick` alike.
@@ -276,6 +306,8 @@ rig dash --from payload.json --org your-org --since 30d
 ```
 
 **Explaining rig to other people.** `rig demo` renders one self-contained interactive page that makes the case for rig *on the repos of whoever is watching*: the `talks_to` graph drawn from the catalogue, clickable to see what each relationship actually is — with the repos nothing is recorded about listed underneath rather than floating in it — and then one real work from the records walked through command by command — `new`, each `attach`, the design gate, `pr`, `close` — with what appeared in the work root and what was committed to the data root beside every step. It ends on that work's own pull-request timings, which are the argument that the durable half outlives the branch.
+
+The header counts the inventory — repos, relationships, works — and what those works produced: how many landed, which means every one of their pull requests merged, the median time from first commit to last merge with the `n` it was taken over, and the median repos each. All of it is read out of the terminal pull-request facts `rig close` already stores, so it needs no network and cannot be wrong tomorrow. What the page will not do is claim a saving: rig has no record of what the same work would have cost without it, so it does not pretend to one. In the drawing, a relationship with a stated `direction` gets an arrowhead and one without stays a plain line — which makes the picture itself a map of where the catalogue is thin.
 
 Nothing in it is a mock-up. Every command, path, branch, base and PR number comes out of a record, which is the only version of this that does not start disagreeing with the tool the week after it is written. The example work is the one with the most repos that actually merged, or name another with `--example <work-id>`.
 

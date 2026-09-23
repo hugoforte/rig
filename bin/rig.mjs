@@ -13,6 +13,7 @@ import { checkouts, unreadable } from './checkouts.mjs'
 import { discover } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
+import { impact, unattached } from './catalog-graph.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
@@ -711,6 +712,25 @@ function listWorkIds (dataRootPath = dataRoot()) {
     .map(d => d.name)
 }
 
+// Every work record in a root that parses, and the ids of the ones that do not. For the readers
+// that want the records as *evidence* rather than as the thing they act on — the observed graph
+// behind `rig impact` and the offer `rig attach` makes. One unreadable record must not cost those
+// their answer, and for `attach` it must not cost the command it follows: the offer runs after
+// the worktree is cut and the record saved, and a throw there skipped the commit and left the
+// data root half-written. So a record that will not read is left out and named, never swallowed.
+function readRecords (root) {
+  const works = []
+  const unreadable = []
+  for (const id of listWorkIds(root)) {
+    try { works.push(readJson(recordFile(id, root))) } catch { unreadable.push(id) }
+  }
+  return { works, unreadable }
+}
+
+const sayUnreadable = ids => {
+  if (ids.length) say(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
+}
+
 // ---------------------------------------------------------------- catalogue
 
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
@@ -815,6 +835,12 @@ org: ${org}
 stack: ${stack || 'unknown'}
 role: TODO — one line: what this repo is, in this org's terms
 talks_to: []
+# One item per repo this one talks to. direction: downstream means a change here can break
+# that repo, upstream the other way round, both either way; leave it out if you do not know.
+# talks_to:
+#   - repo: some-other-repo
+#     how: one line — what actually passes between them
+#     direction: downstream
 setup: []
 check: []
 ---
@@ -1872,6 +1898,37 @@ cmds.attach = ({ flags, positional }) => {
   const name = positional[0] || die('usage: rig attach <repo>')
   commitAs(work.id, name)
   attachRepo(cfg, work, name, { setup: !!flags.setup })
+  offerNeighbours(work, name)
+}
+
+// What else this repo travels with, said once, at the moment the repo set is being chosen.
+// **Both graphs here, unlike `rig next`, which offers only the declared one.** The difference
+// is how often each command speaks: `attach` runs once per repo and is the moment the question
+// is live, so a co-attachment the records keep making is worth raising; `next` runs constantly
+// and has to stay quiet enough to be read.
+//
+// Offers, never blocks — nothing is attached for you, and the command has already done its job
+// by the time this prints.
+function offerNeighbours (work, name) {
+  const catalog = loadCatalog()
+  if (!catalog.length) return
+  const { works, unreadable } = readRecords(dataRoot())
+  const answer = impact(catalog, name, { works })
+  const have = new Set((work.repos || []).map(r => r.repo.toLowerCase()))
+  const said = repo => say(C.dim(`· ${repo}`))
+
+  for (const n of answer.hop1) {
+    if (have.has(n.repo.toLowerCase())) continue
+    const why = n.disagreed ? '' : n.direction === 'downstream' ? `, and a change in ${name} can break it`
+      : n.direction === 'upstream' ? `, and a change in it can break ${name}`
+        : n.direction === 'both' ? ', and either can break the other' : ''
+    said(`${n.repo} talks to ${name}${why} — not attached (\`rig attach ${n.repo}\`)`)
+  }
+  for (const o of answer.observed) {
+    if (have.has(o.repo.toLowerCase()) || o.declared) continue
+    said(`${o.repo} has shared ${o.works.length} work${o.works.length === 1 ? '' : 's'} with ${name}, with nothing in talks_to to say why`)
+  }
+  sayUnreadable(unreadable)
 }
 
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
@@ -2433,6 +2490,14 @@ cmds.check = ({ flags, positional }) => {
   }
 }
 
+// Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
+// offer is visibly only as good as the catalogue, and a thin one produces a thin offer rather
+// than a confident wrong answer. The traversal itself is `unattached` in bin/catalog-graph.mjs.
+function unattachedNeighbours (work) {
+  const catalog = loadCatalog()
+  return catalog.length ? unattached(catalog, (work.repos || []).map(r => r.repo)) : []
+}
+
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
 // off the back of another command (decision 66). The gathering lives here; every decision
 // about what is worth offering is `bin/next.mjs`'s.
@@ -2463,6 +2528,7 @@ cmds.next = ({ flags }) => {
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
+    neighbours: unattachedNeighbours(work),
   })
 
   const phase = phaseOf(work, repos)
@@ -2952,9 +3018,123 @@ cmds.catalog = ({ flags, positional }) => {
     const flag = e.draft ? C.yellow(' [draft]') : ''
     say(`${e.repo.padEnd(34)} ${C.dim(e.org.padEnd(15))} ${e.role}${flag}`)
     if (flags.verbose && e.talks_to.length) {
-      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}`)
+      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
     }
   }
+}
+
+// What else a change in this repo reaches. DESIGN.md §6 already made this traversal a rule —
+// "for every selected repo, check its neighbours and say why each is or isn't in scope" — and
+// left the agent to carry it out against a graph rig could have computed. This is that rule
+// with a command behind it, which is also what makes correcting an entry change an outcome:
+// until something reads `talks_to` back, rule 4 asks for a correction and offers no reason.
+//
+// **Offers, never judges.** No verdict, no threshold, nothing attached for you — `rig list`'s
+// rule, information and not automation. The one thing it will not stay quiet about is a
+// contradiction: two entries that disagree about which way a relationship runs are reported as
+// a disagreement, never resolved by picking a side.
+cmds.impact = ({ positional }) => {
+  sayCurrentRoot()
+  const name = positional[0]
+  if (!name) die('rig impact wants a repo — `rig catalog` lists them')
+  const entries = loadCatalog()
+  if (!entries.length) die('catalogue is empty — entries are drafted on `rig attach`')
+  const { works, unreadable } = readRecords(dataRoot())
+  const answer = impact(entries, name, { works })
+
+  // Asked only about the repos in the answer, not the whole catalogue. The measure costs a git
+  // spawn per entry that has a mirror, and a neighbourhood is a handful of repos where a
+  // catalogue is hundreds; `doctor` pays the full price because it reports on all of them.
+  const named = new Set([answer.repo, ...answer.hop1.map(n => n.repo), ...answer.hop2.map(n => n.repo)].map(r => r.toLowerCase()))
+  const cfg = config()
+  const age = new Map(catalogueFreshness(dataRoot(), entries.filter(e => named.has(e.repo.toLowerCase())), cfg.mirrorRoot, onPath('git'))
+    .map(f => [f.repo.toLowerCase(), f]))
+
+  // Everything a claim should be weighed against, in one dim parenthesis: no entry at all, an
+  // entry nobody has corrected, or one the repo has moved on from — decision 93's count and
+  // date, carrying no opinion about either.
+  const caveat = n => {
+    const bits = []
+    if (!n.catalogued) bits.push('no catalogue entry')
+    else if (n.draft) bits.push('draft entry')
+    const f = age.get(n.repo.toLowerCase())
+    if (f && f.commits > 0) bits.push(`entry ${f.commits} commit${f.commits === 1 ? '' : 's'} behind, since ${f.writtenAt}`)
+    return bits.length ? ` ${C.dim(`(${bits.join('; ')})`)}` : ''
+  }
+
+  const LABEL = { downstream: 'downstream', upstream: 'upstream', both: 'both ways' }
+  const label = n => (n.disagreed ? C.yellow('disagreed') : C.dim(LABEL[n.direction] || 'unstated'))
+  const width = Math.max(12, ...[...answer.hop1, ...answer.hop2].map(n => n.repo.length))
+
+  say(`${C.bold(answer.repo)}${answer.org ? ` ${C.dim(answer.org)}` : ''}${answer.role ? ` — ${answer.role}` : ''}${caveat(answer)}`)
+
+  // No declared edge is not the end of the answer. Every freshly drafted entry has `talks_to: []`,
+  // and that is exactly where the observed graph below has something to say — returning here
+  // hid the evidence in the one case it was built for.
+  say('')
+  if (!answer.hop1.length) say(C.dim('nothing in the catalogue talks to it, and it talks to nothing — `talks_to` in its entry is where that is said'))
+  else say(C.dim('one hop'))
+  for (const n of answer.hop1) {
+    say(`  ${n.repo.padEnd(width)}  ${label(n)}${caveat(n)}`)
+    // Every end's own sentence, verbatim. The direction says which way it runs and the prose
+    // says what it is; neither replaces the other, and a disagreement is only legible when both
+    // claims can be read side by side.
+    for (const said of n.says) {
+      say(C.dim(`    ${said.from} → ${said.to}: ${said.how || '(nothing said)'}`) + (said.direction ? C.dim(` [${said.direction}]`) : ''))
+    }
+  }
+
+  if (answer.hop2.length) {
+    // No composed direction: two edges end to end are not a third edge, and the repo in the
+    // middle may well absorb what the first one does. What is printed is the route, and the
+    // direction of the far hop alone.
+    say('')
+    say(C.dim('two hops'))
+    for (const n of answer.hop2) {
+      const via = n.via.map(v => `${v.through}${v.disagreed ? ' (disagreed)' : v.direction ? ` (${LABEL[v.direction]} of it)` : ''}`).join(', ')
+      say(`  ${n.repo.padEnd(width)}  ${C.dim(`via ${via}`)}${caveat(n)}`)
+    }
+  }
+
+  // The observed graph, under the declared one and never merged into it. A pair the records
+  // keep making with nothing in `talks_to` to explain it is the finding — evidence that an
+  // entry is missing an edge, and it names which entry. A pair the catalogue already explains
+  // is still printed, because the count is how strong the declared edge turned out to be.
+  if (answer.observed.length) {
+    say('')
+    say(C.dim('worked on together'))
+    for (const o of answer.observed) {
+      const n = o.works.length
+      const count = `${n} work${n === 1 ? '' : 's'}`
+      say(`  ${o.repo.padEnd(width)}  ${C.dim(count)}${o.declared ? C.dim(' — and talks_to says why') : C.yellow(' — and nothing in talks_to says why')}`)
+      say(C.dim(`    ${o.works.join(', ')}`))
+    }
+    const quiet = answer.observed.filter(o => !o.declared)
+    if (quiet.length) {
+      say('')
+      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — ${answer.catalogued
+        ? `\`rig catalog ${answer.repo}\` names the file to correct`
+        : `and ${answer.repo} has no catalogue entry — one is drafted the first time it is attached`}`))
+    }
+  }
+
+  // Two different gaps, pointed at two different things. A draft has a file, and `rig catalog`
+  // names it; a repo with no entry has none, and `rig catalog` dies on it — the entry is drafted
+  // the first time the repo is attached, so that is the pointer.
+  const drafts = answer.hop1.filter(n => n.catalogued && n.draft).map(n => n.repo)
+  const unwritten = answer.hop1.filter(n => !n.catalogued).map(n => n.repo)
+  if (drafts.length || unwritten.length) say('')
+  if (drafts.length) {
+    say(C.dim(drafts.length === 1
+      ? `${drafts[0]} is still a draft — \`rig catalog ${drafts[0]}\` names the file`
+      : `${drafts.join(', ')} are still drafts — \`rig catalog <repo>\` names each file`))
+  }
+  if (unwritten.length) {
+    say(C.dim(unwritten.length === 1
+      ? `${unwritten[0]} has no catalogue entry — one is drafted the first time it is attached`
+      : `${unwritten.join(', ')} have no catalogue entry — one is drafted the first time each is attached`))
+  }
+  sayUnreadable(unreadable)
 }
 
 cmds.prompt = ({ positional }) => {
@@ -3472,6 +3652,9 @@ cmds.help = () => {
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
+  rig impact <repo>               what else a change in that repo reaches: the repos one and
+                                  two hops away in talks_to, each with what was said, which
+                                  way it runs, and how far behind its entry is
   rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
                                   re-renders its deploy order from the stack
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
