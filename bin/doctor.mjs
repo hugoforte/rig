@@ -169,8 +169,9 @@ function rootFindings (root) {
 // Everything the findings need that they cannot work out for themselves, gathered by the
 // caller so this stays pure. **Decision 54 is a field here, not a branch**: a check this
 // machine cannot make arrives null — `git: null` with no git on PATH, `gitConfig: null`
-// with it, `disk: null` on a machine with neither free-space probe — and a null is dropped
-// or noted, never counted against the machine.
+// with it, `disk: null` when free space could not be measured (no `df` on PATH, a Node
+// without `fs.statfsSync`, a work root the filesystem will not report on) — and a null is
+// dropped or noted, never counted against the machine.
 //
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
@@ -329,8 +330,9 @@ export function doctorFindings (snap = {}) {
     out.push(warn(`unmanaged entry "${entry}" in ${wr.path} — no data root has a work record for it; rig owns this tree`))
   }
 
-  // The label comes from the probe, not from the path: a drive letter on Windows, the mount
-  // point the work root actually sits on anywhere else.
+  // The label names the volume that was measured, which is not always the one the path is
+  // written on: the drive, or the share, the work root resolves to on Windows; the mount point
+  // `df` found it on anywhere else.
   if (snap.disk) {
     out.push(check(`disk on ${snap.disk.label}`, snap.disk.freeGb > 20, {
       ok: `${snap.disk.freeGb} GB free`,

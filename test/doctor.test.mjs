@@ -424,7 +424,7 @@ test('a long list is capped, because the line is read by a person and the tail i
   assert.match(says, /e \(96 commits since 2026-07-14\), and 2 more$/)
 })
 
-test('a free-space probe this machine does not have costs one line, not the verdict (decision 54)', () => {
+test('free space this machine could not measure costs one line, not the verdict (decision 54)', () => {
   const found = doctorFindings(snap({ disk: null }))
   assert.equal(matching(found, /disk on/).length, 0)
   assert.equal(problemCount(found), 0)
