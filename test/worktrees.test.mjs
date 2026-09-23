@@ -315,6 +315,17 @@ test('a copy left in the mirror of a branch gone from the remote is checked out 
   assert.match(said().warnings, /feat\/t13 is not on acme\/billing but the mirror kept a copy/)
 })
 
+test('a worktree folder deleted by hand does not keep its branch from being cut again', () => {
+  const left = workDir('t14', 'billing')
+  const kept = gitMust(left, 'rev-parse', 'HEAD')
+  fs.rmSync(left, { recursive: true, force: true, maxRetries: 5 })
+  const dest = workDir('t15', 'billing')
+
+  trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/t13', dest })
+
+  assert.equal(gitMust(dest, 'rev-parse', 'HEAD'), kept)
+})
+
 test('anyMirror finds a mirror to ask git about an org, and answers nothing for an org with none', () => {
   assert.equal(trees().anyMirror('acme'), mirrorOf('acme', 'billing'))
   assert.equal(trees().anyMirror('nobody'), null)

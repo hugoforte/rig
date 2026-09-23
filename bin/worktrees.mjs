@@ -108,10 +108,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // A branch only the mirror has — never pushed, or deleted from the remote once merged —
     // is checked out as it is, with a warning: its commits exist nowhere else, and whether
     // they are still wanted is for whoever is looking at them to say.
+    //
+    // A worktree folder deleted by hand leaves the mirror a record still claiming its branch,
+    // so the mirror is pruned first (hugoforte/rig#151). Prune drops only records whose folder
+    // is gone; a live worktree keeps its claim.
     cut ({ org, repo, branch, dest }) {
       const mirror = fetched(org, repo)
       const base = remoteHead(mirror, org, repo)
       if (fs.existsSync(dest)) throw new RigError(`${dest} already exists`)
+      git(mirror, 'worktree', 'prune')
       if (onRemote(mirror, branch)) {
         checkOutRemote(mirror, org, repo, branch, dest)
         return { base }
