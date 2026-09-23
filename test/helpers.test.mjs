@@ -259,7 +259,8 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
 // because its answer is remembered and the run after it must not be handed it.
 const launcherOnPath = process.platform === 'win32' && process.env.PATH.split(';').find(dir => realGitFor(dir) !== 'git')
 test('a hook starts through the git a run is handed, with MSYSTEM set or not', { skip: !launcherOnPath }, () => {
-  // GitHub faked so that `rig init` never asks the real `gh` whether it is authenticated.
+  // GitHub faked, as every installation in the suite fakes it. `gh` is not on this run's PATH
+  // anyway, so the fake only keeps the warning about that off the output.
   const m = makeInstall({ prefix: 'rig-launcher-hook-', localConfig: true, github: { auth: 'ok', repos: {} } })
   try {
     const posix = p => p.replaceAll('\\', '/')
