@@ -3,7 +3,7 @@
 // The rest of the suite drives rig through `test/harness.mjs`'s `rig()`, which now has two
 // adapters and picks the in-process one for most files — so if the seam leaked, what would
 // fail is whichever test happened to run second, with a message about a data root or a
-// catalogue and nothing about the leak. These are the four properties that make the in-process
+// catalogue and nothing about the leak. These are the five properties that make the in-process
 // adapter honest, each asserted where it is the subject.
 //
 // The installations are `makeInstall`'s, because what has to be shown is a *run* against an
@@ -92,4 +92,18 @@ test('a tracker is a run\'s, so the next run reads the state file again rather t
   // one command and wrong for anything else: this second run would have been answered by the
   // first run's client, reading the state that had already been loaded into memory.
   assert.match(drive(one, ['doctor']).out, /gh not on PATH/)
+})
+
+test('a run handed a crippled PATH is never told what a run with a whole one found', () => {
+  // What is remembered across runs is keyed on PATH, so the key has to be the PATH a child is
+  // actually given. `{ ...env, PATH }` from a shell that spells it `Path` holds both, and a
+  // Windows child is handed whichever sorts first, which is not the one inserted first.
+  const whole = Object.entries(one.env).find(([k]) => k.toUpperCase() === 'PATH')[1]
+  const crippled = Object.fromEntries(Object.entries(one.env).filter(([k]) => k.toUpperCase() !== 'PATH'))
+  crippled.Path = whole
+  crippled.PATH = path.join(one.tmp, 'no-git-here')
+  const doctor = env => drive({ ...one, env }, ['doctor']).out
+
+  assert.match(doctor(crippled), /git — not on PATH/, 'the crippled run was answered from the whole one')
+  assert.doesNotMatch(doctor(one.env), /git — not on PATH/, 'the whole run was answered from the crippled one')
 })

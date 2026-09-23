@@ -141,7 +141,7 @@ function exec (cmd, args, { env: extra, ...opts } = {}) {
 // PATH, so one run's answer is the next run's for as long as they are handed the same one.
 const gitPrograms = new Map()
 function gitProgram () {
-  const key = pathOf(env())
+  const key = pickEnv('PATH')
   if (!gitPrograms.has(key)) gitPrograms.set(key, realGitFor(key))
   return gitPrograms.get(key)
 }
@@ -173,11 +173,18 @@ function programPath (name, searchPath) {
   return null
 }
 
-// Windows does not agree with itself about the case of an environment variable's name, so the
-// ones rig reads are found rather than named — the same reason `pathOf` exists.
+// What a child of this run would be handed for `name`. On Windows the case of a name is no
+// part of it — PATH is `Path` about as often as not — and a copied environment keeps whichever
+// case it was given, so `{ ...env, PATH }` can hold two spellings of one variable. Node's spawn
+// hands the child whichever key sorts first, so that is the one read here: reading the other
+// answers for an environment no child of the run ever sees. Everywhere else a name is exactly
+// itself, because that is how a child there reads it.
 const pickEnv = name => {
   const e = env()
-  return e[Object.keys(e).find(k => k.toLowerCase() === name.toLowerCase()) ?? ''] ?? ''
+  const key = process.platform === 'win32'
+    ? Object.keys(e).sort().find(k => k.toUpperCase() === name.toUpperCase())
+    : name
+  return key === undefined ? '' : e[key] ?? ''
 }
 
 // Is the command on PATH at all? `exec` dies when it is not, which is right for every caller
@@ -194,12 +201,8 @@ const pickEnv = name => {
 // and no `cwd` for the same reason: what it asks about is PATH, and a `--version` cannot care
 // where it runs — where a run is standing may be a directory `rig close` has just removed.
 const onPathAnswers = new Map()
-// Windows spells it `Path` about as often as `PATH`, and a copied environment keeps whichever
-// case it was given — so the key is found rather than named.
-const pathOf = environment =>
-  environment[Object.keys(environment).find(k => k.toLowerCase() === 'path') ?? ''] ?? ''
 const onPath = cmd => {
-  const key = `${pathOf(env())}\u0000${cmd}`
+  const key = `${pickEnv('PATH')}\u0000${cmd}`
   if (!onPathAnswers.has(key)) {
     onPathAnswers.set(key, !spawnSync(cmd, ['--version'], { ...spawnDefaults(current.command), env: env() }).error)
   }
