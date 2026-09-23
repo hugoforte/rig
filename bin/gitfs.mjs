@@ -96,9 +96,11 @@ function gitFileTarget (file, dir) {
 // put a second file there — and read for every way git's grammar lets a key be written, not
 // only the way git writes one: on its section header's line, with no value, with a comment
 // after it, in any section. Anything short of a plain `bare = false` counts as bare.
-// Conservative on purpose: the cost of handing a question back is one subprocess in a
-// layout nobody here has, and the cost of getting it wrong is a wrong answer stated
-// confidently.
+// Conservative on purpose, and not cheap: every worktree rig makes is a linked worktree of
+// a `git clone --bare` mirror, whose common config says `bare = true`. git ignores that for
+// a linked worktree unless `extensions.worktreeConfig` is on, and this reads it all the
+// same, so rig's own commonest layout is handed back to git and paid for in subprocesses.
+// The cost of getting it wrong is a wrong answer stated confidently.
 function overridden (gitDir, commonDir, bareExpected) {
   const lines = ((read(path.join(commonDir, 'config')) ?? '') + '\n' +
     (read(path.join(gitDir, 'config.worktree')) ?? ''))
