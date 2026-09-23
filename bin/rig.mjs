@@ -170,15 +170,29 @@ function realGitFor (searchPath, msystem = '') {
   return exists(real) ? real : 'git'
 }
 
-// Where PATH would find a program, without starting one to find out. `PATHEXT` is what makes
-// a bare name executable on Windows and it is the user's to set, so it is read rather than
-// assumed; everywhere else a name is the file.
+// Where a spawn on Windows finds a program, without starting one to find out — or null where
+// that cannot be said for sure, which `realGitFor` answers as plain `git`. The search is
+// libuv's, because that is what Node's spawn runs: each PATH entry in turn, less one pair of
+// surrounding quotes, trying `<name>.com` and then `<name>.exe`. PATHEXT plays no part in it.
+//
+// An entry this cannot read the way libuv does ends the search rather than being walked past:
+// the program there may be the one the spawn runs, and the next layout along would then be
+// somebody else's git. That is an entry that leans on a cwd to say where it points, which
+// libuv would read against the run's; and one with a quote left once the surrounding pair is
+// gone, which is how a quoted entry holding a `;` arrives, split in two. A directory with an
+// apostrophe in its name goes with them, and costs only the saving.
+//
+// One difference is kept on purpose: the libuv some Node releases still ship looks in the
+// child's cwd before PATH, and this does not. The answer is cached against PATH, which the cwd
+// is no part of, and a git.exe that happens to sit where a run is standing is not one worth
+// preferring.
+const QUOTED = /^(["'])(.*)\1$/
+const FULLY_QUALIFIED = /^([a-z]:[\\/]|[\\/]{2})/i
 function programPath (name, searchPath) {
-  const exts = process.platform === 'win32'
-    ? (pickEnv('PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : ['']
-  for (const dir of searchPath.split(path.delimiter).filter(Boolean)) {
-    for (const ext of exts) {
+  for (const entry of searchPath.split(';').filter(Boolean)) {
+    const dir = entry.replace(QUOTED, '$2')
+    if (/["']/.test(dir) || !FULLY_QUALIFIED.test(dir)) return null
+    for (const ext of ['.com', '.exe']) {
       const candidate = path.join(dir, name + ext)
       if (exists(candidate)) return candidate
     }

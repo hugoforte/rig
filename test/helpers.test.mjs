@@ -188,6 +188,10 @@ test('the Git for Windows launcher is stepped past, and nobody else\'s git is', 
   const real = layout('proper', 'mingw64', 'bin', 'git.exe')
   assert.equal(realGitFor(proper), real, 'the launcher names the binary it would have started')
 
+  const bin = path.dirname(layout('bin-layout', 'bin', 'git.exe'))
+  const binReal = layout('bin-layout', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(bin), binReal, 'Git for Windows puts a launcher in bin\\ as well as cmd\\')
+
   const headless = path.dirname(layout('headless', 'cmd', 'git.exe'))
   assert.equal(realGitFor(headless), 'git', 'the layout without the binary in it proves nothing')
 
@@ -195,8 +199,32 @@ test('the Git for Windows launcher is stepped past, and nobody else\'s git is', 
   layout('shim', 'mingw64', 'bin', 'git.exe')
   assert.equal(realGitFor(shim), 'git',
     'a git somewhere of its own is a program someone meant to put there')
+  assert.equal(realGitFor([shim, proper].join(';')), 'git',
+    'and one ahead of the launcher on PATH is the git a spawn runs, whatever comes after it')
 
   assert.equal(realGitFor(path.join(root, 'nothing-here')), 'git', 'and no git on PATH is left to fail as it always did')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('PATH is searched as a spawn searches it, and an entry it cannot read that way ends the search', onWindows, () => {
+  // Node's spawn strips one pair of quotes from an entry and tries `git.com`, then `git.exe`,
+  // and nothing else. Reading PATH any other way walks past the directory the spawn takes its
+  // git from, on to a layout further along that is somebody else's git.
+  const { root, layout } = programTree()
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+  const own = path.dirname(layout('own', 'git.exe'))
+  const script = path.dirname(layout('script', 'git.bat'))
+  const split = path.dirname(layout('semi;colon', 'git.exe'))
+  const searching = (...entries) => realGitFor(entries.join(';'))
+
+  assert.equal(searching(`"${own}"`, proper), 'git', 'a quoted entry is still where the spawn finds its git')
+  assert.equal(searching(`"${proper}"`), real, 'and a quoted launcher is still the launcher')
+  assert.equal(searching(script, proper), real, 'a git.bat is not a program the spawn would start')
+  assert.equal(searching('relative', proper), 'git',
+    'a relative entry is read against where the run stands, which is no part of this answer')
+  assert.equal(searching(`"${split}"`, proper), 'git',
+    'a quoted entry holding a ; is one directory to the spawn, and not one this reads')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
