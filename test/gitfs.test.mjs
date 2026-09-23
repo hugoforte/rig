@@ -152,6 +152,43 @@ test('an empty directory called `.git` is walked past, the way git walks past it
   assert.ok(same(agreesWithGit(child, 'an empty .git directory').top, own))
 })
 
+test('a HEAD is judged the way git judges it, neither stricter nor looser', () => {
+  // Stricter walks past a checkout git answers for and names the one around it; looser
+  // answers for a directory git walks past. git wants `ref:` naming something under
+  // `refs/`, or an object id's first forty hex digits in either case, and reads no further.
+  const inner = mk(path.join(own, 'judged'))
+  gitMust(inner, 'init', '-q', '-b', 'main')
+  gitMust(inner, 'commit', '-q', '--allow-empty', '-m', 'first')
+  const sha = gitMust(inner, 'rev-parse', 'HEAD')
+  for (const head of [sha.toUpperCase(), `${sha} and more\n`, 'ref: main\n']) {
+    fs.writeFileSync(path.join(inner, '.git', 'HEAD'), head)
+    agreesWithGit(inner, `a HEAD of ${JSON.stringify(head)}`)
+  }
+  const shaped = mk(path.join(own, 'shaped'))
+  mk(path.join(shaped, 'objects'))
+  mk(path.join(shaped, 'refs'))
+  fs.writeFileSync(path.join(shaped, 'HEAD'), 'ref: main\n')
+  assert.ok(same(agreesWithGit(shaped, 'a would-be bare repository git rejects').top, own))
+})
+
+test('a HEAD that is a symbolic link names the ref it links to, the way git reads it', t => {
+  // `core.preferSymlinkRefs` writes one. git reads the link rather than following it — an
+  // unborn branch's points at nothing yet — and a link outside `refs/` is no HEAD at all.
+  const inner = mk(path.join(own, 'linked-head'))
+  gitMust(inner, 'init', '-q', '-b', 'main')
+  const head = path.join(inner, '.git', 'HEAD')
+  fs.rmSync(head)
+  try { fs.symlinkSync('refs/heads/unborn', head) } catch (e) {
+    if (e.code === 'EPERM') return t.skip('this machine will not make a symbolic link')
+    throw e
+  }
+  assert.ok(same(agreesWithGit(inner, 'a HEAD linked to an unborn branch').top, inner))
+  assert.equal(headBranch(discover(inner, env).gitDir), git(inner, 'symbolic-ref', '-q', '--short', 'HEAD').out)
+  fs.rmSync(head)
+  fs.symlinkSync('../elsewhere', head)
+  assert.ok(same(agreesWithGit(inner, 'a HEAD linked outside refs/').top, own))
+})
+
 test('a work tree git has been told to look elsewhere for is handed back to git', () => {
   // `core.worktree` is the setting that makes the walk's answer wrong rather than missing:
   // git reports a directory no `.git` entry names. Null is this module saying so.

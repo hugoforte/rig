@@ -33,16 +33,30 @@ export const MOVED_BY = [
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
 ]
 
-// git's `validate_headref`: a HEAD is a symbolic ref, or a raw object id — forty hex digits
-// under SHA-1 and sixty-four under SHA-256. Checking it is what stops an empty directory
-// called `.git` being read as a repository, which git walks straight past. Deliberately no
-// stricter than git about what a symbolic ref may name: rejecting a HEAD git accepts would
-// not hand the question back, it would walk on and answer for the checkout further up.
-const VALID_HEAD = /^(ref:\s*\S|[0-9a-f]{40}(?:[0-9a-f]{24})?\s*$)/
+// git's `validate_headref`: a HEAD is `ref:` naming something under `refs/`, or starts with
+// forty hex digits in either case — which a SHA-256 id also does — and git reads nothing
+// after them. Checking it is what stops an empty directory called `.git` being read as a
+// repository, which git walks straight past. It is git's test exactly, because a mistake
+// either way is a wrong answer rather than a missing one: rejecting a HEAD git accepts walks
+// on and answers for the checkout further up, and accepting one git rejects answers for a
+// directory git walks past.
+const VALID_HEAD = /^(?:ref:[ \t\n\r]*refs\/|[0-9a-fA-F]{40})/
 
 const read = file => { try { return fs.readFileSync(file, 'utf8') } catch { return null } }
 const statOf = p => { try { return fs.statSync(p) } catch { return null } }
 const isDir = p => statOf(p)?.isDirectory() === true
+
+// HEAD as git reads it. `core.preferSymlinkRefs` makes it a symbolic link rather than a
+// file, and git takes a link into `refs/` as the ref it names without following it — an
+// unborn branch's link points at nothing yet — and a link anywhere else as no HEAD at all.
+// Node reads the link back in this platform's separators, and git compares it in `/`.
+function headOf (gitDir) {
+  const file = path.join(gitDir, 'HEAD')
+  let link
+  try { link = fs.readlinkSync(file) } catch { return read(file) }
+  link = link.split(path.sep).join('/')
+  return link.startsWith('refs/') ? `ref: ${link}` : null
+}
 
 // A linked worktree's git dir holds a `commondir` pointing at the main checkout's, which is
 // where the objects and the refs actually live. git resolves it before it decides whether a
@@ -56,7 +70,7 @@ const commonOf = gitDir => {
 // git's `is_git_directory`, which is the test that makes a directory a repository rather
 // than a directory with a suggestive name.
 function isGitDir (dir) {
-  const head = read(path.join(dir, 'HEAD'))
+  const head = headOf(dir)
   if (head === null || !VALID_HEAD.test(head)) return false
   const common = commonOf(dir)
   return isDir(path.join(common, 'objects')) && isDir(path.join(common, 'refs'))
@@ -171,6 +185,6 @@ export function discover (start, env = process.env) {
 // it is what they should do with it — `fastForward` calls it detached and declines to move
 // anything, which is the right answer for a head that is not on a branch.
 export function headBranch (gitDir) {
-  const m = /^ref:\s*refs\/heads\/(.+)$/m.exec(read(path.join(gitDir, 'HEAD')) ?? '')
+  const m = /^ref:\s*refs\/heads\/(.+)$/m.exec(headOf(gitDir) ?? '')
   return m ? m[1].trim() : null
 }
