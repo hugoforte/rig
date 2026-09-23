@@ -1,9 +1,9 @@
 // The two checkouts an installation owns, against real git. The module's seam is the
 // runner it is handed, so these tests hand it one that spawns git for real — local bare
 // remotes in a temp tree, no network, no `gh`, and no CLI subprocess. A fake runner
-// appears five times, and only where standing the state up for real would prove less than
-// it costs: the spawn options `fetch` is given, an unmeasurable distance, a `git status`
-// that fails, a refused `git add`, and a rebase whose abort fails too.
+// appears only where standing the state up for real would prove less than it costs: the
+// spawn options `fetch` is given, a `git status` that fails, a count that fails after it, a
+// refused `git add`, a `git diff --cached` that fails, and a rebase whose abort fails too.
 //
 // One temp tree, shared. Every checkout a test reads is made by that test or in `before`,
 // so no test depends on another having run first — `--test-name-pattern` has to work.
@@ -422,6 +422,25 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   const r = c(unreadableTree).fastForward('anywhere')
   assert.equal(r.outcome, 'failed')
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
+})
+
+test('a count the fallback could not make is unknown, and nothing moves on it', () => {
+  // The fallback counts the distance itself, and the count towards the upstream is the one
+  // that decides whether anything moves: `status` failed, the upstream resolves, and that
+  // count fails too. A confident "0 behind" would report the checkout current on the
+  // strength of a question nothing answered.
+  const uncounted = (cmd, args) => {
+    if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
+    if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
+    if (args.includes('symbolic-ref')) return { code: 0, out: 'refs/heads/main', err: '' }
+    if (args.includes('HEAD..@{u}')) return { code: 128, out: '', err: 'fatal: bad revision' }
+    if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
+    if (args.includes('rev-list')) return { code: 0, out: '0', err: '' }
+    return { code: 1, out: '', err: '' }
+  }
+  const r = c(uncounted).fastForward('anywhere')
+  assert.equal(r.state.behind, null)
+  assert.equal(r.outcome, 'unmeasurable')
 })
 
 test('a repository git refuses outright is no checkout, not one with no upstream', () => {
