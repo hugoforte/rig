@@ -25,9 +25,9 @@ import path from 'node:path'
 // even to nothing, which git still reads as set — means git is answering a different
 // question from the one the filesystem was asked, and reproducing each of them here would be
 // a second implementation of the part of git most likely to change.
-// `GIT_DISCOVERY_ACROSS_FILESYSTEM` is in the list for the opposite reason: without it git
-// stops the walk at a filesystem boundary, which the walk below reproduces, and with it git
-// does not.
+// `GIT_DISCOVERY_ACROSS_FILESYSTEM` is in the list for the opposite reason: without it POSIX
+// git stops the walk at a filesystem boundary, which the walk below reproduces there, and
+// with it git does not.
 export const MOVED_BY = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
@@ -145,8 +145,11 @@ export function discover (start, env = process.env) {
   for (const name of MOVED_BY) if (env[name] !== undefined) return null
   let dir
   try { dir = fs.realpathSync.native(path.resolve(start)) } catch { return null }
-  // git records the starting directory's device and stops when the walk leaves it, so that
-  // a repository on the far side of a mount point is not claimed to own what is under it.
+  // POSIX git records the starting directory's device and stops when the walk leaves it, so
+  // that a repository on the far side of a mount point is not claimed to own what is under
+  // it, and so does this. Git for Windows never compares devices — its `st_dev` is always
+  // zero — and Node's `dev` there is a volume's serial on some paths and zero on others, so
+  // on Windows leaving the starting device hands the question back instead.
   const device = statOf(dir)?.dev ?? null
 
   for (;;) {
@@ -174,7 +177,7 @@ export function discover (start, env = process.env) {
     }
     const up = path.dirname(dir)
     if (up === dir) return NO_REPOSITORY
-    if ((statOf(up)?.dev ?? null) !== device) return NO_REPOSITORY
+    if ((statOf(up)?.dev ?? null) !== device) return process.platform === 'win32' ? null : NO_REPOSITORY
     dir = up
   }
 }

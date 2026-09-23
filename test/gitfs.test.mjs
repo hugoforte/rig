@@ -119,6 +119,23 @@ test('a checkout whose root is also shaped like a bare repository is still a che
   assert.ok(same(agreesWithGit(mk(path.join(stray, 'sub')), 'a directory inside it').top, stray))
 })
 
+test('a walk that leaves its filesystem stops where POSIX git stops, and on Windows asks git', t => {
+  // POSIX git stops at a mount point and Git for Windows walks on, and a Windows `dev` is not
+  // a volume's identity on every path, so there only git can say. The stub stands in for a
+  // mounted volume, which nothing short of an elevated session can make.
+  const inside = fs.realpathSync.native(mk(path.join(own, 'mounted', 'inside')))
+  const volume = path.dirname(inside)
+  const statSync = fs.statSync
+  t.mock.method(fs, 'statSync', (p, ...rest) => {
+    const stats = statSync(p, ...rest)
+    const under = path.relative(volume, p)
+    if (!under.startsWith('..') && !path.isAbsolute(under)) stats.dev += 1
+    return stats
+  })
+  const stopped = { top: null, gitDir: null, commonDir: null }
+  assert.deepEqual(discover(inside, env), process.platform === 'win32' ? null : stopped)
+})
+
 test('a directory that is no repository is said to be one, without a repository above it', () => {
   assert.deepEqual(discover(outside, env), { top: null, gitDir: null, commonDir: null })
   assert.equal(git(outside, 'rev-parse', '--show-toplevel').code !== 0, true, 'git agrees, at the price of a subprocess')
