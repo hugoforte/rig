@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, freeSpace, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  SPAWN_DEFAULTS, refreshSpawn, freeSpace, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -158,10 +158,13 @@ test('every child rig spawns is hidden, so a console-less child pays for no cons
 })
 
 test('the freshness refresh is detached, silent, rooted in the tool, and hidden', () => {
-  assert.equal(REFRESH_SPAWN.detached, true, 'the fetch has to outlive the command that armed it')
-  assert.equal(REFRESH_SPAWN.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
-  assert.equal(REFRESH_SPAWN.windowsHide, true, 'see above; this is the one that hung a machine')
-  assert.ok(REFRESH_SPAWN.cwd, 'a child sitting in a worktree is one `rig close` cannot remove')
+  const spawn = refreshSpawn('C:\\rig', { PATH: 'somewhere' })
+  assert.equal(spawn.detached, true, 'the fetch has to outlive the command that armed it')
+  assert.equal(spawn.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
+  assert.equal(spawn.windowsHide, true, 'see above; this is the one that hung a machine')
+  assert.equal(spawn.cwd, 'C:\\rig', 'a child sitting in a worktree is one `rig close` cannot remove')
+  assert.deepEqual(spawn.env, { PATH: 'somewhere' },
+    'the run that armed it decides what it may reach, not the process that happened to host it')
 })
 
 // Free space is asked of the runtime rather than of the platform, so there is no `df` output

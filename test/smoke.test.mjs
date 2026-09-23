@@ -32,6 +32,8 @@ const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
   githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
 } = makeInstall({
+  // Nothing here is about the process rig runs in, so the runs happen in this one.
+  inProcess: true,
   prefix: 'rig-smoke-',
   author: 'rig smoke',
   email: 'smoke@example.invalid',

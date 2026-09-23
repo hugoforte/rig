@@ -20,6 +20,8 @@ import path from 'node:path'
 import { makeInstall, readJson } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, gitMust, cleanup } = makeInstall({
+  // Nothing here is about the process rig runs in, so the runs happen in this one.
+  inProcess: true,
   prefix: 'rig-base-',
   author: 'rig base',
   email: 'base@example.invalid',

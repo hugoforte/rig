@@ -23,7 +23,11 @@ import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
-const RIG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// The tool checkout this file is part of, and the installation a run is a run *of* unless
+// it is told otherwise: a test drives this code against a throwaway installation in a temp
+// directory, and `rig.local.json`, `prompts/`, `templates/` and every freshness reading have
+// to be that one's rather than this checkout's.
+const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // ---------------------------------------------------------------- primitives
 
@@ -36,18 +40,55 @@ const C = {
   cyan: s => `\x1b[36m${s}\x1b[0m`,
 }
 
-const say = s => console.log(s)
+// ------------------------------------------------------------- an invocation
+
+// One run of rig, and everything about it that is not code: the installation it is a run of,
+// where it is standing, what it may read of the machine, where its words go, and the state it
+// collects on the way. `run` at the bottom builds one, makes it current for the length of the
+// call and puts back what was there, so nothing a run accumulates can reach the next one —
+// which is what lets a test drive rig in its own process instead of paying for one.
+//
+// Ambient rather than a parameter, and that is the trade this makes: threading one argument
+// through every function in this file would *be* the change, and what a second run in one
+// process needed was the state's **lifetime**, not the plumbing. What used to end when the
+// process ended — the five module-level bindings, the two memoised tracker adapters, the PATH
+// answers — now ends when the invocation does. One run at a time in a process, which is what
+// the CLI has by construction and what `node --test` gives: files run in parallel processes
+// and a file's tests in sequence.
+//
+// It starts as the process, because two of the helpers in the export block —
+// `branchFirstCommitAt` and `prTiming` — are exported for their logic and reach git and
+// GitHub to apply it, and a test calls those without ever starting a run.
+let current = invocationOf({})
+
+const toolRoot = () => current.toolRoot
+const cwd = () => current.cwd
+const env = () => current.env
+// Windows refuses to remove a directory that is some process's cwd, so `rig close` moves out
+// of the one it is standing in. Where the *run* is standing always moves; whether the process
+// moves with it is the caller's answer, because an in-process run does not own the process.
+const chdir = dir => { current.cwd = dir; current.chdir(dir) }
+// Raw writers: what a command has to say, with nothing added. The six sinks below add the
+// line and the glyph; `cmds.catalog` and `cmds.prompt` write a file through `out` unchanged,
+// which is what keeps a piped entry byte-for-byte the file it came from.
+const out = s => current.out(s)
+const err = s => current.err(s)
+
+// Six sinks and one writer behind each pair, so that "where does rig's output go" is a
+// property of the run rather than of the process. Line-ending is theirs and not the writer's:
+// `cmds.prompt` and `cmds.catalog` write a file through the same stdout with no line added.
+const say = s => out(`${s}\n`)
 // For the ambient freshness line alone: it is rig talking about itself, not part of any
 // command's answer, so it must not land in a pipe someone is reading the answer out of.
-const aside = s => console.error(s)
-const step = s => console.log(`${C.cyan('·')} ${s}`)
-const warn = s => console.log(`${C.yellow('!')} ${s}`)
-const ok = s => console.log(`${C.green('✓')} ${s}`)
+const aside = s => err(`${s}\n`)
+const step = s => out(`${C.cyan('·')} ${s}\n`)
+const warn = s => out(`${C.yellow('!')} ${s}\n`)
+const ok = s => out(`${C.green('✓')} ${s}\n`)
 // A rung above `warn`, and `doctor` is the only caller: `!` is something for you to deal
 // with, `✗` is something that should not be possible. Keeping them apart is what stops the
 // one report that means "rig has a bug" reading like the eleven that mean "push your data
 // root".
-const bad = s => console.log(`${C.red('✗')} ${s}`)
+const bad = s => out(`${C.red('✗')} ${s}\n`)
 
 const die = msg => { throw new RigError(msg) }
 
@@ -58,22 +99,45 @@ const die = msg => { throw new RigError(msg) }
 // the behavioural symptom only shows on a machine already under load.
 const SPAWN_DEFAULTS = { encoding: 'utf8', windowsHide: true }
 
-function run (cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { ...SPAWN_DEFAULTS, ...opts })
+// Every subprocess rig starts, and the one place a run's cwd and environment reach one.
+// Without them a child inherits the *process's*, which for a run that is not the process is
+// somebody else's: an isolated run's `GIT_CONFIG_GLOBAL` lost to the machine's real git
+// config, and `git rev-parse --show-toplevel` answering for a directory the run never named.
+//
+// `opts.env` is additions to the run's environment rather than a replacement, because that is
+// what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
+// there, and a replacement would drop everything an isolated run depends on.
+function exec (cmd, args, { env: extra, ...opts } = {}) {
+  const r = spawnSync(cmd, args,
+    { ...SPAWN_DEFAULTS, cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts })
   if (r.error) die(`${cmd} not found on PATH (${r.error.message})`)
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
 
-// Is the command on PATH at all? `run` dies when it is not, which is right for every caller
+// Is the command on PATH at all? `exec` dies when it is not, which is right for every caller
 // that needs it — except the ones whose whole job is to report that it is missing.
 //
-// Asked once per command name per process, because PATH cannot change inside one and the
-// answer was being bought again every time: a tenth of every process rig starts across the
-// test suite was `git --version`, asked to be told what the last one had already said.
+// Asked once per command name per PATH, because the answer was being bought again every
+// time: a tenth of every process rig starts across the test suite was `git --version`, asked
+// to be told what the last one had already said.
+//
+// The cache outlives the invocation and PATH is part of its key, which is the pair that makes
+// it safe. A run does not own PATH — the machine does — so one run's answer is the next
+// run's too for as long as they are handed the same one; keying on it is what stops a run
+// given a crippled PATH being told what a run with a whole one found. The probe takes `env`
+// and no `cwd` for the same reason: what it asks about is PATH, and a `--version` cannot care
+// where it runs — where a run is standing may be a directory `rig close` has just removed.
 const onPathAnswers = new Map()
+// Windows spells it `Path` about as often as `PATH`, and a copied environment keeps whichever
+// case it was given — so the key is found rather than named.
+const pathOf = environment =>
+  environment[Object.keys(environment).find(k => k.toLowerCase() === 'path') ?? ''] ?? ''
 const onPath = cmd => {
-  if (!onPathAnswers.has(cmd)) onPathAnswers.set(cmd, !spawnSync(cmd, ['--version'], SPAWN_DEFAULTS).error)
-  return onPathAnswers.get(cmd)
+  const key = `${pathOf(env())}\u0000${cmd}`
+  if (!onPathAnswers.has(key)) {
+    onPathAnswers.set(key, !spawnSync(cmd, ['--version'], { ...SPAWN_DEFAULTS, env: env() }).error)
+  }
+  return onPathAnswers.get(key)
 }
 
 // `df -Pk`: a header line, then one line per filesystem — Filesystem, 1024-blocks, Used,
@@ -109,23 +173,22 @@ function freeSpace (dir) {
 }
 
 function must (cmd, args, opts = {}) {
-  const r = run(cmd, args, opts)
+  const r = exec(cmd, args, opts)
   if (r.code !== 0) die(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
   return r.out
 }
 
-const git = (dir, ...args) => run('git', ['-C', dir, ...args])
+const git = (dir, ...args) => exec('git', ['-C', dir, ...args])
 const gitMust = (dir, ...args) => must('git', ['-C', dir, ...args])
 
 // The two checkouts an installation owns — the data root and the tool itself. Reading one
 // and moving one is `checkouts.mjs`'s; what to warn about and when to refuse is the policy
 // below, which is the only part that differs between them.
-const co = checkouts({ run })
+const co = checkouts({ run: exec, env })
 
-function readStdin () {
-  if (process.stdin.isTTY) return ''
-  try { return fs.readFileSync(0, 'utf8').trim() } catch { return '' }
-}
+// Asked for at the moment a command wants it rather than when the run starts: reading fd 0
+// blocks, and `rig help` must not wait on a terminal nobody is piping into.
+const readStdin = () => current.stdin()
 
 const exists = p => fs.existsSync(p)
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
@@ -142,19 +205,6 @@ const writeText = (p, v) => {
 
 // ------------------------------------------------------------------- config
 
-// Where config lives, resolved on first use rather than at load: `help` and `prompt` never
-// read config, and a broken rig.local.json should fail inside a command with the file
-// named, not on import. `cmds.init` is the one thing that reassigns this, at its top, when
-// the data root is moving in the command that is running — bin/roots.mjs owns everything
-// else about the two files.
-let location
-// Which data root the command asked for, set by `main` from `--data` before anything reads
-// config. A module-level value rather than a parameter on `where` because every caller of
-// `where` wants the same answer, and threading it through all of them would be a second way
-// to be wrong about which knowledge is in hand.
-let requestedData = null
-let requestedRepos = []
-
 // The repo the command is standing in, for the one step of the resolution order that needs to
 // ask git. Named by its remote rather than its folder, because a clone can be called anything
 // and the catalogue is keyed by the repo's real name. Null for anywhere that is not a checkout,
@@ -164,27 +214,37 @@ function repoAtCwd () {
   // would walk anyway — so the answer this step gives most often, that the cwd is not a
   // checkout at all, costs no subprocess and does not even need git on PATH. A layout
   // `gitfs` declines to commit to answers null, and git is asked about those.
-  const place = discover(process.cwd())
+  const place = discover(cwd(), env())
   if (place && !place.top) return null
-  // `run` dies when the command is not there, and this is ambient work on behalf of whatever
+  // `exec` dies when the command is not there, and this is ambient work on behalf of whatever
   // the user actually asked for — `rig doctor` on a machine with no git has to live long
   // enough to say so, which it cannot if resolving the data root killed it first.
   if (!onPath('git')) return null
   let top = place?.top
   if (!top) {
-    const asked = run('git', ['rev-parse', '--show-toplevel'])
+    const asked = exec('git', ['rev-parse', '--show-toplevel'])
     if (asked.code !== 0) return null
     top = asked.out
   }
   // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
   // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
-  const url = run('git', ['remote', 'get-url', 'origin'])
+  const url = exec('git', ['remote', 'get-url', 'origin'])
   if (url.code !== 0 || !url.out) return path.basename(top)
   return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
 }
 
-const where = () => (location ??= locate(RIG_ROOT, process.env, {
-  data: requestedData, repos: requestedRepos, repoAt: repoAtCwd,
+// Where config lives, resolved on first use rather than when the run starts: `help` and
+// `prompt` never read config, and a broken rig.local.json should fail inside a command with
+// the file named, not before one has run. `cmds.init` is the one thing that reassigns
+// `current.location`, at its top, when the data root is moving in the command that is running
+// — bin/roots.mjs owns everything else about the two files.
+//
+// `requestedData` and `requestedRepos` are what the command line said, read before anything
+// reads config. They sit on the invocation rather than being parameters of `where`, because
+// every caller of `where` wants the same answer and threading it through all of them would be
+// a second way to be wrong about which knowledge is in hand.
+const where = () => (current.location ??= locate(toolRoot(), env(), {
+  data: current.requestedData, repos: current.requestedRepos, repoAt: repoAtCwd, cwd: cwd(),
 }))
 
 // `current` chose this root, and no flag, shell or work folder did. Said by the commands
@@ -216,24 +276,32 @@ const repoConfigFile = () => where().orgFile
 // With the matching RIG_FAKE_* env var naming a JSON file, the in-memory adapter runs
 // instead, loaded from that file and written back when the command ends, so a
 // subprocess test sees the issues and comments rig made — one mechanism for both.
+// One per run, not one per process: the resolved client and the fake's state are a run's, and
+// a second run in the same process that found the first one's issues already in memory would
+// be reading a file nobody wrote.
 function adapterResolver (envVar, viaCli, inMemory) {
   let resolved, fake
   return {
     get () {
       if (resolved) return resolved
-      const file = process.env[envVar]
-      if (!file) return (resolved = viaCli())
+      const file = env()[envVar]
+      if (!file) {
+        const spawnCli = args =>
+          spawnSync(CLI_FOR[envVar], args, { ...SPAWN_DEFAULTS, cwd: cwd(), env: env() })
+        return (resolved = viaCli({ exec: spawnCli }))
+      }
       fake = { file, state: exists(file) ? readJson(file) : {} }
-      return (resolved = inMemory(fake.state))
+      return (resolved = inMemory(fake.state, { env: env() }))
     },
     persist () { if (fake) writeJson(fake.file, fake.state) },
   }
 }
-const githubAdapter = adapterResolver('RIG_FAKE_GITHUB', githubViaGh, githubInMemory)
-const jiraAdapter = adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory)
-const github = () => githubAdapter.get()
-const jira = () => jiraAdapter.get()
-const persistFakeTrackers = () => { githubAdapter.persist(); jiraAdapter.persist() }
+// The real CLI behind each adapter. Spawned here rather than inside the tracker module, so
+// the run's environment reaches `gh` and `twg` the way it reaches `git`.
+const CLI_FOR = { RIG_FAKE_GITHUB: 'gh', RIG_FAKE_TWG: 'twg' }
+const github = () => current.github.get()
+const jira = () => current.jira.get()
+const persistFakeTrackers = () => { current.github.persist(); current.jira.persist() }
 
 // Runs a tracker call the caller can carry on without, and answers why it failed, or
 // nothing when it didn't. Anything but a tracker failure is a bug and propagates.
@@ -265,11 +333,11 @@ const repoConfigJson = () => readOrg(where()) ?? {}
 // means. The reading is `checkouts.mjs`'s; the one thing here is the guard in front of it.
 function toolState () {
   // Ambient work on behalf of a command that has already run: no environment problem found
-  // here is this function's to report. So the probe must not be `run`, which dies when git is
+  // here is this function's to report. So the probe must not be `exec`, which dies when git is
   // absent — doctor calls this before it reaches its own `git` check, and has to live long
   // enough to make it.
   if (!onPath('git')) return unreadable()
-  return co.identify(RIG_ROOT)
+  return co.identify(toolRoot())
 }
 
 // Disposable state, so it lives with the other disposable state rather than in the config
@@ -308,7 +376,7 @@ const writeFreshness = (cfg, measured) => writeCache(cfg, 'freshness.json', meas
 const measureFreshness = state => ({
   sha: state.head,
   remote: state.upstream,
-  behind: co.countCommits(RIG_ROOT, 'HEAD..@{u}'),
+  behind: co.countCommits(toolRoot(), 'HEAD..@{u}'),
   checkedAt: new Date().toISOString(),
 })
 
@@ -328,12 +396,15 @@ const measureFreshness = state => ({
 // the command; `stdio: 'ignore'` stops a piped `rig prompt` hanging on a child holding the
 // pipe; `cwd` keeps the child out of a worktree `rig close` must remove; `windowsHide` is why
 // the child is not paying for a console per git call.
-const REFRESH_SPAWN = { cwd: RIG_ROOT, detached: true, stdio: 'ignore', windowsHide: true }
+const refreshSpawn = (root, environment) =>
+  ({ cwd: root, env: environment, detached: true, stdio: 'ignore', windowsHide: true })
 
+// The installation's own copy and not this file, which for a run driven in another process's
+// memory are two different rigs: what is being measured is the checkout the run is a run of.
 function refreshFreshnessInBackground () {
   try {
-    spawn(process.execPath, [fileURLToPath(import.meta.url), 'freshness-refresh'],
-      REFRESH_SPAWN).unref()
+    spawn(process.execPath, [path.join(toolRoot(), 'bin', 'rig.mjs'), 'freshness-refresh'],
+      refreshSpawn(toolRoot(), env())).unref()
   } catch { /* a refresh that will not spawn is not worth a word to the user */ }
 }
 
@@ -357,7 +428,7 @@ function freshnessEpilogue (command) {
     const due = dueForRefresh(cache, cfg.freshness.everyHours)
     const speaks = announces(command, { enabled: cfg.freshness.enabled })
     if (!due && !(speaks && cache?.behind)) return
-    const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
+    const head = git(toolRoot(), 'rev-parse', 'HEAD')
     if (head.code !== 0) return
     const line = speaks ? staleLine(cache, head.out) : null
     if (!due && !line) return
@@ -484,7 +555,7 @@ function writeOrgMigrations (loc = where()) {
 // The authoritative record lives in the rig repo (DESIGN.md §7.1).
 function findWorkId (cfg, explicit) {
   if (explicit) return explicit
-  let dir = process.cwd()
+  let dir = cwd()
   for (;;) {
     const marker = path.join(dir, WORK_FOLDER.marker, 'id')
     if (exists(marker)) return readText(marker).trim()
@@ -701,8 +772,8 @@ TODO: what this repo actually is, its gotchas, and the expensive-to-rediscover f
 // not this machine's.
 const trees = cfg => worktrees({
   mirrorRoot: cfg.mirrorRoot,
-  remotes: process.env.RIG_FAKE_REMOTES ? remotesInDirectory(process.env.RIG_FAKE_REMOTES) : remotesOnGitHub(),
-  run,
+  remotes: env().RIG_FAKE_REMOTES ? remotesInDirectory(env().RIG_FAKE_REMOTES) : remotesOnGitHub(),
+  run: exec,
   step,
   warn,
 })
@@ -1208,11 +1279,9 @@ function commitDataRoot (message, loc = where(), known = null) {
 }
 
 // A mutating command's registration of what it is committing as. Called as soon as the
-// command has written anything worth committing; `main` does the rest.
-let pendingCommit = null
-let currentCommand = null
+// command has written anything worth committing; `invoke` does the rest.
 const commitAs = (subject, detail) =>
-  { pendingCommit = `rig ${currentCommand}${subject ? ` ${subject}` : ''}${detail ? `: ${detail}` : ''}` }
+  { current.pendingCommit = `rig ${current.command}${subject ? ` ${subject}` : ''}${detail ? `: ${detail}` : ''}` }
 
 // ----------------------------------------------------------------- commands
 
@@ -1291,7 +1360,7 @@ function joinOrCreateDataRepo (spec, named) {
   // Every data repo is called `rig-data` by convention, so the repo's own name cannot place
   // the second one — both would land on the same directory. A named root is put in a
   // directory named for it; the unnamed first root keeps the path it has always had.
-  const target = path.join(path.dirname(RIG_ROOT), named ? `${name}-${named}` : name)
+  const target = path.join(path.dirname(toolRoot()), named ? `${name}-${named}` : name)
 
   // Already pointed somewhere else? Switching data roots is deliberate, not a side effect of
   // joining a repo — but `--name` *is* that deliberate act, and refusing it would make the
@@ -1355,7 +1424,7 @@ cmds.init = ({ flags }) => {
   // `init` used to poke the resolved root half-way through itself, which left everything
   // after that line depending on a line you had to read the whole command to find.
   const previousRoot = dataRoot()
-  if (flags['data-root']) location = withDataRoot(where(), path.resolve(RIG_ROOT, flags['data-root']))
+  if (flags['data-root']) current.location = withDataRoot(where(), path.resolve(toolRoot(), flags['data-root']))
   const targetDataRoot = dataRoot()
   const isSplit = where().split
   // A separate data root is always a git checkout with a first commit (local or not).
@@ -1389,7 +1458,7 @@ cmds.init = ({ flags }) => {
   const email = typeof flags.email === 'string' ? flags.email : ''
   if (flags.name === true) die('--name wants a name for the data root')
   const named = typeof flags.name === 'string' && flags.name ? flags.name : null
-  const knownRoots = registry(RIG_ROOT).roots
+  const knownRoots = registry(toolRoot(), env()).roots
   if (named && !flags['data-root'] && !knownRoots[named]) {
     die(`--name ${named} names a data root this machine does not configure — pass --data-root <dir> or --data-repo owner/name to say where it is`)
   }
@@ -1460,7 +1529,7 @@ cmds.init = ({ flags }) => {
     warn(`no rig.json in ${targetDataRoot} — orgs and trackers are unknown until it exists`)
   }
 
-  const lp = run('git', ['config', '--global', 'core.longpaths'])
+  const lp = exec('git', ['config', '--global', 'core.longpaths'])
   if (lp.out !== 'true') {
     must('git', ['config', '--global', 'core.longpaths', 'true'])
     ok('set core.longpaths=true (MAX_PATH would otherwise break deep node_modules)')
@@ -1498,7 +1567,7 @@ cmds.init = ({ flags }) => {
 // `current` naming a root that has gone is exactly what this command is for and resolving
 // it would die first.
 cmds.use = ({ positional }) => {
-  const reg = registry(RIG_ROOT)
+  const reg = registry(toolRoot(), env())
   const names = Object.keys(reg.roots)
   const name = positional[0]
   if (!name) {
@@ -1517,7 +1586,7 @@ cmds.use = ({ positional }) => {
   const entry = reg.roots[name]
   if (!entry) die(`no data root "${name}" in ${reg.localFile}${names.length ? ` — it has ${names.join(', ')}` : ''}`)
   if (!exists(entry.path)) die(`data root "${name}" is ${entry.path}, which is not there — fix dataRoots.${name} in ${reg.localFile}`)
-  const loc = withDataRoot({ toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }, entry.path)
+  const loc = withDataRoot({ toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }, entry.path)
   if (!loc.split) die(`data root "${name}" is inside the tool checkout — knowledge must not live in a public tool's tree; run \`rig prompt setup\``)
   if (!exists(loc.orgFile)) die(`data root "${name}" has no rig.json at ${loc.orgFile} — \`rig init --data-root ${entry.path}\` makes one`)
   const cfgJson = readOrg(loc) ?? {}
@@ -1537,7 +1606,7 @@ cmds.use = ({ positional }) => {
   if (pending.length) warn(`${name} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
 }
 
-cmds.new = async ({ flags, positional }) => {
+cmds.new = ({ flags, positional }) => {
   sayCurrentRoot()
   const cfg = config()
   const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
@@ -1618,7 +1687,7 @@ cmds.new = async ({ flags, positional }) => {
   commitAs(id)
   // Context doc — scaffolded minimal, not eleven empty sections (DESIGN.md §7.2). The
   // header line it carries is then rewritten by saveWork, which owns it from here on.
-  const tpl = readText(path.join(RIG_ROOT, 'templates', 'context.md'))
+  const tpl = readText(path.join(toolRoot(), 'templates', 'context.md'))
   writeText(contextFile(id), tpl
     .replace(/\{\{ID\}\}/g, id)
     .replace(/\{\{TITLE\}\}/g, title || id)
@@ -1647,7 +1716,7 @@ cmds.new = async ({ flags, positional }) => {
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
-    for (const r of repos) await attachRepo(cfg, work, r, { setup: !!flags.setup })
+    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup })
   } else {
     say('No repos attached yet. Run the selection interview:')
     say(C.dim('  rig prompt select-repos'))
@@ -1656,7 +1725,7 @@ cmds.new = async ({ flags, positional }) => {
 }
 
 // Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
-async function attachRepo (cfg, work, repoName, { setup = false } = {}) {
+function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   if (work.repos.some(r => r.repo.toLowerCase() === repoName.toLowerCase())) {
     say(`${repoName} already attached — nothing to do`)
     return
@@ -1732,12 +1801,12 @@ cmds.ticket = ({ flags, positional }) => {
   ok(`recorded ${key} on ${id}`)
 }
 
-cmds.attach = async ({ flags, positional }) => {
+cmds.attach = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
   commitAs(work.id, name)
-  await attachRepo(cfg, work, name, { setup: !!flags.setup })
+  attachRepo(cfg, work, name, { setup: !!flags.setup })
 }
 
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
@@ -1995,11 +2064,11 @@ const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
 // is no release to name, and a sha in a field called `release` would be a different claim.
 //
 // Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`):
-// `run` dies when the command is not there, and `rig list --json` on a machine with no git
+// `exec` dies when the command is not there, and `rig list --json` on a machine with no git
 // has a full answer to give about the records — which release wrote it is the one field that
 // needs git, and a missing field is the right way to say so.
 const releaseHere = () => (onPath('git')
-  ? releaseMark({ describe: git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
+  ? releaseMark({ describe: git(toolRoot(), 'describe', '--tags', '--long', '--match', 'v[0-9]*').out })
   : null)
 
 // The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
@@ -2150,7 +2219,7 @@ cmds.dash = ({ flags }) => {
   const [cmd, args] = OPENERS[process.platform] || ['xdg-open', []]
   // Opening it is a convenience; the path above is the deliverable. A machine with no opener
   // on PATH must not turn a rendered page into a failed command.
-  const r = onPath(cmd) ? run(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
+  const r = onPath(cmd) ? exec(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
@@ -2190,7 +2259,7 @@ cmds.demo = ({ flags }) => {
 
   if (flags['no-open']) return
   const [cmd, args] = OPENERS[process.platform] || ['xdg-open', []]
-  const r = onPath(cmd) ? run(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
+  const r = onPath(cmd) ? exec(cmd, [...args, out]) : { code: 1, err: `${cmd} is not on PATH` }
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
@@ -2243,7 +2312,10 @@ cmds.status = ({ flags }) => {
 function runCatalogCommands (dir, commands, label) {
   for (const c of commands) {
     step(`${c}  ${C.dim(`(in ${path.basename(dir)})`)}`)
-    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit' })
+    // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
+    // and watching it is the point — which is also why a run this is part of has to be the
+    // process for its output to reach whoever asked. The environment is still the run's.
+    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
   return true
@@ -2288,7 +2360,7 @@ cmds.check = ({ flags, positional }) => {
       continue
     }
     if (flags.run) {
-      if (!runCatalogCommands(r.path, cat.check, 'check')) process.exitCode = 1
+      if (!runCatalogCommands(r.path, cat.check, 'check')) current.exitCode = 1
       continue
     }
     say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
@@ -2584,7 +2656,7 @@ cmds.stage = ({ flags, positional }) => {
 // The base is this repo's own top of stack, which is the whole reason rig is worth having cut
 // it: at the moment of the cut the base is not in doubt, and it never needs recording.
 function cutStageHere (cfg, work, branch) {
-  const here = process.cwd()
+  const here = cwd()
   const entry = work.repos.find(r => sameDir(r.path, here) || insideDir(here, r.path))
   if (!entry) {
     const names = work.repos.map(r => r.repo).join(', ') || 'none attached yet'
@@ -2634,7 +2706,7 @@ cmds.plan = ({ flags }) => {
   }
 
   if (exists(planFile(id)) && !flags.force) die(`${planFile(id)} already exists — \`rig plan --refresh\` brings its deploy order up to date`)
-  const tpl = readText(path.join(RIG_ROOT, 'templates', 'rollout-testing-plan.md'))
+  const tpl = readText(path.join(toolRoot(), 'templates', 'rollout-testing-plan.md'))
   writeText(planFile(id), tpl
     .replace(/\{\{ID\}\}/g, id)
     .replace(/\{\{TITLE\}\}/g, work.title || id)
@@ -2669,7 +2741,7 @@ cmds.close = ({ flags }) => {
     for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
     say('')
     say(C.dim('Resolve these, or pass --force if you genuinely want to discard them.'))
-    process.exitCode = 1
+    current.exitCode = 1
     return
   }
   // Forcing past the blockers is a decision, and decision 64's rule is that a decision no
@@ -2703,7 +2775,7 @@ cmds.close = ({ flags }) => {
   commitAs(id)
   const wd = workDir(cfg, id)
   // Windows refuses to remove a directory that is some process's cwd — including ours.
-  if (insideDir(process.cwd(), wd)) process.chdir(RIG_ROOT)
+  if (insideDir(cwd(), wd)) chdir(toolRoot())
   if (exists(wd)) {
     try {
       fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
@@ -2807,7 +2879,7 @@ cmds.catalog = ({ flags, positional }) => {
     // no edit mode and should not grow one, so naming the file is the whole affordance — the
     // same thing `rig attach` does when it drafts one, and what `rig next` points at when it
     // offers the correction.
-    process.stdout.write(readText(e.file))
+    out(readText(e.file))
     return aside(C.dim(e.file))
   }
   if (!entries.length) return say('catalogue is empty — entries are drafted on `rig attach`')
@@ -2822,7 +2894,7 @@ cmds.catalog = ({ flags, positional }) => {
 
 cmds.prompt = ({ positional }) => {
   const name = positional[0]
-  const dir = path.join(RIG_ROOT, 'prompts')
+  const dir = path.join(toolRoot(), 'prompts')
   if (!name) {
     say('available prompts:')
     for (const f of fs.readdirSync(dir)) say(`  ${f.replace(/\.md$/, '')}`)
@@ -2830,7 +2902,7 @@ cmds.prompt = ({ positional }) => {
   }
   const f = path.join(dir, `${name}.md`)
   if (!exists(f)) die(`no prompt "${name}" (see \`rig prompt\`)`)
-  process.stdout.write(readText(f))
+  out(readText(f))
 }
 
 // Fast-forwards one of the two checkouts an installation is made of. Never merges and never
@@ -2902,10 +2974,10 @@ cmds.update = ({ flags }) => {
   let problems = 0
   const tool = toolState()
   if (tool.linked) {
-    warn(`this is the copy in a worktree (${RIG_ROOT}) — updating it would move your work's branch, not the installation. Run \`rig update\` from the installed checkout.`)
+    warn(`this is the copy in a worktree (${toolRoot()}) — updating it would move your work's branch, not the installation. Run \`rig update\` from the installed checkout.`)
     problems++
   } else {
-    const moved = updateCheckout('tool', RIG_ROOT)
+    const moved = updateCheckout('tool', toolRoot())
     if (moved.status === 'failed') problems++
     // This process is running the code that was here a moment ago: its migration list, its
     // doctor checks and its version are all the old ones. Hand the rest of the update to what
@@ -2914,15 +2986,15 @@ cmds.update = ({ flags }) => {
     // the hop silently, and with it every migration that just landed.
     if (moved.status === 'moved' && !flags.restarted) {
       say(`${C.dim('·')} ${C.dim('the tool moved — continuing with the code that just arrived')}`)
-      const again = spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin', 'rig.mjs'), 'update', '--restarted'],
-        { stdio: 'inherit' })
+      const again = spawnSync(process.execPath, [path.join(toolRoot(), 'bin', 'rig.mjs'), 'update', '--restarted'],
+        { stdio: 'inherit', env: env() })
       // A non-zero exit here is usually the doctor checks reporting problems, which is a
       // healthy update. It means a broken release only when the arrived code cannot run at
       // all — so ask it for the one command that needs nothing, and believe that instead.
-      if (again.status !== 0 && run(process.execPath, [path.join(RIG_ROOT, 'bin', 'rig.mjs'), 'help']).code !== 0) {
-        warn(`the update landed, but the rig that arrived does not run — \`git -C ${RIG_ROOT} reset --hard ${moved.from}\` puts the previous one back`)
+      if (again.status !== 0 && exec(process.execPath, [path.join(toolRoot(), 'bin', 'rig.mjs'), 'help']).code !== 0) {
+        warn(`the update landed, but the rig that arrived does not run — \`git -C ${toolRoot()} reset --hard ${moved.from}\` puts the previous one back`)
       }
-      process.exitCode = again.status ?? 1
+      current.exitCode = again.status ?? 1
       return
     }
   }
@@ -2932,9 +3004,9 @@ cmds.update = ({ flags }) => {
   // mid-work — which is the whole reason this is one installation rather than three. Read
   // from the registry rather than `where`, so a broken `current` does not stop the roots that
   // are fine from being brought forward.
-  const reg = registry(RIG_ROOT)
+  const reg = registry(toolRoot(), env())
   const names = Object.keys(reg.roots)
-  const base = { toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }
+  const base = { toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }
   const targets = names.length
     ? names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path) }))
     : [{ name: null, loc: where() }]
@@ -2982,7 +3054,7 @@ cmds.update = ({ flags }) => {
   // an exit code read back off the process — an update that moved nothing and a doctor that
   // found nothing are two facts, added together here.
   problems += problemCount(cmds.doctor({ flags: {}, positional: [] }))
-  if (problems) process.exitCode = 1
+  if (problems) current.exitCode = 1
 }
 
 // Hidden: the detached child spawned at the end of a command. Fetches, measures, writes the
@@ -2991,7 +3063,7 @@ cmds['freshness-refresh'] = () => {
   const cfg = config()
   const state = toolState()
   if (skipReason(state)) return
-  const fetched = co.fetch(RIG_ROOT)
+  const fetched = co.fetch(toolRoot())
   // A failed check is still a check: stamping it means an unreachable remote is retried once
   // per interval rather than at the end of every command. What it must not do is forget a
   // distance that is still true — concurrent refreshes make each other's fetches fail on the
@@ -3016,7 +3088,7 @@ cmds['freshness-refresh'] = () => {
 function doctorFreshness (cfg, tool) {
   const skipped = skipReason(tool)
   if (skipped) return { skipped }
-  const fetched = co.fetch(RIG_ROOT)
+  const fetched = co.fetch(toolRoot())
   if (!fetched.ok) return { fetchError: fetched.error }
   const measured = measureFreshness(tool)
   writeFreshness(cfg, measured)
@@ -3166,9 +3238,9 @@ function mirrorHead (mirror) {
 // pointing at nothing must not hide the roots that are fine. A machine that configures none
 // falls back to the location doctor resolved, which is the not-set-up layout it reports on.
 function doctorRootLocations (fallback) {
-  const reg = registry(RIG_ROOT)
+  const reg = registry(toolRoot(), env())
   const names = Object.keys(reg.roots)
-  const base = { toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }
+  const base = { toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }
   if (!names.length) return [{ name: null, loc: fallback }]
   return names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path, { name }) }))
 }
@@ -3190,9 +3262,9 @@ function doctorSelection () {
   try { return { loc: where(), error: null } }
   catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: not doctor's to swallow
-    const reg = registry(RIG_ROOT)
+    const reg = registry(toolRoot(), env())
     return {
-      loc: withDataRoot({ toolRoot: RIG_ROOT, localFile: reg.localFile, roots: reg.roots }, RIG_ROOT,
+      loc: withDataRoot({ toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }, toolRoot(),
         { name: null, source: 'fallback', entry: null }),
       error: e.message,
     }
@@ -3219,14 +3291,14 @@ function doctorSnapshot () {
   if (!exists(localFile)) return { setUp: false, localFile }
 
   const cfg = load(loc)
-  const gv = onPath('git') ? run('git', ['--version']) : { code: 1, out: '' }
+  const gv = onPath('git') ? exec('git', ['--version']) : { code: 1, out: '' }
   const hasGit = gv.code === 0
   const tool = toolState()
   // Which *release* this is, when the checkout stands on one — a version and a sha name the
   // same build twice and neither says whether it was ever published. The describe is asked
   // for here and not in `toolState`, which runs in every command's epilogue and is already
   // four spawns dear; doctor is the one caller that can afford a fifth.
-  const describe = hasGit ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
+  const describe = hasGit ? git(toolRoot(), 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
   const roots = doctorRootLocations(loc).map(root => doctorRoot(root.name, root.loc, hasGit))
   const disk = freeSpace(cfg.workRoot)
   // Needed if *any* root tracks in Jira: twg is one tool on one machine, so the question is
@@ -3246,7 +3318,7 @@ function doctorSnapshot () {
     selection: { error: selectionError },
     node: process.version,
     git: hasGit ? gv.out : null,
-    rig: { recordFormat: MAJOR, root: RIG_ROOT, mark: releaseMark({ describe, head: tool.head }) },
+    rig: { recordFormat: MAJOR, root: toolRoot(), mark: releaseMark({ describe, head: tool.head }) },
     freshness: doctorFreshness(cfg, tool),
     gh: github().auth(),
     jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
@@ -3254,8 +3326,8 @@ function doctorSnapshot () {
     // something is wrong, so it has to reach the end and report everything it can.
     gitConfig: hasGit
       ? {
-          longpaths: run('git', ['config', '--global', 'core.longpaths']).out,
-          symlinks: run('git', ['config', '--get', 'core.symlinks']).out,
+          longpaths: exec('git', ['config', '--global', 'core.longpaths']).out,
+          symlinks: exec('git', ['config', '--get', 'core.symlinks']).out,
         }
       : null,
     workRoot: { path: cfg.workRoot, exists: exists(cfg.workRoot), entries: workRootEntries(cfg) },
@@ -3288,7 +3360,7 @@ cmds.doctor = () => {
   const problems = problemCount(found)
   say('')
   say(problems ? C.yellow(`${problems} thing(s) to look at`) : C.green('all clear'))
-  if (problems) process.exitCode = 1
+  if (problems) current.exitCode = 1
   return found
 }
 
@@ -3364,16 +3436,123 @@ rig record format ${MAJOR} — \`rig doctor\` names the release this checkout st
 how far it is behind its remote, \`rig update\` brings it forward.`)
 }
 
-// --------------------------------------------------------------------- main
+// ----------------------------------------------------------------- one run
 
-// Importable by tests: the pure helpers, and `listing` — the one machine-readable surface
-// (decision 55), which is neither pure nor cheap, since it reads every record and may ask
-// GitHub about every branch. Nothing below the guard runs on import.
+// What one invocation does, from the argv it was handed to the exit code it earns. Split from
+// `run` below so that building the invocation and running a command inside it stay two
+// things: everything here already has `current` to read, and nothing here decides what
+// `current` is.
+//
+// A `RigError` is rig's own refusal and is printed; anything else is a bug and propagates,
+// which is what stops the data root being committed — `pendingCommit` is never reached — and
+// leaves it exactly as the failed command found it.
+function invoke (argv) {
+  const [cmdName, ...rest] = argv
+  const cmd = cmds[cmdName || 'help']
+  // Returned rather than exited on: an in-process run has no process to exit, and a command
+  // nobody recognised has nothing after it to run either way.
+  if (!cmd) {
+    err(`unknown command "${cmdName}" — try \`rig help\`\n`)
+    return 1
+  }
+  current.command = cmdName
+  // What the data root was before the command ran, for the commit at the end of it.
+  let prepared = null
+  try {
+    const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
+    // Before the first `where()`: the data root a command names decides every path it reads.
+    if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
+    if (typeof args.flags.data === 'string') current.requestedData = args.flags.data
+    // `rig new --repos a,b` is the one command that names repos before there is a work folder
+    // to anchor it, and it is the command whose choice of root matters most — it is the one
+    // that writes the record.
+    if (typeof args.flags.repos === 'string') {
+      current.requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
+    }
+    if (MUTATING.has(cmdName)) prepared = prepareDataRoot()
+    cmd(args)
+  } catch (e) {
+    if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
+    err(`${C.red('✗')} ${e.message}\n`)
+    current.exitCode = 1
+  } finally {
+    persistFakeTrackers()
+  }
+  if (current.pendingCommit) commitDataRoot(current.pendingCommit, where(), prepared)
+  freshnessEpilogue(cmdName)
+  return current.exitCode
+}
+
+// Reading fd 0 blocks until whoever holds the other end closes it, so the CLI reads it when a
+// command asks for it and never when nothing is piping in.
+function readProcessStdin () {
+  if (process.stdin.isTTY) return ''
+  try { return fs.readFileSync(0, 'utf8').trim() } catch { return '' }
+}
+
+// The invocation `run` works in, with the CLI's answer for everything a caller left out.
+// A function declaration and not an arrow, because the process's own invocation is built at
+// the top of this file and needs it hoisted.
+function invocationOf ({
+  toolRoot = MODULE_ROOT,
+  cwd = process.cwd(),
+  env = process.env,
+  stdin = readProcessStdin,
+  out = s => process.stdout.write(s),
+  err = s => process.stderr.write(s),
+  chdir = () => {},
+} = {}) {
+  return {
+    toolRoot,
+    cwd,
+    env,
+    stdin,
+    out,
+    err,
+    chdir,
+    github: adapterResolver('RIG_FAKE_GITHUB', githubViaGh, githubInMemory),
+    jira: adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory),
+    location: null,
+    requestedData: null,
+    requestedRepos: [],
+    pendingCommit: null,
+    command: null,
+    exitCode: 0,
+  }
+}
+
+// One invocation of rig. `argv` is the arguments alone — no node, no script path — and the
+// second argument is everything of the machine this run may reach: which installation it is a
+// run of, where it is standing, what environment its subprocesses get, where stdin comes from
+// and where its two streams go. It returns the exit code; only a bug leaves as an exception.
+//
+// The defaults are the CLI's, which is why `main` is now one line. A caller that passes its
+// own gets a run that cannot see the machine it is on — which is what the test suite was
+// buying a process for: ~400 times, at a Node start and a module graph each.
+//
+// `chdir` is the one piece of the process an in-process run must not touch. The CLI's moves
+// the process, because Windows will not delete a directory that is its cwd; another caller's
+// does nothing, since the process is not the run's and the run's own cwd has already moved.
+export function run (argv, io = {}) {
+  // Put back rather than cleared, so a run that throws cannot leave a half-finished
+  // invocation current for whatever its caller does next.
+  const previous = current
+  current = invocationOf(io)
+  try {
+    return invoke(argv)
+  } finally {
+    current = previous
+  }
+}
+
+// Importable by tests: `run`, the pure helpers, and `listing` — the one machine-readable
+// surface (decision 55), which is neither pure nor cheap, since it reads every record and may
+// ask GitHub about every branch. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, effectiveIdentity, freeSpace,
+  SPAWN_DEFAULTS, refreshSpawn, effectiveIdentity, freeSpace,
   directionSection, directionBody, directionIsTodo,
   listing,
 }
@@ -3385,36 +3564,6 @@ const isMain = (() => {
   try { return fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) } catch { return false }
 })()
 
-if (isMain) {
-  const [, , cmdName, ...rest] = process.argv
-  const cmd = cmds[cmdName || 'help']
-  if (!cmd) {
-    console.error(`unknown command "${cmdName}" — try \`rig help\``)
-    process.exit(1)
-  }
-  currentCommand = cmdName
-  // What the data root was before the command ran, for the commit at the end of it.
-  let preparedDataRoot = null
-  try {
-    const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
-    // Before the first `where()`: the data root a command names decides every path it reads.
-    if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
-    if (typeof args.flags.data === 'string') requestedData = args.flags.data
-    // `rig new --repos a,b` is the one command that names repos before there is a work folder
-    // to anchor it, and it is the command whose choice of root matters most — it is the one
-    // that writes the record.
-    if (typeof args.flags.repos === 'string') {
-      requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
-    }
-    if (MUTATING.has(cmdName)) preparedDataRoot = prepareDataRoot()
-    await cmd(args)
-  } catch (e) {
-    if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
-    console.error(`${C.red('✗')} ${e.message}`)
-    process.exitCode = 1
-  } finally {
-    persistFakeTrackers()
-  }
-  if (pendingCommit) commitDataRoot(pendingCommit, where(), preparedDataRoot)
-  freshnessEpilogue(cmdName)
-}
+// `process.exitCode` and never `process.exit`: the streams may still be draining, and an exit
+// that cuts one is how the last lines of a long `rig list` go missing down a pipe.
+if (isMain) process.exitCode = run(process.argv.slice(2), { chdir: dir => process.chdir(dir) })

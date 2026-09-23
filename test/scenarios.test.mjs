@@ -43,6 +43,8 @@ const publish = ({ tmp, remotesDir, gitMust }, repo) => {
 // README's own recipe for the second root, refused outright — and both are invisible to a test
 // that asserts a single `init` against a machine with nothing.
 scenario('one root becomes three', {
+  // A journey about records and machine files, so it is walked in this process.
+  inProcess: true,
   prefix: 'e2e-roots-',
   localConfig: true,
   // No repos seeded: the data repo `--data-repo` names does not exist, so init takes the
@@ -153,6 +155,9 @@ const BEFORE_NAMED_ROOTS = 'v3.4.0'
 const noTagFor = wanted => `${wanted} is not in this checkout — a shallow clone carries no tags`
 
 scenario('the previous release, against a machine file this one wrote', {
+  // The steps that drive *this* rig run here; the ones that name `root: PREVIOUS.root` are
+  // about a different tool on disk, and `rig()` spawns those whatever this says.
+  inProcess: true,
   prefix: 'e2e-window-',
   localConfig: true,
   github: { auth: 'ok', repos: {} },
@@ -216,6 +221,7 @@ scenario('the previous release, against a machine file this one wrote', {
 // from where the catalogue entry and the record now sit, which is the only reason the split is
 // a file move and not a migration — and the only way to show that is to move them and ask.
 scenario('splitting a data root', {
+  inProcess: true,
   prefix: 'e2e-split-',
   localConfig: true,
   remotes: true,

@@ -15,12 +15,19 @@
 //
 // `run(cmd, args, opts)` is spawnSync-shaped and injected, the way `worktrees.mjs` takes
 // it — one spawn in the tool rather than one per module, and a runner a test can stand in
-// for when it needs git to answer something real git will not produce on demand.
+// for when it needs git to answer something real git will not produce on demand. `opts.env`
+// is the one place it is not spawnSync-shaped: it names additions, because what a caller
+// holds is the environment of the run this is part of, and replacing that here would drop
+// the `GIT_CONFIG_GLOBAL` that keeps an isolated run off the machine's own config.
 //
-// Where a checkout *is* does not go through it at all. `gitfs.mjs` walks up for the `.git`
-// entry the way git does, reads the branch out of HEAD, and answers null for the layouts it
-// will not commit to — so the readings below spawn git for the questions only git can
-// answer, and ask it about a path only when the filesystem handed the question back.
+// `env` is that same run's, as a thunk, and `gitfs.discover` is what wants it: `GIT_DIR` and
+// its four relations are exactly what make `discover` hand a question back, and reading them
+// off the process would be reading a different run's answer.
+//
+// Where a checkout *is* does not go through the runner at all. `gitfs.mjs` walks up for the
+// `.git` entry the way git does, reads the branch out of HEAD, and answers null for the
+// layouts it will not commit to — so the readings below spawn git for the questions only git
+// can answer, and ask it about a path only when the filesystem handed the question back.
 import fs from 'node:fs'
 import path from 'node:path'
 import { discover, headBranch } from './gitfs.mjs'
@@ -67,7 +74,7 @@ export const unreadable = () => ({ ...UNREAD })
 const firstLine = s => (s || '').split('\n')[0]
 const lines = s => s.split('\n').filter(Boolean)
 
-export function checkouts ({ run }) {
+export function checkouts ({ run, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 
   // A commit count, or null when git could not answer. Never 0 for "we do not know": a
@@ -89,7 +96,7 @@ export function checkouts ({ run }) {
   // this is the most-asked question in the tool. **A null `place` is not a missing
   // repository**: it is the layouts that module declines to commit to, which is the whole
   // reason git is still here to be asked.
-  function topOf (dir, place = discover(dir)) {
+  function topOf (dir, place = discover(dir, env())) {
     const top = place ? place.top : gitTop(dir)
     if (!top) return { ...UNREAD }
     if (!sameDir(top, dir)) return { ...UNREAD, repo: 'nested', top }
@@ -108,7 +115,7 @@ export function checkouts ({ run }) {
   // `place` is passed in by `identify`, which has already asked for it — the walk is cheap
   // but it is not free, and doing it twice per command would be paying for one answer with
   // two readings of the same directories.
-  function identity (dir, place = discover(dir)) {
+  function identity (dir, place = discover(dir, env())) {
     const state = topOf(dir, place)
     if (state.repo !== 'own') return state
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
@@ -176,7 +183,7 @@ export function checkouts ({ run }) {
   // its own words. Four extra calls, on a path where git has already failed and speed is
   // buying nothing.
   function describe (dir) {
-    const place = discover(dir)
+    const place = discover(dir, env())
     const state = topOf(dir, place)
     if (state.repo !== 'own') return state
     const status = branchStatus(dir)
@@ -221,7 +228,7 @@ export function checkouts ({ run }) {
   // end of *every* command and a git call costs tens of milliseconds: scanning the tree
   // and counting two ranges for an answer nobody reads would be a tax on the whole tool.
   function identify (dir) {
-    const place = discover(dir)
+    const place = discover(dir, env())
     const state = identity(dir, place)
     if (state.repo !== 'own') return state
     // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the
@@ -246,7 +253,7 @@ export function checkouts ({ run }) {
   // makes it current. Never dies and never prompts: an unreachable remote is an ordinary
   // Tuesday, and whether working from what is already here is enough is the caller's call.
   function fetch (dir) {
-    const r = run('git', ['-C', dir, 'fetch', '-q'], { env: { ...process.env, ...FETCH_ENV } })
+    const r = run('git', ['-C', dir, 'fetch', '-q'], { env: FETCH_ENV })
     return r.code === 0 ? { ok: true } : { ok: false, error: firstLine(r.err) || 'no detail from git' }
   }
 

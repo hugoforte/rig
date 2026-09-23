@@ -28,6 +28,9 @@ import { makeInstall, readJson } from './harness.mjs'
 // `prefix` names the temp directory, so a failing run says which file left it behind.
 export function billingInstall (prefix) {
   const m = makeInstall({
+    // Every file in this family is about a record, a branch or a line of output, so their
+    // runs happen in the test's own process.
+    inProcess: true,
     prefix,
     author: 'rig close',
     email: 'close@example.invalid',

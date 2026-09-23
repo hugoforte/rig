@@ -135,7 +135,10 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 // inspect it: { auth, repos: { 'owner/name': { language, prs, issues, source } } }.
 // `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' makes
 // lookups answer null or false, as gh's non-zero exit does, and writes fail.
-export function githubInMemory (state) {
+// `env` is the run's, for the one call below that spawns anything: a clone made under the
+// machine's real global config rather than the run's is how an isolated test starts
+// answering for the machine it happens to be on.
+export function githubInMemory (state, { env } = {}) {
   state.repos = state.repos || {}
   // Can gh answer at all (missing fails everything), and is it allowed to (writes need auth)?
   const answers = () => {
@@ -234,7 +237,7 @@ export function githubInMemory (state) {
       // The one on-disk effect: a clone is a checkout, so it clones from the recorded source.
       const found = lookup(spec) || fail(`${spec}: no such repo (in-memory GitHub)`)
       const source = found.repo.source || fail(`${spec}: exists but has no \`source\` to clone from (in-memory GitHub)`)
-      const r = spawnSync('git', ['clone', '-q', source, target], { encoding: 'utf8' })
+      const r = spawnSync('git', ['clone', '-q', source, target], { encoding: 'utf8', ...(env ? { env } : {}) })
       if (r.error) fail(`git not found on PATH (${r.error.message})`)
       if (r.status !== 0) fail(`clone of ${spec}: ${(r.stderr || '').trim()}`)
     },

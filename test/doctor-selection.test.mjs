@@ -112,7 +112,7 @@ test('an unresolvable selection is one thing to look at, and it is the only one'
 // Two data roots, each set up the way `rig init` sets one up, and then the pointer between
 // them removed — the state the machine file is in between naming a second root and running
 // `rig use`.
-const install = makeInstall({ prefix: 'doctor-sel-', localConfig: true, github: { issues: {} } })
+const install = makeInstall({ prefix: 'doctor-sel-', localConfig: true, github: { issues: {} }, inProcess: true })
 const { tmp, dataRoot, workRoot, localConfig, rig, cleanup } = install
 const second = path.join(tmp, 'rig-data-doctor-sel-two')
 
