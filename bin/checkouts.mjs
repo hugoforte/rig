@@ -16,8 +16,14 @@
 // `run(cmd, args, opts)` is spawnSync-shaped and injected, the way `worktrees.mjs` takes
 // it — one spawn in the tool rather than one per module, and a runner a test can stand in
 // for when it needs git to answer something real git will not produce on demand.
+//
+// Where a checkout *is* does not go through it at all. `gitfs.mjs` walks up for the `.git`
+// entry the way git does, reads the branch out of HEAD, and answers null for the layouts it
+// will not commit to — so the readings below spawn git for the questions only git can
+// answer, and ask it about a path only when the filesystem handed the question back.
 import fs from 'node:fs'
 import path from 'node:path'
+import { discover, headBranch } from './gitfs.mjs'
 import { sameDir } from './roots.mjs'
 
 // A fetch may never stop to ask for credentials, and the guard belongs on the operation
@@ -74,29 +80,48 @@ export function checkouts ({ run }) {
     return Number.isFinite(n) ? n : null
   }
 
-  // Whether this directory is a checkout of its own, and where its top is. One call, and
-  // both readings start with it: a directory *inside* another repo would otherwise report
-  // that repo's branch and distance as its own.
-  function topOf (dir) {
+  // Whether this directory is a checkout of its own, and where its top is. Both readings
+  // start with it: a directory *inside* another repo would otherwise report that repo's
+  // branch and distance as its own.
+  //
+  // `gitfs.discover` answers it from the filesystem, which is where the answer was all
+  // along — "walk up until something is a repository" is a handful of `stat` calls, and
+  // this is the most-asked question in the tool. **A null `place` is not a missing
+  // repository**: it is the layouts that module declines to commit to, which is the whole
+  // reason git is still here to be asked.
+  function topOf (dir, place = discover(dir)) {
+    const top = place ? place.top : gitTop(dir)
+    if (!top) return { ...UNREAD }
+    if (!sameDir(top, dir)) return { ...UNREAD, repo: 'nested', top }
+    return { ...UNREAD, repo: 'own', top }
+  }
+
+  const gitTop = dir => {
     const top = git(dir, 'rev-parse', '--show-toplevel')
-    if (top.code !== 0) return { ...UNREAD }
-    if (!sameDir(top.out, dir)) return { ...UNREAD, repo: 'nested', top: top.out }
-    return { ...UNREAD, repo: 'own', top: top.out }
+    return top.code === 0 ? top.out : null
   }
 
   // Which checkout this is, without reading its tree. `identify` is the only caller left:
   // it runs at the end of every command, and `describe`'s one call below scans the working
   // tree, which is the cost decision 80 kept the two readings apart to avoid.
-  function identity (dir) {
-    const state = topOf(dir)
+  //
+  // `place` is passed in by `identify`, which has already asked for it — the walk is cheap
+  // but it is not free, and doing it twice per command would be paying for one answer with
+  // two readings of the same directories.
+  function identity (dir, place = discover(dir)) {
+    const state = topOf(dir, place)
     if (state.repo !== 'own') return state
-    const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     return {
       ...state,
-      branch: branch.code === 0 ? branch.out : null,
+      branch: place ? headBranch(place.gitDir) : gitBranch(dir),
       upstream: upstream.code === 0 ? upstream.out : null,
     }
+  }
+
+  const gitBranch = dir => {
+    const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
+    return branch.code === 0 ? branch.out : null
   }
 
   // Everything the `--branch` header of `git status --porcelain=v2` answers, in one call:
@@ -141,7 +166,7 @@ export function checkouts ({ run }) {
   }
 
   // Where a checkout stands: its identity, its distance from its upstream, and the two
-  // different ways its tree can be untidy. **Two git calls**, where this cost six as
+  // different ways its tree can be untidy. **One git call**, where this cost six as
   // `checkoutState` and still cost six as six separate readings.
   //
   // The fallback is the whole reason the six survive at all. `status` reads the index and
@@ -151,17 +176,20 @@ export function checkouts ({ run }) {
   // its own words. Four extra calls, on a path where git has already failed and speed is
   // buying nothing.
   function describe (dir) {
-    const state = topOf(dir)
+    const place = discover(dir)
+    const state = topOf(dir, place)
     if (state.repo !== 'own') return state
     const status = branchStatus(dir)
     if (status) return { ...state, ...status }
-    const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     const tracking = upstream.code === 0 ? upstream.out : null
     const head = git(dir, 'rev-parse', 'HEAD')
     return {
       ...state,
-      branch: branch.code === 0 ? branch.out : null,
+      // The same reading `identity` makes, so the two paths through this module cannot
+      // disagree about which branch a checkout is on — and the same one `branch.head` above
+      // gives, which `symbolic-ref --short` was the odd one out against.
+      branch: place ? headBranch(place.gitDir) : gitBranch(dir),
       upstream: tracking,
       head: head.code === 0 ? head.out : null,
       ahead: tracking ? countCommits(dir, '@{u}..HEAD') : 0,
@@ -173,20 +201,29 @@ export function checkouts ({ run }) {
     }
   }
 
+  // The copy running from a linked worktree, told the way git tells it: its git dir sits
+  // under the main checkout's rather than being it. The `.git` entry the walk landed on and
+  // the `commondir` beside it are the two paths `--absolute-git-dir` and `--git-common-dir`
+  // print, so this is only asked of git for a layout `gitfs` declined. Both answers are
+  // needed to compare them and a git that does not know either option answers neither:
+  // reading that as "linked" would switch the freshness check off for good, blaming a
+  // worktree the user is not in.
+  function gitLinked (dir) {
+    const gitDir = git(dir, 'rev-parse', '--absolute-git-dir')
+    const commonDir = git(dir, 'rev-parse', '--git-common-dir')
+    if (gitDir.code !== 0 || commonDir.code !== 0 || !gitDir.out || !commonDir.out) return false
+    return !sameDir(gitDir.out, path.resolve(dir, commonDir.out))
+  }
+
   // The same shape, asked the freshness questions instead of the distance ones: whether
   // this checkout is a thing to judge at all (`freshness.mjs`'s `skipReason` decides) and
   // what it is standing on. Kept apart from `describe` because this reading runs at the
   // end of *every* command and a git call costs tens of milliseconds: scanning the tree
   // and counting two ranges for an answer nobody reads would be a tax on the whole tool.
   function identify (dir) {
-    const state = identity(dir)
+    const place = discover(dir)
+    const state = identity(dir, place)
     if (state.repo !== 'own') return state
-    // Both answers are needed to compare them, and a git that does not know either option
-    // answers neither. Reading that as "linked" would switch the freshness check off for
-    // good, blaming a worktree the user is not in.
-    const gitDir = git(dir, 'rev-parse', '--absolute-git-dir')
-    const commonDir = git(dir, 'rev-parse', '--git-common-dir')
-    const comparable = gitDir.code === 0 && commonDir.code === 0 && gitDir.out && commonDir.out
     // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the
     // remote renames its default branch the ref names one that no longer exists, so it is
     // believed only when the branch it points at is still there.
@@ -199,7 +236,7 @@ export function checkouts ({ run }) {
     const head = git(dir, 'rev-parse', 'HEAD')
     return {
       ...state,
-      linked: comparable ? !sameDir(gitDir.out, path.resolve(dir, commonDir.out)) : false,
+      linked: place ? !sameDir(place.gitDir, place.commonDir) : gitLinked(dir),
       defaultBranch: lives ? named : null,
       head: head.code === 0 ? head.out : null,
     }
