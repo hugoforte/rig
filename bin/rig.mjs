@@ -65,9 +65,10 @@ let current = invocationOf({})
 const toolRoot = () => current.toolRoot
 const cwd = () => current.cwd
 const env = () => current.env
-// Windows refuses to remove a directory that is some process's cwd, so `rig close` moves out
-// of the one it is standing in. Where the *run* is standing always moves; whether the process
-// moves with it is the caller's answer, because an in-process run does not own the process.
+// Windows refuses to remove a directory that is some process's cwd, so `rig close` and
+// `rig detach` move out of the one they are standing in. Where the *run* is standing always
+// moves; whether the process moves with it is the caller's answer, because an in-process run
+// does not own the process.
 const chdir = dir => { current.cwd = dir; current.chdir(dir) }
 // Raw writers: what a command has to say, with nothing added. The six sinks below add the
 // line and the glyph; `cmds.catalog` and `cmds.prompt` write a file through `out` unchanged,
@@ -2027,6 +2028,8 @@ cmds.detach = ({ flags, positional }) => {
   const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
 
+  // Out of the worktree before it goes, for the reason `close` gives.
+  if (insideDir(cwd(), entry.path)) chdir(toolRoot())
   const failed = trees(cfg).remove({ org: entry.org, repo: entry.repo, dir: entry.path, force: !!flags.force })
   if (failed) die(failed)
 
@@ -2962,6 +2965,11 @@ cmds.close = ({ flags }) => {
     // work is about to lose the worktree its first commit could have been read from.
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
   })
+  // Out of the work folder before anything in it is removed. Windows refuses to remove a
+  // directory that is some process's cwd — including ours — and everywhere else git removes it
+  // regardless, and the next subprocess, started in a directory that is not there, never runs.
+  const wd = workDir(cfg, id)
+  if (insideDir(cwd(), wd)) chdir(toolRoot())
   for (const r of work.repos) {
     if (!exists(r.path)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force: !!flags.force })
@@ -2969,9 +2977,6 @@ cmds.close = ({ flags }) => {
     else step(`removed worktree ${r.repo}`)
   }
   commitAs(id)
-  const wd = workDir(cfg, id)
-  // Windows refuses to remove a directory that is some process's cwd — including ours.
-  if (insideDir(cwd(), wd)) chdir(toolRoot())
   if (exists(wd)) {
     try {
       fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
