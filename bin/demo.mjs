@@ -24,7 +24,11 @@
 // does highlighting and stepping, nothing else. The page has to open from a file:// URL on a
 // machine with no network, because that is the machine it will be presented from.
 
-// ---------------------------------------------------------------- the graph
+// The graph itself is `bin/catalog-graph.mjs`, which `rig impact` reads too. What is left
+// here is the drawing of it: where a node goes, and how big.
+import { buildGraph } from './catalog-graph.mjs'
+
+// ------------------------------------------------------------- laying it out
 
 // A deterministic PRNG, so the same catalogue always lays out the same way. A demo that
 // rearranged itself between the rehearsal and the room would be a bad demo, and a layout
@@ -37,58 +41,6 @@ function seeded (seed) {
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t
     return ((t ^ t >>> 14) >>> 0) / 4294967296
   }
-}
-
-// `talks_to` is written from both ends: Payments says how it hears from the integration hub,
-// and the hub says how it pushes. Those are one relationship described twice, so the graph
-// draws one line and hangs both descriptions off it. Drawing two would say the systems are
-// more tangled than they are, which is the opposite of what the catalogue is for.
-export function buildGraph (catalog) {
-  const known = new Map(catalog.map(e => [e.repo.toLowerCase(), e]))
-  const nodes = new Map()
-  const edges = new Map()
-
-  const node = (repo, entry) => {
-    const key = repo.toLowerCase()
-    if (!nodes.has(key)) {
-      nodes.set(key, {
-        id: repo,
-        org: entry?.org || '',
-        role: entry?.role || '',
-        stack: entry?.stack || '',
-        // A neighbour named by someone else's `talks_to` with no entry of its own is a real
-        // finding, not a rendering problem: it is the catalogue telling you where it is thin.
-        // Dropping it would hide exactly the gap worth seeing.
-        catalogued: Boolean(entry),
-        draft: Boolean(entry?.draft),
-        degree: 0,
-      })
-    }
-    return nodes.get(key)
-  }
-
-  for (const entry of catalog) node(entry.repo, entry)
-
-  for (const entry of catalog) {
-    for (const link of entry.talks_to || []) {
-      const other = typeof link === 'string' ? link : link.repo
-      if (!other) continue
-      const how = typeof link === 'string' ? '' : (link.how || '')
-      const a = node(entry.repo, entry)
-      const b = node(other, known.get(String(other).toLowerCase()))
-      if (a.id === b.id) continue
-      const key = [a.id.toLowerCase(), b.id.toLowerCase()].sort().join('\u0000')
-      if (!edges.has(key)) edges.set(key, { a: a.id, b: b.id, says: [] })
-      if (how) edges.get(key).says.push({ from: a.id, to: b.id, how })
-    }
-  }
-
-  for (const e of edges.values()) {
-    nodes.get(e.a.toLowerCase()).degree++
-    nodes.get(e.b.toLowerCase()).degree++
-  }
-
-  return { nodes: [...nodes.values()], edges: [...edges.values()] }
 }
 
 // How big a node is drawn. A busy repo gets a bigger dot, which is the one piece of the
@@ -557,7 +509,64 @@ export function summarize ({ catalog = [], works = [], generatedAt = null, root 
       works: works.length,
       crossRepo: works.filter(w => (w.repos || []).length > 1).length,
     },
+    outcome: outcome(works),
     spread: Object.entries(spread).map(([repos, n]) => ({ repos: Number(repos), n })).sort((a, b) => a.repos - b.repos),
+  }
+}
+
+// What the works cost, as opposed to how many there were. The header counted inventory and
+// said nothing about what any of it produced, which is the half that makes the case.
+//
+// Read out of the **terminal PR facts** `rig close` stores and `rig backfill` fills in behind
+// it (decision 60): a merge cannot un-merge, so unlike the dashboard's live PR state these
+// cannot be wrong by tomorrow — which is the property decision 91 required of anything this
+// page commits into a data root. No `gh` call, so `--quick` and live agree by construction.
+//
+// **A work landed when a pull request of its own merged.** Not `closedAt`, which is when the
+// teardown ran: `rig close --abandoned` sets it too, and a work can be closed with nothing
+// shipped. **The cycle is the first commit in any repo to the last merge in any repo**, because
+// a cross-repo work is not finished until its last repo is — taking the first merge would make
+// the widest works look like the fastest.
+//
+// **Median, never mean**, and every figure carries the n it was taken over: one migration that
+// sat for a month drags a mean far enough to be a lie, and a figure with no n behind it is the
+// claim `rig dash` already refuses to make.
+const median = xs => {
+  if (!xs.length) return null
+  const sorted = [...xs].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+const DAY = 86400000
+
+function outcome (works) {
+  const landed = []
+  for (const w of works) {
+    // Landed is every repo's pull request merged — the rule `rig dash` counts by, in
+    // `reduceWork` — and never an abandoned work, whatever merged before it was stopped. Counting
+    // a work on its first merge stops its clock early and makes the widest works look fastest.
+    if (w.abandonedAt) continue
+    const repos = w.repos || []
+    const prs = repos.map(r => repoBranch(r, w.branch)?.pr)
+    if (!repos.length || !prs.every(pr => pr?.mergedAt)) continue
+    const first = prs.map(pr => Date.parse(pr.firstCommitAt)).filter(Number.isFinite)
+    const last = prs.map(pr => Date.parse(pr.mergedAt)).filter(Number.isFinite)
+    landed.push({
+      repos: repos.length,
+      days: first.length && last.length ? (Math.max(...last) - Math.min(...first)) / DAY : null,
+    })
+  }
+  const days = landed.map(l => l.days).filter(d => d !== null)
+  const round = (n, dp) => (n === null ? null : Math.round(n * 10 ** dp) / 10 ** dp)
+  return {
+    landed: landed.length,
+    // Kept to four places rather than one: a root of single-repo works merges in hours, and
+    // rounding to a tenth of a day here would flatten every one of them to zero before the
+    // page ever got to choose a unit.
+    cycleDays: round(median(days), 4),
+    cycleN: days.length,
+    reposPerWork: round(median(landed.map(l => l.repos)), 1),
   }
 }
 
@@ -582,12 +591,55 @@ const duration = (from, to) => {
 
 
 
+// Days is the model's unit because it is the one a cycle time is usually quoted in, but a
+// data root of single-repo works merges in hours and "0 days" reads as a broken page rather
+// than as a fast one. So the page picks the unit from the number, the way `duration` already
+// does for the pull-request table.
+//
+// Each unit is chosen after rounding, not before, so 59.9 minutes is "1 hour" rather than
+// "60 minutes" and a cycle one breath short of a day is "1 day" rather than "24 hours".
+const span = days => {
+  if (days === null) return ''
+  const unit = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const minutes = Math.round(days * 24 * 60)
+  if (minutes < 60) return unit(Math.max(1, minutes), 'minute')
+  const hours = Math.round(days * 24 * 10) / 10
+  if (hours < 24) return unit(hours, 'hour')
+  return unit(Math.round(days * 10) / 10, 'day')
+}
+
+// Where a line from `from` towards `to` meets `to`'s circle, one unit outside it. The heads put
+// their tip exactly on the line's end (`refX` at the tip), so this is where the tip lands.
+const toEdge = (from, to) => {
+  const length = Math.hypot(to.x - from.x, to.y - from.y) || 1
+  const back = (nodeRadius(to) + 1) / length
+  return {
+    x: Math.round((to.x - (to.x - from.x) * back) * 10) / 10,
+    y: Math.round((to.y - (to.y - from.y) * back) * 10) / 10,
+  }
+}
+
 function renderGraph (graph) {
   if (!graph.nodes.length) return '<p class="empty">No repos catalogued in this data root yet.</p>'
 
-  const edges = graph.edges.map((e, i) =>
-    `<line class="edge" id="e${i}" data-a="${esc(e.a)}" data-b="${esc(e.b)}" ` +
-    `x1="${e.from.x}" y1="${e.from.y}" x2="${e.to.x}" y2="${e.to.y}"></line>`).join('\n    ')
+  // `from` is the edge's `a` and `to` its `b`, and `direction` is recorded from `a`'s side, so
+  // `downstream` — a change in `a` can break `b` — points at the `to` end. An edge nobody placed
+  // and an edge the two entries disagree about are both drawn plain: an unknown is not a fact,
+  // and neither is a contradiction. That makes the drawing a map of where the catalogue is thin,
+  // which is the same argument as listing the repos with no entry underneath it.
+  //
+  // A marked end stops at the edge of the dot it points at. The nodes are drawn after the edges
+  // with an opaque fill, so a head left at a node's centre is painted over and the page shows a
+  // plain line — the picture this is meant to tell apart from an unstated edge.
+  const edges = graph.edges.map((e, i) => {
+    const end = !e.disagreed && (e.direction === 'downstream' || e.direction === 'both')
+    const start = !e.disagreed && (e.direction === 'upstream' || e.direction === 'both')
+    const from = start ? toEdge(e.to, e.from) : e.from
+    const to = end ? toEdge(e.from, e.to) : e.to
+    const heads = (start ? ' marker-start="url(#arrowback)"' : '') + (end ? ' marker-end="url(#arrow)"' : '')
+    return `<line class="edge" id="e${i}" data-a="${esc(e.a)}" data-b="${esc(e.b)}" ` +
+      `x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"${heads}></line>`
+  }).join('\n    ')
 
   const nodes = graph.nodes.map(n => {
     const r = nodeRadius(n)
@@ -598,6 +650,10 @@ function renderGraph (graph) {
   }).join('\n    ')
 
   return `<svg viewBox="0 0 ${graph.width} ${graph.height}" class="graph" role="img" aria-label="Repository dependency graph">
+    <defs>
+      <marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z"></path></marker>
+      <marker id="arrowback" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z"></path></marker>
+    </defs>
     ${edges}
     ${nodes}
   </svg>`
@@ -720,6 +776,7 @@ tbody th { font-weight: 500; }
 /* ---- graph */
 .graph { width: 100%; height: auto; display: block; touch-action: manipulation; margin: .3rem 0 .1rem; }
 .edge { stroke: var(--line); stroke-width: 2; transition: stroke .12s, stroke-width .12s; }
+#arrow path, #arrowback path { fill: var(--line); }
 .edge.lit { stroke: var(--accent); stroke-width: 2.6; }
 .graph.picking .edge:not(.lit) { stroke: var(--line); opacity: .3; }
 .node circle { fill: var(--raise); stroke: var(--good); stroke-width: 2; transition: fill .12s, stroke .12s; }
@@ -889,6 +946,11 @@ ${renderPrs(ex)}`
   <p>Everything on this page was read out of that root just now: <strong>${c.repos}</strong> catalogued
   repos, <strong>${c.edges}</strong> relationships between them, <strong>${c.works}</strong> recorded
   works, <strong>${c.crossRepo}</strong> of which spanned more than one repo${c.uncatalogued ? `, and <strong>${c.uncatalogued}</strong> repo${c.uncatalogued === 1 ? '' : 's'} named by a neighbour with no catalogue entry yet` : ''}.</p>
+${s.outcome.landed ? `  <p class="outcome"><strong>${s.outcome.landed}</strong> of those works landed: a median of
+  <strong>${span(s.outcome.cycleDays)}</strong> from the first commit to the last merge (n=${s.outcome.cycleN}),
+  over a median of <strong>${s.outcome.reposPerWork}</strong> repo${s.outcome.reposPerWork === 1 ? '' : 's'} each.
+  Read out of the pull requests those works actually merged — rig has no record of what you would
+  have spent without it, so this page does not claim one.</p>` : ''}
 </header>
 
 <section class="panel">

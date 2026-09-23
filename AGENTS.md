@@ -119,7 +119,36 @@ One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`r
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
-traversal over it.
+traversal over it, and `rig impact <repo>` is that traversal as a command — the repos one and
+two hops away, what each end said about the relationship, which way it runs, and how far
+behind each entry is.
+
+```bash
+rig impact billing        # what a change in billing reaches, and what reaches it
+```
+
+A `talks_to` item may carry a `direction` beside its `how`: `downstream` means "a change in
+this repo can break that one", `upstream` is the other way, `both` is both. **Absent means
+unstated, which is not the same as both ways** — rig prints the edge and declines to place it.
+Either end may state it and rig reads it from whichever end is asking, so `downstream` in one
+entry and `upstream` in the other are one claim agreed twice. Two entries making different
+claims are a **disagreement**: reported, never resolved by picking a side, because the
+disagreement is the thing worth seeing. `rig impact` offers and never blocks, and it is the only
+place a disagreement is reported — `rig doctor` does not look for them.
+
+**Two graphs, and the disagreement is the output.** Beside the declared graph `talks_to` makes,
+`rig impact` reads an **observed** one out of the work records: which repos have been attached
+to the same work, and how many times. It is read out of what was recorded rather than what anyone
+claimed, so it cannot be wrong about what happened — but it can only ever see repos somebody has already
+worked on together, so it never catches the fourth repo the first time. A pair the records keep
+making with nothing in `talks_to` to explain it is the finding, and rig names the entry to
+correct.
+
+**Two commands offer the neighbours you have not attached.** `rig attach` names them once, at
+the moment the repo set is being chosen, from both graphs. `rig next` offers only the declared
+ones, through planning, designing and building, and goes quiet from `reviewing` on — once a
+pull request is open, adding a repo is a decision already taken. Neither blocks, and neither
+attaches anything for you.
 
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
 lint, its build. Both are commands and never results: no pass or fail is ever stored.
@@ -326,7 +355,9 @@ rig demo                      # into <data root>/demo/index.html, then opens it
 rig demo --example <work-id>  # walk through a particular work rather than the chosen one
 ```
 
-One interactive page, rendered from the data root in hand: the `talks_to` graph, and one real
+One interactive page, rendered from the data root in hand: the `talks_to` graph — arrowheads
+where a direction is stated, plain lines where it is not — the outcome figures for the works
+that landed, and one real
 work walked through command by command. It exists because this repo is public and a page
 naming a real org's repos cannot live in it — so the generator is committed here and the page
 is committed wherever its data root is.
