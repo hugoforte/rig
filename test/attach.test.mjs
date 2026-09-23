@@ -127,11 +127,32 @@ check: []
 
 Prose.
 `)
-  const r = rig(['attach', 'web', '--work', 't1'])
-  assert.equal(r.code, 0, r.out)
-  const out = strip(r.out)
-  assert.match(out, /warehouse talks to web, and a change in it can break web — not attached \(`rig attach warehouse`\)/)
-  assert.doesNotMatch(out, /billing|orders/, 'a neighbour already attached is not offered back')
+  // Two other works' records: one that paired web with a repo the catalogue says nothing
+  // about, and one that no longer parses. The first is the observed half of the offer; the
+  // second is what used to crash the attach after it had cut the worktree and saved the record,
+  // which skipped the commit and left the data root half-written. Any record in the root is
+  // read by the offer, so any one of them going bad must not cost the command it follows.
+  const records = ['earlier', 'broken'].map(id => path.join(dataRoot, 'work', id))
+  for (const dir of records) fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(records[0], 'work.json'), JSON.stringify({ id: 'earlier', repos: [{ repo: 'web' }, { repo: 'ledger' }] }))
+  fs.writeFileSync(path.join(records[1], 'work.json'), '{ "id": "broken", ')
+  try {
+    const r = rig(['attach', 'web', '--work', 't1'])
+    assert.equal(r.code, 0, r.out)
+    const out = strip(r.out)
+    assert.match(out, /warehouse talks to web, and a change in it can break web — not attached \(`rig attach warehouse`\)/)
+    assert.match(out, /ledger has shared 1 work with web, with nothing in talks_to to say why/)
+    assert.match(out, /1 work record could not be read and was left out: broken/)
+    assert.doesNotMatch(out, /billing|orders/, 'a neighbour already attached is not offered back')
+    assert.equal(gitMust(dataRoot, 'status', '--porcelain'), '', 'the attach committed, as it did before the offer existed')
+
+    // The same traversal from the command that runs all through the work, declared graph only.
+    const next = strip(rig(['next', '--work', 't1']).out)
+    assert.match(next, /warehouse talks to web \(a change in it can break web\) — not attached/)
+    assert.doesNotMatch(next, /ledger/, 'a co-attachment is evidence about the catalogue, and next offers only the declared graph')
+  } finally {
+    for (const dir of records) fs.rmSync(dir, { recursive: true, force: true })
+  }
 
   assert.equal(rig(['detach', 'web', '--work', 't1']).code, 0)
   assert.equal(record().repos.length, 2, 'the suite carries on from two attached repos')

@@ -534,6 +534,25 @@ function listWorkIds (dataRootPath = dataRoot()) {
     .map(d => d.name)
 }
 
+// Every work record in a root that parses, and the ids of the ones that do not. For the readers
+// that want the records as *evidence* rather than as the thing they act on — the observed graph
+// behind `rig impact` and the offer `rig attach` makes. One unreadable record must not cost those
+// their answer, and for `attach` it must not cost the command it follows: the offer runs after
+// the worktree is cut and the record saved, and a throw there skipped the commit and left the
+// data root half-written. So a record that will not read is left out and named, never swallowed.
+function readRecords (root) {
+  const works = []
+  const unreadable = []
+  for (const id of listWorkIds(root)) {
+    try { works.push(readJson(recordFile(id, root))) } catch { unreadable.push(id) }
+  }
+  return { works, unreadable }
+}
+
+const sayUnreadable = ids => {
+  if (ids.length) say(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
+}
+
 // ---------------------------------------------------------------- catalogue
 
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
@@ -1708,8 +1727,8 @@ cmds.attach = async ({ flags, positional }) => {
 function offerNeighbours (work, name) {
   const catalog = loadCatalog()
   if (!catalog.length) return
-  const root = dataRoot()
-  const answer = impact(catalog, name, { works: listWorkIds(root).map(id => readJson(recordFile(id, root))) })
+  const { works, unreadable } = readRecords(dataRoot())
+  const answer = impact(catalog, name, { works })
   const have = new Set((work.repos || []).map(r => r.repo.toLowerCase()))
   const said = repo => say(C.dim(`· ${repo}`))
 
@@ -1724,6 +1743,7 @@ function offerNeighbours (work, name) {
     if (have.has(o.repo.toLowerCase()) || o.declared) continue
     said(`${o.repo} has shared ${o.works.length} work${o.works.length === 1 ? '' : 's'} with ${name}, with nothing in talks_to to say why`)
   }
+  sayUnreadable(unreadable)
 }
 
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
@@ -2831,8 +2851,8 @@ cmds.impact = ({ positional }) => {
   if (!name) die('rig impact wants a repo — `rig catalog` lists them')
   const entries = loadCatalog()
   if (!entries.length) die('catalogue is empty — entries are drafted on `rig attach`')
-  const root = dataRoot()
-  const answer = impact(entries, name, { works: listWorkIds(root).map(id => readJson(recordFile(id, root))) })
+  const { works, unreadable } = readRecords(dataRoot())
+  const answer = impact(entries, name, { works })
 
   // Asked only about the repos in the answer, not the whole catalogue. The measure costs a git
   // spawn per entry that has a mirror, and a neighbourhood is a handful of repos where a
@@ -2926,6 +2946,7 @@ cmds.impact = ({ positional }) => {
       ? `${unwritten[0]} has no catalogue entry — one is drafted the first time it is attached`
       : `${unwritten.join(', ')} have no catalogue entry — one is drafted the first time each is attached`))
   }
+  sayUnreadable(unreadable)
 }
 
 cmds.prompt = ({ positional }) => {
