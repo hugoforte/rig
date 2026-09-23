@@ -351,8 +351,9 @@ const writeText = (p, v) => {
 
 // The repo the command is standing in, for the one step of the resolution order that needs to
 // ask git. Named by its remote rather than its folder, because a clone can be called anything
-// and the catalogue is keyed by the repo's real name. Null for anywhere that is not a checkout,
-// or a checkout with no origin — both of which simply mean this step has no answer.
+// and the catalogue is keyed by the repo's real name; by its folder only when there is no
+// origin to go by. Null for anywhere that is not a checkout, or is one git will not open —
+// both of which simply mean this step has no answer.
 function repoAtCwd () {
   // Where the checkout is comes from the filesystem (`gitfs.discover`), which is what git
   // would walk anyway — so the answer this step gives most often, that the cwd is not a
@@ -373,8 +374,13 @@ function repoAtCwd () {
   // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
   // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
   const url = exec('git', ['remote', 'get-url', 'origin'])
-  if (url.code !== 0 || !url.out) return path.basename(top)
-  return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
+  if (url.code === 0 && url.out) return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
+  // git fails this for a repository it refuses to open — another user's, or one with an
+  // extension it does not know — as well as for one with no origin, and the filesystem walk
+  // sees neither refusal. The folder is the name only for a checkout git will open, and where
+  // the walk placed it git has not been asked that yet.
+  if (place && exec('git', ['rev-parse', '--show-toplevel']).code !== 0) return null
+  return path.basename(top)
 }
 
 // Where config lives, resolved on first use rather than when the run starts: `help` and

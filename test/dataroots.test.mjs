@@ -445,6 +445,28 @@ test('a checkout the filesystem walk hands back to git is still placed by its re
   assert.match(r.out, /data root: personal \(the repo it is about\)/)
 })
 
+// A folder named for ledger, so the name is there to be guessed from, and what decides
+// whether it is guessed is git.
+
+test('a checkout with no origin is named by its folder, the one name it has', () => {
+  const dir = path.join(tmp, 'no-origin', 'ledger')
+  fs.mkdirSync(dir, { recursive: true })
+  gitMust(dir, 'init', '-q', '-b', 'main')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a repository git refuses to open is not named by its folder', () => {
+  // git refuses a repository with an extension it does not know, or one another user owns,
+  // and the filesystem walk sees neither. Every question put to git then fails, `remote
+  // get-url` with it, and that is not the same answer as "no origin".
+  const dir = checkoutAt('refused/ledger', 'payments')
+  gitMust(dir, 'config', 'core.repositoryformatversion', '1')
+  gitMust(dir, 'config', 'extensions.rigHasNeverHeardOfThis', 'true')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: hugoforte \(current\)/)
+})
+
 test('--data with no name is a typo, not a request', () => {
   const r = rig(['list', '--data'])
   assert.equal(r.code, 1)
