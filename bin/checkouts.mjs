@@ -74,42 +74,102 @@ export function checkouts ({ run }) {
     return Number.isFinite(n) ? n : null
   }
 
-  // Which checkout this is, and whether it is one at all. Both readings start here.
-  function identity (dir) {
+  // Whether this directory is a checkout of its own, and where its top is. One call, and
+  // both readings start with it: a directory *inside* another repo would otherwise report
+  // that repo's branch and distance as its own.
+  function topOf (dir) {
     const top = git(dir, 'rev-parse', '--show-toplevel')
     if (top.code !== 0) return { ...UNREAD }
-    // A directory *inside* another repo would otherwise report that repo's branch and
-    // distance as its own.
     if (!sameDir(top.out, dir)) return { ...UNREAD, repo: 'nested', top: top.out }
+    return { ...UNREAD, repo: 'own', top: top.out }
+  }
+
+  // Which checkout this is, without reading its tree. `identify` is the only caller left:
+  // it runs at the end of every command, and `describe`'s one call below scans the working
+  // tree, which is the cost decision 80 kept the two readings apart to avoid.
+  function identity (dir) {
+    const state = topOf(dir)
+    if (state.repo !== 'own') return state
     const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
     const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
     return {
-      ...UNREAD,
-      repo: 'own',
-      top: top.out,
+      ...state,
       branch: branch.code === 0 ? branch.out : null,
       upstream: upstream.code === 0 ? upstream.out : null,
     }
   }
 
+  // Everything the `--branch` header of `git status --porcelain=v2` answers, in one call:
+  // the head, the branch, the upstream, the distance both ways, and the two ways a tree can
+  // be untidy. That is five calls' worth — `symbolic-ref HEAD`, `rev-parse --abbrev-ref
+  // @{u}`, a `rev-list` per direction, and `status --porcelain` — and carrying the header is
+  // exactly what the v2 format is for.
+  //
+  // **`branch.ab` is absent precisely when git could not measure**, and `branch.upstream`
+  // says which of the two reasons it is: no upstream configured at all, or one configured
+  // whose ref has gone — the case a squash-merge-and-delete leaves behind. So the null that
+  // `countCommits` used to draw survives, and it is now drawn on better evidence than
+  // `rev-parse @{u}` could give, which failed identically for both.
+  //
+  // Null for a directory git would not answer about at all. Reading that as a clean tree is
+  // the quiet wrong answer that matters most here: it is what `rig update` migrates on.
+  function branchStatus (dir) {
+    const r = git(dir, 'status', '--porcelain=v2', '--branch')
+    if (r.code !== 0) return null
+    const header = {}
+    const entries = []
+    for (const line of lines(r.out)) {
+      const h = /^# (branch\.\w+) (.*)$/.exec(line)
+      if (h) header[h[1]] = h[2]
+      else if (!line.startsWith('# ')) entries.push(line)
+    }
+    const upstream = header['branch.upstream'] ?? null
+    const ab = /^\+(\d+) -(\d+)$/.exec(header['branch.ab'] ?? '')
+    // `(detached)` and `(initial)` are git's own words for "there is no name here", and
+    // both would otherwise be reported as though they were one.
+    const named = v => (v && !v.startsWith('(') ? v : null)
+    return {
+      head: named(header['branch.oid']),
+      branch: named(header['branch.head']),
+      upstream,
+      ahead: upstream ? (ab ? Number(ab[1]) : null) : 0,
+      behind: upstream ? (ab ? Number(ab[2]) : null) : 0,
+      // Untracked entries are the `?` ones, exactly as `??` was in v1.
+      dirty: entries.length,
+      modified: entries.filter(l => !l.startsWith('? ')).length,
+    }
+  }
+
   // Where a checkout stands: its identity, its distance from its upstream, and the two
-  // different ways its tree can be untidy. Six git calls — the same six this cost as
-  // `checkoutState`, because `dirty` and `modified` come from one `status --porcelain`
-  // rather than two runs of it: untracked entries are exactly the `??` ones.
+  // different ways its tree can be untidy. **Two git calls**, where this cost six as
+  // `checkoutState` and still cost six as six separate readings.
+  //
+  // The fallback is the whole reason the six survive at all. `status` reads the index and
+  // `rev-list` does not, so a corrupt index is a tree git cannot read and a distance it
+  // still can — and collapsing the readings into one call would have reported that as a
+  // checkout nothing is known about, which stops `fastForward` before git gets to refuse in
+  // its own words. Four extra calls, on a path where git has already failed and speed is
+  // buying nothing.
   function describe (dir) {
-    const state = identity(dir)
+    const state = topOf(dir)
     if (state.repo !== 'own') return state
-    // A status git would not answer leaves both counts null, the same way an unmeasurable
-    // distance does. Reading a failed status as a clean tree is the quiet wrong answer that
-    // matters most here: it is what `rig update` migrates on.
-    const status = git(dir, 'status', '--porcelain')
-    const changes = status.code === 0 ? lines(status.out) : null
+    const status = branchStatus(dir)
+    if (status) return { ...state, ...status }
+    const branch = git(dir, 'symbolic-ref', '-q', '--short', 'HEAD')
+    const upstream = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
+    const tracking = upstream.code === 0 ? upstream.out : null
+    const head = git(dir, 'rev-parse', 'HEAD')
     return {
       ...state,
-      ahead: state.upstream ? countCommits(dir, '@{u}..HEAD') : 0,
-      behind: state.upstream ? countCommits(dir, 'HEAD..@{u}') : 0,
-      dirty: changes && changes.length,
-      modified: changes && changes.filter(l => !l.startsWith('??')).length,
+      branch: branch.code === 0 ? branch.out : null,
+      upstream: tracking,
+      head: head.code === 0 ? head.out : null,
+      ahead: tracking ? countCommits(dir, '@{u}..HEAD') : 0,
+      behind: tracking ? countCommits(dir, 'HEAD..@{u}') : 0,
+      // The tree is the half that was unreadable, and a tree nobody could read is not a
+      // clean one: `rig update` migrates on this.
+      dirty: null,
+      modified: null,
     }
   }
 
