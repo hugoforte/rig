@@ -1,0 +1,95 @@
+// `run(argv, io)` as a seam, rather than through what it happens to make possible.
+//
+// The rest of the suite drives rig through `test/harness.mjs`'s `rig()`, which now has two
+// adapters and picks the in-process one for most files — so if the seam leaked, what would
+// fail is whichever test happened to run second, with a message about a data root or a
+// catalogue and nothing about the leak. These are the four properties that make the in-process
+// adapter honest, each asserted where it is the subject.
+//
+// The installations are `makeInstall`'s, because what has to be shown is a *run* against an
+// installation that is not this checkout; `run` is called directly rather than through `rig()`,
+// because `rig()` choosing the adapter is the thing under test everywhere else.
+import { test, after } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+
+import { run } from '../bin/rig.mjs'
+import { makeInstall, strip } from './harness.mjs'
+
+// Two installations, because one cannot show that a run does not read the other's. Each has
+// its machine file outside the tool copy (`localConfig`), which is what lets two of them exist
+// on one machine at all.
+const one = makeInstall({ prefix: 'rig-invocation-one-', localConfig: true, github: { auth: 'ok' } })
+const two = makeInstall({ prefix: 'rig-invocation-two-', localConfig: true, github: { auth: 'ok' } })
+
+after(() => { one.cleanup(); two.cleanup() })
+
+// One invocation against one installation, with everything of the machine it may reach named.
+const drive = (m, args, { cwd = m.tmp, input = '' } = {}) => {
+  let out = ''
+  let err = ''
+  const code = run(args, {
+    toolRoot: m.install,
+    cwd,
+    env: m.env,
+    stdin: () => input,
+    out: s => { out += s },
+    err: s => { err += s },
+  })
+  return { code, out: strip(out), err: strip(err) }
+}
+
+const setUp = m => assert.equal(drive(m, ['init', '--data-root', m.dataRoot,
+  '--work-root', m.workRoot, '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
+
+test('a run answers with an exit code, and every word of it reaches the writers it was handed', () => {
+  const answered = drive(one, ['help'])
+  assert.equal(answered.code, 0)
+  assert.match(answered.out, /cross-repo work harness/)
+  assert.equal(answered.err, '', 'a command that worked says nothing on the error stream')
+
+  // The refusal, on the other stream and with the exit code that carries it. This used to be
+  // `process.exit(1)`, which a caller in the same process could not have survived.
+  const refused = drive(one, ['nonsense'])
+  assert.equal(refused.code, 1)
+  assert.match(refused.err, /unknown command "nonsense"/)
+  assert.equal(refused.out, '', 'and nothing on the answer stream to confuse a pipe')
+})
+
+test('two installations, one process, and neither run resolves the other\'s data root', () => {
+  setUp(one)
+  setUp(two)
+  // Interleaved on purpose: the failure this catches is a resolved location memoised past the
+  // end of a run, which a test that finished with one installation before starting the other
+  // would never see.
+  assert.equal(drive(one, ['new', 'in-one', '--title', 'In one', '--no-ticket']).code, 0)
+  assert.equal(drive(two, ['new', 'in-two', '--title', 'In two', '--no-ticket']).code, 0)
+  assert.equal(drive(one, ['new', 'in-one-again', '--title', 'Again', '--no-ticket']).code, 0)
+
+  const records = m => fs.readdirSync(path.join(m.dataRoot, 'work')).sort()
+  assert.deepEqual(records(one), ['in-one', 'in-one-again'])
+  assert.deepEqual(records(two), ['in-two'])
+})
+
+test('the folder a run is standing in is the one it was handed, never the process\'s', () => {
+  // Nothing has changed this process's directory, so a work found here can only have been
+  // found by walking up from the cwd the run was given.
+  const inside = drive(one, ['status'], { cwd: path.join(one.workRoot, 'in-one') })
+  assert.equal(inside.code, 0, inside.out + inside.err)
+  assert.match(inside.out, /in-one/)
+
+  const outside = drive(one, ['status'])
+  assert.equal(outside.code, 1)
+  assert.match(outside.err, /not inside a work/)
+})
+
+test('a tracker is a run\'s, so the next run reads the state file again rather than what it remembered', () => {
+  assert.match(drive(one, ['doctor']).out, /gh authenticated/)
+
+  fs.writeFileSync(one.githubStateFile, JSON.stringify({ auth: 'missing' }))
+  // The adapter used to be resolved once per process, which is right for a process that runs
+  // one command and wrong for anything else: this second run would have been answered by the
+  // first run's client, reading the state that had already been loaded into memory.
+  assert.match(drive(one, ['doctor']).out, /gh not on PATH/)
+})

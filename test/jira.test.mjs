@@ -300,7 +300,7 @@ test('resolveJiraFields: create-metadata wins over the system set when both know
 // honestly. One temp installation (test/harness.mjs) with the in-memory twg adapter behind
 // RIG_FAKE_TWG; the real `twg` is never spawned. The two tests below share it and run in
 // order: the dry-run's preview is compared against what the create then sends.
-const install = makeInstall({ prefix: 'rig-jira-', twg: { present: true, issues: {}, fields: {}, boards: {} } })
+const install = makeInstall({ prefix: 'rig-jira-', twg: { present: true, issues: {}, fields: {}, boards: {} }, inProcess: true })
 after(install.cleanup)
 
 const brief = [

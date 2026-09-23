@@ -17,16 +17,18 @@ import { checkouts, unreadable, FETCH_ENV } from '../bin/checkouts.mjs'
 
 let tmp, env, sandbox
 
-// `run` is spawnSync-shaped, the way rig.mjs passes it in. The sandbox goes on *last*:
-// `fetch` builds its environment from `process.env` to add the prompt guard, the way
-// rig.mjs's own runner does, and without this the one call in the file that does so would
-// escape to the machine's real git config.
-const run = (cmd, args, opts = {}) => {
-  const merged = { ...(opts.env ?? env), ...sandbox }
+// `run` is shaped the way rig.mjs passes it in: spawnSync's options, except that `opts.env`
+// names *additions* to the environment the runner already holds — `fetch` passes the prompt
+// guard alone and means it on top of everything else. `base` is a thunk because the
+// environment is built in `before`. The sandbox goes on *last*, so the one call in the file
+// that adds anything cannot escape to the machine's real config.
+const runIn = base => (cmd, args, opts = {}) => {
+  const merged = { ...base(), ...(opts.env ?? {}), ...sandbox }
   const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts, env: merged })
   if (r.error) throw r.error
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
+const run = runIn(() => env)
 const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 const gitMust = (dir, ...args) => {
   const r = git(dir, ...args)
@@ -456,7 +458,7 @@ test('a commit git refuses answers git\'s reason, and the change is still there'
   const nameless = { ...env }
   delete nameless.GIT_AUTHOR_NAME; delete nameless.GIT_AUTHOR_EMAIL
   delete nameless.GIT_COMMITTER_NAME; delete nameless.GIT_COMMITTER_EMAIL
-  const bare = checkouts({ run: (cmd, args, opts = {}) => run(cmd, args, { env: nameless, ...opts }) })
+  const bare = checkouts({ run: runIn(() => nameless) })
 
   const r = bare.commitAll(local, 'rig save: a record')
   assert.equal(r.outcome, 'commit-failed')

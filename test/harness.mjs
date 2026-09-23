@@ -1,7 +1,7 @@
-// One throwaway rig installation in a temp directory, for the tests that drive the CLI as a
-// subprocess: the tool on disk, the roots it works on, an environment isolated from the
-// machine, and the runners the tests drive it with. What only one test file needs stays in
-// that file; what they all need lives here.
+// One throwaway rig installation in a temp directory, for the tests that drive the CLI end
+// to end: the tool on disk, the roots it works on, an environment isolated from the machine,
+// and the runners the tests drive it with. What only one test file needs stays in that file;
+// what they all need lives here.
 //
 // The call sites differ on how the tool is put on disk and what it may reach, and the
 // options carry the differences rather than flattening them:
@@ -17,6 +17,9 @@
 // - test/attach.test.mjs wants repos to clone, and passes `remotes`: `RIG_FAKE_REMOTES`
 //   points at a directory of bare repos the test publishes into, so `bin/worktrees.mjs`
 //   resolves a repo to disk instead of github.com.
+// - most of them pass `inProcess`, which is about how the tool is *run* rather than how it is
+//   put on disk: `rig()` below then calls `bin/rig.mjs`'s `run(argv, io)` here rather than
+//   starting a process for it.
 //
 // GitHub and Jira are the in-memory adapters selected by `RIG_FAKE_GITHUB` and
 // `RIG_FAKE_TWG`, each naming a JSON state file the tool reads on start and writes back on
@@ -33,6 +36,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { run as runInProcess } from '../bin/rig.mjs'
 
 // The checkout under test — the source every temp installation is built from.
 export const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -59,6 +63,7 @@ export function makeInstall ({
   github,
   twg,
   remotes = false,
+  inProcess = false,
 } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   const dataRoot = path.join(tmp, 'rig-data')
@@ -132,7 +137,39 @@ export function makeInstall ({
   // stripped above: rig resolves its data root partly from the folder it runs in, and the
   // suite is itself run from inside a rig work folder often enough that inheriting would let
   // the machine decide what an isolated installation reads.
-  const rig = (args, { input = '', env: envOverride = env, root = install, cwd = tmp } = {}) => {
+  //
+  // Two adapters behind one signature, and which a call gets is a question about what the
+  // test is *for* (DESIGN.md decision 94). `bin/rig.mjs` exports `run(argv, io)`, so an
+  // invocation is a value this process can produce: the same installation, cwd, environment
+  // and stdin a subprocess would have been handed, with the two streams collected instead of
+  // piped. What that buys is the ~51ms a Node boot costs on the Windows runner, and rig's
+  // module graph on top of it, times the several hundred invocations this suite makes.
+  //
+  // A test whose subject *is* the process keeps the subprocess, and three kinds of test do:
+  // `test/installation.test.mjs`, which drives `rig update` re-executing the tool that just
+  // arrived, the detached freshness refresh, and a crippled PATH; the steps of
+  // `test/scenarios.test.mjs` that drive the previous release; and `rig check --run`, whose
+  // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe.
+  // `inProcess` sets the installation's default and any call may say otherwise.
+  //
+  // A call naming a different `root` is always a subprocess, whatever it asked for: what it
+  // wants is the code on *that* disk — the previous release, or a copy something has edited
+  // — and in this process the code is always this checkout's.
+  const rig = (args, { input = '', env: envOverride = env, root = install, cwd = tmp, inProcess: here = inProcess } = {}) => {
+    if (here && root === install) {
+      let stdout = ''
+      let stderr = ''
+      const code = runInProcess(args, {
+        toolRoot: root,
+        cwd: cwd || process.cwd(),
+        env: envOverride,
+        // What `fs.readFileSync(0, 'utf8').trim()` gives the subprocess, given the same input.
+        stdin: () => input.trim(),
+        out: s => { stdout += s },
+        err: s => { stderr += s },
+      })
+      return { code, out: strip(stdout + stderr), stdout: strip(stdout) }
+    }
     const r = spawnSync(process.execPath, [path.join(root, 'bin', 'rig.mjs'), ...args],
       { encoding: 'utf8', env: envOverride, input, ...(cwd ? { cwd } : {}) })
     return { code: r.status, out: strip(r.stdout + r.stderr), stdout: strip(r.stdout) }

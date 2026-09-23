@@ -253,7 +253,7 @@ test('the registry is the location\'s to answer, and never the merged config\'s'
 
 // ------------------------------------------------------------------ the CLI
 
-const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} } })
+const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} }, inProcess: true })
 const { tmp, dataRoot, workRoot, localConfig, rig, gitMust, cleanup } = install
 const second = path.join(tmp, 'rig-data-personal')
 
