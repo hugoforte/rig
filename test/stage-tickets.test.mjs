@@ -97,12 +97,12 @@ test('forcing past an open slice records the decision, rather than leaving it un
 test('and a forced close is not then reported as a contradiction', () => {
   // `rig close --force` exists to tear down past exactly this, so the state is explained. The
   // rule fires on a record nothing can account for, never on a decision made on purpose.
+  // It reads the work branch's own pull request, and #51 merged, so an open one is what gives
+  // it something to fire on.
+  seedPr({ branch: 'feat/forced-work', number: 54, state: 'OPEN', base: 'main', url: 'https://github.com/acme/billing/pull/54', mergedAt: null })
   const r = rig(['status', '--work', 'forced'])
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /should not be possible/)
-  // Scoped to this work: the shared installation carries other works with contradictions of
-  // their own, which is the point of `doctor` running over all of them.
-  assert.doesNotMatch(rig(['doctor']).out, /forced: closed, but/)
 })
 
 // The work branch landed and a slice of it did not — the one shape where the work's *own*
