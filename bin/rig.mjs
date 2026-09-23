@@ -108,6 +108,13 @@ const die = msg => { throw new RigError(msg) }
 // So the run that is that child hides its spawns and no other run does. Taking the command
 // rather than reading it keeps this assertable without standing up a run, which matters
 // because the only symptom of getting it wrong is cost.
+//
+// That rests on an assumption: that rig's own process has a console. Every ordinary way of
+// starting it gives it one — a terminal; the npm shim, which is cmd.exe or PowerShell starting
+// node plainly, so node is given a console even when the shim was launched detached; or any
+// parent with a console, hidden or not. A host that starts `node bin/rig.mjs` itself with
+// DETACHED_PROCESS, or calls `run()` from a process with no console, breaks it, and gets a
+// visible window for every git call.
 const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === 'freshness-refresh' })
 
 // Every subprocess rig starts, and the one place a run's cwd and environment reach one.

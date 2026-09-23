@@ -158,7 +158,8 @@ test('only the console-less run hides its spawns, because a hidden console is a 
   // `conhost.exe` per spawn, and a process creation on Windows is ~17ms. Set on everything it
   // was doubling the price of every git call to hide a console the command already had.
   assert.equal(spawnDefaults('status').windowsHide, false,
-    'an ordinary command has a console its children inherit, and must not buy a second one')
+    'an ordinary command has a console its children inherit, and must not buy a second one — ' +
+    'which assumes rig was started with one, and not by a host launching node DETACHED_PROCESS')
   assert.equal(spawnDefaults('freshness-refresh').windowsHide, true,
     'the detached child has none to inherit, and every git call it makes would pop a window')
 })
