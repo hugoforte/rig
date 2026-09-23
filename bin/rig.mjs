@@ -10,6 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
+import { discover } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { releaseMark } from './release.mjs'
@@ -158,14 +159,26 @@ let requestedRepos = []
 // and the catalogue is keyed by the repo's real name. Null for anywhere that is not a checkout,
 // or a checkout with no origin — both of which simply mean this step has no answer.
 function repoAtCwd () {
+  // Where the checkout is comes from the filesystem (`gitfs.discover`), which is what git
+  // would walk anyway — so the answer this step gives most often, that the cwd is not a
+  // checkout at all, costs no subprocess and does not even need git on PATH. A layout
+  // `gitfs` declines to commit to answers null, and git is asked about those.
+  const place = discover(process.cwd())
+  if (place && !place.top) return null
   // `run` dies when the command is not there, and this is ambient work on behalf of whatever
   // the user actually asked for — `rig doctor` on a machine with no git has to live long
   // enough to say so, which it cannot if resolving the data root killed it first.
   if (!onPath('git')) return null
-  const top = run('git', ['rev-parse', '--show-toplevel'])
-  if (top.code !== 0) return null
+  let top = place?.top
+  if (!top) {
+    const asked = run('git', ['rev-parse', '--show-toplevel'])
+    if (asked.code !== 0) return null
+    top = asked.out
+  }
+  // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
+  // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
   const url = run('git', ['remote', 'get-url', 'origin'])
-  if (url.code !== 0 || !url.out) return path.basename(top.out)
+  if (url.code !== 0 || !url.out) return path.basename(top)
   return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
 }
 
@@ -1951,7 +1964,7 @@ const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
 
 // The release this checkout stands on, or null when nothing here was ever tagged. One spawn,
 // inside a command somebody ran on purpose — never in `toolState`, which every command's
-// epilogue already pays eight spawns for (ADR 0003). `head` is not passed: without a tag there
+// epilogue already pays four spawns for (ADR 0003). `head` is not passed: without a tag there
 // is no release to name, and a sha in a field called `release` would be a different claim.
 //
 // Guarded like every other ambient git call in this file (`repoAtCwd`, `doctorSnapshot`):
@@ -3185,7 +3198,7 @@ function doctorSnapshot () {
   // Which *release* this is, when the checkout stands on one — a version and a sha name the
   // same build twice and neither says whether it was ever published. The describe is asked
   // for here and not in `toolState`, which runs in every command's epilogue and is already
-  // eight spawns dear; doctor is the one caller that can afford a ninth.
+  // four spawns dear; doctor is the one caller that can afford a fifth.
   const describe = hasGit ? git(RIG_ROOT, 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
   const roots = doctorRootLocations(loc).map(root => doctorRoot(root.name, root.loc, hasGit))
   const disk = freeSpace(cfg.workRoot)
