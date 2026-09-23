@@ -543,12 +543,17 @@ const DAY = 86400000
 function outcome (works) {
   const landed = []
   for (const w of works) {
-    const prs = (w.repos || []).map(r => repoBranch(r, w.branch)?.pr).filter(pr => pr?.mergedAt)
-    if (!prs.length) continue
+    // Landed is every repo's pull request merged — the rule `rig dash` counts by, in
+    // `reduceWork` — and never an abandoned work, whatever merged before it was stopped. Counting
+    // a work on its first merge stops its clock early and makes the widest works look fastest.
+    if (w.abandonedAt) continue
+    const repos = w.repos || []
+    const prs = repos.map(r => repoBranch(r, w.branch)?.pr)
+    if (!repos.length || !prs.every(pr => pr?.mergedAt)) continue
     const first = prs.map(pr => Date.parse(pr.firstCommitAt)).filter(Number.isFinite)
     const last = prs.map(pr => Date.parse(pr.mergedAt)).filter(Number.isFinite)
     landed.push({
-      repos: (w.repos || []).length,
+      repos: repos.length,
       days: first.length && last.length ? (Math.max(...last) - Math.min(...first)) / DAY : null,
     })
   }
@@ -590,12 +595,28 @@ const duration = (from, to) => {
 // data root of single-repo works merges in hours and "0 days" reads as a broken page rather
 // than as a fast one. So the page picks the unit from the number, the way `duration` already
 // does for the pull-request table.
+//
+// Each unit is chosen after rounding, not before, so 59.9 minutes is "1 hour" rather than
+// "60 minutes" and a cycle one breath short of a day is "1 day" rather than "24 hours".
 const span = days => {
   if (days === null) return ''
-  if (days >= 1) return `${days} day${days === 1 ? '' : 's'}`
-  const hours = days * 24
-  if (hours >= 1) return `${Math.round(hours * 10) / 10} hour${Math.round(hours * 10) / 10 === 1 ? '' : 's'}`
-  return `${Math.max(1, Math.round(hours * 60))} minutes`
+  const unit = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const minutes = Math.round(days * 24 * 60)
+  if (minutes < 60) return unit(Math.max(1, minutes), 'minute')
+  const hours = Math.round(days * 24 * 10) / 10
+  if (hours < 24) return unit(hours, 'hour')
+  return unit(Math.round(days * 10) / 10, 'day')
+}
+
+// Where a line from `from` towards `to` meets `to`'s circle, one unit outside it. The heads put
+// their tip exactly on the line's end (`refX` at the tip), so this is where the tip lands.
+const toEdge = (from, to) => {
+  const length = Math.hypot(to.x - from.x, to.y - from.y) || 1
+  const back = (nodeRadius(to) + 1) / length
+  return {
+    x: Math.round((to.x - (to.x - from.x) * back) * 10) / 10,
+    y: Math.round((to.y - (to.y - from.y) * back) * 10) / 10,
+  }
 }
 
 function renderGraph (graph) {
@@ -606,13 +627,18 @@ function renderGraph (graph) {
   // and an edge the two entries disagree about are both drawn plain: an unknown is not a fact,
   // and neither is a contradiction. That makes the drawing a map of where the catalogue is thin,
   // which is the same argument as listing the repos with no entry underneath it.
+  //
+  // A marked end stops at the edge of the dot it points at. The nodes are drawn after the edges
+  // with an opaque fill, so a head left at a node's centre is painted over and the page shows a
+  // plain line — the picture this is meant to tell apart from an unstated edge.
   const edges = graph.edges.map((e, i) => {
-    const heads = e.disagreed ? ''
-      : e.direction === 'downstream' ? ' marker-end="url(#arrow)"'
-        : e.direction === 'upstream' ? ' marker-start="url(#arrowback)"'
-          : e.direction === 'both' ? ' marker-start="url(#arrowback)" marker-end="url(#arrow)"' : ''
+    const end = !e.disagreed && (e.direction === 'downstream' || e.direction === 'both')
+    const start = !e.disagreed && (e.direction === 'upstream' || e.direction === 'both')
+    const from = start ? toEdge(e.to, e.from) : e.from
+    const to = end ? toEdge(e.from, e.to) : e.to
+    const heads = (start ? ' marker-start="url(#arrowback)"' : '') + (end ? ' marker-end="url(#arrow)"' : '')
     return `<line class="edge" id="e${i}" data-a="${esc(e.a)}" data-b="${esc(e.b)}" ` +
-      `x1="${e.from.x}" y1="${e.from.y}" x2="${e.to.x}" y2="${e.to.y}"${heads}></line>`
+      `x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"${heads}></line>`
   }).join('\n    ')
 
   const nodes = graph.nodes.map(n => {
@@ -625,8 +651,8 @@ function renderGraph (graph) {
 
   return `<svg viewBox="0 0 ${graph.width} ${graph.height}" class="graph" role="img" aria-label="Repository dependency graph">
     <defs>
-      <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z"></path></marker>
-      <marker id="arrowback" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z"></path></marker>
+      <marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z"></path></marker>
+      <marker id="arrowback" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z"></path></marker>
     </defs>
     ${edges}
     ${nodes}

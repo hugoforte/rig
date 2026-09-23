@@ -410,10 +410,25 @@ const landedWork = (id, ...repos) => work({
     ({ repo, org: 'acme', base: 'main', pr: pr({ firstCommitAt, mergedAt }) })),
 })
 
-test('outcome: a work lands when a pull request of its own merged, not when it was closed', () => {
+test('outcome: a work lands when every one of its pull requests merged, not when it was closed', () => {
   const closedNothingMerged = work({ id: 'c', closedAt: '2026-02-01T00:00:00Z', repos: [{ repo: 'a', base: 'main' }] })
   const s = summarize({ catalog: sampleCatalog(), works: [closedNothingMerged] })
   assert.equal(s.outcome.landed, 0, 'closedAt is when the teardown ran, not evidence that anything shipped')
+})
+
+test('outcome: a work with one repo merged and another still out has not landed', () => {
+  const partial = work({
+    id: 'p',
+    repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr({ mergedAt: '2026-01-02T02:00:00Z' }) },
+      { repo: 'b', org: 'acme', base: 'main' }],
+  })
+  assert.equal(summarize({ catalog: sampleCatalog(), works: [partial] }).outcome.landed, 0,
+    'counting it would stop its clock at the first merge, which makes the widest works look fastest')
+})
+
+test('outcome: an abandoned work has not landed, whatever merged before it was stopped', () => {
+  const stopped = { ...landedWork('s', ['a', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z']), abandonedAt: '2026-01-02T00:00:00Z' }
+  assert.equal(summarize({ catalog: sampleCatalog(), works: [stopped] }).outcome.landed, 0)
 })
 
 test('outcome: the cycle runs from the first commit anywhere to the last merge anywhere', () => {
@@ -466,6 +481,33 @@ test('outcome: a cycle under a day is shown in hours, because zero days reads as
   assert.match(html, /3 hours<\/strong> from the first commit/)
 })
 
+// The unit is picked from the number, and the number is rounded for a reader: four places is
+// what the model keeps so that hours survive, and it is not what a person should be shown.
+const cycle = (from, to) => {
+  const html = page({ works: [landedWork('w', ['a', from, to])] })
+  return html.match(/<strong>([^<]+)<\/strong> from the first commit/)[1]
+}
+
+test('outcome: days are shown to one place, not to the four the model keeps', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-04T03:24:00Z'), '3.1 days')
+})
+
+test('outcome: exactly one day is a day, singular', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'), '1 day')
+})
+
+test('outcome: a cycle of seconds is one minute, singular', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T00:00:30Z'), '1 minute')
+})
+
+test('outcome: a cycle that rounds up to sixty minutes is an hour', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T00:59:54Z'), '1 hour')
+})
+
+test('outcome: a cycle that rounds up to twenty-four hours is a day', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T23:59:50Z'), '1 day')
+})
+
 test('outcome: a migrated record is read the same as a legacy one', () => {
   const legacy = landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])
   const migrated = work3(legacy)
@@ -495,5 +537,36 @@ test('renderDemo: two entries that disagree are drawn plain rather than pointed 
     catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]),
       entry('b', [{ repo: 'a', how: 'y', direction: 'downstream' }])],
   })
-  assert.doesNotMatch(html, /marker-end=/)
+  assert.doesNotMatch(html, /marker-(end|start)=/, 'no head of either kind, not just not the one it would have had')
+})
+
+// Where a head actually lands. The nodes are drawn after the edges with an opaque fill, so a head
+// at a node's centre is painted over and the page shows a plain line — which is how the first
+// version shipped, with every attribute test above passing. So: which end carries the head, and
+// is that end outside the circle it points at.
+const drawn = html => {
+  const nodes = new Map([...html.matchAll(/data-repo="([^"]+)"[^>]*transform="translate\(([-\d.]+),([-\d.]+)\)"><circle r="([\d.]+)"/g)]
+    .map(([, id, x, y, r]) => [id, { x: Number(x), y: Number(y), r: Number(r) }]))
+  const [tag] = html.match(/<line class="edge"[^>]*>/)
+  const attr = k => tag.match(new RegExp(`${k}="([^"]*)"`))[1]
+  const line = { a: attr('data-a'), b: attr('data-b'), x1: Number(attr('x1')), y1: Number(attr('y1')), x2: Number(attr('x2')), y2: Number(attr('y2')) }
+  return { nodes, line, end: /marker-end=/.test(tag), start: /marker-start=/.test(tag) }
+}
+const clear = (x, y, n) => Math.hypot(x - n.x, y - n.y) - n.r
+
+test('renderDemo: a downstream head is on the far end, and outside the dot it points at', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]), entry('b')] }))
+  assert.deepEqual([d.line.a, d.line.b, d.end, d.start], ['a', 'b', true, false])
+  assert.ok(clear(d.line.x2, d.line.y2, d.nodes.get('b')) >= 0, 'the head is painted over if it ends under b')
+})
+
+test('renderDemo: an upstream head is on the near end, and outside the dot it points at', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'upstream' }]), entry('b')] }))
+  assert.deepEqual([d.end, d.start], [false, true])
+  assert.ok(clear(d.line.x1, d.line.y1, d.nodes.get('a')) >= 0, 'the head is painted over if it ends under a')
+})
+
+test('renderDemo: `both` keeps both heads clear of both dots', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'both' }]), entry('b')] }))
+  assert.ok(clear(d.line.x1, d.line.y1, d.nodes.get('a')) >= 0 && clear(d.line.x2, d.line.y2, d.nodes.get('b')) >= 0)
 })
