@@ -2474,7 +2474,8 @@ function branchRows (cfg, work) {
   const rows = []
   const declared = (work.stages || []).map(s => s.branch)
   for (const entry of work.repos) {
-    const found = trees(cfg).chain({ org: entry.org, repo: entry.repo, branch: work.branch, stages: declared })
+    const base = workBranch(entry, work)?.base || entry.base
+    const found = trees(cfg).chain({ org: entry.org, repo: entry.repo, branch: work.branch, base, stages: declared })
     const known = new Map(found.map(f => [f.branch, f]))
     // The record laid over what git found: a recorded base wins where there is one, because
     // the only branch that has one is the work branch and git cannot name a remote HEAD.
