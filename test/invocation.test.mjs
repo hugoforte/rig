@@ -11,6 +11,7 @@
 // because `rig()` choosing the adapter is the thing under test everywhere else.
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -129,4 +130,17 @@ test('a run handed no cwd asks the process for one only when a command needs it'
   } finally {
     process.cwd = real
   }
+})
+
+test('a reader that stops reading is the end of the output, not a crash', async () => {
+  // `rig list | head -1`: the reader goes, and every line rig writes after that meets a closed
+  // pipe. Closed here before rig has written a word, so that none of them can win the race.
+  const child = spawn(process.execPath, [path.join(one.install, 'bin', 'rig.mjs'), 'list', '--quick'],
+    { env: one.env, cwd: one.tmp, stdio: ['ignore', 'pipe', 'pipe'] })
+  child.stdout.destroy()
+  let stderr = ''
+  child.stderr.on('data', chunk => { stderr += chunk })
+  const code = await new Promise(resolve => child.on('close', resolve))
+  assert.equal(code, 0, stderr)
+  assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error'/)
 })

@@ -3902,4 +3902,12 @@ const isMain = (() => {
 
 // `process.exitCode` and never `process.exit`: the streams may still be draining, and an exit
 // that cuts one is how the last lines of a long `rig list` go missing down a pipe.
-if (isMain) process.exitCode = run(process.argv.slice(2), { chdir: dir => process.chdir(dir) })
+//
+// A reader that stops early — `rig list | head -1` — closes the pipe under every write after
+// it, and a bare stream write reports that as an 'error' event with nobody listening, which
+// Node turns into a stack trace and exit 1 once the command has already succeeded. Nobody is
+// left to read what rig would have said, so a closed pipe is where the output ends.
+if (isMain) {
+  for (const stream of [process.stdout, process.stderr]) stream.on('error', e => { if (e.code !== 'EPIPE') throw e })
+  process.exitCode = run(process.argv.slice(2), { chdir: dir => process.chdir(dir) })
+}
