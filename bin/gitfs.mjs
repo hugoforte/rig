@@ -1,10 +1,10 @@
 // The questions rig asks git that its own files already answer, exactly.
 //
 // A git subprocess costs 55–65ms on Windows — `git --version`, which does nothing, is 55 of
-// them — and the test suite makes some forty-eight hundred of them, of which `rev-parse
-// --show-toplevel` alone is a fifth. That question is "walk up from here until something
-// is a repository", which is a handful of `stat` calls: a thousandth of the price, for the
-// same answer.
+// them — and before this module the test suite made some forty-eight hundred of them, of
+// which `rev-parse --show-toplevel` alone was a fifth. That question is "walk up from here
+// until something is a repository", which is a handful of `stat` calls: a thousandth of the
+// price, for the same answer.
 //
 // **The same answer, or none.** Everything here is either what git would have said or
 // `null`, and `null` means nobody could tell and the caller should go and ask. A guess
