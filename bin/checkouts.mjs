@@ -133,8 +133,8 @@ export function checkouts ({ run, env = () => process.env }) {
   const branchOf = (dir, place) => place ? headBranch(place.gitDir) : gitBranch(dir)
 
   // The full ref and not `--short`, which abbreviates for display — `heads/rel` beside a tag
-  // `rel` — so this names the branch `headBranch` names, and a HEAD outside `refs/heads/` is
-  // on no branch here either.
+  // `rel` — so this names a branch by its ref, as `headBranch` does, and a HEAD outside
+  // `refs/heads/` is on no branch here either.
   const gitBranch = dir => {
     const ref = git(dir, 'symbolic-ref', '-q', 'HEAD')
     return ref.code === 0 && ref.out.startsWith('refs/heads/') ? ref.out.slice('refs/heads/'.length) : null
