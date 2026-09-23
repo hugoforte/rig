@@ -216,6 +216,19 @@ test('the copy in a linked worktree knows it is one', () => {
   assert.equal(c().identify(local).linked, false)
 })
 
+test('a branch sharing its name with a tag is named the same whether git or the filesystem reads it', () => {
+  // `symbolic-ref --short` abbreviates for display, and beside a tag `rel` it prints the
+  // branch `rel` as `heads/rel` — so where gitfs handed the question back, the same checkout
+  // was on a branch of a different name.
+  const { local } = cloned('tagged')
+  gitMust(local, 'checkout', '-q', '-b', 'rel')
+  gitMust(local, 'tag', 'rel')
+  // `discover` hands every question to git when one of git's discovery variables is in the
+  // environment it reads. git never sees this one: the runner keeps its own.
+  const askingGit = checkouts({ run, env: () => ({ ...env, GIT_CEILING_DIRECTORIES: path.join(tmp, 'nowhere') }) })
+  assert.deepEqual([c().identify(local).branch, askingGit.identify(local).branch], ['rel', 'rel'])
+})
+
 test('a detached HEAD has no branch and still has a head', () => {
   const { local } = cloned('detached')
   gitMust(local, 'checkout', '-q', '--detach')
@@ -396,7 +409,7 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   const unreadableTree = (cmd, args) => {
     if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
     if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
-    if (args.includes('symbolic-ref')) return { code: 0, out: 'main', err: '' }
+    if (args.includes('symbolic-ref')) return { code: 0, out: 'refs/heads/main', err: '' }
     if (args.includes('merge')) return { code: 128, out: '', err: 'fatal: .git/index: index file smaller than expected' }
     if (args.includes('@{u}..HEAD')) return { code: 0, out: '0', err: '' }
     if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
