@@ -184,8 +184,8 @@ export function discover (start, env = process.env) {
 
 // The branch a git dir's HEAD names, and null when it names no branch — a detached HEAD, an
 // unreadable HEAD, or a HEAD pointing outside `refs/heads/`. Exact for every case rig
-// creates, and it differs from `symbolic-ref --short HEAD` in two places worth naming,
-// because in both of them `--short` was answering a question rig was not asking.
+// creates, and it differs from `symbolic-ref --short HEAD` in three places worth naming. In
+// the first two, `--short` was answering a question rig was not asking.
 //
 // `--short` abbreviates for *display*, and abbreviates less when the short form would be
 // ambiguous: on a branch `rel` in a repository that also has a tag `rel`, it prints
@@ -193,10 +193,16 @@ export function discover (start, env = process.env) {
 // stamp into the freshness cache as the name of a branch. The ref is what rig wants, and
 // the ref says `rel`.
 //
-// A HEAD pointing at, say, `refs/other/thing` is the other one: `--short` prints
+// A HEAD pointing at, say, `refs/other/thing` is the second: `--short` prints
 // `other/thing`, and that is not a branch. Null is what rig's readers already handle, and
 // it is what they should do with it — `fastForward` calls it detached and declines to move
 // anything, which is the right answer for a head that is not on a branch.
+//
+// The third is a branch that is itself a symbolic ref, the alias a rename from `master` to
+// `main` can leave behind: HEAD names `refs/heads/master`, which names `refs/heads/main`.
+// `symbolic-ref` follows the chain to `main`, and so does `status`'s `branch.head`; this
+// reads one level and says `master`. There git's answer is the better one, and this one
+// stands because rig never makes such an alias.
 export function headBranch (gitDir) {
   const m = /^ref:\s*refs\/heads\/(.+)$/m.exec(headOf(gitDir) ?? '')
   return m ? m[1].trim() : null
