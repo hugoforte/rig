@@ -10,7 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
-import { discover } from './gitfs.mjs'
+import { discover, notARepository } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
@@ -575,6 +575,10 @@ function freshnessEpilogue (command) {
     const due = dueForRefresh(cache, cfg.freshness.everyHours)
     const speaks = announces(command, { enabled: cfg.freshness.enabled })
     if (!due && !(speaks && cache?.behind)) return
+    // A tool copy that is no checkout — an install from a tarball, the suite's own copies — has
+    // no HEAD to ask about, and the filesystem says so without a spawn. A layout `gitfs` hands
+    // back is still git's to answer.
+    if (notARepository(discover(toolRoot(), env()))) return
     const head = git(toolRoot(), 'rev-parse', 'HEAD')
     if (head.code !== 0) return
     const line = speaks ? staleLine(cache, head.out) : null

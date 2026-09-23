@@ -101,6 +101,15 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
 })
 
+test('a tool copy with no repository pays no git for the freshness check', () => {
+  // After init, so the check has a config to read and, with no cache yet, is due: all that
+  // stands between it and `git rev-parse HEAD` is knowing that this copy is no checkout.
+  const trace = path.join(tmp, 'help.trace')
+  const r = rig(['help'], { env: { ...env, GIT_TRACE2: trace } })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(trace), fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '')
+})
+
 test('init warns rather than crashes without a usable gh', () => {
   const r = rig(['init'])
   assert.equal(r.code, 0, r.out)

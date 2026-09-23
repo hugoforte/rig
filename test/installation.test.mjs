@@ -145,6 +145,15 @@ test('the next command prints the stale line on stderr, from the cache alone', (
   assert.doesNotMatch(strip(r.stdout), /behind/, 'never in the stdout someone is piping')
 })
 
+test('a checkout git is pointed at by GIT_DIR still hears that it is behind', () => {
+  // With GIT_DIR set the filesystem walk hands the question back rather than answer it, and
+  // the epilogue skips git only for a copy the walk has shown is no checkout. Read the other
+  // way, the handed-back answer would silence the line for good on every machine that sets it.
+  const r = rig(['list', '--quick'], { env: { ...env, GIT_DIR: path.join(install, '.git') } })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /rig is 1 commit behind origin\/main/)
+})
+
 test('freshness switched off in rig.json silences the line on every machine', () => {
   withDataRootConfig(cfg => { cfg.freshness = { enabled: false } }, () => {
     const r = rig(['list', '--quick'])
