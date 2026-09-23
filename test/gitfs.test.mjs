@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { discover, headBranch } from '../bin/gitfs.mjs'
+import { discover, headBranch, notARepository } from '../bin/gitfs.mjs'
 
 let tmp, env
 const git = (dir, ...args) => {
@@ -156,6 +156,18 @@ test('GIT_DIR in the environment is git\'s question, and is handed back unanswer
   assert.equal(discover(own, { ...env, GIT_DIR: path.join(bare) }), null)
   assert.equal(discover(own, { ...env, GIT_CEILING_DIRECTORIES: tmp }), null)
   assert.notEqual(discover(own, env), null, 'and an ordinary environment is still answered')
+})
+
+test('a shrug is never read as a no, which is the distinction callers act on', () => {
+  // `notARepository` is what lets a caller stop early, so the one thing it must never do is
+  // say "no repository" when the real answer was "ask git". The freshness epilogue ends the
+  // whole check on a true here; reading a handed-back question as a fact would switch
+  // freshness off for good on any machine that sets `GIT_DIR`.
+  assert.equal(notARepository(discover(outside, env)), true, 'a directory that is no repository')
+  assert.equal(notARepository(discover(own, env)), false, 'a checkout')
+  assert.equal(notARepository(discover(bare, env)), false, 'a bare repository, which has a git dir and no work tree')
+  assert.equal(notARepository(discover(own, { ...env, GIT_DIR: bare })), false,
+    'and a question handed back to git, which is the one that would be a bug')
 })
 
 test('the branch is the ref HEAD names, and a detached HEAD is no branch', () => {

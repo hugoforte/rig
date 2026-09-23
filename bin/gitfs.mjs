@@ -89,6 +89,13 @@ function overridden (gitDir, commonDir, bareExpected) {
 
 const NO_REPOSITORY = Object.freeze({ top: null, gitDir: null, commonDir: null })
 
+// `discover` gives three answers, and a caller that only wants one of them should not have
+// to know the shape to tell them apart: `null` is "ask git", a `gitDir` is "here it is", and
+// neither is **"there is no repository here"** — a fact, not a shrug. Worth its own name
+// because acting on the difference is the whole point: the shrug must fall through to git,
+// and the fact is allowed to end the matter.
+export const notARepository = place => place !== null && place.gitDir === null
+
 // Where the repository containing `dir` is, answered the way git answers it: walk up, and
 // at each level look at the directory itself before looking for a `.git` inside it. That
 // order is not cosmetic — a bare repository sitting inside somebody's checkout answers for
