@@ -16,7 +16,7 @@
 // Nothing here spawns anything, which is why there is no injected runner: the seam that
 // `worktrees.mjs` and `checkouts.mjs` both take is a seam around a subprocess, and this
 // module's whole point is that there isn't one. Its tests stand up real repositories with
-// real git and compare, which is `checkouts.test.mjs`'s precedent for the same reason —
+// real git and compare, which is the checkouts family's precedent for the same reason —
 // faster to read and harder to fool than a fake.
 import fs from 'node:fs'
 import path from 'node:path'
