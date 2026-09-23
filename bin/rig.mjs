@@ -67,6 +67,11 @@ const toolRoot = () => current.toolRoot
 // where the process is, and the process is asked only now: a shell left in a folder `rig close`
 // deleted has no cwd to give, and `rig help` from there has no use for one.
 const cwd = () => current.cwd ?? process.cwd()
+
+// Whether the run is standing in `dir`, asked before removing it. A directory the process can
+// no longer report — the shell a `rig close` left in a folder that is gone — is standing in
+// nothing about to be removed, and a command pinned by `--work` never needed it at all.
+const standingIn = dir => { try { return insideDir(cwd(), dir) } catch { return false } }
 const env = () => current.env
 // Windows refuses to remove a directory that is some process's cwd, so `rig close` and
 // `rig detach` move out of the one they are standing in. Where the *run* is standing always
@@ -2056,7 +2061,7 @@ cmds.detach = ({ flags, positional }) => {
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
 
   // Out of the worktree before it goes, for the reason `close` gives.
-  if (insideDir(cwd(), entry.path)) chdir(toolRoot())
+  if (standingIn(entry.path)) chdir(toolRoot())
   const failed = trees(cfg).remove({ org: entry.org, repo: entry.repo, dir: entry.path, force: !!flags.force })
   if (failed) die(failed)
 
@@ -2993,10 +2998,11 @@ cmds.close = ({ flags }) => {
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
   })
   // Out of the work folder before anything in it is removed. Windows refuses to remove a
-  // directory that is some process's cwd — including ours — and everywhere else git removes it
-  // regardless, and the next subprocess, started in a directory that is not there, never runs.
+  // directory that is some process's cwd — including ours. Everywhere else git removes it
+  // regardless, and a run handed its cwd rather than inheriting it would then start every later
+  // subprocess in a directory that is not there, which Node refuses to do.
   const wd = workDir(cfg, id)
-  if (insideDir(cwd(), wd)) chdir(toolRoot())
+  if (standingIn(wd)) chdir(toolRoot())
   for (const r of work.repos) {
     if (!exists(r.path)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force: !!flags.force })

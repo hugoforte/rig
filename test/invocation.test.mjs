@@ -131,9 +131,40 @@ test('a run handed no cwd asks the process for one only when a command needs it'
       const code = run(args, { toolRoot: one.install, env: one.env, out: s => { said += s }, err: s => { said += s } })
       assert.equal(code, 0, `rig ${args.join(' ')}: ${strip(said)}`)
     }
+    // A command that starts subprocesses: they inherit the process's cwd, which nothing had to
+    // read for them.
+    let said = ''
+    run(['doctor', '--data', DEFAULT_ROOT_NAME], { toolRoot: one.install, env: one.env, out: s => { said += s }, err: s => { said += s } })
+    assert.match(strip(said), /git\b.*\d+\.\d+/, 'doctor reached git')
   } finally {
     process.cwd = real
   }
+})
+
+test('a work named with --work closes from a shell standing in a folder that is gone', () => {
+  // What `close` asks of the cwd is whether the run is standing in what it is about to remove,
+  // and a directory the process can no longer report is not about to be removed.
+  assert.equal(drive(one, ['new', 'gone-cwd', '--title', 'Closed from nowhere', '--no-ticket']).code, 0)
+  const real = process.cwd
+  process.cwd = () => { throw Object.assign(new Error('ENOENT: no such file or directory, uv_cwd'), { code: 'ENOENT' }) }
+  let said = ''
+  let code
+  try {
+    code = run(['close', '--work', 'gone-cwd', '--abandoned', '--data', DEFAULT_ROOT_NAME],
+      { toolRoot: one.install, env: one.env, out: s => { said += s }, err: s => { said += s } })
+  } finally {
+    process.cwd = real
+  }
+  assert.equal(code, 0, strip(said))
+})
+
+test('a subprocess that cannot start in the run\'s directory says so, and does not blame PATH', () => {
+  const gone = path.join(one.tmp, 'was-here')
+  fs.mkdirSync(gone)
+  fs.rmdirSync(gone)
+  const r = drive(one, ['doctor', '--data', DEFAULT_ROOT_NAME], { cwd: gone })
+  assert.match(r.err, /could not start in .*was-here, which no longer exists/)
+  assert.doesNotMatch(r.out + r.err, /not found on PATH/)
 })
 
 test('a reader that stops reading is the end of the output, not a crash', async () => {

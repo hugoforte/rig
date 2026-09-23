@@ -387,7 +387,7 @@ test('a directory that is not there is not blamed on PATH, although Node reports
 
 test('any other failure to start says which command failed and why, and nothing about PATH', () => {
   // An output past spawnSync's buffer is the one seen in practice: a status over a tree with
-  // thousands of changes, which used to report git as missing.
+  // thousands of changes, where git is on PATH and working.
   assert.equal(spawnFailure('git', ['-C', 'root', 'status'], spawnError('ENOBUFS'), os.tmpdir()),
     'git -C root status failed (spawnSync git ENOBUFS)')
 })
