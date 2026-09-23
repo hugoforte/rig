@@ -146,6 +146,31 @@ test('a `.git` file naming nothing stops the walk, the way it stops git', () => 
   assert.notEqual(git(broken, 'rev-parse', '--show-toplevel').code, 0, 'git stops here too')
 })
 
+test('a `.git` file is read as strictly as git reads it', () => {
+  // `gitdir: ` exactly, at the very start, with nothing after the path but the line ending.
+  // Every one of these names a real repository, and git refuses all of them.
+  const loose = mk(path.join(own, 'loose'))
+  const store = path.join(tmp, 'loose-store').replace(/\\/g, '/')
+  gitMust(loose, 'init', '-q', '--separate-git-dir', store)
+  assert.ok(same(agreesWithGit(loose, 'the file git wrote').top, loose))
+  // Removed rather than overwritten: git marks it hidden on Windows, which refuses a rewrite.
+  fs.rmSync(path.join(loose, '.git'))
+  for (const text of [`gitdir:${store}\n`, `gitdir:  ${store}\n`, `# a note\ngitdir: ${store}\n`,
+    `gitdir: ${store}\nand more\n`, `gitdir: ${store} \n`]) {
+    fs.writeFileSync(path.join(loose, '.git'), text)
+    assert.equal(agreesWithGit(loose, JSON.stringify(text)).top, null)
+  }
+})
+
+test('a `.git` that is neither a file nor a directory is walked past, the way git walks past it', {
+  skip: process.platform === 'win32' && 'Windows has no FIFOs',
+}, () => {
+  // Reading one would block until something wrote to it; git only stats it and moves on.
+  const piped = mk(path.join(own, 'piped'))
+  assert.equal(spawnSync('mkfifo', [path.join(piped, '.git')]).status, 0)
+  assert.ok(same(agreesWithGit(piped, 'a FIFO called .git').top, own))
+})
+
 test('an empty directory called `.git` is walked past, the way git walks past it', () => {
   const child = mk(path.join(own, 'child'))
   mk(path.join(child, '.git'))

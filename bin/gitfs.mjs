@@ -77,10 +77,12 @@ function isGitDir (dir) {
 }
 
 // `.git` as a *file* holds `gitdir: <path>`, which a linked worktree writes absolute and a
-// submodule writes relative to the file's own directory.
+// submodule writes relative to the file's own directory. Read as git's `read_gitfile_gently`
+// reads it — `gitdir: ` exactly, at the very start, and the rest bar the line ending is the
+// path — so a file git refuses names nothing here either.
 function gitFileTarget (file, dir) {
-  const m = /^gitdir:\s*(.+)$/m.exec(read(file) ?? '')
-  return m ? path.resolve(dir, m[1].trim()) : null
+  const m = /^gitdir: (.+?)[\r\n]*$/.exec(read(file) ?? '')
+  return m ? path.resolve(dir, m[1]) : null
 }
 
 // The three settings that make this walk's answer *wrong* rather than merely missing.
@@ -144,7 +146,9 @@ export function discover (start, env = process.env) {
   for (;;) {
     const entry = path.join(dir, '.git')
     const found = statOf(entry)
-    if (found) {
+    // A `.git` that is neither a file nor a directory — a FIFO, a socket, a device — git
+    // stats and walks past without opening, which is as well: a FIFO would never answer.
+    if (found?.isFile() || found?.isDirectory()) {
       // A `.git` file naming a directory that is not a repository is where git stops and
       // says so, rather than carrying on up — so a broken submodule inside a checkout is
       // not silently answered for by the checkout around it.
