@@ -231,6 +231,10 @@ test('PATH is searched as a spawn searches it, and an entry it cannot read that 
   assert.equal(searching(`${own}"`, proper), 'git', 'and so is one with a quote at one end only, which the spawn strips too')
   assert.equal(searching(`"${proper}"`), real, 'and a quoted launcher is still the launcher')
   assert.equal(searching(com, proper), 'git', 'a git.com is a program the spawn would start')
+  const hollow = path.join(root, 'hollow', 'cmd')
+  fs.mkdirSync(path.join(hollow, 'git.exe'), { recursive: true })
+  layout('hollow', 'mingw64', 'bin', 'git.exe')
+  assert.equal(searching(hollow, proper), real, 'a directory called git.exe is no program, and the spawn walks on past it')
   assert.equal(searching(script, proper), real, 'a git.bat is not')
   assert.equal(searching('relative', proper), 'git',
     'a relative entry is read against where the run stands, which is no part of this answer')
@@ -279,7 +283,8 @@ test('a hook starts through the git a run is handed, with MSYSTEM set or not', {
     assert.equal(unset.code, 0, unset.said)
     assert.equal(hookRuns(), 1, 'the binary started straight sets up the PATH a hook needs, as the launcher would')
 
-    const set = init('set', { MSYSTEM: 'MINGW64' })
+    // Spelled in lower case, which Windows reads as the same variable and so does git.exe.
+    const set = init('set', { msystem: 'MINGW64' })
     assert.equal(set.code, 0, set.said)
     assert.equal(hookRuns(), 2, 'a run with MSYSTEM set is handed the launcher, never the binary the run before it was')
   } finally { m.cleanup() }

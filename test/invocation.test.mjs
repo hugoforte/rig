@@ -110,6 +110,13 @@ test('a run handed a crippled PATH is never told what a run with a whole one fou
 
   assert.match(doctor(crippled), /git — not on PATH/, 'the crippled run was answered from the whole one')
   assert.doesNotMatch(doctor(one.env), /git — not on PATH/, 'the whole run was answered from the crippled one')
+
+  // And the git a command starts is looked for on the same PATH: found on the other one, it
+  // commits through a git the run was never handed.
+  const head = () => one.git(one.dataRoot, 'rev-parse', 'HEAD').stdout
+  const before = head()
+  drive({ ...one, env: crippled }, ['new', 'crippled-new', '--title', 'Crippled', '--no-ticket'])
+  assert.equal(head(), before, 'nothing was committed through a git this run could not have started')
 })
 
 // ------------------------------------------------------------ the CLI's half

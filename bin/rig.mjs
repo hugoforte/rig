@@ -211,6 +211,9 @@ function realGitFor (searchPath, msystem = '') {
 // gone, which is how a quoted entry holding a `;` arrives, split in two. A directory with an
 // apostrophe in its name goes with them, and costs only the saving.
 //
+// A directory called `git.exe` is no program to the spawn, which walks on past it, and so
+// does this.
+//
 // One difference is kept on purpose: the libuv some Node releases still ship looks in the
 // child's cwd before PATH, and this does not. The answer is cached against PATH, which the cwd
 // is no part of, and a git.exe that happens to sit where a run is standing is not one worth
@@ -223,7 +226,7 @@ function programPath (name, searchPath) {
     if (/["']/.test(dir) || !FULLY_QUALIFIED.test(dir)) return null
     for (const ext of ['.com', '.exe']) {
       const candidate = path.join(dir, name + ext)
-      if (exists(candidate)) return candidate
+      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate
     }
   }
   return null
@@ -544,8 +547,9 @@ const measureFreshness = state => ({
 // `cwd` is the tool root, which is the only tree the child touches: a process's cwd is an
 // open directory handle on Windows, so a child left sitting in the caller's worktree is one
 // `rig close` cannot remove. `windowsHide` on every `git` call the child makes is what keeps
-// it fast — `detached` means DETACHED_PROCESS, so a console-less child allocates a console
-// host per spawn unless told not to, and the six in `toolState` alone cost twenty seconds.
+// it usable — `detached` means DETACHED_PROCESS, so the child has no console to hand on, and
+// every git call it makes would otherwise open a visible window of its own, at a cost of
+// seconds each under load.
 // Nothing on this spawn can tell the child that: beside DETACHED_PROCESS Windows ignores the
 // CREATE_NO_WINDOW that `windowsHide` asks for, and no spawn's options reach the spawns its
 // child makes. The child hides its own, in `spawnDefaults`, because `refreshArgv` hands it the
@@ -573,7 +577,7 @@ function refreshFreshnessInBackground () {
 function freshnessEpilogue (command) {
   // The refresh is the check. If it armed another, a remote nobody can reach would spawn a
   // chain of detached processes with no one to stop it.
-  if (command === 'freshness-refresh') return
+  if (command === REFRESH_COMMAND) return
   try {
     const cfg = config()
     if (!cfg.freshness.enabled) return
