@@ -415,6 +415,36 @@ test('a repo belonging to another root cannot be attached to this work', () => {
     'and no entry for it was drafted into this root')
 })
 
+// The repo the command stands in, found end to end: every test of that step above hands
+// `locate` a fake. A real checkout outside any work folder, so no anchor answers first, and
+// not named for its repo, so reading the folder name cannot pass for reading the remote. Its
+// repo is ledger, which `personal` catalogues since `rig new --repos` above; current is the
+// other root.
+const checkoutAt = (where, repo) => {
+  const dir = path.join(tmp, where)
+  fs.mkdirSync(dir, { recursive: true })
+  gitMust(dir, 'init', '-q', '-b', 'main')
+  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/acme/${repo}.git`)
+  return dir
+}
+
+test('the checkout a command runs in chooses the root that catalogues its repo', () => {
+  // The run's folder and not the process's: in this process that is the checkout the suite
+  // runs from, whose repo no root here catalogues.
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/my-clone', 'ledger') })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a checkout the filesystem walk hands back to git is still placed by its repo', () => {
+  // `core.worktree` is a layout `gitfs` will not answer for, and its null means "ask git",
+  // never "no checkout here".
+  const dir = checkoutAt('somewhere/handed-back', 'ledger')
+  gitMust(dir, 'config', 'core.worktree', dir.split(path.sep).join('/'))
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
 test('--data with no name is a typo, not a request', () => {
   const r = rig(['list', '--data'])
   assert.equal(r.code, 1)
