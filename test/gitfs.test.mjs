@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { discover, headBranch, notARepository } from '../bin/gitfs.mjs'
+import { discover, headBranch, MOVED_BY, notARepository } from '../bin/gitfs.mjs'
 
 let tmp, env
 const git = (dir, ...args) => {
@@ -65,6 +65,9 @@ let own, bare, outside
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-gitfs-'))
   env = { ...process.env }
+  // Any of these in the runner's own environment is a question for git, and every test here
+  // would be handed it back rather than answered.
+  for (const name of MOVED_BY) delete env[name]
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
   Object.assign(env, { GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' })
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig gitfs'

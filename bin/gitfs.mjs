@@ -27,7 +27,7 @@ import path from 'node:path'
 // likely to change. `GIT_DISCOVERY_ACROSS_FILESYSTEM` is in the list for the opposite
 // reason: without it git stops the walk at a filesystem boundary, which the walk below
 // reproduces, and with it git does not.
-const MOVED_BY = [
+export const MOVED_BY = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
 ]
