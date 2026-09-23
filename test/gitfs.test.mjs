@@ -227,6 +227,31 @@ test('a work tree git has been told to look elsewhere for is handed back to git'
   assert.equal(discover(held, env), null, 'and this module declines rather than answering the wrong one')
 })
 
+test('a setting that shares its section header\'s line is still read, the way git reads it', () => {
+  const headed = seeded('headed')
+  const elsewhere = mk(path.join(tmp, 'headed-tree'))
+  fs.appendFileSync(path.join(headed, '.git', 'config'), `[core] worktree = ${elsewhere.replace(/\\/g, '/')}\n`)
+  assert.ok(same(git(headed, 'rev-parse', '--show-toplevel').out, elsewhere), 'git answers the other directory')
+  assert.equal(discover(headed, env), null)
+})
+
+test('`core.bare` is handed back however it is spelled, unless it is plainly false', () => {
+  // git takes a key on its section header's line, a key with no value as true, a trailing
+  // comment, a quoted value and any number but nought. git writes none of them itself, and
+  // each of them leaves a checkout with no work tree.
+  const spelled = seeded('spelled')
+  const config = path.join(spelled, '.git', 'config')
+  const unset = fs.readFileSync(config, 'utf8').replace(/^[ \t]*bare = false\r?\n/m, '')
+  for (const bare of ['[core] bare = true', '[core]\n\tbare', '[core]\n\tbare = true # a note',
+    '[core]\n\tbare = "true"', '[core]\n\tbare = 2']) {
+    fs.writeFileSync(config, `${unset}${bare}\n`)
+    assert.notEqual(git(spelled, 'rev-parse', '--show-toplevel').code, 0, `git reads ${JSON.stringify(bare)} as bare`)
+    assert.equal(discover(spelled, env), null, `${JSON.stringify(bare)} is handed back`)
+  }
+  fs.writeFileSync(config, `${unset}[core]\n\tbare = false\n`)
+  assert.ok(same(agreesWithGit(spelled, 'bare = false').top, spelled))
+})
+
 test('GIT_DIR in the environment is git\'s question, and is handed back unanswered', () => {
   assert.equal(discover(own, { ...env, GIT_DIR: path.join(bare) }), null)
   assert.equal(discover(own, { ...env, GIT_CEILING_DIRECTORIES: tmp }), null)

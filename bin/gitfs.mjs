@@ -93,15 +93,19 @@ function gitFileTarget (file, dir) {
 // would name a branch that does not exist.
 //
 // Read from the common config, plus the per-worktree one when `extensions.worktreeConfig`
-// put a second file there. Conservative on purpose: the cost of handing a question back is
-// one subprocess in a layout nobody here has, and the cost of getting it wrong is a wrong
-// answer stated confidently.
+// put a second file there — and read for every way git's grammar lets a key be written, not
+// only the way git writes one: on its section header's line, with no value, with a comment
+// after it, in any section. Anything short of a plain `bare = false` counts as bare.
+// Conservative on purpose: the cost of handing a question back is one subprocess in a
+// layout nobody here has, and the cost of getting it wrong is a wrong answer stated
+// confidently.
 function overridden (gitDir, commonDir, bareExpected) {
-  const text = (read(path.join(commonDir, 'config')) ?? '') +
-    '\n' + (read(path.join(gitDir, 'config.worktree')) ?? '')
-  if (/^\s*worktree\s*=/mi.test(text)) return true
-  if (/^\s*refstorage\s*=/mi.test(text)) return true
-  return !bareExpected && /^\s*bare\s*=\s*(true|yes|on|1)\s*$/mi.test(text)
+  const lines = ((read(path.join(commonDir, 'config')) ?? '') + '\n' +
+    (read(path.join(gitDir, 'config.worktree')) ?? ''))
+    .split('\n').map(line => line.replace(/^\s*\[[^\]]*\]/, '').trim())
+  if (lines.some(line => /^(worktree|refstorage)\b/i.test(line))) return true
+  return !bareExpected &&
+    lines.some(line => /^bare\b/i.test(line) && !/^bare\s*=\s*(false|no|off|0)$/i.test(line))
 }
 
 const NO_REPOSITORY = Object.freeze({ top: null, gitDir: null, commonDir: null })
