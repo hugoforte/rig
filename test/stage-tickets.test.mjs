@@ -13,8 +13,6 @@ const { rig, gitMust, github, commitWork, seedIssue, seedPr, worktree, record, i
 after(cleanup)
 
 test('a slice that landed closes its own ticket, at the one moment rig speaks', () => {
-  // GitHub fires a closing keyword only for a pull request that merges into the default
-  // branch, and a stage's pull request never does — so a slice's ticket cannot close itself.
   assert.equal(rig(['new', 'ticketed', '--title', 'Ticketed work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'ticketed']).code, 0)
   seedIssue(7, 'the schema')

@@ -13,8 +13,6 @@ after(cleanup)
 // The two-stage work this file renders: the first slice landed, the second is up for review.
 before(() => slicedWork(m))
 
-// ------------------------------------------------- cutting one
-
 test('--cut outside a worktree says which repos it could have meant', () => {
   assert.equal(rig(['new', 'cutter', '--title', 'Cutter work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'cutter']).code, 0)

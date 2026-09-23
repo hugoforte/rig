@@ -18,12 +18,6 @@ after(cleanup)
 // The two-stage work this file renders: the first slice landed, the second is up for review.
 before(() => slicedWork(m))
 
-// ------------------------------------------------- opening the pull request
-
-// Review is the phase rig was most obviously absent from: it has read PR state everywhere
-// since it existed and had never opened one. Not a gate — a command you run when the stages
-// are in.
-
 test('pr refuses on a work with nothing attached, rather than succeeding at nothing', () => {
   assert.equal(rig(['new', 'to-review', '--title', 'Work to review', '--type', 'feat', '--no-ticket']).code, 0)
   const r = rig(['pr', '--work', 'to-review'])

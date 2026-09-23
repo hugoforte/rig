@@ -15,8 +15,6 @@ const { rig, git, gitMust, github, setGithub, commitWork, cutStage, worktree, re
 
 after(cleanup)
 
-// ------------------------------------------------- stages
-
 test('a work starts with no stages, and says so without making it sound like a deficiency', () => {
   assert.equal(rig(['new', 'sliced', '--title', 'Sliced work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'sliced']).code, 0)
