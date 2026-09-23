@@ -446,7 +446,7 @@ test('nothing to commit is an outcome, not a failure', () => {
   const { local } = cloned('nothing')
   const r = c().commitAll(local, 'rig save: nothing happened')
   assert.equal(r.outcome, 'nothing')
-  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'and HEAD is still nameable')
+  assert.equal(r.hash, null, 'no commit was made, so there is none to name — and no caller reads one')
 })
 
 test('a commit git refuses answers git\'s reason, and the change is still there', () => {

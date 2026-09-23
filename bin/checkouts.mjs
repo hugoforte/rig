@@ -306,7 +306,10 @@ export function checkouts ({ run }) {
   //   committed · nothing (there was nothing staged to commit) · stage-failed
   //   · commit-failed
   //
-  // `hash` is what HEAD is afterwards, short, or null when there is no commit to name.
+  // `hash` is the commit this made, short, and null when it made none — which is every
+  // outcome but `committed`, and no caller reads it on one of those. Naming HEAD after a
+  // commit that never happened was a git call on the commonest path through `rig save`: a
+  // data root with nothing new in it.
   function commitAll (dir, message) {
     const add = git(dir, 'add', '-A')
     if (add.code !== 0) return { outcome: 'stage-failed', hash: null, error: firstLine(add.err) }
@@ -314,12 +317,10 @@ export function checkouts ({ run }) {
     // to say — which must not read as the "something is" that goes on to commit.
     const diff = git(dir, 'diff', '--cached', '--quiet')
     if (diff.code > 1) return { outcome: 'stage-failed', hash: null, error: firstLine(diff.err) || 'git could not say what is staged' }
-    const staged = diff.code === 1
-    if (staged) {
-      const commit = git(dir, 'commit', '-q', '-m', message)
-      if (commit.code !== 0) return { outcome: 'commit-failed', hash: null, error: firstLine(commit.err || commit.out) }
-    }
-    return { outcome: staged ? 'committed' : 'nothing', hash: shortHead(dir) }
+    if (diff.code === 0) return { outcome: 'nothing', hash: null }
+    const commit = git(dir, 'commit', '-q', '-m', message)
+    if (commit.code !== 0) return { outcome: 'commit-failed', hash: null, error: firstLine(commit.err || commit.out) }
+    return { outcome: 'committed', hash: shortHead(dir) }
   }
 
   // Is a rebase in progress in this checkout? Asked of git rather than assumed from a
