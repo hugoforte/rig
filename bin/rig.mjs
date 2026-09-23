@@ -92,12 +92,22 @@ const bad = s => out(`${C.red('✗')} ${s}\n`)
 
 const die = msg => { throw new RigError(msg) }
 
-// `windowsHide` is not cosmetic here and is not an internal choice: the freshness refresh is
-// spawned DETACHED_PROCESS, so it has no console, and without this every `git` it runs
-// allocates a console host — seconds each, a refresh that never finishes inside its deadline,
-// and an orphan per command that buries the desktop in windows. A test asserts it, because
-// the behavioural symptom only shows on a machine already under load.
-const SPAWN_DEFAULTS = { encoding: 'utf8', windowsHide: true }
+// `windowsHide` belongs to one run and not to all of them. `CREATE_NO_WINDOW` does not
+// suppress a console — it gives the child its own *hidden* one, which is a `conhost.exe` per
+// spawn: a second process creation stacked on the one actually being asked for, and on
+// Windows a process creation is around seventeen milliseconds. Set on every spawn, it was
+// doubling the cost of every `git` call rig makes, to hide a console an ordinary command
+// already has and its children happily inherit.
+//
+// The freshness refresh is the child it was for, and there it is load-bearing. That one is
+// spawned DETACHED_PROCESS, so it has no console to inherit and every `git` it runs would
+// allocate a *visible* one — seconds each, a refresh that never finishes inside its deadline,
+// and an orphan window per command burying the desktop.
+//
+// So the run that is that child hides its spawns and no other run does. Taking the command
+// rather than reading it keeps this assertable without standing up a run, which matters
+// because the only symptom of getting it wrong is cost.
+const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === 'freshness-refresh' })
 
 // Every subprocess rig starts, and the one place a run's cwd and environment reach one.
 // Without them a child inherits the *process's*, which for a run that is not the process is
@@ -108,10 +118,65 @@ const SPAWN_DEFAULTS = { encoding: 'utf8', windowsHide: true }
 // what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
 // there, and a replacement would drop everything an isolated run depends on.
 function exec (cmd, args, { env: extra, ...opts } = {}) {
-  const r = spawnSync(cmd, args,
-    { ...SPAWN_DEFAULTS, cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts })
+  const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args,
+    { ...spawnDefaults(current.command), cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts })
   if (r.error) die(`${cmd} not found on PATH (${r.error.message})`)
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
+}
+
+// Git for Windows puts a **launcher** on PATH: `cmd\git.exe` is 46KB and its whole job is to
+// start `mingw64\bin\git.exe`, which is the 4.4MB one that does the work. So every `git` rig
+// runs is two process creations, and on Windows the process creation *is* the expensive part
+// of a git call — measured on this machine, 60ms through the launcher against 32ms straight
+// to the binary. Across a suite that makes thousands of them it is a quarter of the runtime.
+//
+// **Only that launcher is stepped past.** Somebody's own `git` on PATH — a corporate wrapper,
+// a credential shim — is a program they put there on purpose, and going around it would be
+// rig deciding it knew better. So the launcher has to be recognised rather than assumed: the
+// file PATH resolves to must sit in a Git for Windows layout (`cmd\` or `bin\`) *and* have the
+// real binary as a sibling under `mingw64`. A shim anywhere else looks like nothing of the
+// sort and is left alone, which is the answer for every case this cannot positively identify.
+// Cached against PATH rather than per process, for `onPath`'s reason below: a run does not own
+// PATH, so one run's answer is the next run's for as long as they are handed the same one.
+const gitPrograms = new Map()
+function gitProgram () {
+  const key = pathOf(env())
+  if (!gitPrograms.has(key)) gitPrograms.set(key, realGitFor(key))
+  return gitPrograms.get(key)
+}
+
+const GIT_LAUNCHER_DIRS = ['cmd', 'bin']
+function realGitFor (searchPath) {
+  if (process.platform !== 'win32') return 'git'
+  const launcher = programPath('git', searchPath)
+  if (!launcher) return 'git'
+  const dir = path.dirname(launcher)
+  if (!GIT_LAUNCHER_DIRS.includes(path.basename(dir).toLowerCase())) return 'git'
+  const real = path.join(path.dirname(dir), 'mingw64', 'bin', 'git.exe')
+  return exists(real) ? real : 'git'
+}
+
+// Where PATH would find a program, without starting one to find out. `PATHEXT` is what makes
+// a bare name executable on Windows and it is the user's to set, so it is read rather than
+// assumed; everywhere else a name is the file.
+function programPath (name, searchPath) {
+  const exts = process.platform === 'win32'
+    ? (pickEnv('PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : ['']
+  for (const dir of searchPath.split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, name + ext)
+      if (exists(candidate)) return candidate
+    }
+  }
+  return null
+}
+
+// Windows does not agree with itself about the case of an environment variable's name, so the
+// ones rig reads are found rather than named — the same reason `pathOf` exists.
+const pickEnv = name => {
+  const e = env()
+  return e[Object.keys(e).find(k => k.toLowerCase() === name.toLowerCase()) ?? ''] ?? ''
 }
 
 // Is the command on PATH at all? `exec` dies when it is not, which is right for every caller
@@ -135,7 +200,7 @@ const pathOf = environment =>
 const onPath = cmd => {
   const key = `${pathOf(env())}\u0000${cmd}`
   if (!onPathAnswers.has(key)) {
-    onPathAnswers.set(key, !spawnSync(cmd, ['--version'], { ...SPAWN_DEFAULTS, env: env() }).error)
+    onPathAnswers.set(key, !spawnSync(cmd, ['--version'], { ...spawnDefaults(current.command), env: env() }).error)
   }
   return onPathAnswers.get(key)
 }
@@ -287,7 +352,7 @@ function adapterResolver (envVar, viaCli, inMemory) {
       const file = env()[envVar]
       if (!file) {
         const spawnCli = args =>
-          spawnSync(CLI_FOR[envVar], args, { ...SPAWN_DEFAULTS, cwd: cwd(), env: env() })
+          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: cwd(), env: env() })
         return (resolved = viaCli({ exec: spawnCli }))
       }
       fake = { file, state: exists(file) ? readJson(file) : {} }
@@ -3552,7 +3617,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  SPAWN_DEFAULTS, refreshSpawn, effectiveIdentity, freeSpace,
+  spawnDefaults, refreshSpawn, effectiveIdentity, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,
   listing,
 }

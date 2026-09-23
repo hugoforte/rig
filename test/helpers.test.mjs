@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  SPAWN_DEFAULTS, refreshSpawn, freeSpace, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -152,9 +152,43 @@ test('statusLine: what a document may carry, which is only what the record can p
 // the machines that were fine. A wrong option here is not a refactor; it is the regression.
 // The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
 // `test/checkouts.test.mjs`, where the operation it guards now lives.
-test('every child rig spawns is hidden, so a console-less child pays for no console', () => {
-  assert.equal(SPAWN_DEFAULTS.windowsHide, true,
-    'DETACHED_PROCESS has no console; without this each git call allocates a console host')
+test('only the console-less run hides its spawns, because a hidden console is a whole process', () => {
+  // `CREATE_NO_WINDOW` does not suppress a console, it allocates a hidden one — a
+  // `conhost.exe` per spawn, and a process creation on Windows is ~17ms. Set on everything it
+  // was doubling the price of every git call to hide a console the command already had.
+  assert.equal(spawnDefaults('status').windowsHide, false,
+    'an ordinary command has a console its children inherit, and must not buy a second one')
+  assert.equal(spawnDefaults('freshness-refresh').windowsHide, true,
+    'the detached child has none to inherit, and every git call it makes would pop a window')
+})
+
+// Windows only: everywhere else `git` is the binary and there is nothing to step past.
+test('the Git for Windows launcher is stepped past, and nobody else\'s git is', { skip: process.platform !== 'win32' }, () => {
+  // The saving is real — 60ms through the launcher against 32ms straight to the binary, on
+  // every git call — but the risk is that somebody's own `git` is a program they put on PATH
+  // deliberately. So the launcher is *recognised*, never assumed: the right layout, with the
+  // real binary actually sitting where that layout says it would.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-gitpath-'))
+  const layout = (name, ...parts) => {
+    const p = path.join(root, name, ...parts)
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, '')
+    return p
+  }
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(proper), real, 'the launcher names the binary it would have started')
+
+  const headless = path.dirname(layout('headless', 'cmd', 'git.exe'))
+  assert.equal(realGitFor(headless), 'git', 'the layout without the binary in it proves nothing')
+
+  const shim = path.dirname(layout('shim', 'tools', 'git.exe'))
+  layout('shim', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(shim), 'git',
+    'a git somewhere of its own is a program someone meant to put there')
+
+  assert.equal(realGitFor(path.join(root, 'nothing-here')), 'git', 'and no git on PATH is left to fail as it always did')
+  fs.rmSync(root, { recursive: true, force: true })
 })
 
 test('the freshness refresh is detached, silent, rooted in the tool, and hidden', () => {
