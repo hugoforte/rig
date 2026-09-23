@@ -255,6 +255,66 @@ test('remove takes a clean worktree away without being forced', () => {
   assert.ok(!fs.existsSync(dest))
 })
 
+// Every worktree cut on a branch leaves the mirror a copy of it in `refs/heads`, because a
+// worktree shares the mirror's ref store — t3 above left one of `feat/theirs`. Cutting on
+// that branch again is the ordinary way back into a closed work (hugoforte/rig#149).
+test('a copy left in the mirror is moved up to the remote rather than refused', () => {
+  pushToRemote(path.join(tmp, 'seed', 'acme-billing'), 'feat/theirs', 'more of their work')
+  const dest = workDir('t10', 'billing')
+
+  trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/theirs', dest })
+
+  assert.equal(gitMust(dest, 'rev-parse', 'HEAD'), gitMust(dest, 'rev-parse', 'origin/feat/theirs'))
+  assert.equal(gitMust(dest, 'rev-parse', '--abbrev-ref', '@{u}'), 'origin/feat/theirs')
+})
+
+test('a copy left in the mirror ahead of the remote is checked out as it is, commits kept', () => {
+  const left = workDir('t10', 'billing')
+  fs.writeFileSync(path.join(left, 'NOTES.md'), 'never pushed\n')
+  gitMust(left, 'add', '-A')
+  gitMust(left, 'commit', '-q', '-m', 'never pushed')
+  const kept = gitMust(left, 'rev-parse', 'HEAD')
+  assert.equal(trees().remove({ org: 'acme', repo: 'billing', dir: left }), null)
+  const dest = workDir('t11', 'billing')
+
+  trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/theirs', dest })
+
+  assert.equal(gitMust(dest, 'rev-parse', 'HEAD'), kept)
+  assert.equal(gitMust(dest, 'rev-parse', '--abbrev-ref', '@{u}'), 'origin/feat/theirs')
+})
+
+test('a copy left in the mirror that has diverged from the remote is refused and left alone', () => {
+  const left = workDir('t11', 'billing')
+  assert.equal(trees().remove({ org: 'acme', repo: 'billing', dir: left }), null)
+  const mirror = mirrorOf('acme', 'billing')
+  const kept = gitMust(mirror, 'rev-parse', 'refs/heads/feat/theirs')
+  pushToRemote(path.join(tmp, 'seed', 'acme-billing'), 'feat/theirs', 'their work moved on')
+  const dest = workDir('t12', 'billing')
+
+  assert.throws(
+    () => trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/theirs', dest }),
+    e => e instanceof RigError && /has diverged/.test(e.message) && /branch -D feat\/theirs/.test(e.message))
+  assert.equal(gitMust(mirror, 'rev-parse', 'refs/heads/feat/theirs'), kept, 'the mirror\'s copy is untouched')
+  assert.ok(!fs.existsSync(dest), 'no worktree cut')
+  assert.doesNotMatch(said().warnings, /checking it out/, 'nothing claims a checkout that did not happen')
+})
+
+test('a copy left in the mirror of a branch gone from the remote is checked out as it is', () => {
+  const left = workDir('t13', 'billing')
+  trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/t13', dest: left })
+  fs.writeFileSync(path.join(left, 'NOTES.md'), 'only here\n')
+  gitMust(left, 'add', '-A')
+  gitMust(left, 'commit', '-q', '-m', 'only here')
+  const kept = gitMust(left, 'rev-parse', 'HEAD')
+  assert.equal(trees().remove({ org: 'acme', repo: 'billing', dir: left }), null)
+  const dest = workDir('t14', 'billing')
+
+  trees().cut({ org: 'acme', repo: 'billing', branch: 'feat/t13', dest })
+
+  assert.equal(gitMust(dest, 'rev-parse', 'HEAD'), kept)
+  assert.match(said().warnings, /feat\/t13 is not on acme\/billing but the mirror kept a copy/)
+})
+
 test('anyMirror finds a mirror to ask git about an org, and answers nothing for an org with none', () => {
   assert.equal(trees().anyMirror('acme'), mirrorOf('acme', 'billing'))
   assert.equal(trees().anyMirror('nobody'), null)
