@@ -13,10 +13,15 @@
 
 export const DEFAULT_FRESHNESS = { enabled: true, everyHours: 24 }
 
+// The hidden command a finished command spawns to do the fetch. One name for every place that
+// has to agree on it — the spawn, the command it runs, and the rule that hides that child's own
+// spawns — because a copy that drifted would leave each of them working on its own terms.
+export const REFRESH_COMMAND = 'freshness-refresh'
+
 // Commands that never print the ambient line: `doctor` and `update` report freshness
 // themselves and the refresh *is* the check; `prompt` and `help` are reference output being
 // read or fed to an agent, and rig's housekeeping does not belong in the middle of it.
-export const QUIET_COMMANDS = new Set(['prompt', 'help', 'doctor', 'update', 'freshness-refresh'])
+export const QUIET_COMMANDS = new Set(['prompt', 'help', 'doctor', 'update', REFRESH_COMMAND])
 
 // Why the tool checkout is not a thing to judge for freshness, or null when it is.
 // The worktree case is the one that bites: `bin/rig.mjs` resolves the tool root from its own

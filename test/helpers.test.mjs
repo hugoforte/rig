@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  spawnDefaults, refreshSpawn, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -160,8 +160,13 @@ test('only the console-less run hides its spawns, because a hidden console is a 
   assert.equal(spawnDefaults('status').windowsHide, false,
     'an ordinary command has a console its children inherit, and must not buy a second one — ' +
     'which assumes rig was started with one, and not by a host launching node DETACHED_PROCESS')
-  assert.equal(spawnDefaults('freshness-refresh').windowsHide, true,
-    'the detached child has none to inherit, and every git call it makes would pop a window')
+  // The command the refresh is actually spawned with, never a copy of its name: a copy stays
+  // green while the two drift apart, and then the child's git calls go unhidden with nothing
+  // to notice but a deadline on a loaded machine.
+  const [, refresh] = refreshArgv('C:\\rig')
+  assert.equal(spawnDefaults(refresh).windowsHide, true,
+    'the detached child has none to inherit, and every git call it makes would pop a window — ' +
+    'this is the one that hung a machine')
 })
 
 // Windows only: everywhere else `git` is the binary and there is nothing to step past. The
@@ -238,11 +243,10 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('the freshness refresh is detached, silent, rooted in the tool, and hidden', () => {
+test('the freshness refresh is detached, silent, and rooted in the tool', () => {
   const spawn = refreshSpawn('C:\\rig', { PATH: 'somewhere' })
   assert.equal(spawn.detached, true, 'the fetch has to outlive the command that armed it')
   assert.equal(spawn.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
-  assert.equal(spawn.windowsHide, true, 'see above; this is the one that hung a machine')
   assert.equal(spawn.cwd, 'C:\\rig', 'a child sitting in a worktree is one `rig close` cannot remove')
   assert.deepEqual(spawn.env, { PATH: 'somewhere' },
     'the run that armed it decides what it may reach, not the process that happened to host it')

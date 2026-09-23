@@ -12,7 +12,7 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { discover } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
-import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
+import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
@@ -115,7 +115,7 @@ const die = msg => { throw new RigError(msg) }
 // parent with a console, hidden or not. A host that starts `node bin/rig.mjs` itself with
 // DETACHED_PROCESS, or calls `run()` from a process with no console, breaks it, and gets a
 // visible window for every git call.
-const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === 'freshness-refresh' })
+const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === REFRESH_COMMAND })
 
 // Every subprocess rig starts, and the one place a run's cwd and environment reach one.
 // Without them a child inherits the *process's*, which for a run that is not the process is
@@ -518,20 +518,23 @@ const measureFreshness = state => ({
 // `rig close` cannot remove. `windowsHide` on every `git` call the child makes is what keeps
 // it fast — `detached` means DETACHED_PROCESS, so a console-less child allocates a console
 // host per spawn unless told not to, and the six in `toolState` alone cost twenty seconds.
+// Nothing on this spawn can tell the child that: beside DETACHED_PROCESS Windows ignores the
+// CREATE_NO_WINDOW that `windowsHide` asks for, and no spawn's options reach the spawns its
+// child makes. The child hides its own, in `spawnDefaults`, because `refreshArgv` hands it the
+// command that asks for that.
 // Asserted by a test rather than left to a comment: every field is load-bearing, and each
 // failure it prevents is invisible until it is expensive. `detached` lets the fetch outlive
 // the command; `stdio: 'ignore'` stops a piped `rig prompt` hanging on a child holding the
-// pipe; `cwd` keeps the child out of a worktree `rig close` must remove; `windowsHide` is why
-// the child is not paying for a console per git call.
+// pipe; `cwd` keeps the child out of a worktree `rig close` must remove.
 const refreshSpawn = (root, environment) =>
-  ({ cwd: root, env: environment, detached: true, stdio: 'ignore', windowsHide: true })
+  ({ cwd: root, env: environment, detached: true, stdio: 'ignore' })
+const refreshArgv = root => [path.join(root, 'bin', 'rig.mjs'), REFRESH_COMMAND]
 
 // The installation's own copy and not this file, which for a run driven in another process's
 // memory are two different rigs: what is being measured is the checkout the run is a run of.
 function refreshFreshnessInBackground () {
   try {
-    spawn(process.execPath, [path.join(toolRoot(), 'bin', 'rig.mjs'), 'freshness-refresh'],
-      refreshSpawn(toolRoot(), env())).unref()
+    spawn(process.execPath, refreshArgv(toolRoot()), refreshSpawn(toolRoot(), env())).unref()
   } catch { /* a refresh that will not spawn is not worth a word to the user */ }
 }
 
@@ -3366,7 +3369,7 @@ cmds.update = ({ flags }) => {
 
 // Hidden: the detached child spawned at the end of a command. Fetches, measures, writes the
 // cache, says nothing to anyone — the next command is what speaks.
-cmds['freshness-refresh'] = () => {
+cmds[REFRESH_COMMAND] = () => {
   const cfg = config()
   const state = toolState()
   if (skipReason(state)) return
@@ -3862,7 +3865,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
+  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,
   listing,
 }
