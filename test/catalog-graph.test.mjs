@@ -6,7 +6,7 @@
 // left `bin/demo.mjs`. What is new below the divider is direction, and `impact`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildGraph, impact, coAttached } from '../bin/catalog-graph.mjs'
+import { buildGraph, impact, coAttached, unattached } from '../bin/catalog-graph.mjs'
 
 const entry = (repo, talks_to = [], rest = {}) => ({
   repo, org: 'acme', role: `${repo} does things`, stack: 'Node',
@@ -83,7 +83,7 @@ test('direction: the two ends state one relationship from opposite sides, and ag
     entry('billing', [{ repo: 'orders', how: 'pushes invoices', direction: 'downstream' }]),
     entry('orders', [{ repo: 'billing', how: 'reads the invoice shape', direction: 'upstream' }]),
   ])
-  assert.deepEqual([dir(graph, 'billing'), graph.edges[0].conflict], ['downstream', false])
+  assert.deepEqual([dir(graph, 'billing'), graph.edges[0].disagreed], ['downstream', false])
 })
 
 test('direction: two ends that disagree are a contradiction, and rig picks no winner', () => {
@@ -91,7 +91,7 @@ test('direction: two ends that disagree are a contradiction, and rig picks no wi
     entry('billing', [{ repo: 'orders', how: 'pushes invoices', direction: 'downstream' }]),
     entry('orders', [{ repo: 'billing', how: 'emits OrderReturned', direction: 'downstream' }]),
   ])
-  assert.deepEqual([graph.edges[0].direction, graph.edges[0].conflict], [null, true])
+  assert.deepEqual([graph.edges[0].direction, graph.edges[0].disagreed], [null, true])
 })
 
 test('direction: `both` at one end and `downstream` at the other is a disagreement', () => {
@@ -99,7 +99,7 @@ test('direction: `both` at one end and `downstream` at the other is a disagreeme
     entry('billing', [{ repo: 'orders', how: 'pushes invoices', direction: 'downstream' }]),
     entry('orders', [{ repo: 'billing', how: 'and back again', direction: 'both' }]),
   ])
-  assert.equal(graph.edges[0].conflict, true, 'two different claims about one relationship, not a superset to resolve')
+  assert.equal(graph.edges[0].disagreed, true, 'two different claims about one relationship, not a superset to resolve')
 })
 
 test('direction: `both` at both ends is one claim, agreed', () => {
@@ -107,7 +107,7 @@ test('direction: `both` at both ends is one claim, agreed', () => {
     entry('billing', [{ repo: 'orders', how: 'either way', direction: 'both' }]),
     entry('orders', [{ repo: 'billing', how: 'either way', direction: 'both' }]),
   ])
-  assert.deepEqual([graph.edges[0].direction, graph.edges[0].conflict], ['both', false])
+  assert.deepEqual([graph.edges[0].direction, graph.edges[0].disagreed], ['both', false])
 })
 
 test('direction: silence at one end is not a disagreement with the other', () => {
@@ -115,12 +115,12 @@ test('direction: silence at one end is not a disagreement with the other', () =>
     entry('billing', [{ repo: 'orders', how: 'pushes invoices', direction: 'downstream' }]),
     entry('orders', [{ repo: 'billing', how: 'emits OrderReturned' }]),
   ])
-  assert.deepEqual([dir(graph, 'billing'), graph.edges[0].conflict], ['downstream', false])
+  assert.deepEqual([dir(graph, 'billing'), graph.edges[0].disagreed], ['downstream', false])
 })
 
 test('direction: an edge nobody placed is unstated, which is not the same as both ways', () => {
   const graph = buildGraph([entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]), entry('orders')])
-  assert.deepEqual([graph.edges[0].direction, graph.edges[0].conflict], [null, false])
+  assert.deepEqual([graph.edges[0].direction, graph.edges[0].disagreed], [null, false])
 })
 
 test('direction: a word that is not a direction does not become one, and stays readable', () => {
@@ -207,7 +207,7 @@ test('impact: a contradiction survives the traversal instead of being resolved o
     entry('billing', [{ repo: 'orders', how: 'pushes', direction: 'downstream' }]),
     entry('orders', [{ repo: 'billing', how: 'emits', direction: 'downstream' }]),
   ], 'billing')
-  assert.deepEqual([answer.hop1[0].direction, answer.hop1[0].conflict], [null, true])
+  assert.deepEqual([answer.hop1[0].direction, answer.hop1[0].disagreed], [null, true])
 })
 
 // ------------------------------------------------- the observed graph
@@ -281,4 +281,41 @@ test('impact: a work that never held the subject says nothing about it', () => {
 test('impact: with no records at all, observed is empty and the declared graph is untouched', () => {
   const answer = impact([entry('billing', [{ repo: 'orders', how: 'a' }]), entry('orders')], 'billing')
   assert.deepEqual([answer.observed, answer.hop1.map(n => n.repo)], [[], ['orders']])
+})
+
+// ------------------------------------------- the neighbours nobody attached
+
+// What `rig next` offers: repos the declared graph says talk to one this work has attached, and
+// which are not attached themselves. Pure, so every rule it applies is one literal away.
+
+test('unattached: a neighbour of an attached repo is offered, with the repo it was reached from', () => {
+  const found = unattached([entry('billing', [{ repo: 'orders', how: 'a', direction: 'downstream' }]), entry('orders')], ['billing'])
+  assert.deepEqual(found, [{ repo: 'orders', via: 'billing', direction: 'downstream' }])
+})
+
+test('unattached: a neighbour already attached is not offered back, whatever its case', () => {
+  const found = unattached([entry('billing', [{ repo: 'Orders', how: 'a' }]), entry('Orders')], ['billing', 'orders'])
+  assert.deepEqual(found, [])
+})
+
+test('unattached: a neighbour two attached repos both reach is offered once', () => {
+  const found = unattached([
+    entry('billing', [{ repo: 'ledger', how: 'a' }]),
+    entry('orders', [{ repo: 'ledger', how: 'b' }]),
+    entry('ledger'),
+  ], ['billing', 'orders'])
+  assert.deepEqual(found.map(n => n.repo), ['ledger'])
+})
+
+test('unattached: a disagreed direction is offered as no direction, not as either claim', () => {
+  const found = unattached([
+    entry('billing', [{ repo: 'orders', how: 'a', direction: 'downstream' }]),
+    entry('orders', [{ repo: 'billing', how: 'b', direction: 'downstream' }]),
+  ], ['billing'])
+  assert.equal(found[0].direction, null)
+})
+
+test('unattached: the offer is ordered by name, so it reads the same every time', () => {
+  const found = unattached([entry('billing', [{ repo: 'zeta', how: 'a' }, { repo: 'alpha', how: 'b' }])], ['billing'])
+  assert.deepEqual(found.map(n => n.repo), ['alpha', 'zeta'])
 })

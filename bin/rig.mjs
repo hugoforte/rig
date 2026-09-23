@@ -12,7 +12,7 @@ import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
-import { impact, coAttached } from './catalog-graph.mjs'
+import { impact, unattached } from './catalog-graph.mjs'
 import { releaseMark } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
@@ -1715,7 +1715,7 @@ function offerNeighbours (work, name) {
 
   for (const n of answer.hop1) {
     if (have.has(n.repo.toLowerCase())) continue
-    const why = n.conflict ? '' : n.direction === 'downstream' ? `, and a change in ${name} can break it`
+    const why = n.disagreed ? '' : n.direction === 'downstream' ? `, and a change in ${name} can break it`
       : n.direction === 'upstream' ? `, and a change in it can break ${name}`
         : n.direction === 'both' ? ', and either can break the other' : ''
     said(`${n.repo} talks to ${name}${why} — not attached (\`rig attach ${n.repo}\`)`)
@@ -2282,26 +2282,12 @@ cmds.check = ({ flags, positional }) => {
   }
 }
 
-// The repos the catalogue says talk to one this work has attached, and which are not attached
-// themselves — §6's traversal, asked once per attached repo. One entry per repo however many
-// attached repos reach it: the offer names where it came from, and naming three of them makes
-// the line longer without making it truer.
-//
 // Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
 // offer is visibly only as good as the catalogue, and a thin one produces a thin offer rather
-// than a confident wrong answer.
+// than a confident wrong answer. The traversal itself is `unattached` in bin/catalog-graph.mjs.
 function unattachedNeighbours (work) {
   const catalog = loadCatalog()
-  if (!catalog.length) return []
-  const have = new Set((work.repos || []).map(r => r.repo.toLowerCase()))
-  const found = new Map()
-  for (const r of work.repos || []) {
-    for (const n of impact(catalog, r.repo).hop1) {
-      if (have.has(n.repo.toLowerCase()) || found.has(n.repo.toLowerCase())) continue
-      found.set(n.repo.toLowerCase(), { repo: n.repo, via: r.repo, direction: n.conflict ? null : n.direction })
-    }
-  }
-  return [...found.values()].sort((a, b) => a.repo.localeCompare(b.repo))
+  return catalog.length ? unattached(catalog, (work.repos || []).map(r => r.repo)) : []
 }
 
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
@@ -2869,7 +2855,7 @@ cmds.impact = ({ positional }) => {
   }
 
   const LABEL = { downstream: 'downstream', upstream: 'upstream', both: 'both ways' }
-  const label = n => (n.conflict ? C.yellow('disagreed') : C.dim(LABEL[n.direction] || 'unstated'))
+  const label = n => (n.disagreed ? C.yellow('disagreed') : C.dim(LABEL[n.direction] || 'unstated'))
   const width = Math.max(12, ...[...answer.hop1, ...answer.hop2].map(n => n.repo.length))
 
   say(`${C.bold(answer.repo)}${answer.org ? ` ${C.dim(answer.org)}` : ''}${answer.role ? ` — ${answer.role}` : ''}${caveat(answer)}`)
@@ -2898,7 +2884,7 @@ cmds.impact = ({ positional }) => {
     say('')
     say(C.dim('two hops'))
     for (const n of answer.hop2) {
-      const via = n.via.map(v => `${v.through}${v.conflict ? ' (disagreed)' : v.direction ? ` (${LABEL[v.direction]} of it)` : ''}`).join(', ')
+      const via = n.via.map(v => `${v.through}${v.disagreed ? ' (disagreed)' : v.direction ? ` (${LABEL[v.direction]} of it)` : ''}`).join(', ')
       say(`  ${n.repo.padEnd(width)}  ${C.dim(`via ${via}`)}${caveat(n)}`)
     }
   }

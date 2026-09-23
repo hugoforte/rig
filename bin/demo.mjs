@@ -607,7 +607,7 @@ function renderGraph (graph) {
   // and neither is a contradiction. That makes the drawing a map of where the catalogue is thin,
   // which is the same argument as listing the repos with no entry underneath it.
   const edges = graph.edges.map((e, i) => {
-    const heads = e.conflict ? ''
+    const heads = e.disagreed ? ''
       : e.direction === 'downstream' ? ' marker-end="url(#arrow)"'
         : e.direction === 'upstream' ? ' marker-start="url(#arrowback)"'
           : e.direction === 'both' ? ' marker-start="url(#arrowback)" marker-end="url(#arrow)"' : ''

@@ -99,7 +99,7 @@ function resolve (edge) {
       .filter(s => DIRECTIONS.has(s.direction))
       .map(s => (lower(s.from) === lower(edge.a) ? s.direction : flip(s.direction))),
   )
-  return claims.size === 1 ? { direction: [...claims][0], conflict: false } : { direction: null, conflict: claims.size > 1 }
+  return claims.size === 1 ? { direction: [...claims][0], disagreed: false } : { direction: null, disagreed: claims.size > 1 }
 }
 
 // The **observed** graph: which repos have been attached to the same work, read straight out
@@ -139,7 +139,7 @@ export function coAttached (works) {
 // break C, does not say that a change in A reaches C — B may well absorb it. So a two-hop
 // neighbour carries the hops it was reached through and the direction of *that* edge, and rig
 // draws no conclusion the catalogue did not state.
-export function impact (catalog, repo, { hops = 2, works = [] } = {}) {
+export function impact (catalog, repo, { works = [] } = {}) {
   const graph = buildGraph(catalog)
   const node = graph.nodes.find(n => lower(n.id) === lower(repo))
   const name = node ? node.id : repo
@@ -156,19 +156,17 @@ export function impact (catalog, repo, { hops = 2, works = [] } = {}) {
   const hop1 = around(name).map(({ edge, other }) => ({
     ...describe(other),
     direction: toward(edge, name),
-    conflict: edge.conflict,
+    disagreed: edge.disagreed,
     says: edge.says,
   })).sort((x, y) => x.repo.localeCompare(y.repo))
 
   const seen = new Set([lower(name), ...hop1.map(n => lower(n.repo))])
   const second = new Map()
-  if (hops > 1) {
-    for (const near of hop1) {
-      for (const { edge, other } of around(near.repo)) {
-        if (seen.has(lower(other))) continue
-        if (!second.has(lower(other))) second.set(lower(other), { ...describe(other), via: [] })
-        second.get(lower(other)).via.push({ through: near.repo, direction: toward(edge, near.repo), conflict: edge.conflict })
-      }
+  for (const near of hop1) {
+    for (const { edge, other } of around(near.repo)) {
+      if (seen.has(lower(other))) continue
+      if (!second.has(lower(other))) second.set(lower(other), { ...describe(other), via: [] })
+      second.get(lower(other)).via.push({ through: near.repo, direction: toward(edge, near.repo), disagreed: edge.disagreed })
     }
   }
 
@@ -198,4 +196,21 @@ export function impact (catalog, repo, { hops = 2, works = [] } = {}) {
     hop2: [...second.values()].sort((x, y) => x.repo.localeCompare(y.repo)),
     observed,
   }
+}
+
+// The repos the declared graph says talk to one of `attached`, and which are not attached
+// themselves — §6's traversal, asked once per attached repo, for `rig next` to offer. One entry
+// per repo however many attached repos reach it: the offer names where it came from, and naming
+// three of them makes the line longer without making it truer. A disagreed direction arrives
+// as none, because offering either claim would be picking the side `impact` refuses to pick.
+export function unattached (catalog, attached) {
+  const have = new Set(attached.map(lower))
+  const found = new Map()
+  for (const repo of attached) {
+    for (const n of impact(catalog, repo).hop1) {
+      if (have.has(lower(n.repo)) || found.has(lower(n.repo))) continue
+      found.set(lower(n.repo), { repo: n.repo, via: repo, direction: n.disagreed ? null : n.direction })
+    }
+  }
+  return [...found.values()].sort((a, b) => a.repo.localeCompare(b.repo))
 }
