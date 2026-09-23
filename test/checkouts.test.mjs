@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { checkouts, unreadable, FETCH_ENV } from '../bin/checkouts.mjs'
+import { MOVED_BY } from '../bin/gitfs.mjs'
 
 let tmp, env, sandbox
 
@@ -86,8 +87,7 @@ before(() => {
   env = { ...process.env }
   // The variables `gitfs.discover` steps aside for, which a developer's shell or a CI image
   // may set for reasons of its own.
-  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
-    'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM']) delete env[name]
+  for (const name of MOVED_BY) delete env[name]
   // Keep every inherited setting — and anything a test writes — out of the real config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
   // Which config git reads is the sandbox, applied to every call. Who it commits as is not:
@@ -170,6 +170,30 @@ test('dirty counts what `git status` reports; modified is what stops a fast-forw
   fs.rmSync(path.join(local, 'notes'), { recursive: true })
 })
 
+test('a stash is no change, and a rename and a conflict are one change each', () => {
+  // The status header carries more than the branch — `# stash` among it, with
+  // `status.showStash` on — and an entry is not always the `1 ` of an ordinary edit.
+  const { local } = cloned('entries')
+  gitMust(local, 'config', 'status.showStash', 'true')
+  fs.appendFileSync(path.join(local, 'README.md'), 'put aside\n')
+  gitMust(local, 'stash', '-q')
+  assert.match(gitMust(local, 'status', '--porcelain=v2', '--branch'), /^# stash 1$/m)
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [0, 0], 'a stash is not the tree')
+
+  gitMust(local, 'mv', 'README.md', 'READ.md')
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 1], 'a staged rename')
+  gitMust(local, 'mv', 'READ.md', 'README.md')
+
+  gitMust(local, 'checkout', '-q', '-b', 'theirs')
+  fs.writeFileSync(path.join(local, 'README.md'), 'theirs\n')
+  gitMust(local, 'commit', '-q', '-am', 'theirs')
+  gitMust(local, 'checkout', '-q', 'main')
+  fs.writeFileSync(path.join(local, 'README.md'), 'ours\n')
+  gitMust(local, 'commit', '-q', '-am', 'ours')
+  assert.notEqual(git(local, 'merge', '-q', 'theirs').code, 0, 'the merge stops on the conflict')
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 1], 'an unmerged file')
+})
+
 test('the upstream is its name, and distance is measured as last fetched', () => {
   const { bare, local } = cloned('distance')
   assert.equal(c().describe(local).upstream, 'origin/main')
@@ -218,8 +242,8 @@ test('the copy in a linked worktree knows it is one', () => {
 
 test('a branch sharing its name with a tag is named the same whether git or the filesystem reads it', () => {
   // `symbolic-ref --short` abbreviates for display, and beside a tag `rel` it prints the
-  // branch `rel` as `heads/rel` — so where gitfs handed the question back, the same checkout
-  // was on a branch of a different name.
+  // branch `rel` as `heads/rel`. Where gitfs hands the question back git is asked for the full
+  // ref instead, so both readings name the branch the same.
   const { local } = cloned('tagged')
   gitMust(local, 'checkout', '-q', '-b', 'rel')
   gitMust(local, 'tag', 'rel')
@@ -331,7 +355,7 @@ test('the merge is --ff-only, which is what holds when the count that would have
 })
 
 test('a branch whose name starts with a parenthesis is a branch, and moves', () => {
-  // Read as detached, `rig update` refused to move it and `rig save` would not push from it.
+  // Read as detached, `rig update` would refuse to move it and `rig save` would not push from it.
   const { bare, local } = onWip('paren')
   pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
   assert.equal(c().fetch(local).ok, true)
@@ -519,8 +543,8 @@ test('a distance git could not measure is not a reason to move anything', () => 
 test('an upstream whose ref has gone is no upstream, whichever reading asks', () => {
   // There is nothing to move towards and nothing to push onto, which is what "no upstream"
   // already tells every caller: `rig save` keeps the commit local and `rig update` migrates.
-  // Read as unmeasurable, the same data root had `rig save` rebase onto a ref that is not
-  // there and `rig update` refuse the migrations behind it.
+  // Read as unmeasurable instead, `rig save` would rebase onto a ref that is not there and
+  // `rig update` would refuse the migrations behind it.
   const local = goneUpstream('gone')
   assert.equal(c().describe(local).upstream, null)
   assert.equal(c().identify(local).upstream, null)
@@ -530,8 +554,9 @@ test('an upstream whose ref has gone is no upstream, whichever reading asks', ()
 test('describe, its fallback and identify agree on the branch and the upstream', () => {
   // Which of the three answers depends on the command and on whether the index could be
   // read, so a disagreement is one checkout with two outcomes. These are the two checkouts
-  // they parted on: a gone upstream that only `describe` still named, and a `(wip)` branch
-  // that only `describe` called detached.
+  // where the status header answers differently from the other readings: a gone upstream,
+  // which the header still names, and a `(wip)` branch, printed there the way git prints its
+  // own `(detached)`.
   const noTree = (cmd, args) => args.includes('--porcelain=v2')
     ? { code: 128, out: '', err: 'fatal: unable to read index' }
     : run(cmd, args)

@@ -126,10 +126,10 @@ export function checkouts ({ run, env = () => process.env }) {
     }
   }
 
-  // Which branch a checkout is on, read one way by every reading here, so `identify`,
-  // `describe` and its fallback cannot disagree about it. Never from `branch.head` in the
-  // status header: git accepts a branch named `(wip)` and prints it there exactly as it
-  // prints its own `(detached)`.
+  // Which branch a checkout is on, read one way by every reading here, so wherever two of
+  // `identify`, `describe` and its fallback read a checkout they name the same branch. Never
+  // from `branch.head` in the status header: git accepts a branch named `(wip)` and prints it
+  // there exactly as it prints its own `(detached)`.
   const branchOf = (dir, place) => place ? headBranch(place.gitDir) : gitBranch(dir)
 
   // The full ref and not `--short`, which abbreviates for display — `heads/rel` beside a tag
@@ -190,8 +190,10 @@ export function checkouts ({ run, env = () => process.env }) {
   }
 
   // Where a checkout stands: its identity, its distance from its upstream, and the two
-  // different ways its tree can be untidy. **One git call**, where this cost six as
-  // `checkoutState` and still cost six as six separate readings.
+  // different ways its tree can be untidy. **One git call** where the filesystem placed the
+  // checkout, where this cost six as `checkoutState` and still cost six as six separate
+  // readings; three where `gitfs` handed the question back, since git then also says where
+  // the checkout is and which branch it is on.
   //
   // The fallback is the whole reason the six survive at all. `status` reads the index and
   // `rev-list` does not, so a corrupt index is a tree git cannot read and a distance it
