@@ -122,7 +122,25 @@ test('a neighbour with no entry of its own is named as the gap it is', () => {
   })
   const o = out('billing')
   assert.match(o, /ancient-mainframe\s+unstated\s+\(no catalogue entry\)/)
-  assert.match(o, /ancient-mainframe is not written up yet — `rig catalog <repo>` names the file/)
+  assert.match(o, /ancient-mainframe has no catalogue entry — one is drafted the first time it is attached/)
+  assert.doesNotMatch(o, /rig catalog ancient-mainframe|rig catalog <repo>/,
+    'rig catalog dies on a repo with no entry, so it is not what to point at')
+})
+
+test('a neighbour whose entry is still a draft is pointed at the file, which exists', () => {
+  fs.writeFileSync(path.join(dataRoot, 'catalog', 'acme', 'ancient-mainframe.md'), `---
+repo: ancient-mainframe
+org: acme
+talks_to: []
+---
+
+<!-- DRAFT: unreviewed -->
+`)
+  try {
+    assert.match(out('billing'), /ancient-mainframe is still a draft — `rig catalog ancient-mainframe` names the file/)
+  } finally {
+    fs.rmSync(path.join(dataRoot, 'catalog', 'acme', 'ancient-mainframe.md'))
+  }
 })
 
 test('a repo the catalogue has never heard of answers, rather than refusing', () => {
@@ -184,4 +202,23 @@ test('a pair the catalogue already explains is shown, and not reported as a gap'
 test('the pairs are ordered by how often the two travelled together', () => {
   const section = out('billing').slice(out('billing').indexOf('worked on together'))
   assert.ok(section.indexOf('ledger') < section.indexOf('orders'), 'two works outrank one')
+})
+
+test('a repo with no talks_to line still shows the pairs the records keep making', () => {
+  // The case the observed graph exists for: every freshly drafted entry has `talks_to: []`, so
+  // an early return on an empty declared graph hid the evidence exactly where it was needed.
+  const o = out('ledger')
+  assert.match(o, /nothing in the catalogue talks to it, and it talks to nothing/)
+  assert.match(o, /worked on together[\s\S]*billing\s+2 works — and nothing in talks_to says why/)
+})
+
+test('the correction for a subject with no entry names what drafts one, not a command that fails', () => {
+  record('w4', 'unwritten', 'billing')
+  try {
+    const o = out('unwritten')
+    assert.match(o, /unwritten has no catalogue entry — one is drafted the first time it is attached/)
+    assert.doesNotMatch(o, /rig catalog unwritten/)
+  } finally {
+    fs.rmSync(path.join(dataRoot, 'work', 'w4'), { recursive: true })
+  }
 })

@@ -2860,13 +2860,12 @@ cmds.impact = ({ positional }) => {
 
   say(`${C.bold(answer.repo)}${answer.org ? ` ${C.dim(answer.org)}` : ''}${answer.role ? ` — ${answer.role}` : ''}${caveat(answer)}`)
 
-  if (!answer.hop1.length) {
-    say('')
-    return say(C.dim('nothing in the catalogue talks to it, and it talks to nothing — `talks_to` in its entry is where that is said'))
-  }
-
+  // No declared edge is not the end of the answer. Every freshly drafted entry has `talks_to: []`,
+  // and that is exactly where the observed graph below has something to say — returning here
+  // hid the evidence in the one case it was built for.
   say('')
-  say(C.dim('one hop'))
+  if (!answer.hop1.length) say(C.dim('nothing in the catalogue talks to it, and it talks to nothing — `talks_to` in its entry is where that is said'))
+  else say(C.dim('one hop'))
   for (const n of answer.hop1) {
     say(`  ${n.repo.padEnd(width)}  ${label(n)}${caveat(n)}`)
     // Every end's own sentence, verbatim. The direction says which way it runs and the prose
@@ -2905,14 +2904,27 @@ cmds.impact = ({ positional }) => {
     const quiet = answer.observed.filter(o => !o.declared)
     if (quiet.length) {
       say('')
-      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — \`rig catalog ${answer.repo}\` names the file to correct`))
+      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — ${answer.catalogued
+        ? `\`rig catalog ${answer.repo}\` names the file to correct`
+        : `and ${answer.repo} has no catalogue entry — one is drafted the first time it is attached`}`))
     }
   }
 
-  const thin = answer.hop1.filter(n => !n.catalogued || n.draft).map(n => n.repo)
-  if (thin.length) {
-    say('')
-    say(C.dim(`${thin.join(', ')} ${thin.length === 1 ? 'is' : 'are'} not written up yet — \`rig catalog <repo>\` names the file`))
+  // Two different gaps, pointed at two different things. A draft has a file, and `rig catalog`
+  // names it; a repo with no entry has none, and `rig catalog` dies on it — the entry is drafted
+  // the first time the repo is attached, so that is the pointer.
+  const drafts = answer.hop1.filter(n => n.catalogued && n.draft).map(n => n.repo)
+  const unwritten = answer.hop1.filter(n => !n.catalogued).map(n => n.repo)
+  if (drafts.length || unwritten.length) say('')
+  if (drafts.length) {
+    say(C.dim(drafts.length === 1
+      ? `${drafts[0]} is still a draft — \`rig catalog ${drafts[0]}\` names the file`
+      : `${drafts.join(', ')} are still drafts — \`rig catalog <repo>\` names each file`))
+  }
+  if (unwritten.length) {
+    say(C.dim(unwritten.length === 1
+      ? `${unwritten[0]} has no catalogue entry — one is drafted the first time it is attached`
+      : `${unwritten.join(', ')} have no catalogue entry — one is drafted the first time each is attached`))
   }
 }
 
