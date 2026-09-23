@@ -125,11 +125,21 @@ function exec (cmd, args, { env: extra, ...opts } = {}) {
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
 
-// Git for Windows puts a **launcher** on PATH: `cmd\git.exe` is 46KB and its whole job is to
-// start `mingw64\bin\git.exe`, which is the 4.4MB one that does the work. So every `git` rig
-// runs is two process creations, and on Windows the process creation *is* the expensive part
-// of a git call — measured on this machine, 60ms through the launcher against 32ms straight
-// to the binary. Across a suite that makes thousands of them it is a quarter of the runtime.
+// Git for Windows puts a **launcher** on PATH: `cmd\git.exe` is 46KB and starts
+// `mingw64\bin\git.exe`, which is the 4.4MB one that does the work. So every `git` rig runs is
+// two process creations, and on Windows the process creation *is* the expensive part of a git
+// call — measured on this machine, 60ms through the launcher against 32ms straight to the
+// binary. Across a suite that makes thousands of them it is a quarter of the runtime.
+//
+// The launcher does more than launch, and the rest of what it does is why MSYSTEM decides
+// this. It sets MSYSTEM and puts Git's own `mingw64\bin` and `usr\bin` at the front of PATH,
+// which is where git finds the `sh` every hook and `!` alias runs through, its credential
+// helper and its own ssh. The binary does the same for itself only when MSYSTEM is unset or
+// empty; with it set — an MSYS2 shell, a non-login bash, a variable set for the whole user — it
+// assumes a PATH that is not there, and every one of those fails to start. So with MSYSTEM set
+// the launcher is kept. Without it the two differ in one thing, taken knowingly: the binary
+// puts `~\bin` ahead of Git's own directories rather than after them, which is the order Git
+// Bash's own login shell gives it.
 //
 // **Only that launcher is stepped past.** Somebody's own `git` on PATH — a corporate wrapper,
 // a credential shim — is a program they put there on purpose, and going around it would be
@@ -137,18 +147,21 @@ function exec (cmd, args, { env: extra, ...opts } = {}) {
 // file PATH resolves to must sit in a Git for Windows layout (`cmd\` or `bin\`) *and* have the
 // real binary as a sibling under `mingw64`. A shim anywhere else looks like nothing of the
 // sort and is left alone, which is the answer for every case this cannot positively identify.
-// Cached against PATH rather than per process, for `onPath`'s reason below: a run does not own
-// PATH, so one run's answer is the next run's for as long as they are handed the same one.
+// Cached against PATH and MSYSTEM rather than per process, for `onPath`'s reason below: a run
+// owns neither, so one run's answer is the next run's for as long as they are handed the same
+// two.
 const gitPrograms = new Map()
 function gitProgram () {
-  const key = pickEnv('PATH')
-  if (!gitPrograms.has(key)) gitPrograms.set(key, realGitFor(key))
+  const searchPath = pickEnv('PATH')
+  const msystem = pickEnv('MSYSTEM')
+  const key = `${searchPath}\u0000${msystem}`
+  if (!gitPrograms.has(key)) gitPrograms.set(key, realGitFor(searchPath, msystem))
   return gitPrograms.get(key)
 }
 
 const GIT_LAUNCHER_DIRS = ['cmd', 'bin']
-function realGitFor (searchPath) {
-  if (process.platform !== 'win32') return 'git'
+function realGitFor (searchPath, msystem = '') {
+  if (process.platform !== 'win32' || msystem) return 'git'
   const launcher = programPath('git', searchPath)
   if (!launcher) return 'git'
   const dir = path.dirname(launcher)

@@ -163,12 +163,11 @@ test('only the console-less run hides its spawns, because a hidden console is a 
     'the detached child has none to inherit, and every git call it makes would pop a window')
 })
 
-// Windows only: everywhere else `git` is the binary and there is nothing to step past.
-test('the Git for Windows launcher is stepped past, and nobody else\'s git is', { skip: process.platform !== 'win32' }, () => {
-  // The saving is real — 60ms through the launcher against 32ms straight to the binary, on
-  // every git call — but the risk is that somebody's own `git` is a program they put on PATH
-  // deliberately. So the launcher is *recognised*, never assumed: the right layout, with the
-  // real binary actually sitting where that layout says it would.
+// Windows only: everywhere else `git` is the binary and there is nothing to step past. The
+// programs are empty files, because which `git` rig runs is decided from where files are and
+// never from what is in them.
+const onWindows = { skip: process.platform !== 'win32' }
+const programTree = () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-gitpath-'))
   const layout = (name, ...parts) => {
     const p = path.join(root, name, ...parts)
@@ -176,6 +175,15 @@ test('the Git for Windows launcher is stepped past, and nobody else\'s git is', 
     fs.writeFileSync(p, '')
     return p
   }
+  return { root, layout }
+}
+
+test('the Git for Windows launcher is stepped past, and nobody else\'s git is', onWindows, () => {
+  // The saving is real — 60ms through the launcher against 32ms straight to the binary, on
+  // every git call — but the risk is that somebody's own `git` is a program they put on PATH
+  // deliberately. So the launcher is *recognised*, never assumed: the right layout, with the
+  // real binary actually sitting where that layout says it would.
+  const { root, layout } = programTree()
   const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
   const real = layout('proper', 'mingw64', 'bin', 'git.exe')
   assert.equal(realGitFor(proper), real, 'the launcher names the binary it would have started')
@@ -189,6 +197,15 @@ test('the Git for Windows launcher is stepped past, and nobody else\'s git is', 
     'a git somewhere of its own is a program someone meant to put there')
 
   assert.equal(realGitFor(path.join(root, 'nothing-here')), 'git', 'and no git on PATH is left to fail as it always did')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('with MSYSTEM set the launcher is kept, because it is what gives git its own PATH', onWindows, () => {
+  const { root, layout } = programTree()
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  layout('proper', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(proper, 'MINGW64'), 'git',
+    'the binary sets up its PATH only when MSYSTEM is unset, so here it could not start a hook')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
