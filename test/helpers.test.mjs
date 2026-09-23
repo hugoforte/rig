@@ -9,8 +9,9 @@ import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
-  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
+  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
 } from '../bin/rig.mjs'
+import { makeInstall } from './harness.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
   const { flags, positional } = parseArgs(['new', '--ticket', 'my-id', '--title', 'T', '--type=chore', '--force'])
@@ -244,6 +245,43 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
   assert.equal(realGitFor(proper, 'MINGW64'), 'git',
     'the binary sets up its PATH only when MSYSTEM is unset, so here it could not start a hook')
   fs.rmSync(root, { recursive: true, force: true })
+})
+
+// The same, asked of git rather than of a layout, because a layout cannot say whether the
+// binary started straight behaves as the launcher would. A hook tells: it runs through a `sh`
+// that is on PATH only once git has put it there, so PATH here holds nothing of Git's but the
+// launcher. The run without MSYSTEM goes first, in the same process and with the same PATH,
+// because its answer is remembered and the run after it must not be handed it.
+const launcherOnPath = process.platform === 'win32' && process.env.PATH.split(';').find(dir => realGitFor(dir) !== 'git')
+test('a hook starts through the git a run is handed, with MSYSTEM set or not', { skip: !launcherOnPath }, () => {
+  const m = makeInstall({ prefix: 'rig-launcher-hook-', localConfig: true })
+  try {
+    const posix = p => p.replaceAll('\\', '/')
+    const hooks = path.join(m.tmp, 'hooks')
+    const ran = path.join(m.tmp, 'hook-ran')
+    fs.mkdirSync(hooks)
+    fs.writeFileSync(path.join(hooks, 'pre-commit'), `#!/bin/sh\necho ran >> '${posix(ran)}'\n`)
+    fs.appendFileSync(m.env.GIT_CONFIG_GLOBAL, `[core]\n\thooksPath = ${posix(hooks)}\n`)
+    const env = Object.fromEntries(Object.entries(m.env).filter(([k]) => !['PATH', 'MSYSTEM'].includes(k.toUpperCase())))
+    env.PATH = [launcherOnPath, path.join(process.env.SystemRoot, 'System32')].join(';')
+    // `init` makes a data root's first commit, and the hook is on that commit.
+    const init = (name, more) => {
+      let said = ''
+      const code = run(['init', '--data-root', path.join(m.tmp, name), '--work-root', m.workRoot], {
+        toolRoot: m.install, cwd: m.tmp, env: { ...env, ...more }, stdin: () => '', out: s => { said += s }, err: s => { said += s },
+      })
+      return { code, said }
+    }
+    const hookRuns = () => fs.existsSync(ran) ? fs.readFileSync(ran, 'utf8').match(/ran/g).length : 0
+
+    const unset = init('unset', {})
+    assert.equal(unset.code, 0, unset.said)
+    assert.equal(hookRuns(), 1, 'the binary started straight sets up the PATH a hook needs, as the launcher would')
+
+    const set = init('set', { MSYSTEM: 'MINGW64' })
+    assert.equal(set.code, 0, set.said)
+    assert.equal(hookRuns(), 2, 'a run with MSYSTEM set is handed the launcher, never the binary the run before it was')
+  } finally { m.cleanup() }
 })
 
 test('the freshness refresh is detached, silent, and rooted in the tool', () => {
