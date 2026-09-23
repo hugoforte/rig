@@ -49,17 +49,17 @@ test('a stage declared after the plan was written makes it stale, and rig next s
 })
 
 test('and refreshing brings it back, rewriting only the generated region', () => {
-  const before = fs.readFileSync(planFile('sliced'), 'utf8')
+  const written = fs.readFileSync(planFile('sliced'), 'utf8')
   // A hand edit in the prose half, to prove the refresh does not touch it.
-  fs.writeFileSync(planFile('sliced'), before.replace('## Rollback', '## Rollback\n\nRevert the migration; it is additive.'))
+  fs.writeFileSync(planFile('sliced'), written.replace('## Rollback', '## Rollback\n\nRevert the migration; it is additive.'))
 
   const r = rig(['plan', '--work', 'sliced', '--refresh'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /refreshed the deploy order/)
 
-  const after = fs.readFileSync(planFile('sliced'), 'utf8')
-  assert.match(after, /feat\/sliced-three/, 'the new stage reached the table')
-  assert.match(after, /Revert the migration; it is additive\./, 'the hand-written prose is untouched')
+  const refreshed = fs.readFileSync(planFile('sliced'), 'utf8')
+  assert.match(refreshed, /feat\/sliced-three/, 'the new stage reached the table')
+  assert.match(refreshed, /Revert the migration; it is additive\./, 'the hand-written prose is untouched')
   assert.doesNotMatch(rig(['next', '--work', 'sliced']).out, /no longer matches the stack/)
 })
 

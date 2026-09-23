@@ -3,11 +3,11 @@
 // files from, and the code that runs is this checkout's. The two tests whose subject is a
 // process start one of their own; test/harness.mjs says when else a run is a subprocess.
 //
-// The copy is for git alone: it has no `.git`, which is what keeps `rig update` and every
-// freshness path off the checkout these tests are running from (test/installation.test.mjs
-// is where a real installation with a remote is built, and says so). The machine config no
-// longer needs it — `RIG_LOCAL_CONFIG` puts rig.local.json in the temp dir, so nothing this
-// suite writes lands beside the tool.
+// What the copy lacks matters as much as what it holds: it has no `.git`, which is what keeps
+// `rig update` and every freshness path off the checkout these tests are running from
+// (test/installation.test.mjs is where a real installation with a remote is built, and says
+// so). And no machine config is written into it — `RIG_LOCAL_CONFIG` puts rig.local.json in
+// the temp dir, so nothing this suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
 // new before close). node:test runs a file's tests serially by default; running a
@@ -433,8 +433,8 @@ test('with nothing to commit, a mutating command still pushes a commit an earlie
 test('a mutating command fast-forwards a data root another machine moved', () => {
   // The correctness half of this feature: rig pushed the data root but never pulled it, so a
   // second machine read stale records and wrote on top of them. Nothing else reaches the
-  // plain behind-and-clean path — the tests either side of this one are behind *and* dirty,
-  // or behind *and* ahead, which take different branches.
+  // plain behind-and-clean path — the other data-root tests here are behind *and* dirty,
+  // behind *and* ahead, or ahead alone, which take different branches.
   const other = path.join(tmp, 'other-machine')
   assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
   fs.writeFileSync(path.join(other, 'FROM-THE-OTHER-MACHINE.md'), 'written elsewhere')

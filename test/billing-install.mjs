@@ -1,15 +1,16 @@
 // One installation with `acme/billing` published and `rig init` run, and every move the tests
 // that drive `close`, `abandon`, `next`, `stage`, `pr` and `plan` make against it.
 //
-// Each of those subjects is a file with an installation of its own, built from here, rather
-// than one file sharing one. `node --test` runs files in parallel and the tests within a file
-// in order, so subjects in one file wait on each other. Apart, each costs an installation of
-// extra work, and buys a subject that runs without the others and a suite CI can divide by
-// file into parts of a similar size. A full run gains less than that suggests: it is bound by
-// process creation and I/O rather than by cores.
+// Six files test them, each with an installation of its own built from here: close, abandon
+// and next in test/close.test.mjs, stage across stages-e2e, stage-cut and stage-tickets, and pr
+// and plan in files of their own. `node --test` runs files in parallel and the tests within a
+// file in order, so subjects in one file wait on each other. Apart, each file costs an
+// installation of extra work, and buys subjects that run without the others and a suite CI
+// can divide by file into parts of a similar size. A full run gains less than that suggests:
+// it is bound by process creation and I/O rather than by cores.
 //
-// The subjects are independent — each builds its own works, and nothing but the installation
-// crosses between them. What does cross is here.
+// The files are independent — each builds its own installation and its own works. What they
+// share is the code below.
 //
 // These helpers are this scenario's and not every scenario's, which is why they are not in
 // `test/harness.mjs`: five other test files publish a bare repo of their own, in five shapes,
