@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Cross-repo work harness. Zero dependencies.",
-  "engines": { "node": ">=18.15.0" },
+  "engines": { "node": "^18.15.0 || >=19.6.0" },
   "bin": { "rig": "bin/rig.mjs" },
   "scripts": {
     "test": "node --test"
