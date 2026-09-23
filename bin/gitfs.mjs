@@ -21,12 +21,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Environment variables that move git's idea of where the repository is. One of these set
-// means git is answering a different question from the one the filesystem was asked, and
-// reproducing each of them here would be a second implementation of the part of git most
-// likely to change. `GIT_DISCOVERY_ACROSS_FILESYSTEM` is in the list for the opposite
-// reason: without it git stops the walk at a filesystem boundary, which the walk below
-// reproduces, and with it git does not.
+// Environment variables that move git's idea of where the repository is. One of these set —
+// even to nothing, which git still reads as set — means git is answering a different
+// question from the one the filesystem was asked, and reproducing each of them here would be
+// a second implementation of the part of git most likely to change.
+// `GIT_DISCOVERY_ACROSS_FILESYSTEM` is in the list for the opposite reason: without it git
+// stops the walk at a filesystem boundary, which the walk below reproduces, and with it git
+// does not.
 export const MOVED_BY = [
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
   'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
@@ -117,7 +118,7 @@ export const notARepository = place => place !== null && place.gitDir === null
 // git stops on for `safe.directory`. Nothing is done about it because nothing can be: a
 // machine where git refuses to read rig's own checkouts has no working rig to protect.
 export function discover (start, env = process.env) {
-  for (const name of MOVED_BY) if (env[name]) return null
+  for (const name of MOVED_BY) if (env[name] !== undefined) return null
   let dir
   try { dir = fs.realpathSync.native(path.resolve(start)) } catch { return null }
   // git records the starting directory's device and stops when the walk leaves it, so that

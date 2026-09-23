@@ -158,6 +158,7 @@ test('a work tree git has been told to look elsewhere for is handed back to git'
 test('GIT_DIR in the environment is git\'s question, and is handed back unanswered', () => {
   assert.equal(discover(own, { ...env, GIT_DIR: path.join(bare) }), null)
   assert.equal(discover(own, { ...env, GIT_CEILING_DIRECTORIES: tmp }), null)
+  assert.equal(discover(own, { ...env, GIT_DIR: '' }), null, 'set and empty is still set, and git refuses it')
   assert.notEqual(discover(own, env), null, 'and an ordinary environment is still answered')
 })
 
