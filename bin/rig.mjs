@@ -550,7 +550,8 @@ function prepareDataRoot () {
   let before = null
   if (exists(root) && where().split) {
     // The full reading, for three fields: what it costs over the identity questions is
-    // one `status` and two counts, and the network fetch on the next line dwarfs them.
+    // one `status`, whose branch header carries the distance, and the network fetch on the
+    // next line dwarfs it.
     // The reading worth keeping cheap is the freshness one, which runs after every command.
     before = co.describe(root)
     if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
@@ -584,7 +585,7 @@ function prepareDataRoot () {
 // whether anything was already waiting to be pushed. A command writes records into the data
 // root and never commits into it, moves its branch or changes its upstream; the fast-forward
 // above runs only with nothing ahead and leaves nothing ahead. So `commitDataRoot` reads these
-// five rather than buying `describe`'s two git calls a second time — which was the whole cost
+// five rather than buying `describe`'s `git status` a second time — which was the whole cost
 // of `rig save` on a data root with nothing new in it.
 //
 // The tree is the half that *did* change, and it comes back null, because a reading that does
