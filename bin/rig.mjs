@@ -63,7 +63,10 @@ const C = {
 let current = invocationOf({})
 
 const toolRoot = () => current.toolRoot
-const cwd = () => current.cwd
+// Where the run is standing, for the commands that need to know. A run handed none is standing
+// where the process is, and the process is asked only now: a shell left in a folder `rig close`
+// deleted has no cwd to give, and `rig help` from there has no use for one.
+const cwd = () => current.cwd ?? process.cwd()
 const env = () => current.env
 // Windows refuses to remove a directory that is some process's cwd, so `rig close` and
 // `rig detach` move out of the one they are standing in. Where the *run* is standing always
@@ -122,12 +125,14 @@ const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === R
 // Without them a child inherits the *process's*, which for a run that is not the process is
 // somebody else's: an isolated run's `GIT_CONFIG_GLOBAL` lost to the machine's real git
 // config, and `git rev-parse --show-toplevel` answering for a directory the run never named.
+// A run handed no cwd is the process's own, so its children inherit that one without anything
+// having to read it first.
 //
 // `opts.env` is additions to the run's environment rather than a replacement, because that is
 // what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
 // there, and a replacement would drop everything an isolated run depends on.
 function exec (cmd, args, { env: extra, ...opts } = {}) {
-  const options = { ...spawnDefaults(current.command), cwd: cwd(), env: extra ? { ...env(), ...extra } : env(), ...opts }
+  const options = { ...spawnDefaults(current.command), cwd: current.cwd, env: extra ? { ...env(), ...extra } : env(), ...opts }
   const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args, options)
   if (r.error) die(spawnFailure(cmd, args, r.error, options.cwd))
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
@@ -383,7 +388,7 @@ function repoAtCwd () {
 // every caller of `where` wants the same answer and threading it through all of them would be
 // a second way to be wrong about which knowledge is in hand.
 const where = () => (current.location ??= locate(toolRoot(), env(), {
-  data: current.requestedData, repos: current.requestedRepos, repoAt: repoAtCwd, cwd: cwd(),
+  data: current.requestedData, repos: current.requestedRepos, repoAt: repoAtCwd, cwd: current.cwd,
 }))
 
 // `current` chose this root, and no flag, shell or work folder did. Said by the commands
@@ -426,7 +431,7 @@ function adapterResolver (envVar, viaCli, inMemory) {
       const file = env()[envVar]
       if (!file) {
         const spawnCli = args =>
-          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: cwd(), env: env() })
+          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: env() })
         return (resolved = viaCli({ exec: spawnCli }))
       }
       fake = { file, state: exists(file) ? readJson(file) : {} }
@@ -3819,12 +3824,13 @@ function readProcessStdin () {
   try { return fs.readFileSync(0, 'utf8').trim() } catch { return '' }
 }
 
-// The invocation `run` works in, with the CLI's answer for everything a caller left out.
+// The invocation `run` works in, with the CLI's answer for everything a caller left out —
+// except the cwd, whose answer is left unasked until a command needs it (see `cwd` above).
 // A function declaration and not an arrow, because the process's own invocation is built at
 // the top of this file and needs it hoisted.
 function invocationOf ({
   toolRoot = MODULE_ROOT,
-  cwd = process.cwd(),
+  cwd,
   env = process.env,
   stdin = readProcessStdin,
   out = s => process.stdout.write(s),

@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { run } from '../bin/rig.mjs'
+import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 import { makeInstall, strip } from './harness.mjs'
 
 // Two installations, because one cannot show that a run does not read the other's. Each has
@@ -106,4 +107,26 @@ test('a run handed a crippled PATH is never told what a run with a whole one fou
 
   assert.match(doctor(crippled), /git — not on PATH/, 'the crippled run was answered from the whole one')
   assert.doesNotMatch(doctor(one.env), /git — not on PATH/, 'the whole run was answered from the crippled one')
+})
+
+// ------------------------------------------------------------ the CLI's half
+
+// What `run` does with what it was *not* handed, which is how the CLI calls it and how no
+// in-process caller in the suite ever does.
+
+test('a run handed no cwd asks the process for one only when a command needs it', () => {
+  // `rig close` run from inside a work folder leaves the shell standing in a directory that is
+  // gone, and there `process.cwd()` throws. `help` and a command pinned to a root by name need
+  // no directory at all, and the next command from that shell is often one of them.
+  const real = process.cwd
+  process.cwd = () => { throw Object.assign(new Error('ENOENT: no such file or directory, uv_cwd'), { code: 'ENOENT' }) }
+  try {
+    for (const args of [['help'], ['list', '--quick', '--data', DEFAULT_ROOT_NAME]]) {
+      let said = ''
+      const code = run(args, { toolRoot: one.install, env: one.env, out: s => { said += s }, err: s => { said += s } })
+      assert.equal(code, 0, `rig ${args.join(' ')}: ${strip(said)}`)
+    }
+  } finally {
+    process.cwd = real
+  }
 })
