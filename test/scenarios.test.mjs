@@ -1,7 +1,7 @@
 // Journeys: one machine, walked through a sequence of states, with nothing restored between
 // the steps.
 //
-// Every other subprocess suite starts from a machine that has nothing and asserts one
+// Every other CLI suite starts from a machine that has nothing and asserts one
 // command. The bugs this file exists for are in the *second* command against a machine that
 // already had state — an existing root, an existing `current`, an existing legacy pointer —
 // and none of them is in resolution, which is where the fast tests are. Resolution order

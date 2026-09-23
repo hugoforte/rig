@@ -1,4 +1,7 @@
-// Runs a temp copy of the tool as a subprocess against temp work and data roots.
+// Drives a temp copy of the tool against temp work and data roots. The runs happen in this
+// process, through `bin/rig.mjs`'s `run(argv, io)`: the copy is the installation rig reads its
+// files from, and the code that runs is this checkout's. The two tests whose subject is a
+// process start one of their own; test/harness.mjs says when else a run is a subprocess.
 //
 // The copy is for git alone: it has no `.git`, which is what keeps `rig update` and every
 // freshness path off the checkout these tests are running from (test/installation.test.mjs
