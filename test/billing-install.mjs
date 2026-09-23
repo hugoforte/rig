@@ -126,21 +126,21 @@ export function billingInstall (prefix) {
 // `pr` and `plan` all need before they have anything to render. Three files build it, so it
 // is built the same way in all three: real branches cut in the worktree, and the pull requests
 // seeded so the live base wins over git the way it does in life.
-export function slicedWork (m, id = 'sliced') {
+export function slicedWork (m) {
   const { rig, cutStage, github, setGithub } = m
-  assert.equal(rig(['new', id, '--title', 'Sliced work', '--type', 'feat', '--no-ticket']).code, 0)
-  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
-  assert.equal(rig(['stage', `feat/${id}-one`, '--delivers', 'the schema', '--work', id]).code, 0)
-  assert.equal(rig(['stage', `feat/${id}-two`, '--delivers', 'the endpoints', '--work', id]).code, 0)
+  assert.equal(rig(['new', 'sliced', '--title', 'Sliced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['stage', 'feat/sliced-one', '--delivers', 'the schema', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['stage', 'feat/sliced-two', '--delivers', 'the endpoints', '--work', 'sliced']).code, 0)
 
-  const opts = { work: id, repo: 'billing', back: `feat/${id}-work` }
-  cutStage({ ...opts, branch: `feat/${id}-one`, from: `feat/${id}-work`, message: 'the schema' })
-  cutStage({ ...opts, branch: `feat/${id}-two`, from: `feat/${id}-one`, message: 'the endpoints' })
+  const opts = { work: 'sliced', repo: 'billing', back: 'feat/sliced-work' }
+  cutStage({ ...opts, branch: 'feat/sliced-one', from: 'feat/sliced-work', message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/sliced-two', from: 'feat/sliced-one', message: 'the endpoints' })
 
   const state = github()
   state.repos['acme/billing'].prs.push(
-    { branch: `feat/${id}-two`, number: 11, state: 'OPEN', url: 'https://github.com/acme/billing/pull/11', base: `feat/${id}-one`, openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
-    { branch: `feat/${id}-one`, number: 10, state: 'MERGED', url: 'https://github.com/acme/billing/pull/10', base: `feat/${id}-work`, openedAt: '2026-09-18T00:00:00Z', mergedAt: '2026-09-18T12:00:00Z', commits: [] },
+    { branch: 'feat/sliced-two', number: 11, state: 'OPEN', url: 'https://github.com/acme/billing/pull/11', base: 'feat/sliced-one', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+    { branch: 'feat/sliced-one', number: 10, state: 'MERGED', url: 'https://github.com/acme/billing/pull/10', base: 'feat/sliced-work', openedAt: '2026-09-18T00:00:00Z', mergedAt: '2026-09-18T12:00:00Z', commits: [] },
   )
   setGithub(state)
 }
