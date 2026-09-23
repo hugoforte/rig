@@ -85,27 +85,33 @@ function gitFileTarget (file, dir) {
   return m ? path.resolve(dir, m[1]) : null
 }
 
-// The three settings that make this walk's answer *wrong* rather than merely missing.
+// The settings that make this walk's answer *wrong* rather than merely missing.
 // `core.worktree` puts the work tree somewhere no `.git` entry names — git reports that
 // other directory as the toplevel, and the walk would report the one holding the file.
-// `core.bare` on a discovered `.git` says there is no work tree at all. And a ref storage
-// this module cannot read (`reftable`) leaves a placeholder in HEAD, so `headBranch` below
-// would name a branch that does not exist.
+// `core.bare` on a discovered `.git` says there is no work tree at all. And a repository
+// format past the plain one is git's to read: a `repositoryformatversion` past 1, or an
+// extension it does not know, is a repository git refuses to open, and the extensions it
+// does know change what this reads — a ref storage that is not files leaves a placeholder in
+// HEAD, a per-worktree config file adds settings. So any `[extensions]` section at all hands
+// the question back, rather than being told apart.
 //
-// Read from the common config, plus the per-worktree one when `extensions.worktreeConfig`
-// put a second file there — and read for every way git's grammar lets a key be written, not
-// only the way git writes one: on its section header's line, with no value, with a comment
-// after it, in any section. Anything short of a plain `bare = false` counts as bare.
-// Conservative on purpose, and not cheap: every worktree rig makes is a linked worktree of
-// a `git clone --bare` mirror, whose common config says `bare = true`. git ignores that for
-// a linked worktree unless `extensions.worktreeConfig` is on, and this reads it all the
-// same, so rig's own commonest layout is handed back to git and paid for in subprocesses.
-// The cost of getting it wrong is a wrong answer stated confidently.
-function overridden (gitDir, commonDir, bareExpected) {
-  const lines = ((read(path.join(commonDir, 'config')) ?? '') + '\n' +
-    (read(path.join(gitDir, 'config.worktree')) ?? ''))
-    .split('\n').map(line => line.replace(/^\s*\[[^\]]*\]/, '').trim())
-  if (lines.some(line => /^(worktree|refstorage)\b/i.test(line))) return true
+// Read from the common config, for every way git's grammar lets a key be written, not only
+// the way git writes one: after any number of section headers on its line, with no value,
+// with a comment after it, in any section. Anything short of a plain `bare = false` counts as
+// bare. The per-worktree `config.worktree` is not read, because git reads it only when
+// `extensions.worktreeConfig` is on, and that is already handed back.
+//
+// Conservative on purpose, and not cheap: every worktree rig makes is a linked worktree of a
+// `git clone --bare` mirror, whose common config says `bare = true`. git ignores that for a
+// linked worktree, and this reads it all the same, so rig's own commonest layout is handed
+// back to git and paid for in subprocesses. The cost of getting it wrong is a wrong answer
+// stated confidently.
+function overridden (commonDir, bareExpected) {
+  const text = read(path.join(commonDir, 'config')) ?? ''
+  if (/\[\s*extensions\s*\]/i.test(text)) return true
+  const lines = text.split('\n').map(line => line.replace(/^\s*(?:\[[^\]]*\]\s*)*/, '').trim())
+  if (lines.some(line => /^worktree\b/i.test(line))) return true
+  if (lines.some(line => /^repositoryformatversion\b/i.test(line) && !/^repositoryformatversion\s*=\s*[01]$/i.test(line))) return true
   return !bareExpected &&
     lines.some(line => /^bare\b/i.test(line) && !/^bare\s*=\s*(false|no|off|0)$/i.test(line))
 }
@@ -138,18 +144,22 @@ export const notARepository = place => place !== null && place.gitDir === null
 // slashes on Windows. Every reader of them either compares with `sameDir`, which resolves
 // both sides, or prints them for a person, for whom the native form is the better one.
 //
-// The one case this answers and git refuses is a repository owned by another user, which
-// git stops on for `safe.directory`. Nothing is done about it because nothing can be: a
-// machine where git refuses to read rig's own checkouts has no working rig to protect.
+// Two of git's refusals are placed all the same, because what decides them is not in the
+// repository: one owned by another user, which git refuses for `safe.directory`, and a bare
+// repository found by walking, which `safe.bareRepository=explicit` refuses. Both are read
+// from the global config, which this never reads. Either is placed where git would have
+// placed it had it agreed to look, and a caller that goes on to ask git anything gets git's
+// refusal then, in git's words; `repoAtCwd`, which would otherwise name a repository from the
+// placement alone, asks git first.
 export function discover (start, env = process.env) {
   for (const name of MOVED_BY) if (env[name] !== undefined) return null
   let dir
   try { dir = fs.realpathSync.native(path.resolve(start)) } catch { return null }
   // POSIX git records the starting directory's device and stops when the walk leaves it, so
   // that a repository on the far side of a mount point is not claimed to own what is under
-  // it, and so does this. Git for Windows never compares devices — its `st_dev` is always
-  // zero — and Node's `dev` there is a volume's serial on some paths and zero on others, so
-  // on Windows leaving the starting device hands the question back instead.
+  // it, and so does this. Git for Windows makes the same comparison with an `st_dev` that is
+  // always zero, so it never stops, and Node's `dev` there is a volume's serial on some paths
+  // and zero on others — so on Windows leaving the starting device hands the question back.
   const device = statOf(dir)?.dev ?? null
 
   for (;;) {
@@ -165,7 +175,7 @@ export function discover (start, env = process.env) {
       if (!gitDir) return NO_REPOSITORY
       if (isGitDir(gitDir)) {
         const common = commonOf(gitDir)
-        return overridden(gitDir, common, false) ? null : { top: dir, gitDir, commonDir: common }
+        return overridden(common, false) ? null : { top: dir, gitDir, commonDir: common }
       }
       // A `.git` *directory* that is not a repository is not a repository at all, and git
       // keeps walking; only the file form is fatal.
@@ -173,7 +183,7 @@ export function discover (start, env = process.env) {
     }
     if (isGitDir(dir)) {
       const common = commonOf(dir)
-      return overridden(dir, common, true) ? null : { top: null, gitDir: dir, commonDir: common }
+      return overridden(common, true) ? null : { top: null, gitDir: dir, commonDir: common }
     }
     const up = path.dirname(dir)
     if (up === dir) return NO_REPOSITORY
@@ -183,9 +193,9 @@ export function discover (start, env = process.env) {
 }
 
 // The branch a git dir's HEAD names, and null when it names no branch — a detached HEAD, an
-// unreadable HEAD, or a HEAD pointing outside `refs/heads/`. Exact for every case rig
-// creates, and it differs from `symbolic-ref --short HEAD` in three places worth naming. In
-// the first two, `--short` was answering a question rig was not asking.
+// unreadable HEAD, or a HEAD pointing outside `refs/heads/`. It differs from
+// `symbolic-ref --short HEAD` in two places, and in both `--short` was answering a question
+// rig was not asking.
 //
 // `--short` abbreviates for *display*, and abbreviates less when the short form would be
 // ambiguous: on a branch `rel` in a repository that also has a tag `rel`, it prints
@@ -198,12 +208,23 @@ export function discover (start, env = process.env) {
 // it is what they should do with it — `fastForward` calls it detached and declines to move
 // anything, which is the right answer for a head that is not on a branch.
 //
-// The third is a branch that is itself a symbolic ref, the alias a rename from `master` to
-// `main` can leave behind: HEAD names `refs/heads/master`, which names `refs/heads/main`.
-// `symbolic-ref` follows the chain to `main`, and so does `status`'s `branch.head`; this
-// reads one level and says `master`. There git's answer is the better one, and this one
-// stands because rig never makes such an alias.
+// A branch that is itself a symbolic ref — the alias a rename from `master` to `main` can
+// leave behind, HEAD naming `refs/heads/master` and that naming `refs/heads/main` — is
+// followed the way git follows it, to `main`. A symbolic ref is only ever a loose file, and a
+// ref storage that is not files has already been handed back, so the loose file in the common
+// directory is the whole of the reading. git gives up after five links, and so does this.
+//
+// A HEAD that starts with a sha is detached whatever follows it, because git reads the sha
+// and nothing after it.
 export function headBranch (gitDir) {
-  const m = /^ref:\s*refs\/heads\/(.+)$/m.exec(headOf(gitDir) ?? '')
-  return m ? m[1].trim() : null
+  const common = commonOf(gitDir)
+  let text = headOf(gitDir)
+  for (let links = 0; links <= 5; links++) {
+    const m = /^ref:\s*refs\/heads\/(.+?)\s*$/.exec(text ?? '')
+    if (!m) return null
+    const next = read(path.join(common, 'refs', 'heads', m[1]))
+    if (next === null || !next.startsWith('ref:')) return m[1]
+    text = next
+  }
+  return null
 }

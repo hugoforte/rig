@@ -188,6 +188,22 @@ test('a `.git` that is neither a file nor a directory is walked past, the way gi
   assert.ok(same(agreesWithGit(piped, 'a FIFO called .git').top, own))
 })
 
+test('a `.git` that stats as neither a file nor a directory is never opened', t => {
+  // The FIFO above, on every platform: the stub stands in for any entry that is not a file or
+  // a directory. What is really there is a `.git` file naming nothing, which would stop the
+  // walk if it were read — so a walk that reaches `own` never read it.
+  const odd = mk(path.join(own, 'odd'))
+  const entry = path.join(odd, '.git')
+  fs.writeFileSync(entry, 'gitdir: ../nowhere\n')
+  const statSync = fs.statSync
+  t.mock.method(fs, 'statSync', (p, ...rest) => {
+    const stats = statSync(p, ...rest)
+    if (path.resolve(p) === path.resolve(entry)) Object.assign(stats, { isFile: () => false, isDirectory: () => false })
+    return stats
+  })
+  assert.ok(same(discover(odd, env).top, own))
+})
+
 test('an empty directory called `.git` is walked past, the way git walks past it', () => {
   const child = mk(path.join(own, 'child'))
   mk(path.join(child, '.git'))
@@ -245,11 +261,38 @@ test('a work tree git has been told to look elsewhere for is handed back to git'
 })
 
 test('a setting that shares its section header\'s line is still read, the way git reads it', () => {
+  // git takes any number of headers on one line, the last of them naming the key's section.
   const headed = seeded('headed')
   const elsewhere = mk(path.join(tmp, 'headed-tree'))
-  fs.appendFileSync(path.join(headed, '.git', 'config'), `[core] worktree = ${elsewhere.replace(/\\/g, '/')}\n`)
-  assert.ok(same(git(headed, 'rev-parse', '--show-toplevel').out, elsewhere), 'git answers the other directory')
-  assert.equal(discover(headed, env), null)
+  const config = path.join(headed, '.git', 'config')
+  const plain = fs.readFileSync(config, 'utf8')
+  for (const header of ['[core]', '[foo] [core]', '[foo][core]']) {
+    fs.writeFileSync(config, `${plain}${header} worktree = ${elsewhere.replace(/\\/g, '/')}\n`)
+    assert.ok(same(git(headed, 'rev-parse', '--show-toplevel').out, elsewhere), `git answers the other directory after ${header}`)
+    assert.equal(discover(headed, env), null, `${header} is handed back`)
+  }
+})
+
+test('a repository whose format git refuses, or whose extensions it would have to read, is git\'s', () => {
+  // A version past 1, or an extension git does not know, is a repository git will not open at
+  // all; a placement for it would answer for a directory every later git call refuses. And
+  // what an extension git does know changes — the ref storage, a per-worktree config — is not
+  // this module's to reproduce.
+  const formatted = seeded('formatted')
+  const config = path.join(formatted, '.git', 'config')
+  const plain = fs.readFileSync(config, 'utf8')
+  const refused = {
+    'repositoryformatversion = 2': plain.replace(/repositoryformatversion = 0/, 'repositoryformatversion = 2'),
+    'an unknown extension': plain.replace(/repositoryformatversion = 0/, 'repositoryformatversion = 1') + '[extensions]\n\tnoSuchThing = true\n',
+  }
+  for (const [what, text] of Object.entries(refused)) {
+    fs.writeFileSync(config, text)
+    assert.notEqual(git(formatted, 'rev-parse', '--show-toplevel').code, 0, `git refuses ${what}`)
+    assert.equal(discover(formatted, env), null, `${what} is handed back`)
+  }
+  fs.writeFileSync(config, plain.replace(/repositoryformatversion = 0/, 'repositoryformatversion = 1') + '[foo] [extensions] worktreeConfig = true\n')
+  assert.equal(git(formatted, 'rev-parse', '--show-toplevel').code, 0, 'git opens a known extension')
+  assert.equal(discover(formatted, env), null, 'and it is handed back, wherever its header is')
 })
 
 test('`core.bare` is handed back however it is spelled, unless it is plainly false', () => {
@@ -259,8 +302,8 @@ test('`core.bare` is handed back however it is spelled, unless it is plainly fal
   const spelled = seeded('spelled')
   const config = path.join(spelled, '.git', 'config')
   const unset = fs.readFileSync(config, 'utf8').replace(/^[ \t]*bare = false\r?\n/m, '')
-  for (const bare of ['[core] bare = true', '[core]\n\tbare', '[core]\n\tbare = true # a note',
-    '[core]\n\tbare = "true"', '[core]\n\tbare = 2']) {
+  for (const bare of ['[core] bare = true', '[foo] [core] bare = true', '[core] [core] bare', '[core]\n\tbare',
+    '[core]\n\tbare = true # a note', '[core]\n\tbare = "true"', '[core]\n\tbare = 2']) {
     fs.writeFileSync(config, `${unset}${bare}\n`)
     assert.notEqual(git(spelled, 'rev-parse', '--show-toplevel').code, 0, `git reads ${JSON.stringify(bare)} as bare`)
     assert.equal(discover(spelled, env), null, `${JSON.stringify(bare)} is handed back`)
@@ -303,8 +346,27 @@ test('an unborn HEAD is still the branch it will be', () => {
   assert.equal(git(fresh, 'symbolic-ref', '-q', '--short', 'HEAD').out, 'main')
 })
 
+test('a branch that is itself a symbolic ref is followed to the branch it names, as git follows it', () => {
+  // The alias a rename from `master` to `main` can leave behind.
+  const aliased = seeded('aliased')
+  gitMust(aliased, 'symbolic-ref', 'refs/heads/master', 'refs/heads/main')
+  gitMust(aliased, 'symbolic-ref', 'HEAD', 'refs/heads/master')
+  assert.equal(git(aliased, 'symbolic-ref', '-q', '--short', 'HEAD').out, 'main')
+  assert.equal(headBranch(discover(aliased, env).gitDir), 'main')
+})
+
+test('a HEAD that is a sha is detached, whatever follows it', () => {
+  // git reads the forty hex digits and nothing after them, so a `ref:` line below them names
+  // no branch.
+  const trailing = seeded('trailing')
+  const sha = gitMust(trailing, 'rev-parse', 'HEAD')
+  fs.writeFileSync(path.join(trailing, '.git', 'HEAD'), `${sha}\nref: refs/heads/main\n`)
+  assert.notEqual(git(trailing, 'symbolic-ref', '-q', 'HEAD').code, 0, 'git says detached')
+  assert.equal(headBranch(discover(trailing, env).gitDir), null)
+})
+
 test('a branch whose name a tag also carries is still named by its ref', () => {
-  // The one place this deliberately differs from `symbolic-ref --short`, which abbreviates
+  // One of the two places this deliberately differs from `symbolic-ref --short`, which abbreviates
   // for display and abbreviates less when the short form would be ambiguous. rig puts this
   // value in messages, compares it with a default branch and caches it as a branch name, so
   // `heads/rel` would be a branch name that names no branch.
