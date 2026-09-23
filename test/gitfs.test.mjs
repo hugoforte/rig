@@ -98,15 +98,25 @@ test('a linked worktree keeps its own git dir and the main checkout\'s common di
 })
 
 test('a bare repository has no work tree, and one inside a checkout still answers for itself', () => {
-  // git looks at a directory before it looks for a `.git` in it, and rig's mirrors are bare
-  // repositories under a work root. Walking for `.git` first would hand back whatever
-  // checkout happened to be above them, which is a wrong answer rather than a missing one.
+  // rig's mirrors are bare repositories under a work root. A mirror has no `.git`, so the
+  // walk reaches it before the checkout above it — and answering with that checkout would
+  // be a wrong answer rather than a missing one.
   assert.equal(agreesWithGit(bare, 'a bare repository').top, null)
   const inside = mk(path.join(own, 'inner.git'))
   assert.equal(spawnSync('git', ['init', '-q', '--bare', inside], { encoding: 'utf8', env }).status, 0)
   const place = agreesWithGit(inside, 'a bare repository inside a checkout')
   assert.equal(place.top, null, 'the checkout around it is not its work tree')
   assert.ok(same(place.gitDir, inside))
+})
+
+test('a checkout whose root is also shaped like a bare repository is still a checkout', () => {
+  // The one shape that tells the order of git's two looks apart: a stray `git init --bare .`
+  // in a checkout's root leaves `HEAD`, `objects` and `refs` beside its `.git`, and git finds
+  // the `.git` before it asks whether the directory is itself a repository.
+  const stray = seeded('stray-bare')
+  gitMust(stray, 'init', '-q', '--bare', '.')
+  assert.ok(same(agreesWithGit(stray, 'a checkout with a bare repository in its root').top, stray))
+  assert.ok(same(agreesWithGit(mk(path.join(stray, 'sub')), 'a directory inside it').top, stray))
 })
 
 test('a directory that is no repository is said to be one, without a repository above it', () => {

@@ -98,10 +98,12 @@ const NO_REPOSITORY = Object.freeze({ top: null, gitDir: null, commonDir: null }
 export const notARepository = place => place !== null && place.gitDir === null
 
 // Where the repository containing `dir` is, answered the way git answers it: walk up, and
-// at each level look at the directory itself before looking for a `.git` inside it. That
-// order is not cosmetic — a bare repository sitting inside somebody's checkout answers for
-// itself, and rig's own mirrors are bare repositories under a work root — so checking
-// `.git` first would report the enclosing checkout as the toplevel of a mirror.
+// at each level look for a `.git` inside the directory before asking whether the directory
+// is itself a bare repository. That order is not cosmetic — a stray `git init --bare .` in
+// a checkout's root leaves a directory that is both, and git calls it a checkout. A bare
+// repository inside somebody's checkout still answers for itself, which matters because
+// rig's own mirrors are bare repositories under a work root: a mirror has no `.git`, and
+// the walk reaches it before it reaches the checkout around it.
 //
 //   null                       nobody could tell; ask git, whose answer is the only one
 //   { top: null, gitDir: null} no repository above this directory — `fatal: not a git
@@ -126,10 +128,6 @@ export function discover (start, env = process.env) {
   const device = statOf(dir)?.dev ?? null
 
   for (;;) {
-    if (isGitDir(dir)) {
-      const common = commonOf(dir)
-      return overridden(dir, common, true) ? null : { top: null, gitDir: dir, commonDir: common }
-    }
     const entry = path.join(dir, '.git')
     const found = statOf(entry)
     if (found) {
@@ -145,6 +143,10 @@ export function discover (start, env = process.env) {
       // A `.git` *directory* that is not a repository is not a repository at all, and git
       // keeps walking; only the file form is fatal.
       if (!found.isDirectory()) return NO_REPOSITORY
+    }
+    if (isGitDir(dir)) {
+      const common = commonOf(dir)
+      return overridden(dir, common, true) ? null : { top: null, gitDir: dir, commonDir: common }
     }
     const up = path.dirname(dir)
     if (up === dir) return NO_REPOSITORY
