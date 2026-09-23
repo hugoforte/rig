@@ -210,32 +210,45 @@ const onPath = cmd => {
 // Available, Capacity, Mounted on. POSIX guarantees `-P` keeps each entry on a single line,
 // which is the whole reason for the flag; the mount point is the rest of the line, because
 // it is the one field allowed to contain spaces.
-// Free space where rig puts worktrees. Asked of the runtime rather than of the platform:
-// `fs.statfsSync` is what `df` and `Get-PSDrive` both go on to ask, and it costs no process
-// at all — which matters because the PowerShell one cost 202ms a call, four times a `git`
-// and by some way the most expensive thing rig ever started.
-//
-// Decision 54 stands and is easier to keep: a check rig cannot make is dropped, never fatal.
-// There is simply no probe left to be missing, so the only way this answers null now is a
-// path the filesystem will not report on — a work root on a disconnected share, or one that
-// is not there yet.
-//
-// `label` names the volume the number is about. Windows has one and it is the whole answer —
-// the drive, or the share a UNC path is on. `statfs` cannot name a POSIX mount point, so
-// there the directory that was measured is the honest label, and a more useful one than
-// `df`'s: the reader is asking about their work root, not about `/`.
-const volumeOf = dir => {
-  if (process.platform !== 'win32') return dir
-  return path.parse(dir).root.replace(/[\\/]+$/, '') || dir
+function parseDf (out) {
+  const row = out.trim().split('\n').slice(1).pop()
+  const cols = row ? row.trim().split(/\s+/) : []
+  if (cols.length < 6) return null
+  const kb = Number(cols[3])
+  if (!Number.isFinite(kb)) return null
+  return { label: cols.slice(5).join(' '), bytes: kb * 1024 }
 }
 
+// Free space where rig puts worktrees: asked of the runtime on Windows and of `df` everywhere
+// else. On Windows `fs.statfsSync` answers without a process, where the `Get-PSDrive` it
+// replaced started a PowerShell at 202ms a call — four times a `git`, and by some way the
+// most expensive thing rig ever started — and libuv counts the free blocks there in the
+// `bsize` it reports, so their product is bytes. Linux counts them in `f_frsize`, which Node
+// does not report, and on a FUSE mount the two differ: Docker Desktop's virtiofs has a 2MiB
+// `bsize` over 16KiB blocks (nodejs/node#62495), which reads as 128 times the free space and
+// turns a nearly full disk into a pass. `df` asks in the right unit, and off Windows it costs
+// about a millisecond.
+//
+// Decision 54: a check rig cannot make is dropped, never fatal. So this answers null when the
+// probe is missing — no `df` on PATH, or a Node without `fs.statfsSync` — and when the path
+// cannot be answered for: a work root on a disconnected share, or one that is not there yet.
+//
+// `label` names the volume the number is about: on Windows the drive, or the share a UNC path
+// is on; anywhere else the mount point `df` found the work root on.
+const volumeOf = dir => path.parse(dir).root.replace(/[\\/]+$/, '') || dir
+
 function freeSpace (dir) {
-  try {
-    const s = fs.statfsSync(dir)
-    const bytes = s.bavail * s.bsize
-    if (!Number.isFinite(bytes)) return null
-    return { label: volumeOf(dir), bytes }
-  } catch { return null }
+  if (process.platform === 'win32') {
+    try {
+      const s = fs.statfsSync(dir)
+      const bytes = s.bavail * s.bsize
+      if (!Number.isFinite(bytes)) return null
+      return { label: volumeOf(dir), bytes }
+    } catch { return null }
+  }
+  if (!onPath('df')) return null
+  const r = exec('df', ['-Pk', dir])
+  return r.code === 0 ? parseDf(r.out) : null
 }
 
 function must (cmd, args, opts = {}) {
@@ -3800,7 +3813,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, effectiveIdentity, freeSpace, realGitFor,
+  spawnDefaults, refreshSpawn, effectiveIdentity, parseDf, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,
   listing,
 }

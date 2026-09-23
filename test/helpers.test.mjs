@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  spawnDefaults, refreshSpawn, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, parseDf, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
 } from '../bin/rig.mjs'
 
@@ -201,21 +201,51 @@ test('the freshness refresh is detached, silent, rooted in the tool, and hidden'
     'the run that armed it decides what it may reach, not the process that happened to host it')
 })
 
-// Free space is asked of the runtime rather than of the platform, so there is no `df` output
-// to misread and no PowerShell to be missing — and the check that used to cost rig its most
-// expensive subprocess now costs it none.
+// Off Windows, `df -Pk` carries the whole check and its output is the only part with anything
+// to get wrong. The samples below are real output.
+test('parseDf: GNU df -Pk', () => {
+  const out = [
+    'Filesystem     1024-blocks     Used Available Capacity Mounted on',
+    '/dev/root         76026616 30988716  45021516      41% /',
+  ].join('\n')
+  assert.deepEqual(parseDf(out), { label: '/', bytes: 45021516 * 1024 })
+})
+
+test('parseDf: BSD df -Pk, as macOS answers', () => {
+  const out = [
+    'Filesystem 1024-blocks      Used Available Capacity  Mounted on',
+    '/dev/disk3s1s1  483816524  10012345 219876543    5%    /',
+  ].join('\n')
+  assert.equal(parseDf(out).bytes, 219876543 * 1024)
+})
+
+test('parseDf: a mount point with spaces is the rest of the line, not one column', () => {
+  const out = [
+    'Filesystem     1024-blocks     Used Available Capacity Mounted on',
+    '/dev/sdb1         41922560  1048576  40873984       3% /mnt/my disk',
+  ].join('\n')
+  assert.equal(parseDf(out).label, '/mnt/my disk')
+})
+
+test('parseDf: output it cannot read is null, so the check is dropped rather than wrong', () => {
+  assert.equal(parseDf(''), null, 'no rows at all')
+  assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on'), null, 'a header and nothing else')
+  assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 - - - - /'), null,
+    'columns that are not numbers')
+})
+
 test('freeSpace: a real directory answers with bytes and the volume it measured', () => {
   const s = freeSpace(os.tmpdir())
-  assert.ok(s, 'the temp directory is on a disk the runtime can report on')
+  assert.ok(s, 'the temp directory is on a disk this machine can report on')
   assert.ok(Number.isFinite(s.bytes) && s.bytes > 0, `implausible free space: ${s.bytes}`)
   assert.ok(s.label, 'something to name the volume in the report')
   if (process.platform === 'win32') assert.match(s.label, /^[A-Za-z]:$/, 'the drive is the answer on Windows')
 })
 
 test('freeSpace: a path the filesystem will not report on is null, so the check is dropped', () => {
-  // Decision 54, and the only way left to reach it: a work root that is not there, or one on
-  // a share nobody is connected to. Dropped, never fatal — doctor is the command you run
-  // because something is already broken.
+  // Decision 54: a work root that is not there, or one on a share nobody is connected to, is
+  // a check rig cannot make. Dropped, never fatal — doctor is the command you run because
+  // something is already broken.
   assert.equal(freeSpace(path.join(os.tmpdir(), 'rig-no-such-directory-8f3a1c')), null)
 })
 
