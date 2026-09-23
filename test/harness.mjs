@@ -145,11 +145,13 @@ export function makeInstall ({
   // piped. What that buys is the ~51ms a Node boot costs on the Windows runner, and rig's
   // module graph on top of it, times the several hundred invocations this suite makes.
   //
-  // A test whose subject *is* the process keeps the subprocess, and three kinds of test do:
+  // A test whose subject *is* the process keeps the subprocess, and four kinds of test do:
   // `test/installation.test.mjs`, which drives `rig update` re-executing the tool that just
   // arrived, the detached freshness refresh, and a crippled PATH; the steps of
-  // `test/scenarios.test.mjs` that drive the previous release; and `rig check --run`, whose
-  // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe.
+  // `test/scenarios.test.mjs` that drive the previous release; `rig check --run`, whose
+  // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe; and the
+  // CLI's own answers for what a caller leaves out of `run` — its stdin, its `chdir` and its
+  // streams — in `test/invocation.test.mjs` and the one brief `test/smoke.test.mjs` pipes in.
   // `inProcess` sets the installation's default and any call may say otherwise.
   //
   // A call naming a different `root` is always a subprocess, whatever it asked for: what it

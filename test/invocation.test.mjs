@@ -4,7 +4,8 @@
 // adapters and picks the in-process one for most files — so if the seam leaked, what would
 // fail is whichever test happened to run second, with a message about a data root or a
 // catalogue and nothing about the leak. These are the five properties that make the in-process
-// adapter honest, each asserted where it is the subject.
+// adapter honest, each asserted where it is the subject, and after them the half of the seam
+// that only the CLI uses.
 //
 // The installations are `makeInstall`'s, because what has to be shown is a *run* against an
 // installation that is not this checkout; `run` is called directly rather than through `rig()`,
@@ -28,7 +29,7 @@ const two = makeInstall({ prefix: 'rig-invocation-two-', localConfig: true, gith
 after(() => { one.cleanup(); two.cleanup() })
 
 // One invocation against one installation, with everything of the machine it may reach named.
-const drive = (m, args, { cwd = m.tmp, input = '' } = {}) => {
+const drive = (m, args, { cwd = m.tmp, input = '', chdir } = {}) => {
   let out = ''
   let err = ''
   const code = run(args, {
@@ -38,6 +39,7 @@ const drive = (m, args, { cwd = m.tmp, input = '' } = {}) => {
     stdin: () => input,
     out: s => { out += s },
     err: s => { err += s },
+    chdir,
   })
   return { code, out: strip(out), err: strip(err) }
 }
@@ -113,7 +115,9 @@ test('a run handed a crippled PATH is never told what a run with a whole one fou
 // ------------------------------------------------------------ the CLI's half
 
 // What `run` does with what it was *not* handed, which is how the CLI calls it and how no
-// in-process caller in the suite ever does.
+// in-process caller in the suite does, and what the process it runs in needs from it: to be
+// moved out of a folder it removes, and to outlive a reader that stops early. The CLI's stdin
+// is read in test/smoke.test.mjs, beside the command that reads it.
 
 test('a run handed no cwd asks the process for one only when a command needs it', () => {
   // `rig close` run from inside a work folder leaves the shell standing in a directory that is
@@ -143,4 +147,26 @@ test('a reader that stops reading is the end of the output, not a crash', async 
   const code = await new Promise(resolve => child.on('close', resolve))
   assert.equal(code, 0, stderr)
   assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error'/)
+})
+
+test('a run moves out of the folder it is closing, and moves the process only by the caller\'s hand', () => {
+  // The run's own cwd always moves. The process belongs to the caller, so the move is handed
+  // to the caller's `chdir` — here one that only notes where it was asked to go, which is what
+  // an in-process caller that must not move the process would do.
+  const before = process.cwd()
+  const moved = []
+  const r = drive(one, ['close'], { cwd: path.join(one.workRoot, 'in-one'), chdir: dir => moved.push(dir) })
+  assert.equal(r.code, 0, r.out + r.err)
+  assert.deepEqual(moved, [one.install], 'the caller was asked to follow it to the tool root')
+  assert.equal(process.cwd(), before, 'and nothing else moved the process')
+})
+
+test('the CLI moves its process out of the work folder it is closing, so the folder can go', () => {
+  // A subprocess, because the process is the subject: Windows will not remove a directory that
+  // is some process's cwd, and this one starts in the folder it removes. Everywhere else the
+  // folder would go regardless, so what this pins is the CLI handing `run` a `chdir` that moves.
+  const folder = path.join(one.workRoot, 'in-one-again')
+  const r = one.rig(['close'], { cwd: folder, inProcess: false })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(folder), r.out)
 })

@@ -250,8 +250,12 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
 })
 
 test('rig new --ticket on a Jira org creates via twg with resolved fields', () => {
+  // A subprocess, so the brief comes down a real stdin: in this process the harness hands the
+  // run a reader of its own, and this is the one test that reads the CLI's. The newline the
+  // pipe ends on is the CLI's to trim, and the context doc, which takes the brief as it came,
+  // is where a brief that was not trimmed would show.
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs'],
-    { input: 'the jira brief\n\nmore detail' })
+    { input: 'the jira brief\n\nmore detail\n', inProcess: false })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /ticket PROJ-1/)
   const record = readJson(path.join(dataRoot, 'work', 't5', 'work.json'))
@@ -262,7 +266,9 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
   assert.equal(issue.body.split('\n\nThe design lives')[0], 'the jira brief\n\nmore detail')
   assert.equal(issue.assignee, 'me')
   assert.deepEqual(issue.fields, { customfield_10755: ['10755'], customfield_10058: 3, customfield_10020: 7 })
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)
+  const doc = fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8')
+  assert.match(doc, /^Tickets: PROJ-1 · Status: Planning$/m)
+  assert.match(doc, /## Problem\n\nthe jira brief\n\nmore detail\n\n## Direction/)
 })
 
 test('a Jira ticket-creation failure surfaces as a clean error, not a stack trace', () => {
