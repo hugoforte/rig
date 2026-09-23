@@ -137,11 +137,14 @@ export function checkouts ({ run, env = () => process.env }) {
   // @{u}`, a `rev-list` per direction, and `status --porcelain` — and carrying the header is
   // exactly what the v2 format is for.
   //
-  // **`branch.ab` is absent precisely when git could not measure**, and `branch.upstream`
-  // says which of the two reasons it is: no upstream configured at all, or one configured
-  // whose ref has gone — the case a squash-merge-and-delete leaves behind. So the null that
-  // `countCommits` used to draw survives, and it is now drawn on better evidence than
-  // `rev-parse @{u}` could give, which failed identically for both.
+  // **`branch.ab` is absent whenever git could not count**, and with an upstream configured
+  // that is two different states. The upstream's ref may have gone — what a
+  // squash-merge-and-delete or a renamed default branch leaves behind — and `branch.upstream`
+  // still names it: that is no upstream at all, there being nothing to move towards or push
+  // onto, and it is what `rev-parse @{u}` answers for it in `identity` and the fallback below.
+  // Or HEAD is unborn, with nothing to count from: the upstream is real and the distance is
+  // unknown. A born HEAD tells the two apart for free; an unborn one asks `@{u}` the same
+  // question the other readings ask, which is one call on a branch with no commits yet.
   //
   // Null for a directory git would not answer about at all. Reading that as a clean tree is
   // the quiet wrong answer that matters most here: it is what `rig update` migrates on.
@@ -155,8 +158,12 @@ export function checkouts ({ run, env = () => process.env }) {
       if (h) header[h[1]] = h[2]
       else if (!line.startsWith('# ')) entries.push(line)
     }
-    const upstream = header['branch.upstream'] ?? null
+    const configured = header['branch.upstream'] ?? null
     const ab = /^\+(\d+) -(\d+)$/.exec(header['branch.ab'] ?? '')
+    const unborn = header['branch.oid'] === '(initial)'
+    const upstream = configured && (ab || (unborn && git(dir, 'rev-parse', '--abbrev-ref', '@{u}').code === 0))
+      ? configured
+      : null
     // `(detached)` and `(initial)` are git's own words for "there is no name here", and
     // both would otherwise be reported as though they were one.
     const named = v => (v && !v.startsWith('(') ? v : null)

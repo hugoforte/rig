@@ -54,6 +54,14 @@ const cloned = name => {
   assert.equal(run('git', ['clone', '-q', bare, local]).code, 0)
   return { bare, local }
 }
+// A checkout whose upstream is still configured and whose ref has gone: what a
+// squash-merge-and-delete, or a remote renaming its default branch, leaves after a prune.
+const goneUpstream = name => {
+  const { bare, local } = cloned(name)
+  gitMust(bare, 'branch', '-m', 'main', 'gone')
+  gitMust(local, 'fetch', '-q', '--prune', 'origin')
+  return local
+}
 // Another machine pushes, as it would while you were not looking.
 const pushFromElsewhere = (bare, file, message) => {
   const theirs = path.join(tmp, `theirs-${path.basename(bare, '.git')}-${file}`)
@@ -418,25 +426,32 @@ test('placing a checkout costs no subprocess, and a directory that is none costs
 })
 
 test('a distance git could not measure is not a reason to move anything', () => {
-  // Real git, where this used to need a fake. An upstream that is still configured and
-  // whose ref has gone is what a squash merge leaves behind, and `status --porcelain=v2
-  // --branch` says exactly that: `branch.upstream` names it, and `branch.ab` is absent
-  // because there is nothing to count against. `rev-parse @{u}` could not tell that from a
-  // branch that never had an upstream at all — it failed identically for both.
-  //
-  // A confident "0 behind" here would report a checkout as current on the strength of a
-  // question nothing answered.
-  const { bare, local } = cloned('unmeasurable')
-  gitMust(bare, 'branch', '-m', 'main', 'gone')
-  gitMust(local, 'fetch', '-q', '--prune', 'origin')
+  // A branch with no commit of its own yet, set to track one that exists: `status
+  // --porcelain=v2 --branch` names the upstream and leaves `branch.ab` out, because there is
+  // nothing to count from. A confident "0 behind" here would report a checkout as current on
+  // the strength of a question nothing answered.
+  const { local } = cloned('unmeasurable')
+  gitMust(local, 'switch', '-q', '--orphan', 'fresh')
+  gitMust(local, 'config', 'branch.fresh.remote', 'origin')
+  gitMust(local, 'config', 'branch.fresh.merge', 'refs/heads/main')
 
   const state = c().describe(local)
-  assert.equal(state.upstream, 'origin/main', 'still configured; it is the ref that went')
+  assert.equal(state.upstream, 'origin/main')
   assert.deepEqual([state.ahead, state.behind], [null, null])
 
   const r = c().fastForward(local)
   assert.equal(r.outcome, 'unmeasurable')
-  assert.equal(r.state.behind, null)
+})
+
+test('an upstream whose ref has gone is no upstream, whichever reading asks', () => {
+  // There is nothing to move towards and nothing to push onto, which is what "no upstream"
+  // already tells every caller: `rig save` keeps the commit local and `rig update` migrates.
+  // Read as unmeasurable, the same data root had `rig save` rebase onto a ref that is not
+  // there and `rig update` refuse the migrations behind it.
+  const local = goneUpstream('gone')
+  assert.equal(c().describe(local).upstream, null)
+  assert.equal(c().identify(local).upstream, null)
+  assert.equal(c().fastForward(local).outcome, 'no-upstream')
 })
 
 test('commitAll stages everything present, including what nobody staged', () => {

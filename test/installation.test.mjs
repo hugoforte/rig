@@ -347,9 +347,9 @@ test('the copy inside a linked worktree is never judged, and says so', () => {
   assert.doesNotMatch(updated.out, /fast-forwarded/)
 })
 
-// A data root with a remote of its own, as a second machine leaves it. `local` has one
-// commit that was never pushed; the remote has one that was never pulled.
-const divergedDataRoot = () => {
+// A data root with a remote of its own, pushed and tracking `origin/main`, at a record format
+// with migrations pending.
+const pushedDataRoot = () => {
   const stamp = Math.random().toString(36).slice(2, 8)
   const remote = path.join(tmp, `data-origin-${stamp}.git`)
   assert.equal(git(tmp, 'init', '-q', '--bare', '-b', 'main', remote).status, 0)
@@ -361,7 +361,13 @@ const divergedDataRoot = () => {
   assert.equal(git(local, 'commit', '-q', '-m', 'rig.json').status, 0)
   assert.equal(git(local, 'remote', 'add', 'origin', remote).status, 0)
   assert.equal(git(local, 'push', '-q', '-u', 'origin', 'main').status, 0)
+  return { stamp, remote, local }
+}
 
+// A data root with a remote of its own, as a second machine leaves it. `local` has one
+// commit that was never pushed; the remote has one that was never pulled.
+const divergedDataRoot = () => {
+  const { stamp, remote, local } = pushedDataRoot()
   const theirs = path.join(tmp, `data-theirs-${stamp}`)
   assert.equal(git(tmp, 'clone', '-q', remote, theirs).status, 0)
   fs.writeFileSync(path.join(theirs, 'NOTES.md'), 'a record from the other machine\n')
@@ -401,6 +407,28 @@ test('update leaves a pending migration alone when it cannot tell whether the da
     assert.match(r.out, /data root: could not fetch .*— not updated/)
     assert.match(r.out, /migration\(s\) pending, not run/)
     assert.equal(readJson(path.join(unreachable, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
+  })
+})
+
+test('a data root whose tracked branch has gone from its remote is local-only, and still migrates', () => {
+  // The remote renamed its default branch and a prune dropped `origin/main` here, so the
+  // config names an upstream that is not there. Nothing can be pushed onto it and nothing
+  // arrives from it, which is a data root with no upstream — not one whose distance nobody
+  // could measure, which would rebase onto nothing and refuse the migrations.
+  const { remote, local } = pushedDataRoot()
+  assert.equal(git(remote, 'branch', '-m', 'main', 'trunk').status, 0)
+  assert.equal(git(local, 'fetch', '-q', '--prune').status, 0)
+  // A work root of its own, so the work made here is not one the installation's root has to
+  // account for.
+  const works = path.join(tmp, 'work-gone-upstream')
+  fs.mkdirSync(works)
+  withLocalConfig({ dataRoot: local, workRoot: works }, () => {
+    const made = rig(['new', 'w1', '--title', 'One', '--no-ticket'])
+    assert.match(made.out, /data root: committed [0-9a-f]{7,} \(no upstream — not pushed\)/)
+    const updated = rig(['update'])
+    assert.match(updated.out, /data root: no upstream — nothing to update from/)
+    assert.match(updated.out, /migrated:/)
+    assert.notEqual(readJson(path.join(local, 'rig.json')).writtenBy, '1.0.0', 'the stamp moved')
   })
 })
 
