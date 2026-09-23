@@ -2833,7 +2833,7 @@ cmds.catalog = ({ flags, positional }) => {
     const flag = e.draft ? C.yellow(' [draft]') : ''
     say(`${e.repo.padEnd(34)} ${C.dim(e.org.padEnd(15))} ${e.role}${flag}`)
     if (flags.verbose && e.talks_to.length) {
-      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}`)
+      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
     }
   }
 }

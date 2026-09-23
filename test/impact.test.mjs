@@ -222,3 +222,9 @@ test('the correction for a subject with no entry names what drafts one, not a co
     fs.rmSync(path.join(dataRoot, 'work', 'w4'), { recursive: true })
   }
 })
+
+test('the catalogue listing shows a stated direction beside what each edge says', () => {
+  const r = rig(['catalog', '--verbose'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /→ orders: pushes invoices as they settle \[downstream\]/)
+})

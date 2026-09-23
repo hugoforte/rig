@@ -133,13 +133,13 @@ unstated, which is not the same as both ways** — rig prints the edge and decli
 Either end may state it and rig reads it from whichever end is asking, so `downstream` in one
 entry and `upstream` in the other are one claim agreed twice. Two entries making different
 claims are a **disagreement**: reported, never resolved by picking a side, because the
-disagreement is the thing worth seeing. `rig impact` offers and never blocks — warnings live
-in `rig doctor`.
+disagreement is the thing worth seeing. `rig impact` offers and never blocks, and it is the only
+place a disagreement is reported — `rig doctor` does not look for them.
 
 **Two graphs, and the disagreement is the output.** Beside the declared graph `talks_to` makes,
 `rig impact` reads an **observed** one out of the work records: which repos have been attached
-to the same work, and how many times. That one is a record rather than a derivation, so it
-cannot be wrong about what happened — but it can only ever see repos somebody has already
+to the same work, and how many times. It is read out of what was recorded rather than what anyone
+claimed, so it cannot be wrong about what happened — but it can only ever see repos somebody has already
 worked on together, so it never catches the fourth repo the first time. A pair the records keep
 making with nothing in `talks_to` to explain it is the finding, and rig names the entry to
 correct.
