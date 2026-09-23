@@ -139,7 +139,7 @@ export function makeInstall ({
   // the machine decide what an isolated installation reads.
   //
   // Two adapters behind one signature, and which a call gets is a question about what the
-  // test is *for* (DESIGN.md decisions 81 and 98). `bin/rig.mjs` exports `run(argv, io)`, so an
+  // test is *for* (DESIGN.md decisions 81 and 99). `bin/rig.mjs` exports `run(argv, io)`, so an
   // invocation is a value this process can produce: the same installation, cwd, environment
   // and stdin a subprocess would have been handed, with the two streams collected instead of
   // piped. What that buys is the ~51ms a Node boot costs on the Windows runner, and rig's

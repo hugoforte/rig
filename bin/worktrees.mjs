@@ -185,12 +185,13 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // mirror's `refs/heads`, because the worktree shares the mirror's ref store; a branch
     // pushed from another machine is under `refs/remotes/origin`.
     //
-    // A stage's base is the nearest of the work's other branches that is an ancestor of it.
-    // That holds while a stage's pull request **merges** into the branch below rather than
-    // being squashed onto it: a squash replaces the commits, so the originals stop being
-    // ancestors of anything and the chain goes with them. `stageOrder` falls back to
-    // declaration order for whatever cannot be placed, which is the net under exactly that.
-    chain ({ org, repo, branch, stages = [] }) {
+    // A stage's base is the branch below it in the stack: the nearest of the work's other
+    // stages that is an ancestor of it, and only failing that the work branch. That holds
+    // while a stage's pull request **merges** into the branch below rather than being squashed
+    // onto it: a squash replaces the commits, so the originals stop being ancestors of anything
+    // and the chain goes with them. `stageOrder` falls back to declaration order for whatever
+    // cannot be placed, which is the net under exactly that.
+    chain ({ org, repo, branch, base, stages = [] }) {
       const mirror = mirrorPath(org, repo)
       if (!fs.existsSync(mirror) || !stages.length) return []
       // A branch cut here, or one only ever seen on the remote. Either is this repo carrying
@@ -215,15 +216,10 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       const present = stages.map(b => ({ branch: b, rev: revOf(b) })).filter(b => b.rev)
       if (!present.length) return []
 
-      // The work branch is a candidate base but never gets one derived for it: its base is
-      // the remote HEAD it was cut from, which is in the record and which git cannot say.
-      const workRev = revOf(branch)
-      const candidates = (workRev ? [{ branch, rev: workRev }] : []).concat(present)
-      const at = b => candidates.findIndex(c => c.branch === b.branch)
       // Ancestry is asked of the same pair of commits several times over — once to place a
-      // candidate under a stage, again to compare two candidates already under one — and two
-      // commits do not change their relationship while this runs. So each pair costs one
-      // spawn, whoever asks for it.
+      // stage, again to compare two candidates already under one, again to measure a stage
+      // against where the work branch was cut — and two commits do not change their
+      // relationship while this runs. So each pair costs one spawn, whoever asks for it.
       const ancestors = new Map()
       const ancestor = (a, b) => {
         const pair = `${a.rev} ${b.rev}`
@@ -232,15 +228,52 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         }
         return ancestors.get(pair)
       }
-      // A branch nobody has committed on yet sits at the same commit as the one below it, so
-      // ancestry is mutual and would place each under the other. Declaration order breaks
-      // that tie, which is the one thing that can tell them apart.
-      const below = (c, b) => c.branch !== b.branch && ancestor(c, b) && (c.rev !== b.rev || at(c) < at(b))
-      const nearer = (best, c) => !best || (best.rev === c.rev ? at(c) > at(best) : ancestor(best, c))
+      // The nearest of `pool` that is an ancestor of `b`. A branch nobody has committed on yet
+      // sits at the same commit as the one below it, so ancestry is mutual and would place each
+      // under the other. The order of `pool` breaks that tie, which is declaration order, the
+      // one thing that can tell them apart.
+      const nearest = (pool, b) => {
+        const at = c => pool.indexOf(c)
+        const below = c => c !== b && ancestor(c, b) && (c.rev !== b.rev || at(c) < at(b))
+        const nearer = (best, c) => !best || (best.rev === c.rev ? at(c) > at(best) : ancestor(best, c))
+        return pool.filter(below).reduce((best, c) => nearer(best, c) ? c : best, null)
+      }
+
+      // The work branch is asked last, because merging the stack down moves it *up* the stack:
+      // fast-forwarded to the top stage it is that stage's commit, and as a candidate beside the
+      // stages it would be the nearest ancestor of the top one and of nothing below — the top
+      // stage placed first and the rest lost (hugoforte/rig#142). The stages keep saying which
+      // sits on which however far the work branch has moved, so they answer first, and the work
+      // branch is the base only of a stage with none below it: one cut from it, or one merged
+      // down into it. It never gets a base derived for itself: that is the remote HEAD it was
+      // cut from, which is in the record and which git cannot say.
+      const workRev = revOf(branch)
+      const work = workRev ? { branch, rev: workRev } : null
+      const onWork = b => !!work && (ancestor(work, b) || ancestor(b, work))
+
+      // Only a stage carrying this work's commits can be read that way. One nobody has
+      // committed on is still where it was cut, which is an ancestor of everything after it —
+      // exactly the shape of a stage merged down first, with none of its commits — so read as
+      // one it would become what every later stage sits on. What it carries is measured from
+      // where the work branch was cut; an empty stage keeps the reading it always had, the work
+      // branch beside the stages as candidates, below them on a tie.
+      //
+      // Where it was cut is where the work branch meets the remote's base branch — never the
+      // mirror's own `refs/heads/<base>`, which is the first clone's and never moves again.
+      // A measure that finds every stage empty tells none of them apart, and it does once the
+      // work has landed in its base branch, so it is dropped rather than letting that read the
+      // whole stack the old way.
+      const fork = work && base ? git(mirror, 'merge-base', work.rev, ref(base)) : null
+      const forkRev = fork?.code === 0 ? fork.out.trim() : null
+      const measured = present.filter(b => !forkRev || !ancestor(b, { rev: forkRev }))
+      const carries = b => !measured.length || measured.includes(b)
+      const worked = present.filter(carries)
+      const idle = (work ? [work] : []).concat(present)
 
       return present.map(b => {
-        const base = candidates.filter(c => below(c, b)).reduce((best, c) => nearer(best, c) ? c : best, null)
-        return { branch: b.branch, base: base ? base.branch : null }
+        if (!carries(b)) return { branch: b.branch, base: nearest(idle, b)?.branch ?? null }
+        const stage = nearest(worked, b)
+        return { branch: b.branch, base: stage ? stage.branch : onWork(b) ? branch : null }
       })
     },
 
