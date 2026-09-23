@@ -470,6 +470,22 @@ test('an upstream whose ref has gone is no upstream, whichever reading asks', ()
   assert.equal(c().fastForward(local).outcome, 'no-upstream')
 })
 
+test('describe, its fallback and identify agree on the branch and the upstream', () => {
+  // Which of the three answers depends on the command and on whether the index could be
+  // read, so a disagreement is one checkout with two outcomes. These are the two checkouts
+  // they parted on: a gone upstream that only `describe` still named, and a `(wip)` branch
+  // that only `describe` called detached.
+  const noTree = (cmd, args) => args.includes('--porcelain=v2')
+    ? { code: 128, out: '', err: 'fatal: unable to read index' }
+    : run(cmd, args)
+  const named = ({ branch, upstream }) => ({ branch, upstream })
+  for (const local of [goneUpstream('agree-gone'), onWip('agree-wip').local]) {
+    const identified = named(c().identify(local))
+    assert.deepEqual(named(c().describe(local)), identified, local)
+    assert.deepEqual(named(c(noTree).describe(local)), identified, local)
+  }
+})
+
 test('commitAll stages everything present, including what nobody staged', () => {
   const { local } = cloned('committing')
   fs.writeFileSync(path.join(local, 'record.md'), 'a record\n')
