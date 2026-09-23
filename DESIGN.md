@@ -281,7 +281,10 @@ One branch name across every repo in a work — already the existing habit (the 
 - Base = **each repo's actual remote HEAD**, detected from the mirror. The `master`/`main`
   mix across orgs makes a global default wrong.
 - If the branch already exists on the remote, **check it out with a loud notice**. That is
-  what makes a work re-creatable on another machine.
+  what makes a work re-creatable on another machine. A copy the mirror kept from an earlier
+  worktree is moved up to the remote when it is behind, checked out as it is when it is ahead,
+  and refused untouched when the two have diverged. A copy of a branch the remote no longer
+  has is checked out as it is, with a warning.
 
 ### 5.3 Mirrors
 

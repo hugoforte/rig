@@ -71,19 +71,59 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   }
 
   const onRemote = (mirror, branch) => git(mirror, 'rev-parse', '--verify', ref(branch)).code === 0
+  const local = branch => `refs/heads/${branch}`
+  const kept = (mirror, branch) => git(mirror, 'rev-parse', '--verify', '--quiet', local(branch)).code === 0
+  const isAncestor = (mirror, a, b) => git(mirror, 'merge-base', '--is-ancestor', a, b).code === 0
+
+  // The mirror may already hold a copy of the branch: every worktree ever cut on it left one
+  // behind in `refs/heads`, because a worktree shares the mirror's ref store and removing the
+  // worktree keeps the branch (hugoforte/rig#149). A copy the remote has caught up with is
+  // moved to it; one ahead of it is checked out as it is, since those commits exist nowhere
+  // else. One that has diverged is refused and left alone — which side is right is not rig's
+  // call. A copy some other worktree still has checked out is git's to refuse.
+  function checkOutRemote (mirror, org, repo, branch, dest) {
+    const behind = !kept(mirror, branch) || isAncestor(mirror, local(branch), ref(branch))
+    if (!behind && !isAncestor(mirror, ref(branch), local(branch))) {
+      throw new RigError(`branch ${branch} in the mirror of ${org}/${repo} has diverged from the remote's — ` +
+        'rig will not overwrite either.\n' +
+        `  compare: git -C ${mirror} log --oneline --left-right ${branch}...origin/${branch}\n` +
+        `  if the remote is right, remove any worktree that has it checked out, then: git -C ${mirror} branch -D ${branch}`)
+    }
+    warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
+    if (behind) {
+      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)])
+      return
+    }
+    step(`keeping the mirror's copy of ${branch}, which is ahead of the remote`)
+    must('git', ['-C', mirror, 'branch', `--set-upstream-to=origin/${branch}`, branch])
+    must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+  }
 
   return {
     // Cut the work's worktree for one repo. Answers the base it used, which is the one
     // thing about the cut worth recording: it is what makes the work re-creatable on
     // another machine. A branch already on the remote is checked out and tracked rather
     // than created, loudly — silently taking over someone else's branch would not be.
+    //
+    // A branch only the mirror has — never pushed, or deleted from the remote once merged —
+    // is checked out as it is, with a warning: its commits exist nowhere else, and whether
+    // they are still wanted is for whoever is looking at them to say.
+    //
+    // A worktree folder deleted by hand leaves the mirror a record still claiming its branch,
+    // so the mirror is pruned first (hugoforte/rig#151). Prune drops only records whose folder
+    // is gone; a live worktree keeps its claim.
     cut ({ org, repo, branch, dest }) {
       const mirror = fetched(org, repo)
       const base = remoteHead(mirror, org, repo)
       if (fs.existsSync(dest)) throw new RigError(`${dest} already exists`)
+      git(mirror, 'worktree', 'prune')
       if (onRemote(mirror, branch)) {
-        warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
-        must('git', ['-C', mirror, 'worktree', 'add', '--track', '-b', branch, dest, ref(branch)])
+        checkOutRemote(mirror, org, repo, branch, dest)
+        return { base }
+      }
+      if (kept(mirror, branch)) {
+        warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
+        must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
         return { base }
       }
       step(`worktree ${repo} → ${branch} (base ${base})`)
