@@ -83,10 +83,10 @@ GitHub keeps **one** list of required status checks and applies it to both the p
 the merge group. There is no PR-only required check. A required check that never reports against
 the group's ref does not fail the entry — it leaves it stalled until `check_response_timeout_minutes`
 ejects it, and the symptom is a queue that appears broken rather than a missing trigger. So
-`test.yml` gains `merge_group` and keeps one job id and one matrix, because the check names have
-to be identical across the two events and they are identical by being the same job. (Since
-hugoforte/rig#155 the Windows check is a gate job named for it that waits on six shard jobs; the
-names are still the same across both events, because it is still one workflow.)
+`test.yml` gains `merge_group` and keeps one set of job definitions for both events, because the
+check names have to be identical across the two events and they are identical by coming from the
+same jobs. (It began as one job id and one matrix; since hugoforte/rig#155 the Windows check is a
+gate job named for it that waits on six shard jobs, and the names still come from the same file.)
 
 `version.yml` gains `merge_group` too, and there it reports success in one line. ADR 0004 said
 it was "deliberately not a merge-queue check", which was a preference GitHub does not offer;
@@ -175,7 +175,7 @@ permanent.
   month**, with unlimited public repositories and a full feature set.
 - **Actions stays free.** Public repositories on standard GitHub-hosted runners are unmetered; the
   2,000 minutes a month a free organization advertises is the *private*-repo allowance and never
-  applies here. The Windows matrix job is not at risk.
+  applies here. The Windows jobs are not at risk.
 - **Every feature `main` depends on survives**, rulesets included — checked one at a time against
   `data/reusables/gated-features/`. Multiple pull request reviewers are *gained*, since free user
   accounts do not have them.

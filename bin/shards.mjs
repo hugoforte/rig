@@ -4,9 +4,9 @@
 //
 // Every `test/*.test.mjs` on disk is dealt, heaviest first, each to whichever shard is lightest
 // so far, by how long the file took alone on a Windows runner (WEIGHTS). A file the table does
-// not know weighs a second and is dealt like any other, so a new test file runs in CI without
-// anyone editing a list, and a file in no shard cannot happen. The weights balance the shards
-// and never decide what runs.
+// not know weighs a second and is dealt like any other, so a new test file beside the others
+// runs in CI without anyone editing a list. The weights balance the shards and never decide
+// what runs; test/shards.test.mjs holds that nothing node would run under test/ goes undealt.
 //
 // `node --test --test-shard` deals round-robin over the sorted names instead, which put the
 // heaviest files together and made the slowest shard three times the fastest.
@@ -88,12 +88,17 @@ function main (argv) {
   const mine = deal(testFiles(dir), total)[index - 1]
   const files = mine.files.map(f => path.join(dir, f))
   console.log(`shard ${index}/${total}: ${mine.files.length} files, ${mine.weight.toFixed(1)} s alone: ${mine.files.join(' ')}`)
-  if (print) return 0
+  // `node --test` with no files runs its default glob, which is the whole suite.
+  if (print || mine.files.length === 0) return 0
   const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' })
   if (r.error) throw r.error
   return r.status ?? 1
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2))
-}
+// Node realpaths the main module before evaluating it, so compare realpaths: through a
+// junction argv[1] is the link, and a guard that compared paths would run nothing and exit 0.
+const isMain = (() => {
+  if (!process.argv[1]) return false
+  try { return fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) } catch { return false }
+})()
+if (isMain) process.exitCode = main(process.argv.slice(2))

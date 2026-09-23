@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deal, parseShard, testFiles, weight, WEIGHTS } from '../bin/shards.mjs'
@@ -43,5 +44,41 @@ test('a shard is <index>/<total>, one-based, and nothing else', () => {
 test('--print names the shard without running it', () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'shards.mjs'), '1/6', '--print'], { encoding: 'utf8' })
   assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stdout, /^shard 1\/6: \d+ files, [\d.]+ s alone: installation\.test\.mjs/)
+  assert.equal(r.stdout.trim().split(': ').at(-1), deal(files, 6)[0].files.join(' '))
+  assert.doesNotMatch(r.stdout, /# tests/, 'nothing ran')
+})
+
+test('an empty shard runs nothing, because node --test with no files would run everything', () => {
+  const spec = `${files.length + 1}/${files.length + 1}`
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'shards.mjs'), spec], { encoding: 'utf8' })
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /: 0 files, /)
+  assert.doesNotMatch(r.stdout, /# tests/, 'nothing ran')
+})
+
+// Plain `node --test`, which Ubuntu runs, takes every .js, .cjs and .mjs under test/ at any
+// depth. The shards take `test/*.test.mjs`. A file in the gap runs on one platform and never
+// on the other, and nothing would say so: this does. The helpers are named because they are
+// the gap today (hugoforte/rig#154 runs them as empty tests on Ubuntu).
+const HELPERS = ['harness.mjs', 'billing-install.mjs', 'checkouts-fixture.mjs', 'worktrees-fixture.mjs']
+const everything = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true })
+  .map(String).filter(f => /[.][cm]?js$/.test(f))
+
+test('every file node would run as a test under test/ is dealt, or is a helper named here', () => {
+  const undealt = everything.filter(f => !files.includes(f) && !HELPERS.includes(f))
+  assert.deepEqual(undealt, [], 'run by node --test on Ubuntu and by no Windows shard')
+})
+
+// The gate is what the ruleset requires, and the two things that make it honest are a line of
+// YAML each: without `if: always()` a failed shard leaves it skipped, and a skipped required
+// check passes; and it must fail on any result but success. Read back rather than trusted.
+test('the gate carries the required check name, always runs, and passes only when every shard did', () => {
+  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'test.yml'), 'utf8')
+  const gate = yml.slice(yml.indexOf('\n  windows:'))
+  assert.notEqual(gate.length, yml.length, 'a job named windows')
+  for (const line of ['name: test (windows-latest)', 'needs: shard', 'if: always()', 'test "$RESULT" = success']) {
+    assert.ok(gate.includes(line), line)
+  }
+  const shard = yml.slice(yml.indexOf('\n  shard:'), yml.indexOf('\n  windows:'))
+  assert.ok(shard.includes('node bin/shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}'), 'the total is the matrix length, written once')
 })
