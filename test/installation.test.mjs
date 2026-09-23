@@ -145,6 +145,15 @@ test('the next command prints the stale line on stderr, from the cache alone', (
   assert.doesNotMatch(strip(r.stdout), /behind/, 'never in the stdout someone is piping')
 })
 
+test('a checkout git is pointed at by GIT_DIR still hears that it is behind', () => {
+  // With GIT_DIR set the filesystem walk hands the question back rather than answer it, and
+  // the epilogue skips git only for a copy the walk has shown is no checkout. Read the other
+  // way, the handed-back answer would silence the line for good on every machine that sets it.
+  const r = rig(['list', '--quick'], { env: { ...env, GIT_DIR: path.join(install, '.git') } })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /rig is 1 commit behind origin\/main/)
+})
+
 test('freshness switched off in rig.json silences the line on every machine', () => {
   withDataRootConfig(cfg => { cfg.freshness = { enabled: false } }, () => {
     const r = rig(['list', '--quick'])
@@ -291,17 +300,24 @@ test('doctor reaches its verdict on a machine with no git on PATH', () => {
   assert.doesNotMatch(out, /git not found on PATH \(spawnSync/, 'it did not die on the way')
 })
 
-test('doctor reaches its verdict on a machine with neither free-space probe', () => {
-  // Free space is probed through PowerShell on Windows and `df` everywhere else. With
-  // neither on PATH the check is dropped, not attempted: `run` dies on a command that is
-  // not there, and this probe is the last check doctor makes, so dying here cost Linux and
-  // macOS the verdict line and a clean exit (hugoforte/rig#7).
+test('free space with nothing on PATH is answered on Windows, and never dies trying', () => {
+  // Off Windows free space is asked of `df`, and with no `df` on PATH the check is dropped,
+  // not attempted: `exec` dies on a command that is not there, and this is the last check
+  // doctor makes, so dying here cost Linux and macOS the verdict line and a clean exit
+  // (hugoforte/rig#7). On Windows `fs.statfsSync` is in the runtime, so the answer arrives on
+  // a machine carrying nothing but node.
   const bare = { ...env }
   for (const k of Object.keys(bare)) if (k.toLowerCase() === 'path') delete bare[k]
   bare.PATH = path.dirname(process.execPath)
   const r = spawnRig(['doctor'], bare)
   const out = strip(r.stdout + r.stderr)
-  assert.doesNotMatch(out, /disk on/, 'a check it cannot make is dropped')
+  if (process.platform === 'win32') assert.match(out, /disk on .+\d+ GB free/, 'answered without a probe to be missing')
+  // Off Windows, the check is dropped rather than answered from the runtime, whose block size
+  // is wrong on Linux. Only where node's own directory holds no `df`, which is every CI image
+  // (setup-node puts node in a tool cache) but not a machine with node in /usr/bin.
+  else if (!fs.existsSync(path.join(path.dirname(process.execPath), 'df'))) {
+    assert.doesNotMatch(out, /disk on/, 'no df, so no disk line')
+  }
   assert.doesNotMatch(out, /not found on PATH \(spawnSync/, 'and it did not die making it')
   assert.match(out, /thing\(s\) to look at|all clear/, 'the verdict still lands')
 })
@@ -340,9 +356,9 @@ test('the copy inside a linked worktree is never judged, and says so', () => {
   assert.doesNotMatch(updated.out, /fast-forwarded/)
 })
 
-// A data root with a remote of its own, as a second machine leaves it. `local` has one
-// commit that was never pushed; the remote has one that was never pulled.
-const divergedDataRoot = () => {
+// A data root with a remote of its own, pushed and tracking `origin/main`, at a record format
+// with migrations pending.
+const pushedDataRoot = () => {
   const stamp = Math.random().toString(36).slice(2, 8)
   const remote = path.join(tmp, `data-origin-${stamp}.git`)
   assert.equal(git(tmp, 'init', '-q', '--bare', '-b', 'main', remote).status, 0)
@@ -354,7 +370,13 @@ const divergedDataRoot = () => {
   assert.equal(git(local, 'commit', '-q', '-m', 'rig.json').status, 0)
   assert.equal(git(local, 'remote', 'add', 'origin', remote).status, 0)
   assert.equal(git(local, 'push', '-q', '-u', 'origin', 'main').status, 0)
+  return { stamp, remote, local }
+}
 
+// A data root with a remote of its own, as a second machine leaves it. `local` has one
+// commit that was never pushed; the remote has one that was never pulled.
+const divergedDataRoot = () => {
+  const { stamp, remote, local } = pushedDataRoot()
   const theirs = path.join(tmp, `data-theirs-${stamp}`)
   assert.equal(git(tmp, 'clone', '-q', remote, theirs).status, 0)
   fs.writeFileSync(path.join(theirs, 'NOTES.md'), 'a record from the other machine\n')
@@ -394,6 +416,28 @@ test('update leaves a pending migration alone when it cannot tell whether the da
     assert.match(r.out, /data root: could not fetch .*— not updated/)
     assert.match(r.out, /migration\(s\) pending, not run/)
     assert.equal(readJson(path.join(unreachable, 'rig.json')).writtenBy, '1.0.0', 'the stamp did not move')
+  })
+})
+
+test('a data root whose tracked branch has gone from its remote is local-only, and still migrates', () => {
+  // The remote renamed its default branch and a prune dropped `origin/main` here, so the
+  // config names an upstream that is not there. Nothing can be pushed onto it and nothing
+  // arrives from it, which is a data root with no upstream — not one whose distance nobody
+  // could measure, which would rebase onto nothing and refuse the migrations.
+  const { remote, local } = pushedDataRoot()
+  assert.equal(git(remote, 'branch', '-m', 'main', 'trunk').status, 0)
+  assert.equal(git(local, 'fetch', '-q', '--prune').status, 0)
+  // A work root of its own, so the work made here is not one the installation's root has to
+  // account for.
+  const works = path.join(tmp, 'work-gone-upstream')
+  fs.mkdirSync(works)
+  withLocalConfig({ dataRoot: local, workRoot: works }, () => {
+    const made = rig(['new', 'w1', '--title', 'One', '--no-ticket'])
+    assert.match(made.out, /data root: committed [0-9a-f]{7,} \(no upstream — not pushed\)/)
+    const updated = rig(['update'])
+    assert.match(updated.out, /data root: no upstream — nothing to update from/)
+    assert.match(updated.out, /migrated:/)
+    assert.notEqual(readJson(path.join(local, 'rig.json')).writtenBy, '1.0.0', 'the stamp moved')
   })
 })
 

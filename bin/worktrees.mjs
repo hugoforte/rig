@@ -169,15 +169,28 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       // from the moment `rig attach` runs and says nothing about whether anyone pushed.
       s.pushed = branch ? git(dir, 'rev-parse', '--verify', '--quiet', ref(branch)).code === 0 : false
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
-      const up = git(dir, 'rev-parse', '--abbrev-ref', '@{u}')
-      const known = [base, recordedBase].filter(Boolean)
-        .find(b => git(dir, 'rev-parse', '--verify', '--quiet', ref(b)).code === 0)
-      const against = up.code === 0 ? '@{u}' : ref(known || base)
-      const counts = git(dir, 'rev-list', '--left-right', '--count', `${against}...HEAD`)
+      const count = from => git(dir, 'rev-list', '--left-right', '--count', `${from}...HEAD`)
+      // The count is the question, so the count is what is asked. `@{u}` fails to resolve for
+      // both the reasons there are — no upstream configured, and one configured whose ref went
+      // with a deleted head branch — and the count fails with it, in git's own words. Asking
+      // `rev-parse --abbrev-ref @{u}` first bought that same verdict one spawn earlier, and the
+      // base was resolved whether or not anything ever measured against it: three git calls
+      // where the ordinary branch, which has an upstream and has been pushed, needs one.
+      //
+      // `fellBack` is the base ref it measured against instead, and null while the upstream
+      // answered — which is the only thing the two paths still have to be told apart for.
+      let counts = count('@{u}')
+      let fellBack = null
+      if (counts.code !== 0) {
+        const known = [base, recordedBase].filter(Boolean)
+          .find(b => git(dir, 'rev-parse', '--verify', '--quiet', ref(b)).code === 0)
+        fellBack = ref(known || base)
+        counts = count(fellBack)
+      }
       if (counts.code !== 0) {
         s.ahead = s.behind = null
         s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
-          `git could not measure ${dir} against ${up.code === 0 ? 'its upstream' : against}`
+          `git could not measure ${dir} against ${fellBack ?? 'its upstream'}`
         return s
       }
       const [behind, ahead] = counts.out.split(/\s+/).map(Number)
@@ -223,17 +236,38 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (!fs.existsSync(mirror) || !stages.length) return []
       // A branch cut here, or one only ever seen on the remote. Either is this repo carrying
       // it; which of the two it is says nothing about the stage.
-      const revOf = b => {
-        for (const r of [`refs/heads/${b}`, ref(b)]) {
-          const got = git(mirror, 'rev-parse', '--verify', '--quiet', r)
-          if (got.code === 0 && got.out) return got.out.trim()
-        }
-        return null
+      //
+      // Asked for every branch at once: `rev-parse --verify` answers for one ref, so a work
+      // with four stages spent ten spawns finding out which of them this repo has. The
+      // branches are all named up front — that is what a declared stage is — so one
+      // `for-each-ref` over the exact refnames answers for the lot. A pattern nothing matches
+      // contributes nothing and is not an error, which is the answer wanted for a stage this
+      // repo does not carry.
+      const named = [...new Set([branch, ...stages].filter(Boolean))]
+      const listed = git(mirror, 'for-each-ref', '--format=%(refname) %(objectname)',
+        ...named.flatMap(b => [`refs/heads/${b}`, ref(b)]))
+      const revs = new Map()
+      for (const line of (listed.code === 0 ? listed.out : '').split('\n').filter(Boolean)) {
+        const gap = line.indexOf(' ')
+        if (gap > 0) revs.set(line.slice(0, gap), line.slice(gap + 1).trim())
       }
+      const revOf = b => revs.get(`refs/heads/${b}`) || revs.get(ref(b)) || null
+
       const present = stages.map(b => ({ branch: b, rev: revOf(b) })).filter(b => b.rev)
       if (!present.length) return []
 
-      const ancestor = (a, b) => git(mirror, 'merge-base', '--is-ancestor', a.rev, b.rev).code === 0
+      // Ancestry is asked of the same pair of commits several times over — once to place a
+      // stage, again to compare two candidates already under one, again to measure a stage
+      // against where the work branch was cut — and two commits do not change their
+      // relationship while this runs. So each pair costs one spawn, whoever asks for it.
+      const ancestors = new Map()
+      const ancestor = (a, b) => {
+        const pair = `${a.rev} ${b.rev}`
+        if (!ancestors.has(pair)) {
+          ancestors.set(pair, git(mirror, 'merge-base', '--is-ancestor', a.rev, b.rev).code === 0)
+        }
+        return ancestors.get(pair)
+      }
       // The nearest of `pool` that is an ancestor of `b`. A branch nobody has committed on yet
       // sits at the same commit as the one below it, so ancestry is mutual and would place each
       // under the other. The order of `pool` breaks that tie, which is declaration order, the

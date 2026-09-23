@@ -4,12 +4,15 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, parseDf, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
-  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo,
+  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
+  spawnFailure,
 } from '../bin/rig.mjs'
+import { makeInstall } from './harness.mjs'
 
 test('parseArgs: values, booleans, and a positional after a boolean flag', () => {
   const { flags, positional } = parseArgs(['new', '--ticket', 'my-id', '--title', 'T', '--type=chore', '--force'])
@@ -152,20 +155,152 @@ test('statusLine: what a document may carry, which is only what the record can p
 // the machines that were fine. A wrong option here is not a refactor; it is the regression.
 // The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
 // `test/checkouts.test.mjs`, where the operation it guards now lives.
-test('every child rig spawns is hidden, so a console-less child pays for no console', () => {
-  assert.equal(SPAWN_DEFAULTS.windowsHide, true,
-    'DETACHED_PROCESS has no console; without this each git call allocates a console host')
+test('only the console-less run hides its spawns, because a hidden console is a whole process', () => {
+  // `CREATE_NO_WINDOW` does not suppress a console, it allocates a hidden one — a
+  // `conhost.exe` per spawn, and a process creation on Windows is ~17ms. Set on everything it
+  // was doubling the price of every git call to hide a console the command already had.
+  assert.equal(spawnDefaults('status').windowsHide, false,
+    'an ordinary command has a console its children inherit, and must not buy a second one — ' +
+    'which assumes rig was started with one, and not by a host launching node DETACHED_PROCESS')
+  // The command the refresh is actually spawned with, never a copy of its name: a copy stays
+  // green while the two drift apart, and then the child's git calls go unhidden with nothing
+  // to notice but a deadline on a loaded machine.
+  const [, refresh] = refreshArgv('C:\\rig')
+  assert.equal(spawnDefaults(refresh).windowsHide, true,
+    'the detached child has none to inherit, and every git call it makes would pop a window — ' +
+    'this is the one that hung a machine')
 })
 
-test('the freshness refresh is detached, silent, rooted in the tool, and hidden', () => {
-  assert.equal(REFRESH_SPAWN.detached, true, 'the fetch has to outlive the command that armed it')
-  assert.equal(REFRESH_SPAWN.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
-  assert.equal(REFRESH_SPAWN.windowsHide, true, 'see above; this is the one that hung a machine')
-  assert.ok(REFRESH_SPAWN.cwd, 'a child sitting in a worktree is one `rig close` cannot remove')
+// Windows only: everywhere else `git` is the binary and there is nothing to step past. The
+// programs are empty files, because which `git` rig runs is decided from where files are and
+// never from what is in them.
+const onWindows = { skip: process.platform !== 'win32' }
+const programTree = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-gitpath-'))
+  const layout = (name, ...parts) => {
+    const p = path.join(root, name, ...parts)
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, '')
+    return p
+  }
+  return { root, layout }
+}
+
+test('the Git for Windows launcher is stepped past, and nobody else\'s git is', onWindows, () => {
+  // The saving is real — 60ms through the launcher against 32ms straight to the binary, on
+  // every git call — but the risk is that somebody's own `git` is a program they put on PATH
+  // deliberately. So the launcher is *recognised*, never assumed: the right layout, with the
+  // real binary actually sitting where that layout says it would.
+  const { root, layout } = programTree()
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(proper), real, 'the launcher names the binary it would have started')
+
+  const bin = path.dirname(layout('bin-layout', 'bin', 'git.exe'))
+  const binReal = layout('bin-layout', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(bin), binReal, 'Git for Windows puts a launcher in bin\\ as well as cmd\\')
+
+  const headless = path.dirname(layout('headless', 'cmd', 'git.exe'))
+  assert.equal(realGitFor(headless), 'git', 'the layout without the binary in it proves nothing')
+
+  const shim = path.dirname(layout('shim', 'tools', 'git.exe'))
+  layout('shim', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(shim), 'git',
+    'a git somewhere of its own is a program someone meant to put there')
+  assert.equal(realGitFor([shim, proper].join(';')), 'git',
+    'and one ahead of the launcher on PATH is the git a spawn runs, whatever comes after it')
+
+  assert.equal(realGitFor(path.join(root, 'nothing-here')), 'git', 'and no git on PATH is left to fail as it always did')
+  fs.rmSync(root, { recursive: true, force: true })
 })
 
-// Free space has no portable probe, so `df -Pk` carries the whole check off Windows and its
-// output is the only part with anything to get wrong. The samples below are real output.
+test('PATH is searched as a spawn searches it, and an entry it cannot read that way ends the search', onWindows, () => {
+  // Node's spawn strips one pair of quotes from an entry and tries `git.com`, then `git.exe`,
+  // and nothing else. Reading PATH any other way walks past the directory the spawn takes its
+  // git from, on to a layout further along that is somebody else's git.
+  const { root, layout } = programTree()
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+  const own = path.dirname(layout('own', 'git.exe'))
+  const com = path.dirname(layout('com', 'git.com'))
+  const script = path.dirname(layout('script', 'git.bat'))
+  const split = path.dirname(layout('semi;colon', 'git.exe'))
+  const searching = (...entries) => realGitFor(entries.join(';'))
+
+  assert.equal(searching(`"${own}"`, proper), 'git', 'a quoted entry is still where the spawn finds its git')
+  assert.equal(searching(`${own}"`, proper), 'git', 'and so is one with a quote at one end only, which the spawn strips too')
+  assert.equal(searching(`"${proper}"`), real, 'and a quoted launcher is still the launcher')
+  assert.equal(searching(com, proper), 'git', 'a git.com is a program the spawn would start')
+  const hollow = path.join(root, 'hollow', 'cmd')
+  fs.mkdirSync(path.join(hollow, 'git.exe'), { recursive: true })
+  layout('hollow', 'mingw64', 'bin', 'git.exe')
+  assert.equal(searching(hollow, proper), real, 'a directory called git.exe is no program, and the spawn walks on past it')
+  assert.equal(searching(script, proper), real, 'a git.bat is not')
+  assert.equal(searching('relative', proper), 'git',
+    'a relative entry is read against where the run stands, which is no part of this answer')
+  assert.equal(searching(`"${split}"`, proper), 'git',
+    'a quoted entry holding a ; is one directory to the spawn, and not one this reads')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('with MSYSTEM set the launcher is kept, because it is what gives git its own PATH', onWindows, () => {
+  const { root, layout } = programTree()
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  layout('proper', 'mingw64', 'bin', 'git.exe')
+  assert.equal(realGitFor(proper, 'MINGW64'), 'git',
+    'the binary sets up its PATH only when MSYSTEM is unset, so here it could not start a hook')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+// The same, asked of git rather than of a layout, because a layout cannot say whether the
+// binary started straight behaves as the launcher would. A hook tells: it runs through a `sh`
+// that is on PATH only once git has put it there, so PATH here holds nothing of Git's but the
+// launcher. The run without MSYSTEM goes first, in the same process and with the same PATH,
+// because its answer is remembered and the run after it must not be handed it.
+const launcherOnPath = process.platform === 'win32' && process.env.PATH.split(';').find(dir => realGitFor(dir) !== 'git')
+test('a hook starts through the git a run is handed, with MSYSTEM set or not', { skip: !launcherOnPath }, () => {
+  const m = makeInstall({ prefix: 'rig-launcher-hook-', localConfig: true })
+  try {
+    const posix = p => p.replaceAll('\\', '/')
+    const hooks = path.join(m.tmp, 'hooks')
+    const ran = path.join(m.tmp, 'hook-ran')
+    fs.mkdirSync(hooks)
+    fs.writeFileSync(path.join(hooks, 'pre-commit'), `#!/bin/sh\necho ran >> '${posix(ran)}'\n`)
+    fs.appendFileSync(m.env.GIT_CONFIG_GLOBAL, `[core]\n\thooksPath = ${posix(hooks)}\n`)
+    const env = Object.fromEntries(Object.entries(m.env).filter(([k]) => !['PATH', 'MSYSTEM'].includes(k.toUpperCase())))
+    env.PATH = [launcherOnPath, path.join(process.env.SystemRoot, 'System32')].join(';')
+    // `init` makes a data root's first commit, and the hook is on that commit.
+    const init = (name, more) => {
+      let said = ''
+      const code = run(['init', '--data-root', path.join(m.tmp, name), '--work-root', m.workRoot], {
+        toolRoot: m.install, cwd: m.tmp, env: { ...env, ...more }, stdin: () => '', out: s => { said += s }, err: s => { said += s },
+      })
+      return { code, said }
+    }
+    const hookRuns = () => fs.existsSync(ran) ? fs.readFileSync(ran, 'utf8').match(/ran/g).length : 0
+
+    const unset = init('unset', {})
+    assert.equal(unset.code, 0, unset.said)
+    assert.equal(hookRuns(), 1, 'the binary started straight sets up the PATH a hook needs, as the launcher would')
+
+    // Spelled in lower case, which Windows reads as the same variable and so does git.exe.
+    const set = init('set', { msystem: 'MINGW64' })
+    assert.equal(set.code, 0, set.said)
+    assert.equal(hookRuns(), 2, 'a run with MSYSTEM set is handed the launcher, never the binary the run before it was')
+  } finally { m.cleanup() }
+})
+
+test('the freshness refresh is detached, silent, and rooted in the tool', () => {
+  const spawn = refreshSpawn('C:\\rig', { PATH: 'somewhere' })
+  assert.equal(spawn.detached, true, 'the fetch has to outlive the command that armed it')
+  assert.equal(spawn.stdio, 'ignore', 'a child holding the pipe stops `rig prompt` ever closing')
+  assert.equal(spawn.cwd, 'C:\\rig', 'a child sitting in a worktree is one `rig close` cannot remove')
+  assert.deepEqual(spawn.env, { PATH: 'somewhere' },
+    'the run that armed it decides what it may reach, not the process that happened to host it')
+})
+
+// Off Windows, `df -Pk` carries the whole check and its output is the only part with anything
+// to get wrong. The samples below are real output.
 test('parseDf: GNU df -Pk', () => {
   const out = [
     'Filesystem     1024-blocks     Used Available Capacity Mounted on',
@@ -195,6 +330,71 @@ test('parseDf: output it cannot read is null, so the check is dropped rather tha
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on'), null, 'a header and nothing else')
   assert.equal(parseDf('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 - - - - /'), null,
     'columns that are not numbers')
+})
+
+test('bytesFree: the blocks this user may still write, in bytes', () => {
+  // Every count different, so reading the wrong one fails: `bfree` differs from `bavail`
+  // wherever blocks are held back, `blocks` is the size of the disk, and a count on its own is
+  // not bytes.
+  assert.equal(bytesFree({ bavail: 10, bfree: 20, blocks: 100, bsize: 4096 }), 40960)
+})
+
+test('freeSpace: a real directory answers with bytes and the volume it measured', () => {
+  const s = freeSpace(os.tmpdir())
+  assert.ok(s, 'the temp directory is on a disk this machine can report on')
+  assert.ok(Number.isFinite(s.bytes) && s.bytes > 0, `implausible free space: ${s.bytes}`)
+  assert.ok(s.label, 'something to name the volume in the report')
+  if (process.platform === 'win32') assert.match(s.label, /^[A-Za-z]:$/, 'the drive is the answer on Windows')
+})
+
+test('freeSpace: a work root junctioned onto another drive is labelled with that drive', t => {
+  if (process.platform !== 'win32') return t.skip('drive letters are a Windows answer')
+  // statfs follows the junction, so the number is the other drive's; a label taken from the
+  // path as written names the drive that was not measured, and a user low on space goes and
+  // clears the wrong one.
+  const drive = p => path.parse(p).root.slice(0, 2).toUpperCase()
+  const repo = path.dirname(fileURLToPath(import.meta.url))
+  const elsewhere = [process.env.SystemRoot, repo].find(p => p && drive(p) !== drive(os.tmpdir()))
+  if (!elsewhere) return t.skip('no second drive here for a junction to lead to')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-junction-'))
+  const link = path.join(root, 'w')
+  try {
+    fs.symlinkSync(elsewhere, link, 'junction')
+    assert.equal(freeSpace(link).label, drive(elsewhere))
+  } finally {
+    // The junction alone: what it leads to is not this test's to remove.
+    if (fs.existsSync(link)) fs.unlinkSync(link)
+    fs.rmdirSync(root)
+  }
+})
+
+test('freeSpace: a path the filesystem will not report on is null, so the check is dropped', () => {
+  // Decision 54: a work root that is not there, or one on a share nobody is connected to, is
+  // a check rig cannot make. Dropped, never fatal — doctor is the command you run because
+  // something is already broken.
+  assert.equal(freeSpace(path.join(os.tmpdir(), 'rig-no-such-directory-8f3a1c')), null)
+})
+
+// Node reports a spawn that never started as one error with a code, and three different things
+// wrong with the machine arrive that way. Only one of them is PATH's fault.
+const spawnError = code => Object.assign(new Error(`spawnSync git ${code}`), { code })
+
+test('a program that is not there is blamed on PATH', () => {
+  assert.equal(spawnFailure('git', ['status'], spawnError('ENOENT'), os.tmpdir()),
+    'git not found on PATH (spawnSync git ENOENT)')
+})
+
+test('a directory that is not there is not blamed on PATH, although Node reports it the same way', () => {
+  const gone = path.join(os.tmpdir(), 'rig-no-such-directory-8f3a1c')
+  assert.equal(spawnFailure('git', ['status'], spawnError('ENOENT'), gone),
+    `git could not start in ${gone}, which no longer exists`)
+})
+
+test('any other failure to start says which command failed and why, and nothing about PATH', () => {
+  // An output past spawnSync's buffer is the one seen in practice: a status over a tree with
+  // thousands of changes, where git is on PATH and working.
+  assert.equal(spawnFailure('git', ['-C', 'root', 'status'], spawnError('ENOBUFS'), os.tmpdir()),
+    'git -C root status failed (spawnSync git ENOBUFS)')
 })
 
 test('activityAt: the newest stamp the record already holds, whichever field it is on', () => {

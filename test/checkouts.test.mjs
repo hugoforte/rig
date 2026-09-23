@@ -1,9 +1,9 @@
 // The two checkouts an installation owns, against real git. The module's seam is the
 // runner it is handed, so these tests hand it one that spawns git for real — local bare
 // remotes in a temp tree, no network, no `gh`, and no CLI subprocess. A fake runner
-// appears five times, and only where standing the state up for real would prove less than
-// it costs: the spawn options `fetch` is given, an unmeasurable distance, a `git status`
-// that fails, a refused `git add`, and a rebase whose abort fails too.
+// appears only where standing the state up for real would prove less than it costs: the
+// spawn options `fetch` is given, a `git status` that fails, a count that fails after it, a
+// refused `git add`, a `git diff --cached` that fails, and a rebase whose abort fails too.
 //
 // One temp tree, shared. Every checkout a test reads is made by that test or in `before`,
 // so no test depends on another having run first — `--test-name-pattern` has to work.
@@ -14,26 +14,32 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { checkouts, unreadable, FETCH_ENV } from '../bin/checkouts.mjs'
+import { MOVED_BY } from '../bin/gitfs.mjs'
 
 let tmp, env, sandbox
 
-// `run` is spawnSync-shaped, the way rig.mjs passes it in. The sandbox goes on *last*:
-// `fetch` builds its environment from `process.env` to add the prompt guard, the way
-// rig.mjs's own runner does, and without this the one call in the file that does so would
-// escape to the machine's real git config.
-const run = (cmd, args, opts = {}) => {
-  const merged = { ...(opts.env ?? env), ...sandbox }
+// `run` is shaped the way rig.mjs passes it in: spawnSync's options, except that `opts.env`
+// names *additions* to the environment the runner already holds — `fetch` passes the prompt
+// guard alone and means it on top of everything else. `base` is a thunk because the
+// environment is built in `before`. The sandbox goes on *last*, so the one call in the file
+// that adds anything cannot escape to the machine's real config.
+const runIn = base => (cmd, args, opts = {}) => {
+  const merged = { ...base(), ...(opts.env ?? {}), ...sandbox }
   const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts, env: merged })
   if (r.error) throw r.error
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
+const run = runIn(() => env)
 const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 const gitMust = (dir, ...args) => {
   const r = git(dir, ...args)
   assert.equal(r.code, 0, `git ${args.join(' ')}: ${r.err || r.out}`)
   return r.out
 }
-const c = () => checkouts({ run })
+// Every instance reads the test's environment and never the process's: `gitfs.discover` hands
+// the question back to git whenever one of git's discovery variables is set, and a shell that
+// exports one would otherwise change which of this module's paths every test takes.
+const c = (runner = run) => checkouts({ run: runner, env: () => env })
 
 // A bare remote with one commit, and a checkout of it that tracks `main`.
 const cloned = name => {
@@ -47,6 +53,21 @@ const cloned = name => {
   assert.equal(run('git', ['clone', '-q', '--bare', seed, bare]).code, 0)
   const local = path.join(tmp, name)
   assert.equal(run('git', ['clone', '-q', bare, local]).code, 0)
+  return { bare, local }
+}
+// A checkout whose upstream is still configured and whose ref has gone: what a
+// squash-merge-and-delete, or a remote renaming its default branch, leaves after a prune.
+const goneUpstream = name => {
+  const { bare, local } = cloned(name)
+  gitMust(bare, 'branch', '-m', 'main', 'gone')
+  gitMust(local, 'fetch', '-q', '--prune', 'origin')
+  return local
+}
+// A checkout on a branch whose name starts with a parenthesis, tracking `main`. git accepts
+// the name, and prints it in `branch.head` exactly as it prints its own `(detached)`.
+const onWip = name => {
+  const { bare, local } = cloned(name)
+  gitMust(local, 'checkout', '-q', '-b', '(wip)', '--track', 'origin/main')
   return { bare, local }
 }
 // Another machine pushes, as it would while you were not looking.
@@ -64,6 +85,9 @@ let plain, own, unborn
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-checkouts-'))
   env = { ...process.env }
+  // The variables `gitfs.discover` steps aside for, which a developer's shell or a CI image
+  // may set for reasons of its own.
+  for (const name of MOVED_BY) delete env[name]
   // Keep every inherited setting — and anything a test writes — out of the real config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
   // Which config git reads is the sandbox, applied to every call. Who it commits as is not:
@@ -146,6 +170,30 @@ test('dirty counts what `git status` reports; modified is what stops a fast-forw
   fs.rmSync(path.join(local, 'notes'), { recursive: true })
 })
 
+test('a stash is no change, and a rename and a conflict are one change each', () => {
+  // The status header carries more than the branch — `# stash` among it, with
+  // `status.showStash` on — and an entry is not always the `1 ` of an ordinary edit.
+  const { local } = cloned('entries')
+  gitMust(local, 'config', 'status.showStash', 'true')
+  fs.appendFileSync(path.join(local, 'README.md'), 'put aside\n')
+  gitMust(local, 'stash', '-q')
+  assert.match(gitMust(local, 'status', '--porcelain=v2', '--branch'), /^# stash 1$/m)
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [0, 0], 'a stash is not the tree')
+
+  gitMust(local, 'mv', 'README.md', 'READ.md')
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 1], 'a staged rename')
+  gitMust(local, 'mv', 'READ.md', 'README.md')
+
+  gitMust(local, 'checkout', '-q', '-b', 'theirs')
+  fs.writeFileSync(path.join(local, 'README.md'), 'theirs\n')
+  gitMust(local, 'commit', '-q', '-am', 'theirs')
+  gitMust(local, 'checkout', '-q', 'main')
+  fs.writeFileSync(path.join(local, 'README.md'), 'ours\n')
+  gitMust(local, 'commit', '-q', '-am', 'ours')
+  assert.notEqual(git(local, 'merge', '-q', 'theirs').code, 0, 'the merge stops on the conflict')
+  assert.deepEqual([c().describe(local).dirty, c().describe(local).modified], [1, 1], 'an unmerged file')
+})
+
 test('the upstream is its name, and distance is measured as last fetched', () => {
   const { bare, local } = cloned('distance')
   assert.equal(c().describe(local).upstream, 'origin/main')
@@ -192,6 +240,19 @@ test('the copy in a linked worktree knows it is one', () => {
   assert.equal(c().identify(local).linked, false)
 })
 
+test('a branch sharing its name with a tag is named the same whether git or the filesystem reads it', () => {
+  // `symbolic-ref --short` abbreviates for display, and beside a tag `rel` it prints the
+  // branch `rel` as `heads/rel`. Where gitfs hands the question back git is asked for the full
+  // ref instead, so both readings name the branch the same.
+  const { local } = cloned('tagged')
+  gitMust(local, 'checkout', '-q', '-b', 'rel')
+  gitMust(local, 'tag', 'rel')
+  // `discover` hands every question to git when one of git's discovery variables is in the
+  // environment it reads. git never sees this one: the runner keeps its own.
+  const askingGit = checkouts({ run, env: () => ({ ...env, GIT_CEILING_DIRECTORIES: path.join(tmp, 'nowhere') }) })
+  assert.deepEqual([c().identify(local).branch, askingGit.identify(local).branch], ['rel', 'rel'])
+})
+
 test('a detached HEAD has no branch and still has a head', () => {
   const { local } = cloned('detached')
   gitMust(local, 'checkout', '-q', '--detach')
@@ -213,11 +274,24 @@ test('a fetch may never stop to ask for credentials', () => {
   // process for every command that armed one. The guard rides on the operation, so this
   // asserts the call and not a constant somebody could stop passing.
   let asked = null
-  checkouts({ run: (cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } } })
+  c((cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } })
     .fetch('anywhere')
   assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
   assert.equal(asked.opts.env.GIT_TERMINAL_PROMPT, '0')
   assert.equal(asked.args.includes('fetch'), true)
+})
+
+test('the status call keeps more output than a spawn keeps by default', () => {
+  // spawnSync keeps 1 MiB of a child's output and fails the call past it, and a v2 line
+  // carries three modes and two object ids beside each path: a rewrite of some seven thousand
+  // tracked files fills that, and every reading of the checkout would die with it.
+  let kept = null
+  const watching = (cmd, args, opts) => {
+    if (args.includes('status')) kept = opts?.maxBuffer
+    return run(cmd, args, opts)
+  }
+  c(watching).describe(own)
+  assert.ok(kept > 1024 * 1024, `maxBuffer: ${kept}`)
 })
 
 test('a checkout level with its upstream is current, and nothing moves', () => {
@@ -266,16 +340,27 @@ test('the merge is --ff-only, which is what holds when the count that would have
   gitMust(local, 'add', '-A')
   gitMust(local, 'commit', '-q', '-m', 'a record of my own')
   assert.equal(c().fetch(local).ok, true)
-  const blind = (cmd, args) => args.includes('@{u}..HEAD')
+  // Two knockouts, because one reading answers both counts: without the tree, `describe`
+  // falls back to a `rev-list` per direction, and this is the forward one.
+  const blind = (cmd, args) => args.includes('--porcelain=v2') || args.includes('@{u}..HEAD')
     ? { code: 1, out: '', err: 'fatal: bad revision' }
     : run(cmd, args)
 
-  const r = checkouts({ run: blind }).fastForward(local)
+  const r = c(blind).fastForward(local)
   assert.equal(r.state.ahead, null, 'nothing could tell it was diverged')
   assert.equal(r.outcome, 'failed')
   assert.match(r.error, /fast-forward/i, 'git refused, in its own words')
   assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'a record of my own')
   assert.equal(gitMust(local, 'rev-list', '--count', '--merges', 'HEAD'), '0', 'no merge commit')
+})
+
+test('a branch whose name starts with a parenthesis is a branch, and moves', () => {
+  // Read as detached, `rig update` would refuse to move it and `rig save` would not push from it.
+  const { bare, local } = onWip('paren')
+  pushFromElsewhere(bare, 'THEIRS.md', 'a record from the other machine')
+  assert.equal(c().fetch(local).ok, true)
+
+  assert.equal(c().fastForward(local).outcome, 'moved')
 })
 
 test('an untracked file does not block a fast-forward', () => {
@@ -348,37 +433,139 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
   const unreadableTree = (cmd, args) => {
     if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
     if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
-    if (args.includes('symbolic-ref')) return { code: 0, out: 'main', err: '' }
+    if (args.includes('symbolic-ref')) return { code: 0, out: 'refs/heads/main', err: '' }
     if (args.includes('merge')) return { code: 128, out: '', err: 'fatal: .git/index: index file smaller than expected' }
     if (args.includes('@{u}..HEAD')) return { code: 0, out: '0', err: '' }
     if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
     if (args.includes('rev-list')) return { code: 0, out: '1', err: '' }
     return { code: 1, out: '', err: '' }
   }
-  const state = checkouts({ run: unreadableTree }).describe('anywhere')
+  const state = c(unreadableTree).describe('anywhere')
   assert.deepEqual([state.dirty, state.modified], [null, null])
   assert.equal(state.behind, 1, 'the distance was measurable; the tree was not')
-  const r = checkouts({ run: unreadableTree }).fastForward('anywhere')
+  const r = c(unreadableTree).fastForward('anywhere')
   assert.equal(r.outcome, 'failed')
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
 
-test('a distance git could not measure is not a reason to move anything', () => {
-  // The one answer real git will not give on demand: an upstream that exists and a
-  // rev-list that fails. A confident "0 behind" here would report a checkout as current
-  // on the strength of a failed command.
-  const fake = (cmd, args) => {
-    const sub = args[2]
-    if (sub === 'rev-parse' && args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
-    if (sub === 'symbolic-ref') return { code: 0, out: 'main', err: '' }
-    if (sub === 'rev-parse' && args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
-    if (sub === 'status') return { code: 0, out: '', err: '' }
-    if (sub === 'rev-list') return { code: 1, out: '', err: 'fatal: bad revision' }
-    return { code: 1, out: '', err: `unexpected: ${args.join(' ')}` }
+test('a count the fallback could not make is unknown, and nothing moves on it', () => {
+  // The fallback counts the distance itself, and the count towards the upstream is the one
+  // that decides whether anything moves: `status` failed, the upstream resolves, and that
+  // count fails too. A confident "0 behind" would report the checkout current on the
+  // strength of a question nothing answered.
+  const uncounted = (cmd, args) => {
+    if (args.includes('status')) return { code: 128, out: '', err: 'fatal: unable to read index' }
+    if (args.includes('--show-toplevel')) return { code: 0, out: args[1], err: '' }
+    if (args.includes('symbolic-ref')) return { code: 0, out: 'refs/heads/main', err: '' }
+    if (args.includes('HEAD..@{u}')) return { code: 128, out: '', err: 'fatal: bad revision' }
+    if (args.includes('@{u}')) return { code: 0, out: 'origin/main', err: '' }
+    if (args.includes('rev-list')) return { code: 0, out: '0', err: '' }
+    return { code: 1, out: '', err: '' }
   }
-  const r = checkouts({ run: fake }).fastForward(path.join(tmp, 'own'))
-  assert.equal(r.outcome, 'unmeasurable')
+  const r = c(uncounted).fastForward('anywhere')
   assert.equal(r.state.behind, null)
+  assert.equal(r.outcome, 'unmeasurable')
+})
+
+test('a repository git refuses outright is no checkout, not one with no upstream', () => {
+  // A config git cannot parse, or an owner `safe.directory` turns away: the filesystem still
+  // finds the `.git`, and every git command fails. Read as a failed `@{u}`, that was a
+  // checkout confidently level with nothing, and doctor told a data root whose config names
+  // `origin/main` that it had no upstream.
+  const { local } = cloned('badconfig')
+  fs.appendFileSync(path.join(local, '.git', 'config'), 'this is not config\n')
+  assert.deepEqual(c().describe(local), unreadable())
+  assert.equal(c().fastForward(local).outcome, 'not-a-checkout')
+})
+
+test('describe reads a checkout in one git call, and pays the old six only when the tree fails', () => {
+  // Pinned, because the symptom of it creeping back is invisible: six spawns answer the
+  // same questions as one and every test still passes, and the only thing that changes is
+  // that the suite takes another minute. A reading of a checkout runs at least twice per
+  // mutating command, so this is the tool's own latency as much as the suite's.
+  const { local } = cloned('counted')
+  const calls = []
+  const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
+  c(counting).describe(local)
+  assert.deepEqual(calls.map(a => a.split(' ')[2]), ['status'], calls.join('\n'))
+
+  calls.length = 0
+  const noTree = (cmd, args) => { calls.push(args.join(' ')); return args.includes('--porcelain=v2') ? { code: 128, out: '', err: 'fatal: unable to read index' } : run(cmd, args) }
+  const state = c(noTree).describe(local)
+  // The five the fallback costs, the first asking whether git will answer at all, plus the
+  // one attempt that found out it had to. Bought on a path where git has already failed,
+  // which is the trade the fallback exists to make.
+  assert.equal(calls.length, 6, calls.join('\n'))
+  assert.deepEqual([state.dirty, state.modified], [null, null], 'the tree is the half that went')
+  assert.equal(state.branch, 'main', 'and the half that did not is still read')
+})
+
+test('placing a checkout costs no subprocess, and a directory that is none costs nothing at all', () => {
+  // The question this module asks most often is where the checkout is, and the filesystem
+  // answers it exactly: walking up for a `.git` entry is what git does. Pinned the same way
+  // and for the same reason as the count above — the symptom of it creeping back is an
+  // extra minute on the suite and nothing else.
+  const { local } = cloned('placed')
+  const calls = []
+  const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
+  const state = c(counting).identify(local)
+  assert.deepEqual(state.branch, 'main', 'and the reading is still the reading')
+  assert.deepEqual(calls.map(a => a.split(' ').slice(2, 4).join(' ')), [
+    'rev-parse --abbrev-ref',            // the upstream, which is config and not a path
+    'symbolic-ref -q',                   // origin/HEAD
+    'rev-parse --verify',                // and whether the branch it names is still there
+    'rev-parse HEAD',
+  ], calls.join('\n'))
+
+  calls.length = 0
+  assert.deepEqual(c(counting).identify(plain), unreadable())
+  assert.deepEqual(calls, [], 'a directory that is no checkout is not worth a spawn to find out')
+})
+
+test('a distance git could not measure is not a reason to move anything', () => {
+  // A branch with no commit of its own yet, set to track one that exists: `status
+  // --porcelain=v2 --branch` names the upstream and leaves `branch.ab` out, because there is
+  // nothing to count from. A confident "0 behind" here would report a checkout as current on
+  // the strength of a question nothing answered.
+  const { local } = cloned('unmeasurable')
+  gitMust(local, 'switch', '-q', '--orphan', 'fresh')
+  gitMust(local, 'config', 'branch.fresh.remote', 'origin')
+  gitMust(local, 'config', 'branch.fresh.merge', 'refs/heads/main')
+
+  const state = c().describe(local)
+  assert.equal(state.upstream, 'origin/main')
+  assert.deepEqual([state.ahead, state.behind], [null, null])
+
+  const r = c().fastForward(local)
+  assert.equal(r.outcome, 'unmeasurable')
+})
+
+test('an upstream whose ref has gone is no upstream, whichever reading asks', () => {
+  // There is nothing to move towards and nothing to push onto, which is what "no upstream"
+  // already tells every caller: `rig save` keeps the commit local and `rig update` migrates.
+  // Read as unmeasurable instead, `rig save` would rebase onto a ref that is not there and
+  // `rig update` would refuse the migrations behind it.
+  const local = goneUpstream('gone')
+  assert.equal(c().describe(local).upstream, null)
+  assert.equal(c().identify(local).upstream, null)
+  assert.equal(c().fastForward(local).outcome, 'no-upstream')
+})
+
+test('describe, its fallback and identify agree on the branch and the upstream', () => {
+  // Which of the three answers depends on the command and on whether the index could be
+  // read, so a disagreement is one checkout with two outcomes. These are the two checkouts
+  // where the status header answers differently from the other readings: a gone upstream,
+  // which the header still names, and a `(wip)` branch, printed there the way git prints its
+  // own `(detached)`.
+  const noTree = (cmd, args) => args.includes('--porcelain=v2')
+    ? { code: 128, out: '', err: 'fatal: unable to read index' }
+    : run(cmd, args)
+  const named = ({ branch, upstream }) => ({ branch, upstream })
+  for (const local of [goneUpstream('agree-gone'), onWip('agree-wip').local]) {
+    const identified = named(c().identify(local))
+    assert.deepEqual(named(c().describe(local)), identified, local)
+    assert.deepEqual(named(c(noTree).describe(local)), identified, local)
+  }
 })
 
 test('commitAll stages everything present, including what nobody staged', () => {
@@ -397,7 +584,7 @@ test('nothing to commit is an outcome, not a failure', () => {
   const { local } = cloned('nothing')
   const r = c().commitAll(local, 'rig save: nothing happened')
   assert.equal(r.outcome, 'nothing')
-  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'and HEAD is still nameable')
+  assert.equal(r.hash, null, 'no commit was made, so there is none to name — and no caller reads one')
 })
 
 test('a commit git refuses answers git\'s reason, and the change is still there', () => {
@@ -407,7 +594,7 @@ test('a commit git refuses answers git\'s reason, and the change is still there'
   const nameless = { ...env }
   delete nameless.GIT_AUTHOR_NAME; delete nameless.GIT_AUTHOR_EMAIL
   delete nameless.GIT_COMMITTER_NAME; delete nameless.GIT_COMMITTER_EMAIL
-  const bare = checkouts({ run: (cmd, args, opts = {}) => run(cmd, args, { env: nameless, ...opts }) })
+  const bare = c(runIn(() => nameless))
 
   const r = bare.commitAll(local, 'rig save: a record')
   assert.equal(r.outcome, 'commit-failed')
@@ -425,7 +612,7 @@ test('a stage git refuses is its own outcome, and nothing is committed', () => {
       ? { code: 128, out: '', err: 'fatal: Unable to create index.lock: File exists.' }
       : { code: 0, out: '', err: '' }
   }
-  const r = checkouts({ run: refuses }).commitAll('anywhere', 'rig save: blocked')
+  const r = c(refuses).commitAll('anywhere', 'rig save: blocked')
   assert.equal(r.outcome, 'stage-failed')
   assert.match(r.error, /index\.lock/)
   assert.equal(seen.some(c => c.includes('commit')), false, 'and it stopped there')
@@ -437,7 +624,7 @@ test('a `git diff --cached` that failed says nothing about what is staged', () =
   const broken = (cmd, args) => args.includes('--cached')
     ? { code: 129, out: '', err: 'fatal: unknown option' }
     : { code: 0, out: '', err: '' }
-  const r = checkouts({ run: broken }).commitAll('anywhere', 'rig save: unknowable')
+  const r = c(broken).commitAll('anywhere', 'rig save: unknowable')
   assert.equal(r.outcome, 'stage-failed')
 })
 
@@ -514,7 +701,7 @@ test('a conflict whose abort also fails is a different answer', () => {
     if (args.includes('rebase')) { started = true; return { code: 1, out: '', err: 'CONFLICT (content): Merge conflict' } }
     return { code: 0, out: '', err: '' }
   }
-  const r = checkouts({ run: stuck }).pushRebasing('anywhere')
+  const r = c(stuck).pushRebasing('anywhere')
   assert.equal(r.outcome, 'conflict-stuck')
 })
 

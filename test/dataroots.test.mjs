@@ -133,6 +133,15 @@ test('finding the repo the cwd is in costs a subprocess, so it is not asked when
   })
 })
 
+test('nor when no root catalogues anything, because a repo could not place this installation', () => {
+  fixture(THREE, ({ tmp, toolRoot }) => {
+    let asked = 0
+    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => { asked++; return 'notes' } })
+    assert.equal(asked, 0, 'a catalogue entry is what binds a repo to a root, and there is none')
+    assert.equal(location.source, 'current', 'so the pointer decides, exactly as it would have')
+  })
+})
+
 test('the work folder still beats the repo: the work already said where it lives', () => {
   fixture(THREE, ({ tmp, toolRoot, machine }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
@@ -244,7 +253,7 @@ test('the registry is the location\'s to answer, and never the merged config\'s'
 
 // ------------------------------------------------------------------ the CLI
 
-const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} } })
+const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} }, inProcess: true })
 const { tmp, dataRoot, workRoot, localConfig, rig, gitMust, cleanup } = install
 const second = path.join(tmp, 'rig-data-personal')
 
@@ -404,6 +413,58 @@ test('a repo belonging to another root cannot be attached to this work', () => {
   assert.match(r.out, /catalogued in data root "personal".*one work cannot span two data roots/s)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'catalog', 'acme', 'ledger.md')),
     'and no entry for it was drafted into this root')
+})
+
+// The repo the command stands in, found end to end: every test of that step above hands
+// `locate` a fake. A real checkout outside any work folder, so no anchor answers first, and
+// not named for its repo, so reading the folder name cannot pass for reading the remote. Its
+// repo is ledger, which `personal` catalogues since `rig new --repos` above; current is the
+// other root.
+const checkoutAt = (where, repo) => {
+  const dir = path.join(tmp, where)
+  fs.mkdirSync(dir, { recursive: true })
+  gitMust(dir, 'init', '-q', '-b', 'main')
+  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/acme/${repo}.git`)
+  return dir
+}
+
+test('the checkout a command runs in chooses the root that catalogues its repo', () => {
+  // The run's folder and not the process's: in this process that is the checkout the suite
+  // runs from, whose repo no root here catalogues.
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/my-clone', 'ledger') })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a checkout the filesystem walk hands back to git is still placed by its repo', () => {
+  // `core.worktree` is a layout `gitfs` will not answer for, and its null means "ask git",
+  // never "no checkout here".
+  const dir = checkoutAt('somewhere/handed-back', 'ledger')
+  gitMust(dir, 'config', 'core.worktree', dir.split(path.sep).join('/'))
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+// A folder named for ledger, so the name is there to be guessed from, and what decides
+// whether it is guessed is git.
+
+test('a checkout with no origin is named by its folder, the one name it has', () => {
+  const dir = path.join(tmp, 'no-origin', 'ledger')
+  fs.mkdirSync(dir, { recursive: true })
+  gitMust(dir, 'init', '-q', '-b', 'main')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a repository git refuses to open is not named by its folder', () => {
+  // git refuses a repository with an extension it does not know, or one another user owns,
+  // and the filesystem walk sees neither. Every question put to git then fails, `remote
+  // get-url` with it, and that is not the same answer as "no origin".
+  const dir = checkoutAt('refused/ledger', 'payments')
+  gitMust(dir, 'config', 'core.repositoryformatversion', '1')
+  gitMust(dir, 'config', 'extensions.rigHasNeverHeardOfThis', 'true')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: hugoforte \(current\)/)
 })
 
 test('--data with no name is a typo, not a request', () => {

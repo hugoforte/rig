@@ -145,27 +145,32 @@ export function registry (toolRoot, env = process.env) {
   return { toolRoot, localFile, roots: rootsOf(machine, localFile), current: machine?.current ?? null }
 }
 
+const dirEntries = dir => {
+  try { return fs.readdirSync(dir) } catch { return [] }   // absent, or a file where a directory was expected
+}
+
+// Every catalogue entry each configured root holds, by root name, lower-cased because the
+// file is named for the repo and NTFS does not distinguish. One traversal, because two
+// questions are asked of it: which root catalogues a given repo, and whether any root
+// catalogues anything at all.
+const catalogued = roots => Object.fromEntries(Object.entries(roots).map(([name, entry]) => {
+  const catalog = path.join(entry.path, 'catalog')
+  return [name, dirEntries(catalog).flatMap(org => dirEntries(path.join(catalog, org)).map(f => f.toLowerCase()))]
+}))
+
+// Whether any configured root could place a repo at all. An installation with nothing
+// catalogued — one that has only just run `rig init` — has no repo-shaped answer to give,
+// which is what makes finding the repo the cwd is in not worth the subprocess it costs.
+const placesRepos = roots => Object.values(catalogued(roots)).some(files => files.length)
+
 // Which configured roots hold a catalogue entry for a repo. A repo is catalogued in exactly
 // one data root — `rig attach` drafts the entry the first time it sees the repo, in whichever
 // root the work was in — so this is a binding that already exists rather than a new thing to
 // configure. Returned as a list because two roots cataloguing one repo is a real state, and
 // guessing between them would put a work's records in the wrong repo.
-//
-// Matched case-insensitively: the file is named for the repo, and NTFS does not distinguish.
 export function rootsCataloguing (roots, repo) {
   const wanted = `${String(repo).toLowerCase()}.md`
-  const hits = []
-  for (const [name, entry] of Object.entries(roots)) {
-    const catalog = path.join(entry.path, 'catalog')
-    let orgs
-    try { orgs = fs.readdirSync(catalog) } catch { continue }   // no catalogue yet is not an error
-    const found = orgs.some(org => {
-      try { return fs.readdirSync(path.join(catalog, org)).some(f => f.toLowerCase() === wanted) }
-      catch { return false }   // a file where an org directory was expected
-    })
-    if (found) hits.push(name)
-  }
-  return hits
+  return Object.entries(catalogued(roots)).filter(([, files]) => files.includes(wanted)).map(([name]) => name)
 }
 
 // The data root the work folder above the cwd belongs to, or null outside one. Walks up
@@ -231,8 +236,10 @@ function chooseRoot (reg, env, opts) {
   const byRepos = fromRepos(reg, opts.repos ?? [], 'named on the command')
   if (byRepos) return byRepos
   // A function, not a value: finding the repo the cwd is in costs a subprocess, and by here
-  // it is the only question left unanswered — every cheaper one has already missed.
-  const here = opts.repoAt?.()
+  // it is the only question left unanswered — every cheaper one has already missed. And it is
+  // only worth the subprocess where a catalogue exists to answer it: what places a command by
+  // its repo is that repo's catalogue entry, so an installation with none has already said no.
+  const here = placesRepos(reg.roots) ? opts.repoAt?.() : null
   const byCwd = here ? fromRepos(reg, [here], 'the repo the current directory is in') : null
   if (byCwd) return byCwd
   if (reg.current) return known(reg.current, 'current', `"current" in ${reg.localFile}`)

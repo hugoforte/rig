@@ -15,6 +15,8 @@ import path from 'node:path'
 import { makeInstall, readJson, strip } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, env, cleanup } = makeInstall({
+  // Nothing here is about the process rig runs in, so the runs happen in this one.
+  inProcess: true,
   prefix: 'rig-attach-',
   author: 'rig attach',
   email: 'attach@example.invalid',
@@ -365,4 +367,28 @@ test('a commit landing in the same second as the entry is not one commit since i
     { encoding: 'utf8', env: { ...env, GIT_AUTHOR_DATE: head, GIT_COMMITTER_DATE: head } }).status, 0)
 
   assert.doesNotMatch(rig(['doctor']).out, /catalogue entr\w+ behind/)
+})
+
+// Standing in a worktree is how rig is used — a command finds its work by walking up from where
+// it runs — and the two commands that remove worktrees are the two that can pull the floor out
+// from under the run. Every test above names its work with `--work` from the temp directory, so
+// these stand inside the tree being removed. A second work, because t1 is closed.
+const t2 = repo => path.join(workRoot, 't2', repo)
+const t2Record = () => readJson(path.join(dataRoot, 'work', 't2', 'work.json'))
+
+test('detach run from inside the worktree it removes finishes, and lets go of the repo', () => {
+  assert.equal(rig(['new', 't2', '--title', 'Standing inside', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 't2']).code, 0)
+  assert.equal(rig(['attach', 'orders', '--work', 't2']).code, 0)
+
+  const r = rig(['detach', 'billing'], { cwd: t2('billing') })
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(t2Record().repos.map(x => x.repo), ['orders'])
+})
+
+test('close run from inside a worktree removes every worktree and records the close', () => {
+  const r = rig(['close', '--abandoned'], { cwd: t2('orders') })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 't2')), 'the work folder and every tree in it are gone')
+  assert.ok(t2Record().closedAt)
 })

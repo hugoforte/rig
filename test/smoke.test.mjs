@@ -1,10 +1,13 @@
-// Runs a temp copy of the tool as a subprocess against temp work and data roots.
+// Drives a temp copy of the tool against temp work and data roots. The runs happen in this
+// process, through `bin/rig.mjs`'s `run(argv, io)`: the copy is the installation rig reads its
+// files from, and the code that runs is this checkout's. The two tests whose subject is a
+// process start one of their own; test/harness.mjs says when else a run is a subprocess.
 //
-// The copy is for git alone: it has no `.git`, which is what keeps `rig update` and every
-// freshness path off the checkout these tests are running from (test/installation.test.mjs
-// is where a real installation with a remote is built, and says so). The machine config no
-// longer needs it — `RIG_LOCAL_CONFIG` puts rig.local.json in the temp dir, so nothing this
-// suite writes lands beside the tool.
+// What the copy lacks matters as much as what it holds: it has no `.git`, which is what keeps
+// `rig update` and every freshness path off the checkout these tests are running from
+// (test/installation.test.mjs is where a real installation with a remote is built, and says
+// so). And no machine config is written into it — `RIG_LOCAL_CONFIG` puts rig.local.json in
+// the temp dir, so nothing this suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
 // new before close). node:test runs a file's tests serially by default; running a
@@ -32,6 +35,8 @@ const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
   githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
 } = makeInstall({
+  // Nothing here is about the process rig runs in, so the runs happen in this one.
+  inProcess: true,
   prefix: 'rig-smoke-',
   author: 'rig smoke',
   email: 'smoke@example.invalid',
@@ -94,6 +99,15 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.equal(local.current, DEFAULT_ROOT_NAME)
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
+})
+
+test('a tool copy with no repository pays no git for the freshness check', () => {
+  // After init, so the check has a config to read and, with no cache yet, is due: all that
+  // stands between it and `git rev-parse HEAD` is knowing that this copy is no checkout.
+  const trace = path.join(tmp, 'help.trace')
+  const r = rig(['help'], { env: { ...env, GIT_TRACE2: trace } })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(trace), fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '')
 })
 
 test('init warns rather than crashes without a usable gh', () => {
@@ -245,8 +259,12 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
 })
 
 test('rig new --ticket on a Jira org creates via twg with resolved fields', () => {
+  // A subprocess, so the brief comes down a real stdin: in this process the harness hands the
+  // run a reader of its own, and this is the one test that reads the CLI's. The newline the
+  // pipe ends on is the CLI's to trim, and the context doc, which takes the brief as it came,
+  // is where a brief that was not trimmed would show.
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs'],
-    { input: 'the jira brief\n\nmore detail' })
+    { input: 'the jira brief\n\nmore detail\n', inProcess: false })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /ticket PROJ-1/)
   const record = readJson(path.join(dataRoot, 'work', 't5', 'work.json'))
@@ -257,7 +275,9 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
   assert.equal(issue.body.split('\n\nThe design lives')[0], 'the jira brief\n\nmore detail')
   assert.equal(issue.assignee, 'me')
   assert.deepEqual(issue.fields, { customfield_10755: ['10755'], customfield_10058: 3, customfield_10020: 7 })
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)
+  const doc = fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8')
+  assert.match(doc, /^Tickets: PROJ-1 · Status: Planning$/m)
+  assert.match(doc, /## Problem\n\nthe jira brief\n\nmore detail\n\n## Direction/)
 })
 
 test('a Jira ticket-creation failure surfaces as a clean error, not a stack trace', () => {
@@ -398,11 +418,23 @@ test('with an upstream, a mutating command pushes, rebasing over what others pus
   assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
 })
 
+test('with nothing to commit, a mutating command still pushes a commit an earlier push left behind', () => {
+  // A commit made by hand stands in for one whose push failed. Nothing is staged, so what
+  // decides the push is how far ahead of origin the data root is, and nothing else.
+  const remote = path.join(tmp, 'rig-data-remote.git')
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nCommitted by hand.\n')
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'committed by hand').status, 0)
+  const r = rig(['save', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: pushed [0-9a-f]{7,}, committed earlier and pushed/)
+  assert.equal(lastCommit(remote), 'committed by hand')
+})
+
 test('a mutating command fast-forwards a data root another machine moved', () => {
   // The correctness half of this feature: rig pushed the data root but never pulled it, so a
   // second machine read stale records and wrote on top of them. Nothing else reaches the
-  // plain behind-and-clean path — the tests either side of this one are behind *and* dirty,
-  // or behind *and* ahead, which take different branches.
+  // plain behind-and-clean path — the other data-root tests here are behind *and* dirty,
+  // behind *and* ahead, or ahead alone, which take different branches.
   const other = path.join(tmp, 'other-machine')
   assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
   fs.writeFileSync(path.join(other, 'FROM-THE-OTHER-MACHINE.md'), 'written elsewhere')
