@@ -582,7 +582,7 @@ function freshnessEpilogue (command) {
     const cfg = config()
     if (!cfg.freshness.enabled) return
     // Cheap first: most runs have nothing to say and nothing to do, and `toolState` costs
-    // four git spawns, or eight in a layout `gitfs` hands back to git (test/checkouts.test.mjs
+    // four git spawns, or eight in a layout `gitfs` hands back to git (test/checkouts-read.test.mjs
     // pins the four). The free half of that is decided from the cache alone, and it is
     // decided before the reading below — a cache written inside its interval by an
     // installation that was up to date is the ordinary run, and it was paying a spawn to be
