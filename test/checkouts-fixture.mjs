@@ -23,6 +23,18 @@ import { MOVED_BY } from '../bin/gitfs.mjs'
 // `prefix` names the temp directory, so a failing run says which file left it behind.
 export function checkoutsFixture (prefix) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
+  // The tree is built before the test file has registered `after(cleanup)`, so a build that
+  // throws — a git too old for `init -b`, say — would leave it behind unless this removes it.
+  try {
+    return { ...build(tmp), cleanup }
+  } catch (e) {
+    cleanup()
+    throw e
+  }
+}
+
+function build (tmp) {
   const env = { ...process.env }
   // The variables `gitfs.discover` steps aside for, which a developer's shell or a CI image
   // may set for reasons of its own.
@@ -98,8 +110,8 @@ export function checkoutsFixture (prefix) {
     gitMust(theirs, 'push', '-q')
   }
 
-  // The three checkouts with no remote in them, made once: a directory git knows nothing
-  // about, a checkout of its own with a commit, and one whose HEAD was never born.
+  // The three checkouts with no remote in them, made once per file: a directory git knows
+  // nothing about, a checkout of its own with a commit, and one whose HEAD was never born.
   const plain = path.join(tmp, 'plain')
   fs.mkdirSync(plain)
   const own = path.join(tmp, 'own')
@@ -112,7 +124,5 @@ export function checkoutsFixture (prefix) {
   fs.mkdirSync(unborn)
   gitMust(unborn, 'init', '-q', '-b', 'main')
 
-  const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
-
-  return { tmp, env, run, runIn, git, gitMust, c, cloned, goneUpstream, onWip, pushFromElsewhere, plain, own, unborn, cleanup }
+  return { tmp, env, run, runIn, git, gitMust, c, cloned, goneUpstream, onWip, pushFromElsewhere, plain, own, unborn }
 }

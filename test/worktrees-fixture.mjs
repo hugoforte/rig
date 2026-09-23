@@ -17,6 +17,18 @@ import { worktrees, remotesInDirectory } from '../bin/worktrees.mjs'
 // `prefix` names the temp directory, so a failing run says which file left it behind.
 export function worktreesFixture (prefix) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
+  // The tree is built before the test file has registered `after(cleanup)`, so a build that
+  // throws would leave it behind unless this removes it.
+  try {
+    return { ...build(tmp), cleanup }
+  } catch (e) {
+    cleanup()
+    throw e
+  }
+}
+
+function build (tmp) {
   const remotesDir = path.join(tmp, 'remotes')
   const mirrorRoot = path.join(tmp, 'w', '.mirrors')
   const workRoot = path.join(tmp, 'w')
@@ -82,7 +94,5 @@ export function worktreesFixture (prefix) {
     gitMust(seed, 'push', '-q', 'origin', branch)
   }
 
-  const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
-
-  return { tmp, remotesDir, mirrorRoot, workRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote, cleanup }
+  return { tmp, remotesDir, mirrorRoot, workRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote }
 }

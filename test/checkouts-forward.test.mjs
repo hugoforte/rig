@@ -1,4 +1,4 @@
-// Fetching and fast-forwarding one of the two checkouts an installation owns,
+// Fast-forwarding one of the two checkouts an installation owns (the fetch itself is read's),
 // against real git. The module's seam is the runner it is handed, so these tests hand it one
 // that spawns git for real — local bare remotes in a temp tree, no network, no `gh`, and no
 // CLI subprocess. A fake runner appears only where standing the state up for real would prove
