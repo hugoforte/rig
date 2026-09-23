@@ -147,11 +147,17 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('landing', `${merged.length} of ${repos.length} merged — still out: ${left}`))
   }
 
+  // A neighbour the catalogue names that is not attached. Decided here, above the floor, because
+  // unlike the draft and close offers below it *is* about the work itself — its repo set — and a
+  // floor saying "everything is attached" one line above "orders — not attached" contradicts
+  // itself. Pushed further down, in the order the ladder reads.
+  const offeringNeighbours = neighbours.length > 0 && ['planning', 'designing', 'building'].includes(phase)
+
   // The floor: repos attached, design agreed, nothing written anywhere. There is only one
-  // thing left to do and rig is not the tool that does it. Asked here, before the two offers
-  // below are pushed, because both of them are about something other than the work itself: a
-  // draft entry must not silence the one line that says the code is yours to write.
-  const floor = !out.length && untouched.length === repos.length
+  // thing left to do and rig is not the tool that does it. Asked here, before the draft and
+  // close offers below are pushed, because both are about something other than the work
+  // itself: a draft entry must not silence the one line that says the code is yours to write.
+  const floor = !out.length && untouched.length === repos.length && !offeringNeighbours
   if (floor) {
     out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
   }
@@ -192,7 +198,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   //
   // One offer for all of them, not one each. `next` is read top to bottom, and a list that
   // grows a line per neighbour is the to-do list guardrail 1 exists to prevent.
-  if (neighbours.length && ['planning', 'designing', 'building'].includes(phase)) {
+  if (offeringNeighbours) {
     const reason = n => (n.direction === 'downstream' ? ` (a change in ${n.via} can break it)`
       : n.direction === 'upstream' ? ` (a change in it can break ${n.via})`
         : n.direction === 'both' ? ` (either can break the other)` : '')

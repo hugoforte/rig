@@ -387,3 +387,18 @@ test('the offer is an offer: it never warns and never refuses', () => {
   })
   assert.doesNotMatch(says(out), /should|must|missing|forgot/i)
 })
+
+test('the floor does not say everything is attached one line above a repo that is not', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /everything is attached/)
+  assert.match(says(out), /orders talks to billing/)
+})
+
+test('with no neighbour to offer, the floor still says the code is yours to write', () => {
+  const out = nextFor({ work: work({ repos: attached('billing'), designedAt: AT }), repos: [repo('billing')] })
+  assert.match(says(out), /everything is attached and agreed/)
+})
