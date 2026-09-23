@@ -79,31 +79,32 @@ const onPath = cmd => {
 // Available, Capacity, Mounted on. POSIX guarantees `-P` keeps each entry on a single line,
 // which is the whole reason for the flag; the mount point is the rest of the line, because
 // it is the one field allowed to contain spaces.
-function parseDf (out) {
-  const row = out.trim().split('\n').slice(1).pop()
-  const cols = row ? row.trim().split(/\s+/) : []
-  if (cols.length < 6) return null
-  const kb = Number(cols[3])
-  if (!Number.isFinite(kb)) return null
-  return { label: cols.slice(5).join(' '), bytes: kb * 1024 }
+// Free space where rig puts worktrees. Asked of the runtime rather than of the platform:
+// `fs.statfsSync` is what `df` and `Get-PSDrive` both go on to ask, and it costs no process
+// at all — which matters because the PowerShell one cost 202ms a call, four times a `git`
+// and by some way the most expensive thing rig ever started.
+//
+// Decision 54 stands and is easier to keep: a check rig cannot make is dropped, never fatal.
+// There is simply no probe left to be missing, so the only way this answers null now is a
+// path the filesystem will not report on — a work root on a disconnected share, or one that
+// is not there yet.
+//
+// `label` names the volume the number is about. Windows has one and it is the whole answer —
+// the drive, or the share a UNC path is on. `statfs` cannot name a POSIX mount point, so
+// there the directory that was measured is the honest label, and a more useful one than
+// `df`'s: the reader is asking about their work root, not about `/`.
+const volumeOf = dir => {
+  if (process.platform !== 'win32') return dir
+  return path.parse(dir).root.replace(/[\\/]+$/, '') || dir
 }
 
-// Free space is the one check with no portable form: PowerShell on Windows, `df` on
-// everything POSIX. Returns null when this machine's probe is absent or says something
-// unreadable — a check rig cannot make is dropped, never fatal, which is what it used to be
-// (a `run` that died on a machine with no powershell, taking doctor's verdict with it).
 function freeSpace (dir) {
-  if (process.platform === 'win32') {
-    if (!onPath('powershell')) return null
-    const drive = dir.slice(0, 2)
-    const r = run('powershell', ['-NoProfile', '-Command', `(Get-PSDrive ${drive[0]}).Free`])
-    const bytes = Number(r.out)
-    if (r.code !== 0 || !r.out || !Number.isFinite(bytes)) return null
-    return { label: drive, bytes }
-  }
-  if (!onPath('df')) return null
-  const r = run('df', ['-Pk', dir])
-  return r.code === 0 ? parseDf(r.out) : null
+  try {
+    const s = fs.statfsSync(dir)
+    const bytes = s.bavail * s.bsize
+    if (!Number.isFinite(bytes)) return null
+    return { label: volumeOf(dir), bytes }
+  } catch { return null }
 }
 
 function must (cmd, args, opts = {}) {
@@ -3333,7 +3334,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  SPAWN_DEFAULTS, REFRESH_SPAWN, effectiveIdentity, parseDf,
+  SPAWN_DEFAULTS, REFRESH_SPAWN, effectiveIdentity, freeSpace,
   directionSection, directionBody, directionIsTodo,
   listing,
 }
