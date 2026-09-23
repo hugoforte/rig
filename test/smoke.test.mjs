@@ -400,6 +400,18 @@ test('with an upstream, a mutating command pushes, rebasing over what others pus
   assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
 })
 
+test('with nothing to commit, a mutating command still pushes a commit an earlier push left behind', () => {
+  // A commit made by hand stands in for one whose push failed. Nothing is staged, so what
+  // decides the push is how far ahead of origin the data root is, and nothing else.
+  const remote = path.join(tmp, 'rig-data-remote.git')
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nCommitted by hand.\n')
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'committed by hand').status, 0)
+  const r = rig(['save', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: pushed [0-9a-f]{7,}, committed earlier and pushed/)
+  assert.equal(lastCommit(remote), 'committed by hand')
+})
+
 test('a mutating command fast-forwards a data root another machine moved', () => {
   // The correctness half of this feature: rig pushed the data root but never pulled it, so a
   // second machine read stale records and wrote on top of them. Nothing else reaches the
