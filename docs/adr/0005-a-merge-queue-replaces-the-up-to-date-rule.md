@@ -84,7 +84,9 @@ the merge group. There is no PR-only required check. A required check that never
 the group's ref does not fail the entry — it leaves it stalled until `check_response_timeout_minutes`
 ejects it, and the symptom is a queue that appears broken rather than a missing trigger. So
 `test.yml` gains `merge_group` and keeps one job id and one matrix, because the check names have
-to be identical across the two events and they are identical by being the same job.
+to be identical across the two events and they are identical by being the same job. (Since
+hugoforte/rig#155 the Windows check is a gate job named for it that waits on six shard jobs; the
+names are still the same across both events, because it is still one workflow.)
 
 `version.yml` gains `merge_group` too, and there it reports success in one line. ADR 0004 said
 it was "deliberately not a merge-queue check", which was a preference GitHub does not offer;
