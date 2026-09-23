@@ -35,7 +35,10 @@ const gitMust = (dir, ...args) => {
   assert.equal(r.code, 0, `git ${args.join(' ')}: ${r.err || r.out}`)
   return r.out
 }
-const c = () => checkouts({ run })
+// Every instance reads the test's environment and never the process's: `gitfs.discover` hands
+// the question back to git whenever one of git's discovery variables is set, and a shell that
+// exports one would otherwise change which of this module's paths every test takes.
+const c = (runner = run) => checkouts({ run: runner, env: () => env })
 
 // A bare remote with one commit, and a checkout of it that tracks `main`.
 const cloned = name => {
@@ -66,6 +69,10 @@ let plain, own, unborn
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-checkouts-'))
   env = { ...process.env }
+  // The variables `gitfs.discover` steps aside for, which a developer's shell or a CI image
+  // may set for reasons of its own.
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
+    'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM']) delete env[name]
   // Keep every inherited setting — and anything a test writes — out of the real config.
   fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
   // Which config git reads is the sandbox, applied to every call. Who it commits as is not:
@@ -215,7 +222,7 @@ test('a fetch may never stop to ask for credentials', () => {
   // process for every command that armed one. The guard rides on the operation, so this
   // asserts the call and not a constant somebody could stop passing.
   let asked = null
-  checkouts({ run: (cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } } })
+  c((cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } })
     .fetch('anywhere')
   assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
   assert.equal(asked.opts.env.GIT_TERMINAL_PROMPT, '0')
@@ -274,7 +281,7 @@ test('the merge is --ff-only, which is what holds when the count that would have
     ? { code: 1, out: '', err: 'fatal: bad revision' }
     : run(cmd, args)
 
-  const r = checkouts({ run: blind }).fastForward(local)
+  const r = c(blind).fastForward(local)
   assert.equal(r.state.ahead, null, 'nothing could tell it was diverged')
   assert.equal(r.outcome, 'failed')
   assert.match(r.error, /fast-forward/i, 'git refused, in its own words')
@@ -359,10 +366,10 @@ test('a tree git could not read is not a clean tree, and not a blocked one eithe
     if (args.includes('rev-list')) return { code: 0, out: '1', err: '' }
     return { code: 1, out: '', err: '' }
   }
-  const state = checkouts({ run: unreadableTree }).describe('anywhere')
+  const state = c(unreadableTree).describe('anywhere')
   assert.deepEqual([state.dirty, state.modified], [null, null])
   assert.equal(state.behind, 1, 'the distance was measurable; the tree was not')
-  const r = checkouts({ run: unreadableTree }).fastForward('anywhere')
+  const r = c(unreadableTree).fastForward('anywhere')
   assert.equal(r.outcome, 'failed')
   assert.match(r.error, /index file smaller/, 'git named the index, which no guess would have')
 })
@@ -375,12 +382,12 @@ test('describe reads a checkout in one git call, and pays the old six only when 
   const { local } = cloned('counted')
   const calls = []
   const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
-  checkouts({ run: counting }).describe(local)
+  c(counting).describe(local)
   assert.deepEqual(calls.map(a => a.split(' ')[2]), ['status'], calls.join('\n'))
 
   calls.length = 0
   const noTree = (cmd, args) => { calls.push(args.join(' ')); return args.includes('--porcelain=v2') ? { code: 128, out: '', err: 'fatal: unable to read index' } : run(cmd, args) }
-  const state = checkouts({ run: noTree }).describe(local)
+  const state = c(noTree).describe(local)
   // The four the fallback costs, plus the one attempt that found out it had to. Bought on a
   // path where git has already failed, which is the trade the fallback exists to make.
   assert.equal(calls.length, 5, calls.join('\n'))
@@ -396,7 +403,7 @@ test('placing a checkout costs no subprocess, and a directory that is none costs
   const { local } = cloned('placed')
   const calls = []
   const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
-  const state = checkouts({ run: counting }).identify(local)
+  const state = c(counting).identify(local)
   assert.deepEqual(state.branch, 'main', 'and the reading is still the reading')
   assert.deepEqual(calls.map(a => a.split(' ').slice(2, 4).join(' ')), [
     'rev-parse --abbrev-ref',            // the upstream, which is config and not a path
@@ -406,7 +413,7 @@ test('placing a checkout costs no subprocess, and a directory that is none costs
   ], calls.join('\n'))
 
   calls.length = 0
-  assert.deepEqual(checkouts({ run: counting }).identify(plain), unreadable())
+  assert.deepEqual(c(counting).identify(plain), unreadable())
   assert.deepEqual(calls, [], 'a directory that is no checkout is not worth a spawn to find out')
 })
 
@@ -458,7 +465,7 @@ test('a commit git refuses answers git\'s reason, and the change is still there'
   const nameless = { ...env }
   delete nameless.GIT_AUTHOR_NAME; delete nameless.GIT_AUTHOR_EMAIL
   delete nameless.GIT_COMMITTER_NAME; delete nameless.GIT_COMMITTER_EMAIL
-  const bare = checkouts({ run: runIn(() => nameless) })
+  const bare = c(runIn(() => nameless))
 
   const r = bare.commitAll(local, 'rig save: a record')
   assert.equal(r.outcome, 'commit-failed')
@@ -476,7 +483,7 @@ test('a stage git refuses is its own outcome, and nothing is committed', () => {
       ? { code: 128, out: '', err: 'fatal: Unable to create index.lock: File exists.' }
       : { code: 0, out: '', err: '' }
   }
-  const r = checkouts({ run: refuses }).commitAll('anywhere', 'rig save: blocked')
+  const r = c(refuses).commitAll('anywhere', 'rig save: blocked')
   assert.equal(r.outcome, 'stage-failed')
   assert.match(r.error, /index\.lock/)
   assert.equal(seen.some(c => c.includes('commit')), false, 'and it stopped there')
@@ -488,7 +495,7 @@ test('a `git diff --cached` that failed says nothing about what is staged', () =
   const broken = (cmd, args) => args.includes('--cached')
     ? { code: 129, out: '', err: 'fatal: unknown option' }
     : { code: 0, out: '', err: '' }
-  const r = checkouts({ run: broken }).commitAll('anywhere', 'rig save: unknowable')
+  const r = c(broken).commitAll('anywhere', 'rig save: unknowable')
   assert.equal(r.outcome, 'stage-failed')
 })
 
@@ -565,7 +572,7 @@ test('a conflict whose abort also fails is a different answer', () => {
     if (args.includes('rebase')) { started = true; return { code: 1, out: '', err: 'CONFLICT (content): Merge conflict' } }
     return { code: 0, out: '', err: '' }
   }
-  const r = checkouts({ run: stuck }).pushRebasing('anywhere')
+  const r = c(stuck).pushRebasing('anywhere')
   assert.equal(r.outcome, 'conflict-stuck')
 })
 
