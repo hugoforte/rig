@@ -657,9 +657,12 @@ org: ${org}
 stack: ${stack || 'unknown'}
 role: TODO — one line: what this repo is, in this org's terms
 talks_to: []
-# - repo: some-other-repo
-#   how: one line — what actually passes between them
-#   direction: downstream    # a change here can break it; upstream is the other way, both is both
+# One item per repo this one talks to. direction: downstream means a change here can break
+# that repo, upstream the other way round, both either way; leave it out if you do not know.
+# talks_to:
+#   - repo: some-other-repo
+#     how: one line — what actually passes between them
+#     direction: downstream
 setup: []
 check: []
 ---

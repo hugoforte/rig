@@ -158,6 +158,22 @@ Prose.
   assert.equal(record().repos.length, 2, 'the suite carries on from two attached repos')
 })
 
+test('the example in a drafted entry, uncommented, is a talks_to the reader actually reads', () => {
+  // The field arrives in the template so it is in front of you at the moment rule 4 says the
+  // knowledge is cheap. That is only true if the example survives the obvious edit: take out
+  // the `talks_to: []` line and the `# ` in front of the example. `orders` was drafted by the
+  // attach above; its file is put back afterwards, because later tests correct it themselves.
+  const file = path.join(dataRoot, 'catalog', 'acme', 'orders.md')
+  const drafted = fs.readFileSync(file, 'utf8')
+  try {
+    fs.writeFileSync(file, drafted.replace(/^talks_to: \[\]\r?\n/m, '').replace(/^# (talks_to:|  )/gm, '$1'))
+    assert.match(strip(rig(['impact', 'orders']).out), /some-other-repo\s+downstream/,
+      'how and direction both reach the reader, and the direction is not swallowed by a trailing comment')
+  } finally {
+    fs.writeFileSync(file, drafted)
+  }
+})
+
 test('each repo is based on its own remote HEAD, not on one default for the work', () => {
   assert.equal(onWorkBranch('orders').base, 'trunk')
   assert.equal(onWorkBranch('billing').base, 'main')
