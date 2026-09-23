@@ -4,7 +4,7 @@
 // around it is the reader's, and a refresh never touches it. `rig next` compares the two,
 // which is what stops the table going stale — the standard this artifact had failed for its
 // entire existence.
-import { test, after } from 'node:test'
+import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
@@ -16,7 +16,7 @@ const { rig, planFile, cleanup } = m
 after(cleanup)
 
 // The two-stage work this file renders: the first slice landed, the second is up for review.
-slicedWork(m)
+before(() => slicedWork(m))
 
 test('plan scaffolds with the deploy order already rendered from the stack', () => {
   const r = rig(['plan', '--work', 'sliced'])

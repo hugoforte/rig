@@ -3,7 +3,7 @@
 // Review is the phase rig was most obviously absent from: it has read PR state everywhere
 // since it existed and had never opened one. Not a gate — a command you run when the stages
 // are in.
-import { test, after } from 'node:test'
+import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -16,7 +16,7 @@ const { dataRoot, rig, gitMust, github, setGithub, worktree, cleanup } = m
 after(cleanup)
 
 // The two-stage work this file renders: the first slice landed, the second is up for review.
-slicedWork(m)
+before(() => slicedWork(m))
 
 // ------------------------------------------------- opening the pull request
 

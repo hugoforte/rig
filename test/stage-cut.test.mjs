@@ -1,6 +1,6 @@
 // `rig stage --cut`: rig makes the branch, in the worktree you are standing in and nowhere
 // else, on top of whatever that repo's stack reaches — and still writes nothing down.
-import { test, after } from 'node:test'
+import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { billingInstall, slicedWork } from './billing-install.mjs'
@@ -11,7 +11,7 @@ const { rig, git, gitMust, github, commitWork, seedPr, worktree, record, cleanup
 after(cleanup)
 
 // The two-stage work this file renders: the first slice landed, the second is up for review.
-slicedWork(m)
+before(() => slicedWork(m))
 
 // ------------------------------------------------- cutting one
 
