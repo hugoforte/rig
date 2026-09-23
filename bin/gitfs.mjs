@@ -165,9 +165,11 @@ export function discover (start, env = process.env) {
   for (;;) {
     const entry = path.join(dir, '.git')
     const found = statOf(entry)
-    // A `.git` that is neither a file nor a directory — a FIFO, a socket, a device — git
-    // stats and walks past without opening, which is as well: a FIFO would never answer.
-    if (found?.isFile() || found?.isDirectory()) {
+    // A `.git` that is neither a file nor a directory — a FIFO, a socket, a device — is
+    // handed back unopened. git will not read one as a `.git` file, and what it does instead
+    // is its own to say; reading it here could block for good, since a FIFO answers nothing.
+    if (found && !found.isFile() && !found.isDirectory()) return null
+    if (found) {
       // A `.git` file naming a directory that is not a repository is where git stops and
       // says so, rather than carrying on up — so a broken submodule inside a checkout is
       // not silently answered for by the checkout around it.

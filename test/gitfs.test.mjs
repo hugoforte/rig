@@ -179,29 +179,31 @@ test('a `.git` file is read as strictly as git reads it', () => {
   }
 })
 
-test('a `.git` that is neither a file nor a directory is walked past, the way git walks past it', {
+test('a `.git` that is neither a file nor a directory is handed back, unopened', {
   skip: process.platform === 'win32' && 'Windows has no FIFOs',
 }, () => {
-  // Reading one would block until something wrote to it; git only stats it and moves on.
+  // Reading a FIFO would block until something wrote to it, and what git does with one is
+  // git's to say.
   const piped = mk(path.join(own, 'piped'))
   assert.equal(spawnSync('mkfifo', [path.join(piped, '.git')]).status, 0)
-  assert.ok(same(agreesWithGit(piped, 'a FIFO called .git').top, own))
+  assert.equal(discover(piped, env), null)
 })
 
 test('a `.git` that stats as neither a file nor a directory is never opened', t => {
   // The FIFO above, on every platform: the stub stands in for any entry that is not a file or
-  // a directory. What is really there is a `.git` file naming nothing, which would stop the
-  // walk if it were read — so a walk that reaches `own` never read it.
-  const odd = mk(path.join(own, 'odd'))
+  // a directory. What is really there is a `.git` file naming nothing, which reads as "no
+  // repository" if it is opened — so an answer of null is one that never opened it. Resolved,
+  // because the walk compares resolved paths and a temp directory may be a short 8.3 name.
+  const odd = fs.realpathSync.native(mk(path.join(own, 'odd')))
   const entry = path.join(odd, '.git')
   fs.writeFileSync(entry, 'gitdir: ../nowhere\n')
   const statSync = fs.statSync
   t.mock.method(fs, 'statSync', (p, ...rest) => {
     const stats = statSync(p, ...rest)
-    if (path.resolve(p) === path.resolve(entry)) Object.assign(stats, { isFile: () => false, isDirectory: () => false })
+    if (path.resolve(p) === entry) Object.assign(stats, { isFile: () => false, isDirectory: () => false })
     return stats
   })
-  assert.ok(same(discover(odd, env).top, own))
+  assert.equal(discover(odd, env), null)
 })
 
 test('an empty directory called `.git` is walked past, the way git walks past it', () => {
