@@ -349,14 +349,17 @@ function freshnessEpilogue (command) {
     const cfg = config()
     if (!cfg.freshness.enabled) return
     // Cheap first: most runs have nothing to say and nothing to do, and `toolState` costs
-    // eight git spawns.
-    const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
-    if (head.code !== 0) return
+    // eight git spawns. The free half of that is decided from the cache alone, and it is
+    // decided before the reading below — a cache written inside its interval by an
+    // installation that was up to date is the ordinary run, and it was paying a spawn to be
+    // told what it already held.
     const cache = readFreshness(cfg)
     const due = dueForRefresh(cache, cfg.freshness.everyHours)
-    const line = announces(command, { enabled: cfg.freshness.enabled })
-      ? staleLine(cache, head.out)
-      : null
+    const speaks = announces(command, { enabled: cfg.freshness.enabled })
+    if (!due && !(speaks && cache?.behind)) return
+    const head = git(RIG_ROOT, 'rev-parse', 'HEAD')
+    if (head.code !== 0) return
+    const line = speaks ? staleLine(cache, head.out) : null
     if (!due && !line) return
     if (skipReason(toolState())) return
     if (line) aside(C.dim(`· ${line}`))
@@ -378,13 +381,17 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', '
 // a second machine read stale records and wrote on top of them. Fast-forward only: a data
 // root with commits of its own is left for `commitDataRoot`'s rebase at the end. Then the
 // gate, which holds whether or not there is a remote to sync with.
+//
+// Answers the half of that reading `commitDataRoot` may have at the end of the command, or
+// null when there was nothing here to read.
 function prepareDataRoot () {
   const root = dataRoot()
+  let before = null
   if (exists(root) && where().split) {
     // The full reading, for three fields: what it costs over the identity questions is
     // one `status` and two counts, and the network fetch on the next line dwarfs them.
     // The reading worth keeping cheap is the freshness one, which runs after every command.
-    const before = co.describe(root)
+    before = co.describe(root)
     if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
       const fetched = co.fetch(root)
       if (!fetched.ok) {
@@ -408,7 +415,20 @@ function prepareDataRoot () {
     }
   }
   checkWriteGate()
+  return before && stillTrueAtTheEnd(before)
 }
+
+// The half of a data root's reading that the command running between the two readings cannot
+// change: what kind of checkout it is, which branch it is on, what that branch tracks, and
+// whether anything was already waiting to be pushed. A command writes records into the data
+// root and never commits into it, moves its branch or changes its upstream; the fast-forward
+// above runs only with nothing ahead and leaves nothing ahead. So `commitDataRoot` reads these
+// five rather than buying `describe`'s two git calls a second time — which was the whole cost
+// of `rig save` on a data root with nothing new in it.
+//
+// The tree is the half that *did* change, and it comes back null, because a reading that does
+// not answer for the tree must not be read as a clean one (decision 80).
+const stillTrueAtTheEnd = state => ({ ...state, head: null, behind: null, dirty: null, modified: null })
 
 // An unreachable remote is retried once an interval rather than at the start of every
 // command: a fetch against a remote that is not there costs a full connect timeout — twenty
@@ -1149,10 +1169,16 @@ function regenerate (cfg, work) {
 // git failure warns and leaves the change for the next command. Before pushing, others'
 // commits are fetched and rebased under ours; a conflict aborts the rebase and says so,
 // so the data root is never left mid-rebase.
-function commitDataRoot (message, loc = where()) {
+//
+// `known` is `prepareDataRoot`'s reading of this same directory, handed over by `main` for the
+// mutating commands that made one — everything below reads only the fields a command cannot
+// change while it runs (`stillTrueAtTheEnd`). `rig init` and `rig update` commit without one
+// and pay for the reading here; `init` is also the one command that moves the location, which
+// is why it is not among those that hand one over.
+function commitDataRoot (message, loc = where(), known = null) {
   const root = loc.dataRoot
   if (!loc.split) { warn(`data root ${root} is inside the tool checkout — not committing knowledge into it`); return }
-  const state = co.describe(root)
+  const state = known ?? co.describe(root)
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
 
@@ -3367,6 +3393,8 @@ if (isMain) {
     process.exit(1)
   }
   currentCommand = cmdName
+  // What the data root was before the command ran, for the commit at the end of it.
+  let preparedDataRoot = null
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
     // Before the first `where()`: the data root a command names decides every path it reads.
@@ -3378,7 +3406,7 @@ if (isMain) {
     if (typeof args.flags.repos === 'string') {
       requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
     }
-    if (MUTATING.has(cmdName)) prepareDataRoot()
+    if (MUTATING.has(cmdName)) preparedDataRoot = prepareDataRoot()
     await cmd(args)
   } catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
@@ -3387,6 +3415,6 @@ if (isMain) {
   } finally {
     persistFakeTrackers()
   }
-  if (pendingCommit) commitDataRoot(pendingCommit)
+  if (pendingCommit) commitDataRoot(pendingCommit, where(), preparedDataRoot)
   freshnessEpilogue(cmdName)
 }

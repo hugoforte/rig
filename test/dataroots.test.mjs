@@ -133,6 +133,15 @@ test('finding the repo the cwd is in costs a subprocess, so it is not asked when
   })
 })
 
+test('nor when no root catalogues anything, because a repo could not place this installation', () => {
+  fixture(THREE, ({ tmp, toolRoot }) => {
+    let asked = 0
+    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => { asked++; return 'notes' } })
+    assert.equal(asked, 0, 'a catalogue entry is what binds a repo to a root, and there is none')
+    assert.equal(location.source, 'current', 'so the pointer decides, exactly as it would have')
+  })
+})
+
 test('the work folder still beats the repo: the work already said where it lives', () => {
   fixture(THREE, ({ tmp, toolRoot, machine }) => {
     catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
