@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
@@ -240,6 +241,27 @@ test('freeSpace: a real directory answers with bytes and the volume it measured'
   assert.ok(Number.isFinite(s.bytes) && s.bytes > 0, `implausible free space: ${s.bytes}`)
   assert.ok(s.label, 'something to name the volume in the report')
   if (process.platform === 'win32') assert.match(s.label, /^[A-Za-z]:$/, 'the drive is the answer on Windows')
+})
+
+test('freeSpace: a work root junctioned onto another drive is labelled with that drive', t => {
+  if (process.platform !== 'win32') return t.skip('drive letters are a Windows answer')
+  // statfs follows the junction, so the number is the other drive's; a label taken from the
+  // path as written names the drive that was not measured, and a user low on space goes and
+  // clears the wrong one.
+  const drive = p => path.parse(p).root.slice(0, 2).toUpperCase()
+  const repo = path.dirname(fileURLToPath(import.meta.url))
+  const elsewhere = [process.env.SystemRoot, repo].find(p => p && drive(p) !== drive(os.tmpdir()))
+  if (!elsewhere) return t.skip('no second drive here for a junction to lead to')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-junction-'))
+  const link = path.join(root, 'w')
+  fs.symlinkSync(elsewhere, link, 'junction')
+  try {
+    assert.equal(freeSpace(link).label, drive(elsewhere))
+  } finally {
+    // The junction alone: what it leads to is not this test's to remove.
+    fs.unlinkSync(link)
+    fs.rmdirSync(root)
+  }
 })
 
 test('freeSpace: a path the filesystem will not report on is null, so the check is dropped', () => {

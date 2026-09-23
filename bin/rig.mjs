@@ -234,8 +234,15 @@ function parseDf (out) {
 // cannot be answered for: a work root on a disconnected share, or one that is not there yet.
 //
 // `label` names the volume the number is about: on Windows the drive, or the share a UNC path
-// is on; anywhere else the mount point `df` found the work root on.
-const volumeOf = dir => path.parse(dir).root.replace(/[\\/]+$/, '') || dir
+// is on; anywhere else the mount point `df` found the work root on. On Windows it is read off
+// the resolved path, because statfs follows a junction or a symlink and the path as written
+// would name the drive the link sits on — a work root moved off a full system drive by a
+// junction would report the other drive's space under the full one's letter.
+const volumeOf = dir => {
+  let real
+  try { real = fs.realpathSync.native(dir) } catch { real = dir }
+  return path.parse(real).root.replace(/[\\/]+$/, '') || dir
+}
 
 function freeSpace (dir) {
   if (process.platform === 'win32') {
