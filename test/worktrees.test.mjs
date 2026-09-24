@@ -178,7 +178,8 @@ test('remove --force takes a dirty worktree away, and prunes the mirror\'s recor
   const dest = workDir('t3', 'billing')
   assert.equal(trees().remove({ org: 'acme', repo: 'billing', dir: dest, force: true }), null)
   assert.ok(!fs.existsSync(dest))
-  assert.doesNotMatch(gitMust(mirrorOf('acme', 'billing'), 'worktree', 'list'), /t3/)
+  // The work directory as a path segment: the temp directory's random suffix can spell `t3`.
+  assert.doesNotMatch(gitMust(mirrorOf('acme', 'billing'), 'worktree', 'list'), /\/t3\//)
 })
 
 test('remove takes a clean worktree away without being forced', () => {
