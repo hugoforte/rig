@@ -16,9 +16,11 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 // Seconds each file took alone on a windows-latest runner, the mean of two (run 35923718667;
-// hugoforte/rig#155 says how they were taken). Runners differ by up to half again, so the last
-// digit means little; what the table has to keep right is the order and the rough size. Take
-// them again when one shard's step drifts well past the others'.
+// hugoforte/rig#155 says how they were taken), except the five files installation and
+// worktrees-stack were split into, which are estimates from local timings until a per-file
+// run on this code replaces them. Runners differ by up to half again, so the last digit means
+// little; what the table has to keep right is the order and the rough size. Take them again
+// when one shard's step drifts well past the others'.
 export const WEIGHTS = {
   'smoke.test.mjs': 18.6,
   'stages-e2e.test.mjs': 16.7,
