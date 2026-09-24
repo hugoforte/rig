@@ -273,11 +273,12 @@ export function checkouts ({ run, env = () => process.env }) {
   //
   // The branch `origin/HEAD` names, without the `origin/` — what `symbolic-ref --short`
   // prints, less that prefix — and null when there is no such symref.
+  // The full ref from git too, never `--short`: beside a local branch named `origin/main`
+  // it abbreviates to `remotes/origin/main`, and the two paths would name different branches.
   const originHeadOf = (dir, place) => {
     const read = place ? symref(place, 'refs/remotes/origin/HEAD') : null
-    if (read) return read.target ? read.target.replace(/^refs\/remotes\/origin\//, '') : null
-    const r = git(dir, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
-    return r.code === 0 ? r.out.replace(/^origin\//, '') : null
+    const r = read ? { code: 0, out: read.target ?? '' } : git(dir, 'symbolic-ref', '-q', 'refs/remotes/origin/HEAD')
+    return r.code === 0 && r.out ? r.out.replace(/^refs\/remotes\/origin\//, '') : null
   }
   const refLives = (dir, place, ref) => {
     const read = place ? refSha(place, ref) : null
@@ -349,13 +350,12 @@ export function checkouts ({ run, env = () => process.env }) {
   const arrived = (dir, from) => lines(git(dir, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out)
 
   // The hash a caller prints after a commit — `committed 880b8ad and pushed` — and nothing
-  // compares it. git's `--short` abbreviates to the shortest prefix past `core.abbrev` that
-  // is unique in the object store, which is not a question the files answer; this prints
-  // the first seven characters of the sha the files hold, which is what git prints for every
-  // data root rig has made and one character short of it on a repository large enough to
-  // need eight. That is the one reading in `gitfs` that is deliberately not git's, decided
-  // for the 234 spawns a suite run spent on it (hugoforte/rig#153), and it is a display
-  // choice: a caller that needed the exact abbreviation would ask git for it.
+  // compares it. This is the first seven characters of the sha the files hold. git's
+  // `--short` prints more whenever `core.abbrev` says so or seven would be ambiguous in the
+  // object store, which is not a question the files answer. That is the one reading here
+  // that is deliberately not git's (DESIGN.md decision 103), decided for the 234 spawns a
+  // suite run spent on it (hugoforte/rig#153), and it is a display choice: a caller that
+  // needed git's abbreviation would ask git for it.
   const shortHead = dir => {
     const read = refSha(discover(dir, env()), 'HEAD')
     if (read?.sha) return read.sha.slice(0, 7)
