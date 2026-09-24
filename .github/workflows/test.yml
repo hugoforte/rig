@@ -61,10 +61,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # The fixtures build every repository under os.tmpdir(), which on the image is the C:
-      # system disk. The workspace and RUNNER_TEMP are on D:, which is the faster of the two;
-      # putting the temp directory beside them was the largest single cut measured for #160.
-      - name: temp on the runner's D drive
+      # The fixtures build every repository under os.tmpdir(), which on the image is the
+      # system disk; RUNNER_TEMP is on the faster one, beside the workspace, and the suite
+      # runs about a fifth quicker there (hugoforte/rig#160). GITHUB_ENV reaches the steps
+      # after this one, which is why the shard is a step of its own.
+      - name: temp directory under RUNNER_TEMP
         run: |
           $tmp = Join-Path $env:RUNNER_TEMP 'tests'
           New-Item -ItemType Directory -Force $tmp | Out-Null
