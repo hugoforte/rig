@@ -255,3 +255,21 @@ test('describe, its fallback and identify agree on the branch and the upstream',
     assert.deepEqual(named(c(noTree).describe(local)), identified, local)
   }
 })
+
+test('every cloned pair is its own: a push to one moves neither another nor the canonical pair, and a name is used once', () => {
+  // The pairs are copies of one canonical pair rather than clones (hugoforte/rig#164), so
+  // what a clone gave for free — a remote of its own, a name that cannot be reused — is
+  // asserted here.
+  const one = cloned('own-one')
+  const other = cloned('own-two')
+  const slashes = p => p.split(path.sep).join('/')
+  assert.equal(slashes(gitMust(one.local, 'config', 'remote.origin.url')), slashes(one.bare))
+  pushFromElsewhere(one.bare, 'ONE.md', 'pushed to one')
+  gitMust(other.local, 'fetch', '-q')
+  gitMust(one.local, 'fetch', '-q')
+  assert.equal(gitMust(one.local, 'rev-list', '--count', 'HEAD..origin/main'), '1')
+  assert.equal(gitMust(other.local, 'rev-list', '--count', 'HEAD..origin/main'), '0', 'the other pair saw nothing')
+  const third = cloned('own-three')
+  assert.equal(gitMust(third.local, 'rev-list', '--count', 'HEAD..origin/main'), '0', 'nor did the canonical pair the next copy is made from')
+  assert.throws(() => cloned('own-one'), /already exists/)
+})
