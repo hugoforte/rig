@@ -420,6 +420,13 @@ overridden.
 
 ## Agent skills
 
+### Skills rig ships
+
+`skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
+the work's record. Both are shipped, never linked: whatever manages a machine symlinks
+`skills/*` into its agent hosts' skills directories. Every skill but the entry point is
+prefixed `rig-`, and `test/skills.test.mjs` holds the shape a host's linker relies on.
+
 ### Issue tracker
 
 Issues are tracked as GitHub Issues on `hugoforte/rig`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
