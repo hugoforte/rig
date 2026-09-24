@@ -5,7 +5,7 @@
 //
 // What the copy lacks matters as much as what it holds: it has no `.git`, which is what keeps
 // `rig update` and every freshness path off the checkout these tests are running from
-// (test/installation.test.mjs is where a real installation with a remote is built, and says
+// (test/installation-fixture.mjs is where a real installation with a remote is built, and says
 // so). And no machine config is written into it — `RIG_LOCAL_CONFIG` puts rig.local.json in
 // the temp dir, so nothing this suite writes lands beside the tool.
 //

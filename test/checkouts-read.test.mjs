@@ -227,12 +227,18 @@ test('placing a checkout costs no subprocess, and a directory that is none costs
   const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
   const state = c(counting).identify(local)
   assert.deepEqual(state.branch, 'main', 'and the reading is still the reading')
+  // origin/HEAD, whether the branch it names is still there, and HEAD's sha are read from the
+  // files too (hugoforte/rig#153); what is left is the upstream, which is config and not a
+  // ref.
   assert.deepEqual(calls.map(a => a.split(' ').slice(2, 4).join(' ')), [
-    'rev-parse --abbrev-ref',            // the upstream, which is config and not a path
-    'symbolic-ref -q',                   // origin/HEAD
-    'rev-parse --verify',                // and whether the branch it names is still there
-    'rev-parse HEAD',
+    'rev-parse --abbrev-ref',
   ], calls.join('\n'))
+  assert.equal(state.defaultBranch, 'main', 'and origin/HEAD is still read')
+  assert.equal(state.head, gitMust(local, 'rev-parse', 'HEAD'))
+  // A local branch named `origin/main` beside the remote-tracking one: `symbolic-ref --short`
+  // would print `remotes/origin/main` to tell them apart, and the default branch is still main.
+  gitMust(local, 'branch', 'origin/main')
+  assert.equal(c().identify(local).defaultBranch, 'main')
 
   calls.length = 0
   assert.deepEqual(c(counting).identify(plain), unreadable())
@@ -254,4 +260,22 @@ test('describe, its fallback and identify agree on the branch and the upstream',
     assert.deepEqual(named(c().describe(local)), identified, local)
     assert.deepEqual(named(c(noTree).describe(local)), identified, local)
   }
+})
+
+test('every cloned pair is its own: a push to one moves neither another nor the canonical pair, and a name is used once', () => {
+  // The pairs are copies of one canonical pair rather than clones (hugoforte/rig#164), so
+  // what a clone gave for free — a remote of its own, a name that cannot be reused — is
+  // asserted here.
+  const one = cloned('own-one')
+  const other = cloned('own-two')
+  const slashes = p => p.split(path.sep).join('/')
+  assert.equal(slashes(gitMust(one.local, 'config', 'remote.origin.url')), slashes(one.bare))
+  pushFromElsewhere(one.bare, 'ONE.md', 'pushed to one')
+  gitMust(other.local, 'fetch', '-q')
+  gitMust(one.local, 'fetch', '-q')
+  assert.equal(gitMust(one.local, 'rev-list', '--count', 'HEAD..origin/main'), '1')
+  assert.equal(gitMust(other.local, 'rev-list', '--count', 'HEAD..origin/main'), '0', 'the other pair saw nothing')
+  const third = cloned('own-three')
+  assert.equal(gitMust(third.local, 'rev-list', '--count', 'HEAD..origin/main'), '0', 'nor did the canonical pair the next copy is made from')
+  assert.throws(() => cloned('own-one'), /already exists/)
 })

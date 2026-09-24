@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // One shard of the suite, for CI to run the test files across several runners at once:
-// `node bin/shards.mjs 3/6` runs the third of six, and `--print` names its files instead.
+// `node bin/shards.mjs 3/8` runs the third of eight, and `--print` names its files instead.
 //
 // Every `test/*.test.mjs` on disk is dealt, heaviest first, each to whichever shard is lightest
 // so far, by how long the file took alone on a Windows runner (WEIGHTS). A file the table does
@@ -15,42 +15,47 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-// Seconds each file took alone on a windows-latest runner, the mean of two (run 35923718667;
-// hugoforte/rig#155 says how they were taken). Runners differ by up to half again, so the last
-// digit means little; what the table has to keep right is the order and the rough size. Take
-// them again when one shard's step drifts well past the others'.
+// Seconds each file took alone on a windows-latest runner, the mean of three (run 36000370498;
+// hugoforte/rig#160 says how they were taken), with the temp directory on the runner's D:
+// drive and Node 22, which is how the shard jobs run. Runners differ by up to half again, so
+// the last digit means little; what the table has to keep right is the order and the rough
+// size. Take them again when one shard's step drifts well past the others'.
 export const WEIGHTS = {
-  'installation.test.mjs': 25.0,
-  'worktrees-stack.test.mjs': 24.4,
-  'smoke.test.mjs': 18.6,
-  'stages-e2e.test.mjs': 16.7,
-  'checkouts-forward.test.mjs': 15.2,
-  'attach.test.mjs': 14.7,
-  'worktrees.test.mjs': 13.6,
-  'checkouts-read.test.mjs': 12.9,
-  'close.test.mjs': 12.6,
-  'scenarios.test.mjs': 12.6,
-  'checkouts-push.test.mjs': 11.4,
-  'stage-tickets.test.mjs': 10.1,
-  'install.test.mjs': 9.8,
-  'stage-cut.test.mjs': 7.5,
-  'gitfs.test.mjs': 6.6,
-  'dataroots.test.mjs': 5.1,
-  'pr.test.mjs': 5.1,
-  'check.test.mjs': 5.0,
-  'release-e2e.test.mjs': 4.7,
-  'invocation.test.mjs': 4.6,
-  'plan.test.mjs': 4.6,
-  'base.test.mjs': 3.5,
-  'impact.test.mjs': 3.3,
-  'dash.test.mjs': 2.2,
-  'doctor-selection.test.mjs': 2.1,
-  'helpers.test.mjs': 1.9,
-  'jira.test.mjs': 1.1,
-  'package.test.mjs': 1.0,
-  'identity.test.mjs': 0.9,
+  'smoke.test.mjs': 13.3,
+  'stages-e2e.test.mjs': 11.5,
+  'install.test.mjs': 10.5,
+  'worktrees.test.mjs': 10.5,
+  'attach.test.mjs': 9.4,
+  'scenarios.test.mjs': 8.9,
+  'installation-update.test.mjs': 8.6,
+  'close.test.mjs': 8.4,
+  'checkouts-forward.test.mjs': 7.6,
+  'worktrees-stack-edge.test.mjs': 7.4,
+  'worktrees-stack.test.mjs': 7.2,
+  'installation-freshness.test.mjs': 7.1,
+  'stage-tickets.test.mjs': 6.9,
+  'refs.test.mjs': 6.4,
+  'installation-migrations.test.mjs': 6.1,
+  'checkouts-push.test.mjs': 5.8,
+  'gitfs.test.mjs': 5.7,
+  'checkouts-read.test.mjs': 5.7,
+  'stage-cut.test.mjs': 4.9,
+  'release-e2e.test.mjs': 4.0,
+  'pr.test.mjs': 3.9,
+  'dataroots.test.mjs': 3.8,
+  'check.test.mjs': 3.7,
+  'plan.test.mjs': 3.5,
+  'impact.test.mjs': 3.1,
+  'base.test.mjs': 2.8,
+  'invocation.test.mjs': 2.4,
+  'dash.test.mjs': 2.1,
+  'doctor-selection.test.mjs': 1.6,
+  'helpers.test.mjs': 1.4,
+  'package.test.mjs': 0.9,
+  'jira.test.mjs': 0.8,
+  'identity.test.mjs': 0.7,
   'release.test.mjs': 0.7,
-  'demo.test.mjs': 0.6,
+  'demo.test.mjs': 0.5,
 }
 const UNKNOWN = 1
 

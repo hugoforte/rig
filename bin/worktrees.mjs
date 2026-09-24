@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
+import { discover, refSha, symref } from './gitfs.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -27,7 +28,7 @@ export const remotesInDirectory = dir => ({ url: (org, repo) => path.join(dir, o
 // `run(cmd, args, opts)` is spawnSync-shaped and injected, so there is one spawn in the
 // tool rather than one per module. `step` and `warn` are how this narrates; both default
 // to silence, because a caller that wants nothing said should not have to pass a sink.
-export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {} }) {
+export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {}, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
   const must = (cmd, args) => {
     const r = run(cmd, args)
@@ -36,6 +37,17 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   }
   const mirrorPath = (org, repo) => path.join(mirrorRoot, org, `${repo}.git`)
   const ref = branch => `refs/remotes/origin/${branch}`
+
+  // Whether a ref resolves, read from the repository's files where `gitfs` places it and
+  // asked of git where it does not (hugoforte/rig#153). A mirror is a bare repository
+  // `discover` places for a few stats, and a worktree's common dir is its mirror, which is
+  // where every ref asked about below lives. `env` is the run's, as `discover` wants it: a
+  // `GIT_DIR` in it is what makes the walk hand the question back.
+  const has = (dir, r) => {
+    const read = refSha(discover(dir, env()), r)
+    if (read) return read.sha !== null
+    return git(dir, 'rev-parse', '--verify', '--quiet', r).code === 0
+  }
 
   // Decisions 4 and 9: the mirror is made the first time a repo is used and fetched every
   // time after. A stale mirror silently branching you off a month-old main is the bug this
@@ -62,17 +74,18 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   // orgs makes a global default wrong, so the fallback list is only for a remote that never
   // answered — and when nothing answers, saying so beats guessing.
   function remoteHead (mirror, org, repo) {
-    const r = git(mirror, 'symbolic-ref', ref('HEAD'))
+    const read = symref(discover(mirror, env()), ref('HEAD'))
+    const r = read ? { code: 0, out: read.target ?? '' } : git(mirror, 'symbolic-ref', ref('HEAD'))
     if (r.code === 0 && r.out) return r.out.replace(ref(''), '')
     for (const b of ['main', 'master', 'develop']) {
-      if (git(mirror, 'rev-parse', '--verify', ref(b)).code === 0) return b
+      if (has(mirror, ref(b))) return b
     }
     throw new RigError(`cannot determine the remote HEAD of ${org}/${repo} (${mirror})`)
   }
 
-  const onRemote = (mirror, branch) => git(mirror, 'rev-parse', '--verify', ref(branch)).code === 0
+  const onRemote = (mirror, branch) => has(mirror, ref(branch))
   const local = branch => `refs/heads/${branch}`
-  const kept = (mirror, branch) => git(mirror, 'rev-parse', '--verify', '--quiet', local(branch)).code === 0
+  const kept = (mirror, branch) => has(mirror, local(branch))
   const isAncestor = (mirror, a, b) => git(mirror, 'merge-base', '--is-ancestor', a, b).code === 0
 
   // The mirror may already hold a copy of the branch: every worktree ever cut on it left one
@@ -199,7 +212,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       // Asked of the branch's own remote-tracking ref, never of `@{u}`: cutting a branch from
       // `refs/remotes/origin/main` makes git set tracking to *main*, so an upstream exists
       // from the moment `rig attach` runs and says nothing about whether anyone pushed.
-      s.pushed = branch ? git(dir, 'rev-parse', '--verify', '--quiet', ref(branch)).code === 0 : false
+      s.pushed = branch ? has(dir, ref(branch)) : false
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const count = from => git(dir, 'rev-list', '--left-right', '--count', `${from}...HEAD`)
       // The count is the question, so the count is what is asked. `@{u}` fails to resolve for
@@ -215,7 +228,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       let fellBack = null
       if (counts.code !== 0) {
         const known = [base, recordedBase].filter(Boolean)
-          .find(b => git(dir, 'rev-parse', '--verify', '--quiet', ref(b)).code === 0)
+          .find(b => has(dir, ref(b)))
         fellBack = ref(known || base)
         counts = count(fellBack)
       }
