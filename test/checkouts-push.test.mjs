@@ -21,8 +21,14 @@ test('commitAll stages everything present, including what nobody staged', () => 
 
   const r = c().commitAll(local, 'rig save: a record')
   assert.equal(r.outcome, 'committed')
-  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'))
+  assert.equal(r.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7))
   assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: a record')
+  // Seven characters is rig's display choice, not git's abbreviation (DESIGN.md decision 103).
+  gitMust(local, 'config', 'core.abbrev', '12')
+  fs.writeFileSync(path.join(local, 'record.md'), 'a second record\n')
+  const again = c().commitAll(local, 'rig save: again')
+  assert.equal(gitMust(local, 'rev-parse', '--short', 'HEAD').length, 12, 'git prints twelve here')
+  assert.equal(again.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7))
   assert.equal(c().describe(local).dirty, 0)
 })
 
@@ -82,7 +88,7 @@ test('pushRebasing puts ours on top of theirs and pushes the result', () => {
 
   const r = c().pushRebasing(local)
   assert.equal(r.outcome, 'pushed')
-  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'the hash is the rebase\'s, not the commit\'s')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7), 'the hash is the rebase\'s, not the commit\'s')
   assert.ok(fs.existsSync(path.join(local, 'THEIRS.md')), 'the other machine\'s commit was rebased under ours')
   assert.equal(run('git', ['-C', bare, 'log', '-1', '--format=%s']).out, 'rig save: a record of my own')
 })
@@ -177,6 +183,6 @@ test('a push the remote refuses keeps the commit and says whose refusal it was',
 
   const r = c().pushRebasing(local)
   assert.equal(r.outcome, 'push-failed')
-  assert.equal(r.hash, gitMust(local, 'rev-parse', '--short', 'HEAD'), 'the caller can name what is waiting')
+  assert.equal(r.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7), 'the caller can name what is waiting')
   assert.ok(r.error)
 })

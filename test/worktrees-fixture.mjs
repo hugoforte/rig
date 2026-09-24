@@ -60,12 +60,15 @@ function build (tmp) {
     return r.out
   }
 
-  const trees = () => worktrees({
+  // `env` is the run's, the way rig.mjs passes it in; `extra` is what a test adds to it to
+  // see the module hand a question back to git.
+  const trees = (extra = {}) => worktrees({
     mirrorRoot,
     remotes: remotesInDirectory(remotesDir),
     run,
     step: s => steps.push(s),
     warn: s => warnings.push(s),
+    env: () => ({ ...env, ...extra }),
   })
   const mirrorOf = (org, repo) => path.join(mirrorRoot, org, `${repo}.git`)
   const remoteOf = (org, repo) => path.join(remotesDir, org, `${repo}.git`)
