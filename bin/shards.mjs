@@ -20,8 +20,6 @@ import { fileURLToPath } from 'node:url'
 // digit means little; what the table has to keep right is the order and the rough size. Take
 // them again when one shard's step drifts well past the others'.
 export const WEIGHTS = {
-  'installation.test.mjs': 25.0,
-  'worktrees-stack.test.mjs': 24.4,
   'smoke.test.mjs': 18.6,
   'stages-e2e.test.mjs': 16.7,
   'checkouts-forward.test.mjs': 15.2,
@@ -30,10 +28,15 @@ export const WEIGHTS = {
   'checkouts-read.test.mjs': 12.9,
   'close.test.mjs': 12.6,
   'scenarios.test.mjs': 12.6,
+  'worktrees-stack.test.mjs': 11.8,
+  'installation-update.test.mjs': 11.5,
   'checkouts-push.test.mjs': 11.4,
+  'worktrees-stack-edge.test.mjs': 10.3,
   'stage-tickets.test.mjs': 10.1,
   'install.test.mjs': 9.8,
+  'installation-freshness.test.mjs': 9.6,
   'stage-cut.test.mjs': 7.5,
+  'installation-migrations.test.mjs': 7.3,
   'gitfs.test.mjs': 6.6,
   'dataroots.test.mjs': 5.1,
   'pr.test.mjs': 5.1,

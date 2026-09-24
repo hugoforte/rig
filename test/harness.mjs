@@ -10,7 +10,7 @@
 //   `.git`, which is what keeps `rig update` and every freshness path off the checkout the
 //   tests run from. With `localConfig` smoke's rig.local.json moves out of the copy too, so
 //   nothing that suite writes lands beside the tool.
-// - test/installation.test.mjs wants the opposite, and passes `checkout`: a real clone of
+// - test/installation-fixture.mjs wants the opposite, and passes `checkout`: a real clone of
 //   the tool from a bare origin in the temp dir, which is the only way the freshness and
 //   update paths are reachable at all. The remote is a directory, so no test touches a
 //   network.
@@ -146,8 +146,9 @@ export function makeInstall ({
   // module graph on top of it, times the several hundred invocations this suite makes.
   //
   // A test whose subject *is* the process keeps the subprocess, and four kinds of test do:
-  // `test/installation.test.mjs`, which drives `rig update` re-executing the tool that just
-  // arrived, the detached freshness refresh, and a crippled PATH; the steps of
+  // `test/installation-freshness.test.mjs` and `test/installation-update.test.mjs`, which
+  // drive the detached freshness refresh, `rig update` re-executing the tool that just
+  // arrived, and a crippled PATH; the steps of
   // `test/scenarios.test.mjs` that drive the previous release; `rig check --run`, whose
   // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe; and the
   // CLI's own answers for what a caller leaves out of `run` — its stdin, its `chdir` and its
@@ -248,7 +249,7 @@ export function previousReleaseTag () {
 }
 
 // The tool as the previous release shipped it, beside the installation, for the half of
-// cross-version the suite could not express: `test/installation.test.mjs` fabricates a
+// cross-version the suite could not express: `test/installation-update.test.mjs` fabricates a
 // *newer* rig by pushing a clone that carries an extra migration, and this is the reverse —
 // the rig still on PATH, run against a machine file the current code just wrote. That window
 // is open on every machine at every release, because the change being installed is the one

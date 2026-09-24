@@ -60,7 +60,7 @@ test('an empty shard runs nothing, because node --test with no files would run e
 // depth. The shards take `test/*.test.mjs`. A file in the gap runs on one platform and never
 // on the other, and nothing would say so: this does. The helpers are named because they are
 // the gap today (hugoforte/rig#154 runs them as empty tests on Ubuntu).
-const HELPERS = ['harness.mjs', 'billing-install.mjs', 'checkouts-fixture.mjs', 'worktrees-fixture.mjs']
+const HELPERS = ['harness.mjs', 'billing-install.mjs', 'checkouts-fixture.mjs', 'installation-fixture.mjs', 'worktrees-fixture.mjs']
 const everything = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true })
   .map(String).filter(f => /[.][cm]?js$/.test(f))
 

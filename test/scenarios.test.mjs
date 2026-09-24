@@ -141,7 +141,7 @@ scenario('one root becomes three', {
 // file this one wrote — and it once read it as an installation that had never been set up,
 // because `init` had deleted the only key it knows. That window opens on every machine at
 // every release, and nothing could express it: the suite could fabricate a *newer* rig
-// (test/installation.test.mjs) and never an older one.
+// (test/installation-update.test.mjs) and never an older one.
 const PREVIOUS = previousReleaseTag()
 
 // The last release that had never heard of named roots, and so the last one that reads
