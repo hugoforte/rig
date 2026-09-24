@@ -16,7 +16,7 @@ import path from 'node:path'
 import { strip, readJson } from './harness.mjs'
 import { billingInstall } from './billing-install.mjs'
 
-const { dataRoot, rig, git, gitMust, github, setGithub, squashMergeAndDeleteBranch, worktree, record, cleanup } = billingInstall('rig-close-')
+const { dataRoot, workRoot, rig, git, gitMust, github, setGithub, squashMergeAndDeleteBranch, bare, commitWork, cutStage, seedPr, worktree, record, cleanup } = billingInstall('rig-close-')
 
 after(cleanup)
 
@@ -105,6 +105,78 @@ test('a work with nothing attached closes, and `list` said so before it did', ()
   assert.doesNotMatch(rig(['list']).out, /empty[\s\S]*?nothing outstanding/,
     'a work with no repos is not offered up as finished')
   assert.equal(rig(['close', '--work', 'empty']).code, 0)
+})
+
+// ------------------------------------------------- branches of a work that landed
+
+// A repo that does not delete a head branch on merge leaves it on the remote, and every
+// worktree ever cut leaves a copy in the mirror (#149). A close on a work that landed takes
+// both — but only a copy whose every commit is in what the PR merged.
+const mirror = repo => path.join(workRoot, '.mirrors', 'acme', `${repo}.git`)
+const hasBranch = (dir, branch) => git(dir, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`).status === 0
+
+const landedWork = (id, number) => {
+  assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  const dest = worktree(id, 'billing')
+  commitWork(dest, `${id}: the work`)
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({
+    branch: `feat/${id}-work`, number, state: 'MERGED', head: gitMust(dest, 'rev-parse', 'HEAD'),
+    url: `https://github.com/acme/billing/pull/${number}`, mergedAt: '2026-09-20T00:00:00Z',
+  })
+  return dest
+}
+
+test('closing a work that landed deletes its branch from the mirror and the remote', () => {
+  landedWork('tidy', 40)
+  const r = rig(['close', '--work', 'tidy'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /deleted branch feat\/tidy-work from billing \(mirror and remote\)/)
+  assert.equal(hasBranch(bare('billing'), 'feat/tidy-work'), false, 'gone from the remote')
+  assert.equal(hasBranch(mirror('billing'), 'feat/tidy-work'), false, 'gone from the mirror')
+})
+
+test('a branch pushed to after its PR merged is kept, and the close says why', () => {
+  const dest = landedWork('pushed-after', 41)
+  commitWork(dest, 'pushed-after: after the merge')
+  gitMust(dest, 'push', '-q')
+
+  const r = rig(['close', '--work', 'pushed-after'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /remote copy of feat\/pushed-after-work kept — it has moved since the PR merged/)
+  assert.equal(hasBranch(bare('billing'), 'feat/pushed-after-work'), true, 'the later commit is still somewhere')
+  assert.equal(hasBranch(mirror('billing'), 'feat/pushed-after-work'), true)
+})
+
+test('a stage that landed goes with the work branch', () => {
+  assert.equal(rig(['new', 'sliced', '--title', 'sliced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['stage', 'feat/sliced-one', '--delivers', 'the schema', '--work', 'sliced']).code, 0)
+  const dest = worktree('sliced', 'billing')
+  cutStage({ work: 'sliced', repo: 'billing', branch: 'feat/sliced-one', from: 'feat/sliced-work', back: 'feat/sliced-work', message: 'the schema' })
+  gitMust(dest, 'push', '-q', 'origin', 'feat/sliced-one')
+  gitMust(dest, 'merge', '-q', '--ff-only', 'feat/sliced-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  const merged = (branch, number) => seedPr({
+    branch, number, state: 'MERGED', head: gitMust(dest, 'rev-parse', branch),
+    url: `https://github.com/acme/billing/pull/${number}`, mergedAt: '2026-09-20T00:00:00Z',
+  })
+  merged('feat/sliced-one', 43)
+  merged('feat/sliced-work', 44)
+
+  const r = rig(['close', '--work', 'sliced'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /deleted branch feat\/sliced-one from billing \(mirror and remote\)/)
+  assert.equal(hasBranch(bare('billing'), 'feat/sliced-one'), false)
+})
+
+test('an abandoned work keeps its branches, merged PR or not', () => {
+  landedWork('left-standing', 42)
+  const r = rig(['close', '--work', 'left-standing', '--abandoned'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /deleted branch/)
+  assert.equal(hasBranch(bare('billing'), 'feat/left-standing-work'), true)
 })
 
 // `close` asks the stack whether a slice is still up for review and `list` does not, because

@@ -144,6 +144,38 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return r.code === 0 ? null : (r.err || r.out)
     },
 
+    // Delete a branch whose pull request merged, from the mirror and from the remote. `head` is
+    // the commit the PR carried, and it is the whole of the safety: a copy is deleted only when
+    // everything on it is in that commit, so nothing that exists nowhere else can go. The mirror's
+    // copy must be `head` or behind it; the remote's must be `head` exactly, and the push leases
+    // on it, so a commit pushed after the merge keeps the branch rather than being lost with it.
+    //
+    // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
+    // throws: a close has already torn the work down by now, and a branch left behind is a
+    // thing to say, not a reason to fail.
+    dropMerged ({ org, repo, branch, head }) {
+      const mirror = mirrorPath(org, repo)
+      const out = { local: 'absent', remote: 'absent' }
+      if (!fs.existsSync(mirror)) return out
+      if (kept(mirror, branch)) {
+        out.local = !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
+          : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
+          : 'kept — git would not delete it'
+      }
+      const ls = git(mirror, 'ls-remote', '--heads', 'origin', local(branch))
+      if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
+      else if (ls.out.trim()) {
+        const tip = ls.out.trim().split(/\s+/)[0]
+        const push = tip !== head ? null
+          : git(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
+        out.remote = !push ? 'kept — it has moved since the PR merged'
+          : push.code === 0 ? 'deleted'
+          : `kept — the push was refused: ${(push.err || push.out).split('\n')[0]}`
+        if (push?.code === 0) git(mirror, 'update-ref', '-d', ref(branch))
+      }
+      return out
+    },
+
     // A worktree as it stands right now: nothing here is ever written down (DESIGN.md
     // decision 2 of §1.2). Distance is measured against the upstream when the branch has
     // one and against a base when it does not — a branch that was never pushed still has a

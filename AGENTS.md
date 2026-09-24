@@ -395,7 +395,11 @@ rig close                 # refuses if anything is uncommitted, unpushed, or has
 rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
 
-`rig close` removes the worktrees and keeps `context.md`. Nothing is ever auto-deleted.
+`rig close` removes the worktrees and keeps `context.md`. When every PR merged, it also deletes
+the work's branches — the work branch and each stage that landed — from the mirror and the
+remote, but only a copy holding nothing its PR did not merge; a branch pushed to after the
+merge is kept and named. A close forced past a blocker, or abandoned, deletes no branch. Nothing
+else is ever auto-deleted.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot

@@ -127,7 +127,7 @@ export function stageState (stage, perRepo = []) {
     open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
-    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url })),
+    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, head: r.pr.head ?? null })),
   }
 }
 
