@@ -206,22 +206,30 @@ test('a ref packed between the loose miss and the packed read is still found', t
   const sha = gitMust(dir, 'rev-parse', 'refs/heads/main')
   // The reader opens the file under the real path `discover` resolved, which on a Windows
   // runner is the long form of a temp directory git was handed in its 8.3 short form.
-  const loose = fs.realpathSync.native(path.join(dir, '.git', 'refs', 'heads', 'main')).toLowerCase()
+  const loose = fs.realpathSync.native(path.join(dir, '.git', 'refs', 'heads', 'main'))
+  const sameFile = file => path.resolve(String(file)).toLowerCase() === loose.toLowerCase()
   // The first read of the loose file is where a concurrent `pack-refs` lands: the ref has
   // gone from `refs/heads/` to `packed-refs` before the file is opened. A reader that took
   // its snapshot of `packed-refs` first would have seen no line for it and said no such ref.
+  // What goes wrong inside the patch is recorded rather than thrown: the reader reads a
+  // throw as an unreadable file, and the message would be lost.
   const original = fs.readFileSync
   let packed = false
+  let inside = null
   fs.readFileSync = function (file, ...rest) {
-    if (!packed && path.resolve(String(file)).toLowerCase() === loose) {
+    if (!packed && sameFile(file)) {
       packed = true
-      gitMust(dir, 'pack-refs', '--all')
-      assert.ok(!fs.existsSync(loose), 'pack-refs moved the ref')
+      try {
+        gitMust(dir, 'pack-refs', '--all')
+        assert.ok(!fs.existsSync(loose), 'pack-refs moved the ref')
+      } catch (e) { inside = e }
     }
     return original.call(this, file, ...rest)
   }
   t.after(() => { fs.readFileSync = original })
-  assert.deepEqual(refSha(place(dir), 'refs/heads/main'), { sha })
+  const read = refSha(place(dir), 'refs/heads/main')
+  if (inside) throw inside
+  assert.deepEqual(read, { sha })
   assert.ok(packed, 'the loose file was read first')
 })
 
@@ -247,6 +255,67 @@ test('a packed-refs file the parser cannot read whole is handed back', () => {
   fs.appendFileSync(path.join(dir, '.git', 'packed-refs'), 'not a ref line\n')
   assert.equal(refSha(place(dir), 'refs/heads/main'), null)
   assert.equal(refSha(place(dir), 'refs/heads/nope'), null, 'absence cannot be asserted from a file half read')
+})
+
+test('a packed-refs header git would not recognise, or a `sorted` file that is not, is handed back', () => {
+  const dir = seeded('badheader')
+  gitMust(dir, 'branch', 'aa')
+  gitMust(dir, 'branch', 'zz')
+  gitMust(dir, 'pack-refs', '--all')
+  const file = path.join(dir, '.git', 'packed-refs')
+  const good = fs.readFileSync(file, 'utf8')
+  assert.match(good, /^# pack-refs with: .*sorted/, 'git writes a sorted file')
+  fs.writeFileSync(file, good.replace(/^# pack-refs with:/, '# something else'))
+  assert.equal(git(dir, 'rev-parse', '--verify', '-q', 'refs/heads/main').code, 128, 'git dies on the header')
+  assert.equal(refSha(place(dir), 'refs/heads/main'), null)
+  // The lines reversed under a header that still claims `sorted`: git's binary search misses.
+  const [header, ...lines] = good.trimEnd().split('\n')
+  fs.writeFileSync(file, [header, ...lines.reverse()].join('\n') + '\n')
+  assert.notEqual(git(dir, 'rev-parse', '--verify', '-q', 'refs/heads/aa').code, 0, 'git misses a ref in it')
+  assert.equal(refSha(place(dir), 'refs/heads/aa'), null)
+  assert.equal(refSha(place(dir), 'refs/heads/main'), null)
+})
+
+test('the packed-refs snapshot is kept, and read again when the file is replaced', () => {
+  const dir = seeded('snapshot')
+  gitMust(dir, 'pack-refs', '--all')
+  const p = place(dir)
+  agreesOnSha(dir, 'refs/heads/main')
+  gitMust(dir, 'branch', 'later')
+  gitMust(dir, 'pack-refs', '--all')
+  assert.ok(!fs.existsSync(path.join(dir, '.git', 'refs', 'heads', 'later')), 'packed, so only the snapshot can answer')
+  assert.equal(agreesOnSha(dir, 'refs/heads/later').sha, gitMust(dir, 'rev-parse', 'refs/heads/main'))
+  assert.deepEqual(refSha(p, 'refs/heads/gone'), { sha: null })
+})
+
+test('a loose ref that is a symbolic link is read as git reads it: the link text is the target', t => {
+  const dir = seeded('symlinked')
+  const link = path.join(dir, '.git', 'refs', 'heads', 'lnk')
+  try {
+    fs.symlinkSync('refs/heads/main', link)
+  } catch (e) {
+    // Windows without the privilege: git's own `core.preferSymlinkRefs` cannot happen here either.
+    t.skip(`symlinks unavailable: ${e.code}`)
+    return
+  }
+  assert.deepEqual(agreesOnSymref(dir, 'refs/heads/lnk'), { target: 'refs/heads/main' })
+  agreesOnSha(dir, 'refs/heads/lnk')
+  fs.symlinkSync(path.join(dir, 'README.md'), path.join(dir, '.git', 'refs', 'heads', 'elsewhere'))
+  assert.equal(refSha(place(dir), 'refs/heads/elsewhere'), null, 'a link to anywhere else is git\'s to read')
+})
+
+test('only what git counts as whitespace ends a sha or pads a target', () => {
+  const dir = seeded('spacing')
+  const sha = gitMust(dir, 'rev-parse', 'refs/heads/main')
+  const heads = path.join(dir, '.git', 'refs', 'heads')
+  fs.writeFileSync(path.join(heads, 'formfeed'), `${sha}\f`)
+  fs.writeFileSync(path.join(heads, 'nbsp'), `ref: refs/heads/main `)
+  fs.writeFileSync(path.join(heads, 'tabbed'), `ref:\trefs/heads/main\r\n`)
+  assert.notEqual(git(dir, 'rev-parse', '--verify', '-q', 'refs/heads/formfeed').code, 0, 'git calls it broken')
+  assert.equal(refSha(place(dir), 'refs/heads/formfeed'), null)
+  assert.notEqual(git(dir, 'rev-parse', '--verify', '-q', 'refs/heads/nbsp').code, 0)
+  assert.equal(refSha(place(dir), 'refs/heads/nbsp'), null)
+  assert.deepEqual(agreesOnSha(dir, 'refs/heads/tabbed'), { sha })
 })
 
 test('a place the walk handed back, or one with no repository, reads nothing', () => {

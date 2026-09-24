@@ -262,44 +262,90 @@ const wellFormed = ref => ref === 'HEAD' || (
   !ref.includes('..') && !ref.includes('@{') && !ref.includes('//') &&
   !ref.endsWith('/') && !ref.endsWith('.') && !/(^|\/)\./.test(ref) && !/\.lock(\/|$)/.test(ref)
 )
+// git's `isspace`: space, tab, newline, return — and not the wider set JavaScript's `\s`
+// and `trim` take, which would read a ref git calls broken as a good one.
+const SPACE = '[ \t\n\r]'
+const trimSpace = s => s.replace(new RegExp(`^${SPACE}+|${SPACE}+$`, 'g'), '')
 
-// One loose ref file, parsed as git parses it: `ref:` then the target with the whitespace
-// around it dropped, or forty hex digits and nothing but whitespace after them.
-//   undefined       no such file
-//   null            a file, but not one this can read
+// The text of one loose ref, parsed as git parses it: `ref:` then the target with the
+// whitespace around it dropped, or forty hex digits and nothing but whitespace after them.
+//   null            not something this can read
 //   { target }      a symbolic ref
 //   { sha }         a plain one
-function looseRef (file, text = readOrAbsent(file)) {
-  if (text === undefined || text === null) return text
+function parseLoose (text) {
   if (text.startsWith('ref:')) {
-    const target = text.slice(4).trim()
+    const target = trimSpace(text.slice(4))
     return wellFormed(target) ? { target } : null
   }
-  const m = /^([0-9a-f]{40})(?:\s|$)/.exec(text)
+  const m = new RegExp(`^([0-9a-f]{40})(?:${SPACE}|$)`).exec(text)
   return m ? { sha: m[1] } : null
 }
-function readOrAbsent (file) {
-  try { return fs.readFileSync(file, 'utf8') } catch (e) { return e?.code === 'ENOENT' ? undefined : null }
+
+// One loose ref file. A symbolic link whose text names something under `refs/` is the
+// symref's target — `core.preferSymlinkRefs` writes symrefs that way, and git reads the
+// link rather than following it; a link to anywhere else git reads through, and this hands
+// back rather than say what it found there.
+//   undefined       no such file
+//   null            a file, but not one this can read
+//   { target } / { sha }   as `parseLoose`
+function looseRef (file) {
+  let link
+  try { link = fs.readlinkSync(file) } catch { link = null }
+  if (link !== null) {
+    link = link.split(path.sep).join('/')
+    return link.startsWith('refs/') && wellFormed(link) ? { target: link } : null
+  }
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch (e) { return e?.code === 'ENOENT' ? undefined : null }
+  return parseLoose(text)
 }
 
-// The `packed-refs` file, whole: a `#` header on the first line, `^` peeled lines under an
-// annotated tag, and otherwise a sha, one space, and the name. Returns the map, an empty one
-// when there is no file, and `null` for a line it does not know.
+// The `packed-refs` file, whole: a `# pack-refs with:` header on the first line naming its
+// traits, `^` peeled lines under an annotated tag, and otherwise a sha, one space, and the
+// name. A header git would not recognise is a file git dies on; a file that claims `sorted`
+// and is not is one git's binary search misses refs in. Both are handed back.
+//
+// Parsed once per file and kept, keyed by the file's size, mtime and inode, the way git
+// keeps its snapshot and checks it against a `stat` — a mirror of a tag-heavy repository
+// packs tens of thousands of lines, and a command asks about several refs. `pack-refs`
+// replaces the file by rename, so a rewrite is a new inode and a new size.
+//   Map             the refs, empty when there is no file
+//   null            a line the parser does not know
+const packed = new Map()
 function packedRefs (commonDir) {
-  const text = readOrAbsent(path.join(commonDir, 'packed-refs'))
-  if (text === undefined) return new Map()
-  if (text === null) return null
+  const file = path.join(commonDir, 'packed-refs')
+  const st = statOf(file)
+  if (st === null) return new Map()
+  const key = `${st.size}:${st.mtimeMs}:${st.ino}`
+  const kept = packed.get(file)
+  if (kept && kept.key === key) return kept.refs
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch { return null }
+  const refs = parsePacked(text)
+  if (refs !== null) packed.set(file, { key, refs })
+  return refs
+}
+function parsePacked (text) {
   const refs = new Map()
   const lines = text.split('\n')
   if (lines.at(-1) === '') lines.pop()
+  let sorted = false
+  let previous = null
   for (const [i, line] of lines.entries()) {
-    if (i === 0 && line.startsWith('#')) continue
+    if (i === 0 && line.startsWith('#')) {
+      const header = /^# pack-refs with:(.*)$/.exec(line)
+      if (!header) return null
+      sorted = header[1].split(' ').includes('sorted')
+      continue
+    }
     if (line.startsWith('^')) {
       if (!SHA.test(line.slice(1))) return null
       continue
     }
     const m = /^([0-9a-f]{40}) (\S+)$/.exec(line)
     if (!m) return null
+    if (sorted && previous !== null && !(previous < m[2])) return null
+    previous = m[2]
     refs.set(m[2], m[1])
   }
   return refs
@@ -313,12 +359,15 @@ function packedRefs (commonDir) {
 function rawRef (place, ref) {
   if (!place || !place.gitDir || !wellFormed(ref) || PER_WORKTREE.test(ref)) return null
   // HEAD is the worktree's own and is never packed; everything else lives in the common dir.
-  if (ref === 'HEAD') return looseRef(null, headOf(place.gitDir))
+  if (ref === 'HEAD') {
+    const text = headOf(place.gitDir)
+    return text === null ? null : parseLoose(text)
+  }
   const loose = looseRef(path.join(place.commonDir, ...ref.split('/')))
   if (loose !== undefined) return loose
-  const packed = packedRefs(place.commonDir)
-  if (packed === null) return null
-  return { sha: packed.get(ref) ?? null }
+  const refs = packedRefs(place.commonDir)
+  if (refs === null) return null
+  return { sha: refs.get(ref) ?? null }
 }
 
 // A ref followed to the end of its symref chain, as git's `resolve_ref` follows it: at most
