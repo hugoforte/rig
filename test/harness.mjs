@@ -266,8 +266,9 @@ export function previousRelease ({ tmp, gitMust }, tag = previousReleaseTag()) {
   // step, and cloning it again would cost seconds the scenario count is rationed by.
   if (!fs.existsSync(root)) {
     // `--no-hardlinks`, because a local clone links its objects by default and the checkout
-    // and the temp directory are not always on one volume — on the Windows runner the repo is
-    // on D: and the temp directory on C:, and git dies with "Improper link".
+    // and the temp directory are not always on one volume — a checkout on D: with the temp
+    // directory on C:, as on many developer machines, and git dies with "Improper link". CI
+    // does not test that case: the shard jobs keep both on one drive.
     gitMust(tmp, 'clone', '-q', '--no-hardlinks', SRC, root)
     gitMust(root, 'checkout', '-q', '--detach', tag)
     fs.rmSync(path.join(root, '.git'), { recursive: true, force: true, maxRetries: 5 })

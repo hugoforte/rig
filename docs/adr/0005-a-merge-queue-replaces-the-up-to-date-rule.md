@@ -86,7 +86,7 @@ ejects it, and the symptom is a queue that appears broken rather than a missing 
 `test.yml` gains `merge_group` and keeps one set of job definitions for both events, because the
 check names have to be identical across the two events and they are identical by coming from the
 same jobs. (It began as one job id and one matrix; since hugoforte/rig#155 the Windows check is a
-gate job named for it that waits on eight shard jobs, and the names still come from the same file.)
+gate job named for it that waits on the shard jobs, and the names still come from the same file.)
 
 `version.yml` gains `merge_group` too, and there it reports success in one line. ADR 0004 said
 it was "deliberately not a merge-queue check", which was a preference GitHub does not offer;
