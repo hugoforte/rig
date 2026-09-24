@@ -30,7 +30,7 @@
 // can answer, and ask it about a path only when the filesystem handed the question back.
 import fs from 'node:fs'
 import path from 'node:path'
-import { discover, headBranch } from './gitfs.mjs'
+import { discover, headBranch, refSha, symref } from './gitfs.mjs'
 import { sameDir } from './roots.mjs'
 
 // A fetch may never stop to ask for credentials, and the guard belongs on the operation
@@ -256,19 +256,42 @@ export function checkouts ({ run, env = () => process.env }) {
     // `origin/HEAD` is written once, at clone time, and git never refreshes it. Once the
     // remote renames its default branch the ref names one that no longer exists, so it is
     // believed only when the branch it points at is still there.
-    const originHead = git(dir, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
-    const named = originHead.code === 0 ? originHead.out.replace(/^origin\//, '') : null
-    const lives = named !== null &&
-      git(dir, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${named}`).code === 0
-    // On an unborn HEAD git exits 128 and echoes the token `HEAD`, which would be printed
-    // as though it were a sha and stamped into the freshness cache as one.
-    const head = git(dir, 'rev-parse', 'HEAD')
+    const named = originHeadOf(dir, place)
+    const lives = named !== null && refLives(dir, place, `refs/remotes/origin/${named}`)
     return {
       ...state,
       linked: place ? !sameDir(place.gitDir, place.commonDir) : gitLinked(dir),
       defaultBranch: lives ? named : null,
-      head: head.code === 0 ? head.out : null,
+      head: headShaOf(dir, place),
     }
+  }
+
+  // The three ref questions `identify` asks, each read from the files where `gitfs` placed
+  // the checkout and asked of git only where it did not, or where the reading handed the
+  // question back (hugoforte/rig#153). Together they were three spawns at the end of every
+  // command.
+  //
+  // The branch `origin/HEAD` names, without the `origin/` — what `symbolic-ref --short`
+  // prints, less that prefix — and null when there is no such symref.
+  const originHeadOf = (dir, place) => {
+    const read = place ? symref(place, 'refs/remotes/origin/HEAD') : null
+    if (read) return read.target ? read.target.replace(/^refs\/remotes\/origin\//, '') : null
+    const r = git(dir, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
+    return r.code === 0 ? r.out.replace(/^origin\//, '') : null
+  }
+  const refLives = (dir, place, ref) => {
+    const read = place ? refSha(place, ref) : null
+    if (read) return read.sha !== null
+    return git(dir, 'rev-parse', '--verify', '-q', ref).code === 0
+  }
+  // HEAD's sha, and null on an unborn HEAD — where git exits 128 and echoes the token
+  // `HEAD`, which would otherwise be printed as though it were a sha and stamped into the
+  // freshness cache as one.
+  const headShaOf = (dir, place) => {
+    const read = place ? refSha(place, 'HEAD') : null
+    if (read) return read.sha
+    const head = git(dir, 'rev-parse', 'HEAD')
+    return head.code === 0 ? head.out : null
   }
 
   // Distance is measured against the upstream *as last fetched*, so this is how a caller
@@ -325,7 +348,19 @@ export function checkouts ({ run, env = () => process.env }) {
   // printing the first few of them wants them in.
   const arrived = (dir, from) => lines(git(dir, 'log', '--oneline', '--no-decorate', `${from}..HEAD`).out)
 
-  const shortHead = dir => git(dir, 'rev-parse', '--short', 'HEAD').out || null
+  // The hash a caller prints after a commit — `committed 880b8ad and pushed` — and nothing
+  // compares it. git's `--short` abbreviates to the shortest prefix past `core.abbrev` that
+  // is unique in the object store, which is not a question the files answer; this prints
+  // the first seven characters of the sha the files hold, which is what git prints for every
+  // data root rig has made and one character short of it on a repository large enough to
+  // need eight. That is the one reading in `gitfs` that is deliberately not git's, decided
+  // for the 234 spawns a suite run spent on it (hugoforte/rig#153), and it is a display
+  // choice: a caller that needed the exact abbreviation would ask git for it.
+  const shortHead = dir => {
+    const read = refSha(discover(dir, env()), 'HEAD')
+    if (read?.sha) return read.sha.slice(0, 7)
+    return git(dir, 'rev-parse', '--short', 'HEAD').out || null
+  }
 
   // The whole tree, committed under one message. `git add -A`, so a checkout rig commits
   // into is one where everything present is meant to be committed — which is why a caller

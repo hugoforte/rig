@@ -227,12 +227,14 @@ test('placing a checkout costs no subprocess, and a directory that is none costs
   const counting = (cmd, args) => { calls.push(args.join(' ')); return run(cmd, args) }
   const state = c(counting).identify(local)
   assert.deepEqual(state.branch, 'main', 'and the reading is still the reading')
+  // origin/HEAD, whether the branch it names is still there, and HEAD's sha are read from the
+  // files too (hugoforte/rig#153); what is left is the upstream, which is config and not a
+  // ref.
   assert.deepEqual(calls.map(a => a.split(' ').slice(2, 4).join(' ')), [
-    'rev-parse --abbrev-ref',            // the upstream, which is config and not a path
-    'symbolic-ref -q',                   // origin/HEAD
-    'rev-parse --verify',                // and whether the branch it names is still there
-    'rev-parse HEAD',
+    'rev-parse --abbrev-ref',
   ], calls.join('\n'))
+  assert.equal(state.defaultBranch, 'main', 'and origin/HEAD is still read')
+  assert.equal(state.head, gitMust(local, 'rev-parse', 'HEAD'))
 
   calls.length = 0
   assert.deepEqual(c(counting).identify(plain), unreadable())
