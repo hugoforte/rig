@@ -10,7 +10,7 @@
 //   `.git`, which is what keeps `rig update` and every freshness path off the checkout the
 //   tests run from. With `localConfig` smoke's rig.local.json moves out of the copy too, so
 //   nothing that suite writes lands beside the tool.
-// - test/installation.test.mjs wants the opposite, and passes `checkout`: a real clone of
+// - test/installation-fixture.mjs wants the opposite, and passes `checkout`: a real clone of
 //   the tool from a bare origin in the temp dir, which is the only way the freshness and
 //   update paths are reachable at all. The remote is a directory, so no test touches a
 //   network.
@@ -54,8 +54,19 @@ const copyTool = (dest, { gitignore = false } = {}) => {
   if (gitignore) fs.cpSync(path.join(SRC, '.gitignore'), path.join(dest, '.gitignore'))
 }
 
-export function makeInstall ({
-  prefix,
+export function makeInstall ({ prefix, ...options } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  // The git steps below can throw — an old git without `init -b`, say — and a caller cannot
+  // have registered a cleanup for a directory it has not been handed yet.
+  try {
+    return buildInstall(tmp, options)
+  } catch (e) {
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
+    throw e
+  }
+}
+
+function buildInstall (tmp, {
   author = 'rig test',
   email = 'test@example.invalid',
   checkout = false,
@@ -64,8 +75,7 @@ export function makeInstall ({
   twg,
   remotes = false,
   inProcess = false,
-} = {}) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+}) {
   const dataRoot = path.join(tmp, 'rig-data')
   const workRoot = path.join(tmp, 'w')
 
@@ -146,8 +156,10 @@ export function makeInstall ({
   // module graph on top of it, times the several hundred invocations this suite makes.
   //
   // A test whose subject *is* the process keeps the subprocess, and four kinds of test do:
-  // `test/installation.test.mjs`, which drives `rig update` re-executing the tool that just
-  // arrived, the detached freshness refresh, and a crippled PATH; the steps of
+  // `test/installation-freshness.test.mjs` and `test/installation-update.test.mjs`, which
+  // drive the detached freshness refresh, `rig update` re-executing the tool that just
+  // arrived, and a crippled PATH, and `test/installation-migrations.test.mjs` with them,
+  // because it drives `rig update` through the same fixture; the steps of
   // `test/scenarios.test.mjs` that drive the previous release; `rig check --run`, whose
   // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe; and the
   // CLI's own answers for what a caller leaves out of `run` — its stdin, its `chdir` and its
@@ -248,7 +260,7 @@ export function previousReleaseTag () {
 }
 
 // The tool as the previous release shipped it, beside the installation, for the half of
-// cross-version the suite could not express: `test/installation.test.mjs` fabricates a
+// cross-version the suite could not express: `test/installation-update.test.mjs` fabricates a
 // *newer* rig by pushing a clone that carries an extra migration, and this is the reverse —
 // the rig still on PATH, run against a machine file the current code just wrote. That window
 // is open on every machine at every release, because the change being installed is the one
@@ -265,8 +277,9 @@ export function previousRelease ({ tmp, gitMust }, tag = previousReleaseTag()) {
   // step, and cloning it again would cost seconds the scenario count is rationed by.
   if (!fs.existsSync(root)) {
     // `--no-hardlinks`, because a local clone links its objects by default and the checkout
-    // and the temp directory are not always on one volume — on the Windows runner the repo is
-    // on D: and the temp directory on C:, and git dies with "Improper link".
+    // and the temp directory are not always on one volume — a checkout on D: with the temp
+    // directory on C:, as on many developer machines, and git dies with "Improper link". CI
+    // does not test that case: the shard jobs keep both on one drive.
     gitMust(tmp, 'clone', '-q', '--no-hardlinks', SRC, root)
     gitMust(root, 'checkout', '-q', '--detach', tag)
     fs.rmSync(path.join(root, '.git'), { recursive: true, force: true, maxRetries: 5 })

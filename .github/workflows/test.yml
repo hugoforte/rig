@@ -8,7 +8,7 @@
 # across the two events, and they are identical because there is one workflow.
 #
 # Windows is where the suite is slow — a process costs more to start there, and the suite is
-# mostly processes — so it runs as six shard jobs at once, dealt by `bin/shards.mjs`, and the
+# mostly processes — so it runs as eight shard jobs at once, dealt by `bin/shards.mjs`, and the
 # check the ruleset requires is a gate job carrying that name which waits on them. Two traps,
 # both handled below: a gate without `if: always()` is *skipped* when a shard fails, and a
 # skipped required check counts as passing; and the gate must fail on any result but success,
@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     name: windows shard ${{ matrix.shard }} of ${{ strategy.job-total }}
     runs-on: windows-latest
     timeout-minutes: 10
@@ -56,9 +56,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Node 22 here and 20 on Ubuntu, so CI covers both. Pinned rather than taken from the
+      # image: the image's own 22 ran the suite slower and less evenly (hugoforte/rig#160).
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+      # The fixtures build every repository under os.tmpdir(), which on the image is the
+      # system disk; RUNNER_TEMP is on the faster one, beside the workspace, and the suite
+      # runs about a fifth quicker there (hugoforte/rig#160). GITHUB_ENV reaches the steps
+      # after this one, which is why the shard is a step of its own.
+      - name: temp directory under RUNNER_TEMP
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'tests'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          "TEMP=$tmp" >> $env:GITHUB_ENV
+          "TMP=$tmp" >> $env:GITHUB_ENV
       # PowerShell on purpose: Git Bash puts its own git first on PATH, and which git the
       # fixtures start is part of what the suite proves.
       - run: node bin/shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}
