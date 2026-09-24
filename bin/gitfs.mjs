@@ -230,3 +230,133 @@ export function headBranch (gitDir) {
   }
   return null
 }
+
+// A ref, read the way git's files backend reads one (hugoforte/rig#153): the loose file
+// under `refs/`, and failing that its line in `packed-refs`. The two are read in that
+// order on purpose. `git pack-refs` — which `gc --auto` runs — moves a ref by writing
+// `packed-refs` whole and only then deleting the loose file, so a loose file found is the ref
+// now, and a loose file missing means the packed file read *afterwards* already carries it.
+// A reader that took its snapshot of `packed-refs` first would find no line for a ref that
+// was still loose, then find the loose file gone, and say the ref does not exist.
+//
+// Every reading is either what git would have said or `null`, as with `discover`, and for
+// the same reason: a sha that is wrong is worse than a subprocess. What is handed back:
+// a name git would have to guess at (a short name, `@{u}`, anything not under `refs/`); the
+// per-worktree refs (`refs/bisect/`, `refs/worktree/`, `refs/rewritten/`), which rig never
+// asks about; a loose file holding neither a sha nor a `ref:`; a `packed-refs` with a line the
+// parser does not know, since absence cannot be asserted from a file half read; and a symref
+// chain longer than the five links git follows. A ref storage that is not files, `GIT_DIR`
+// and its relations, and a format git would refuse never reach here: `place` is what
+// `discover` answered, and it has already declined those.
+//
+// What a reading cannot do is tell a ref *that is being written* apart from one that is
+// there: git writes a loose ref by renaming a `.lock` file into place, so the file is either
+// whole or absent, and the same is true of `packed-refs`. Both readings are therefore as
+// current as git's own.
+const SHA = /^[0-9a-f]{40}$/
+const PER_WORKTREE = /^refs\/(bisect|worktree|rewritten)\//
+// git's `check_refname_format`, as far as the names rig asks about go. Anything this
+// rejects is handed back rather than refused: git may well accept it, and git decides.
+const wellFormed = ref => ref === 'HEAD' || (
+  /^refs\/[^\s~^:?*[\\\x00-\x1f\x7f]+$/.test(ref) &&
+  !ref.includes('..') && !ref.includes('@{') && !ref.includes('//') &&
+  !ref.endsWith('/') && !ref.endsWith('.') && !/(^|\/)\./.test(ref) && !/\.lock(\/|$)/.test(ref)
+)
+
+// One loose ref file, parsed as git parses it: `ref:` then the target with the whitespace
+// around it dropped, or forty hex digits and nothing but whitespace after them.
+//   undefined       no such file
+//   null            a file, but not one this can read
+//   { target }      a symbolic ref
+//   { sha }         a plain one
+function looseRef (file, text = readOrAbsent(file)) {
+  if (text === undefined || text === null) return text
+  if (text.startsWith('ref:')) {
+    const target = text.slice(4).trim()
+    return wellFormed(target) ? { target } : null
+  }
+  const m = /^([0-9a-f]{40})(?:\s|$)/.exec(text)
+  return m ? { sha: m[1] } : null
+}
+function readOrAbsent (file) {
+  try { return fs.readFileSync(file, 'utf8') } catch (e) { return e?.code === 'ENOENT' ? undefined : null }
+}
+
+// The `packed-refs` file, whole: a `#` header on the first line, `^` peeled lines under an
+// annotated tag, and otherwise a sha, one space, and the name. Returns the map, an empty one
+// when there is no file, and `null` for a line it does not know.
+function packedRefs (commonDir) {
+  const text = readOrAbsent(path.join(commonDir, 'packed-refs'))
+  if (text === undefined) return new Map()
+  if (text === null) return null
+  const refs = new Map()
+  const lines = text.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  for (const [i, line] of lines.entries()) {
+    if (i === 0 && line.startsWith('#')) continue
+    if (line.startsWith('^')) {
+      if (!SHA.test(line.slice(1))) return null
+      continue
+    }
+    const m = /^([0-9a-f]{40}) (\S+)$/.exec(line)
+    if (!m) return null
+    refs.set(m[2], m[1])
+  }
+  return refs
+}
+
+// One step of a reading: the ref as the files hold it, without following a symref.
+//   null            ask git
+//   { sha: null }   no such ref
+//   { target }      a symbolic ref naming `target`
+//   { sha }         the object
+function rawRef (place, ref) {
+  if (!place || !place.gitDir || !wellFormed(ref) || PER_WORKTREE.test(ref)) return null
+  // HEAD is the worktree's own and is never packed; everything else lives in the common dir.
+  if (ref === 'HEAD') return looseRef(null, headOf(place.gitDir))
+  const loose = looseRef(path.join(place.commonDir, ...ref.split('/')))
+  if (loose !== undefined) return loose
+  const packed = packedRefs(place.commonDir)
+  if (packed === null) return null
+  return { sha: packed.get(ref) ?? null }
+}
+
+// A ref followed to the end of its symref chain, as git's `resolve_ref` follows it: at most
+// five reads, and a fifth that is still a symref is where git gives up and so does this.
+// Returns the name the chain ends on and that name's own reading — a plain ref or none.
+function followed (place, ref) {
+  let name = ref
+  for (let reads = 1; reads <= 5; reads++) {
+    const r = rawRef(place, name)
+    if (r === null) return null
+    if (r.target === undefined) return { name, r }
+    name = r.target
+  }
+  return null
+}
+
+// The sha `rev-parse --verify` would print for `ref`, following symrefs as git does.
+//   null            nobody could tell; ask git
+//   { sha: null }   no such ref — `rev-parse --verify` exits 1, and an unborn HEAD is one
+//   { sha }         the object it names
+export function refSha (place, ref) {
+  const end = followed(place, ref)
+  return end && end.r
+}
+
+// What `symbolic-ref` would print for `ref`: the end of the chain, which may itself be a ref
+// that does not exist yet — an unborn HEAD names its branch all the same.
+//   null              nobody could tell; ask git
+//   { target: null }  not a symbolic ref — a plain ref, or none: `symbolic-ref` fails the
+//                     same way for both, and a packed line cannot be a symref in the
+//                     `packed-refs` format this reads whole
+//   { target }        the ref the chain ends on
+export function symref (place, ref) {
+  const end = followed(place, ref)
+  if (!end) return null
+  return { target: end.name === ref ? null : end.name }
+}
+
+// `{ sha: null }` is a fact and `null` is a shrug, and acting on the difference is the
+// point, as with `notARepository`.
+export const noSuchRef = r => r !== null && r.sha === null
