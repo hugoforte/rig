@@ -9,7 +9,7 @@ import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { remotesOnGitHub } from '../bin/worktrees.mjs'
+import { remotesOnGitHub, remotesInDirectory, worktrees } from '../bin/worktrees.mjs'
 import { RigError } from '../bin/errors.mjs'
 import { worktreesFixture } from './worktrees-fixture.mjs'
 
@@ -306,4 +306,27 @@ test('an unreachable remote warns and works from what the mirror already has', (
 test('remove answers git\'s reason when there is no mirror to remove the worktree from', () => {
   const failed = trees().remove({ org: 'nobody', repo: 'nothing', dir: workDir('t8', 'nothing') })
   assert.ok(failed, 'a removal that could not happen is reported, never reported as done')
+})
+
+test('whether a branch is on the remote is read from the mirror\'s files, and asked of git under a GIT_DIR in the run\'s env', () => {
+  // The module takes the run's environment, as `checkouts()` does, so that what makes
+  // `gitfs` hand a question back is the run's `GIT_DIR` and not the process's
+  // (hugoforte/rig#153). A `GIT_DIR` in the thunk alone: the runner's own environment is
+  // untouched, so git still answers for the mirror when asked.
+  // `cut` asks the mirror what its remote HEAD is and whether the branch is already there.
+  const calls = []
+  const counting = (cmd, args) => {
+    const bare = args.filter(a => a !== '-C' && a !== mirrorOf('acme', 'billing'))
+    calls.push(bare.slice(0, 2).join(' '))
+    return run(cmd, args)
+  }
+  const asked = env => worktrees({ mirrorRoot: path.join(tmp, 'w', '.mirrors'), remotes: remotesInDirectory(remotesDir), run: counting, env })
+  const refQuestions = () => calls.filter(c => /^(rev-parse|symbolic-ref)/.test(c))
+
+  assert.equal(asked(() => process.env).cut({ org: 'acme', repo: 'billing', branch: 'feat/t9a', dest: workDir('t9a', 'billing') }).base, 'main')
+  assert.deepEqual(refQuestions(), [], 'read from the files')
+  calls.length = 0
+  const moved = () => ({ ...process.env, GIT_DIR: mirrorOf('acme', 'billing') })
+  assert.equal(asked(moved).cut({ org: 'acme', repo: 'billing', branch: 'feat/t9b', dest: workDir('t9b', 'billing') }).base, 'main')
+  assert.ok(refQuestions().includes('symbolic-ref refs/remotes/origin/HEAD'), `handed back to git: ${calls.join(', ')}`)
 })
