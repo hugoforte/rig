@@ -91,7 +91,9 @@ test('a data root whose tracked branch has gone from its remote is local-only, a
   // account for.
   const works = path.join(tmp, 'work-gone-upstream')
   fs.mkdirSync(works)
-  withLocalConfig({ dataRoot: local, workRoot: works }, () => {
+  // Freshness off, because `rig new` would otherwise leave a detached refresh running in the
+  // installation while this file's cleanup removes it; the subject here is the migration.
+  withLocalConfig({ dataRoot: local, workRoot: works, freshness: { enabled: false } }, () => {
     const made = rig(['new', 'w1', '--title', 'One', '--no-ticket'])
     assert.match(made.out, /data root: committed [0-9a-f]{7,} \(no upstream — not pushed\)/)
     const updated = rig(['update'])

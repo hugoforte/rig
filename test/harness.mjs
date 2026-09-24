@@ -54,8 +54,19 @@ const copyTool = (dest, { gitignore = false } = {}) => {
   if (gitignore) fs.cpSync(path.join(SRC, '.gitignore'), path.join(dest, '.gitignore'))
 }
 
-export function makeInstall ({
-  prefix,
+export function makeInstall ({ prefix, ...options } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  // The git steps below can throw — an old git without `init -b`, say — and a caller cannot
+  // have registered a cleanup for a directory it has not been handed yet.
+  try {
+    return buildInstall(tmp, options)
+  } catch (e) {
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 })
+    throw e
+  }
+}
+
+function buildInstall (tmp, {
   author = 'rig test',
   email = 'test@example.invalid',
   checkout = false,
@@ -64,8 +75,7 @@ export function makeInstall ({
   twg,
   remotes = false,
   inProcess = false,
-} = {}) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+}) {
   const dataRoot = path.join(tmp, 'rig-data')
   const workRoot = path.join(tmp, 'w')
 
@@ -148,7 +158,8 @@ export function makeInstall ({
   // A test whose subject *is* the process keeps the subprocess, and four kinds of test do:
   // `test/installation-freshness.test.mjs` and `test/installation-update.test.mjs`, which
   // drive the detached freshness refresh, `rig update` re-executing the tool that just
-  // arrived, and a crippled PATH; the steps of
+  // arrived, and a crippled PATH, and `test/installation-migrations.test.mjs` with them,
+  // because it drives `rig update` through the same fixture; the steps of
   // `test/scenarios.test.mjs` that drive the previous release; `rig check --run`, whose
   // catalogue commands inherit rig's stdio and so reach an assertion only down a pipe; and the
   // CLI's own answers for what a caller leaves out of `run` — its stdin, its `chdir` and its
