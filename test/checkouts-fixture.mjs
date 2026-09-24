@@ -72,18 +72,49 @@ function build (tmp) {
   const c = (runner = run) => checkouts({ run: runner, env: () => env })
 
   // A bare remote with one commit, and a checkout of it that tracks `main`.
+  //
+  // Made with git once per file — the canonical pair below — and copied for every caller,
+  // because most tests want a pair of their own and a clone is five processes where a copy
+  // is none (hugoforte/rig#164). A bare repository and a plain clone are ordinary files. The
+  // absolute paths in them: the clone's `remote.origin.url`, rewritten here to the copied
+  // bare, and the bare's own `remote.origin.url`, which names the seed it was cloned from —
+  // as every bare this made before named its own seed — and stays; the reflog's `clone:
+  // from …` is text git never resolves. A linked worktree is not copyable this way — its
+  // `.git` file and the mirror's `worktrees/<name>/gitdir` point back at the original — and
+  // none is copied. Every checkout in a file shares one first commit as a result, which no
+  // test reads.
+  //
+  // A name already used refuses, where `cpSync` would merge the canonical pair over a
+  // checkout a test had moved on and hand back one that is neither.
   const cloned = name => {
     const bare = path.join(tmp, `${name}.git`)
-    const seed = path.join(tmp, `${name}-seed`)
-    fs.mkdirSync(seed, { recursive: true })
-    gitMust(seed, 'init', '-q', '-b', 'main')
-    fs.writeFileSync(path.join(seed, 'README.md'), `# ${name}\n`)
-    gitMust(seed, 'add', '-A')
-    gitMust(seed, 'commit', '-q', '-m', 'first')
-    assert.equal(run('git', ['clone', '-q', '--bare', seed, bare]).code, 0)
     const local = path.join(tmp, name)
-    assert.equal(run('git', ['clone', '-q', bare, local]).code, 0)
+    for (const dir of [bare, local]) assert.ok(!fs.existsSync(dir), `cloned(${name}): ${dir} already exists`)
+    fs.cpSync(canon.bare, bare, { recursive: true })
+    fs.cpSync(canon.local, local, { recursive: true })
+    const config = path.join(local, '.git', 'config')
+    const lines = fs.readFileSync(config, 'utf8').split('\n')
+    const urls = lines.map((line, i) => [line, i]).filter(([line]) => /^\s*url\s*=/.test(line))
+    assert.equal(urls.length, 1, `one remote url in ${config}`)
+    const [line, i] = urls[0]
+    // Quoted, as git's own writer quotes a value it has to: a `#` or `;` in the temp path
+    // would otherwise start a comment and leave the url short.
+    const value = bare.split(path.sep).join('/').replace(/["\\]/g, '\\$&')
+    lines[i] = `${line.slice(0, line.indexOf('=') + 1)} "${value}"`
+    fs.writeFileSync(config, lines.join('\n'))
     return { bare, local }
+  }
+  // The canonical pair, in a directory of its own so no test's name can collide with it.
+  const canon = { bare: path.join(tmp, '.canon', 'canon.git'), local: path.join(tmp, '.canon', 'canon') }
+  const seed = path.join(tmp, '.canon', 'seed')
+  fs.mkdirSync(seed, { recursive: true })
+  gitMust(seed, 'init', '-q', '-b', 'main')
+  fs.writeFileSync(path.join(seed, 'README.md'), '# canon\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'first')
+  for (const [from, to] of [[seed, canon.bare], [canon.bare, canon.local]]) {
+    const r = run('git', ['clone', '-q', ...(to === canon.bare ? ['--bare'] : []), from, to])
+    assert.equal(r.code, 0, `git clone ${from} ${to}: ${r.err || r.out}`)
   }
   // A checkout whose upstream is still configured and whose ref has gone: what a
   // squash-merge-and-delete, or a remote renaming its default branch, leaves after a prune.

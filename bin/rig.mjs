@@ -10,7 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
-import { discover, notARepository } from './gitfs.mjs'
+import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
@@ -343,6 +343,20 @@ const co = checkouts({ run: exec, env })
 const readStdin = () => current.stdin()
 
 const exists = p => fs.existsSync(p)
+
+// Two ref questions read from the files where `gitfs` places the repository and asked of
+// git where it does not (hugoforte/rig#153): whether a ref resolves, and what HEAD is.
+function refLives (dir, ref, place = discover(dir, env())) {
+  const read = refSha(place, ref)
+  if (read) return read.sha !== null
+  return git(dir, 'rev-parse', '--verify', '--quiet', ref).code === 0
+}
+function headSha (dir, place = discover(dir, env())) {
+  const read = refSha(place, 'HEAD')
+  if (read) return read.sha
+  const head = git(dir, 'rev-parse', 'HEAD')
+  return head.code === 0 ? head.out : null
+}
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 const writeJson = (p, v) => writeText(p, JSON.stringify(v, null, 2) + '\n')
 const readText = p => fs.readFileSync(p, 'utf8')
@@ -594,10 +608,11 @@ function freshnessEpilogue (command) {
     // A tool copy that is no checkout — an install from a tarball, the suite's own copies — has
     // no HEAD to ask about, and the filesystem says so without a spawn. A layout `gitfs` hands
     // back is still git's to answer.
-    if (notARepository(discover(toolRoot(), env()))) return
-    const head = git(toolRoot(), 'rev-parse', 'HEAD')
-    if (head.code !== 0) return
-    const line = speaks ? staleLine(cache, head.out) : null
+    const place = discover(toolRoot(), env())
+    if (notARepository(place)) return
+    const sha = headSha(toolRoot(), place)
+    if (!sha) return
+    const line = speaks ? staleLine(cache, sha) : null
     if (!due && !line) return
     if (skipReason(toolState())) return
     if (line) aside(C.dim(`· ${line}`))
@@ -969,6 +984,7 @@ const trees = cfg => worktrees({
   run: exec,
   step,
   warn,
+  env,
 })
 
 // ------------------------------------------------------------------ helpers
@@ -1499,7 +1515,7 @@ function parseTrackerFlag (spec) {
 // issue links (blob/main/...), and rig.json must exist for `init --orgs` to merge into.
 // Idempotent: does nothing when HEAD already exists.
 function ensureFirstCommit (target, name) {
-  if (git(target, 'rev-parse', '--verify', 'HEAD').code === 0) return false
+  if (refLives(target, 'HEAD')) return false
   if (!exists(path.join(target, 'README.md'))) {
     writeText(path.join(target, 'README.md'), `# ${name}
 
@@ -3580,8 +3596,10 @@ function catalogueFreshness (root, entries, mirrorRoot, hasGit) {
 // not resolve, and taking its word for it means the fallback is never reached even though
 // `refs/remotes/origin/main` is sitting right there.
 function mirrorHead (mirror) {
-  const resolves = r => git(mirror, 'rev-parse', '--verify', '--quiet', r).code === 0
-  const symbolic = git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')
+  const place = discover(mirror, env())
+  const resolves = r => refLives(mirror, r, place)
+  const read = symref(place, 'refs/remotes/origin/HEAD')
+  const symbolic = read ? { code: 0, out: read.target ?? '' } : git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')
   if (symbolic.code === 0 && symbolic.out && resolves(symbolic.out)) return symbolic.out
   return ['main', 'master', 'develop'].map(b => `refs/remotes/origin/${b}`).find(resolves) || null
 }
