@@ -4,7 +4,7 @@
 // tests, and the only way to reach a check was to build a real installation that had the
 // fault.
 //
-// The two things these fixtures cannot prove are in `test/installation.test.mjs`: that doctor
+// The two things these fixtures cannot prove are in `test/installation-update.test.mjs`: that doctor
 // *survives* a machine with no git and no free-space probe. Those are properties of the
 // probing, and the probing is the half that stays impure.
 import test from 'node:test'

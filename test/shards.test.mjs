@@ -13,16 +13,22 @@ import { deal, parseShard, testFiles, weight, WEIGHTS } from '../bin/shards.mjs'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const files = testFiles(path.join(ROOT, 'test'))
 
+// The workflow, read once: the shard count is its matrix and nowhere else, so what these tests
+// deal by is what CI runs.
+const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'test.yml'), 'utf8')
+const shardJob = yml.slice(yml.indexOf('\n  shard:'), yml.indexOf('\n  windows:'))
+const TOTAL = /shard: \[([^\]]+)\]/.exec(shardJob)[1].split(',').length
+
 test('every test file lands in exactly one shard, and a file the weights do not know is dealt like any other', () => {
-  const dealt = deal([...files, 'brand-new.test.mjs'], 6).flatMap(s => s.files).sort()
+  const dealt = deal([...files, 'brand-new.test.mjs'], TOTAL).flatMap(s => s.files).sort()
   assert.deepEqual(dealt, [...files, 'brand-new.test.mjs'].sort())
   assert.equal(weight('brand-new.test.mjs'), 1)
 })
 
 test('the same files deal the same way every time, whatever order they arrive in', () => {
-  const once = deal(files, 6)
-  assert.deepEqual(deal([...files].reverse(), 6), once)
-  assert.deepEqual(deal(files, 6), once)
+  const once = deal(files, TOTAL)
+  assert.deepEqual(deal([...files].reverse(), TOTAL), once)
+  assert.deepEqual(deal(files, TOTAL), once)
 })
 
 test('the weights name files that exist, so a renamed test does not quietly weigh a second', () => {
@@ -31,7 +37,7 @@ test('the weights name files that exist, so a renamed test does not quietly weig
 })
 
 test('the shards come out within one heaviest file of each other', () => {
-  const weights = deal(files, 6).map(s => s.weight)
+  const weights = deal(files, TOTAL).map(s => s.weight)
   const heaviest = Math.max(...files.map(weight))
   assert.ok(Math.max(...weights) - Math.min(...weights) <= heaviest, weights.join(' '))
 })
@@ -42,9 +48,9 @@ test('a shard is <index>/<total>, one-based, and nothing else', () => {
 })
 
 test('--print names the shard without running it', () => {
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'shards.mjs'), '1/6', '--print'], { encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'shards.mjs'), `1/${TOTAL}`, '--print'], { encoding: 'utf8' })
   assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.stdout.trim().split(': ').at(-1), deal(files, 6)[0].files.join(' '))
+  assert.equal(r.stdout.trim().split(': ').at(-1), deal(files, TOTAL)[0].files.join(' '))
   assert.doesNotMatch(r.stdout, /# tests/, 'nothing ran')
 })
 
@@ -60,7 +66,7 @@ test('an empty shard runs nothing, because node --test with no files would run e
 // depth. The shards take `test/*.test.mjs`. A file in the gap runs on one platform and never
 // on the other, and nothing would say so: this does. The helpers are named because they are
 // the gap today (hugoforte/rig#154 runs them as empty tests on Ubuntu).
-const HELPERS = ['harness.mjs', 'billing-install.mjs', 'checkouts-fixture.mjs', 'worktrees-fixture.mjs']
+const HELPERS = ['harness.mjs', 'billing-install.mjs', 'checkouts-fixture.mjs', 'installation-fixture.mjs', 'worktrees-fixture.mjs']
 const everything = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true })
   .map(String).filter(f => /[.][cm]?js$/.test(f))
 
@@ -73,12 +79,23 @@ test('every file node would run as a test under test/ is dealt, or is a helper n
 // YAML each: without `if: always()` a failed shard leaves it skipped, and a skipped required
 // check passes; and it must fail on any result but success. Read back rather than trusted.
 test('the gate carries the required check name, always runs, and passes only when every shard did', () => {
-  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'test.yml'), 'utf8')
   const gate = yml.slice(yml.indexOf('\n  windows:'))
   assert.notEqual(gate.length, yml.length, 'a job named windows')
   for (const line of ['name: test (windows-latest)', 'needs: shard', 'if: always()', 'test "$RESULT" = success']) {
     assert.ok(gate.includes(line), line)
   }
-  const shard = yml.slice(yml.indexOf('\n  shard:'), yml.indexOf('\n  windows:'))
-  assert.ok(shard.includes('node bin/shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}'), 'the total is the matrix length, written once')
+  assert.ok(shardJob.includes('node bin/shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}'), 'the total is the matrix length, written once')
+})
+
+// Two things about how a shard job runs, each measured to matter (hugoforte/rig#160): the
+// fixtures build under os.tmpdir(), which on the image is the system disk, so TEMP is moved
+// under RUNNER_TEMP; and Node 22 pinned, because the image's copy ran the same suite slower
+// and less evenly. GITHUB_ENV reaches only the steps after the one that wrote it, so the
+// shard has to be a later step than the write. Read back rather than trusted, like the gate.
+test('the shard jobs put the temp directory under RUNNER_TEMP, in a step before the shard, and run Node 22', () => {
+  for (const line of ['node-version: 22', '"TEMP=$tmp" >> $env:GITHUB_ENV', '"TMP=$tmp" >> $env:GITHUB_ENV']) {
+    assert.ok(shardJob.includes(line), line)
+  }
+  const between = shardJob.slice(shardJob.lastIndexOf('GITHUB_ENV'), shardJob.indexOf('node bin/shards.mjs'))
+  assert.match(between, /\n      - /, 'the shard runs in a step after the one that set TEMP')
 })

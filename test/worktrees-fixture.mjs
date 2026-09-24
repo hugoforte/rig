@@ -3,10 +3,12 @@
 // module wired to that directory of remotes so every clone, fetch, push and `worktree add`
 // is the real thing, only local. Nothing here needs a network or `gh`.
 //
-// Two files test `bin/worktrees.mjs`, each with a tree of its own built from here: the mirror
-// and worktree lifecycle in worktrees, and reading a work's stack in worktrees-stack. They
-// were one file, second-slowest in the suite on its own at about 35 s on a Windows runner,
-// and `node --test` parallelises by file (hugoforte/rig#155).
+// Three files test `bin/worktrees.mjs`, each with a tree of its own built from here: the
+// mirror and worktree lifecycle in worktrees, and reading a work's stack — the shapes a stack
+// in use takes in worktrees-stack, and the branches that are not a stage's base in
+// worktrees-stack-edge. Together they would be the slowest file in the suite, and
+// `node --test` parallelises by file: apart, none is above about 15 s on a Windows runner
+// (hugoforte/rig#155, #160).
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -97,5 +99,29 @@ function build (tmp) {
     gitMust(seed, 'push', '-q', 'origin', branch)
   }
 
-  return { tmp, remotesDir, mirrorRoot, workRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote }
+  // A work's stack, built by hand in its worktree the way someone would build it: `stages`
+  // is declaration order, which is all `chain()` is told. `repo` names the work's only repo,
+  // so every stack is on a remote and a mirror of its own.
+  //
+  // The mirror is made by an earlier work and main moves on before this one is cut, because
+  // that is the mirror every work after the first gets: its own `refs/heads/main` is the clone's
+  // and never moves, so anything reading it for where this work began reads the wrong commit.
+  const stacked = repo => {
+    const seed = publish('acme', repo)
+    trees().cut({ org: 'acme', repo, branch: 'feat/earlier', dest: workDir('earlier', repo) })
+    pushToRemote(seed, 'main', 'main moves on')
+    const dir = workDir('stacked', repo)
+    trees().cut({ org: 'acme', repo, branch: 'feat/work', dest: dir })
+    return {
+      dir,
+      commit: message => {
+        fs.appendFileSync(path.join(dir, 'README.md'), `${message}\n`)
+        gitMust(dir, 'commit', '-q', '-am', message)
+      },
+      bases: stages => Object.fromEntries(
+        trees().chain({ org: 'acme', repo, branch: 'feat/work', base: 'main', stages }).map(s => [s.branch, s.base])),
+    }
+  }
+
+  return { tmp, remotesDir, mirrorRoot, workRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote, stacked }
 }

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import {
   LOCAL_CONFIG_ENV, locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys,
   sameDir, insideDir,
@@ -221,4 +222,16 @@ test('a sibling whose name starts the same is not inside', () => {
     assert.equal(insideDir(`${toolRoot}-data`, toolRoot), false, 'rig-data is not inside rig')
     assert.equal(insideDir(path.join(tmp, 'rig-data'), toolRoot), false)
   })
+})
+
+// Windows keeps an 8.3 short name beside a long one on the system volume, and a temp directory
+// can be handed to rig by one and printed by git as the other. The short name is asked of cmd
+// rather than written down, and the test stands aside where the volume keeps none.
+test('a directory is the same directory under its 8.3 short name', t => {
+  if (process.platform !== 'win32') return t.skip('8.3 names are Windows')
+  const long = process.env.ProgramFiles
+  // Verbatim, because node would otherwise escape the quotes cmd needs around a path with a space.
+  const short = spawnSync('cmd', ['/d', '/c', `for %I in ("${long}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true }).stdout.trim()
+  if (!short || short.toLowerCase() === long.toLowerCase()) return t.skip('no short name on this volume')
+  assert.ok(sameDir(short, long), `${short} is ${long}`)
 })
