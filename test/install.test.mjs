@@ -90,7 +90,7 @@ before(() => {
 
   // The clone source: this tool, as much of it as `npm install -g` and `rig help` need.
   source = path.join(tmp, 'source')
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(ROOT, d), path.join(source, d), { recursive: true })
+  for (const d of ['bin', 'prompts', 'templates', 'skills']) fs.cpSync(path.join(ROOT, d), path.join(source, d), { recursive: true })
   for (const f of ['package.json', '.gitignore']) fs.cpSync(path.join(ROOT, f), path.join(source, f))
   assert.equal(git(tmp, 'init', '-q', '-b', 'main', source).status, 0)
   assert.equal(git(source, 'add', '-A').status, 0)
@@ -115,6 +115,8 @@ for (const [script, where, skip] of [
     assert.match(r.out, /cross-repo work harness/, 'and the `rig help` it ends with ran anyway')
     assert.equal(fs.realpathSync(installedPackage(prefix)), fs.realpathSync(target),
       'the global command is a link to the checkout it just made')
+    assert.ok(fs.existsSync(path.join(target, 'skills', 'rig', 'SKILL.md')),
+      'the agent skills arrived with the checkout, for whatever links them into an agent host')
   })
 
   test(`${script} run again over a checkout fetches nothing and resets nothing`, { skip }, () => {

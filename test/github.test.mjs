@@ -33,12 +33,12 @@ test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
 })
 
 test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
-  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
+  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
-    { number: 12, state: 'MERGED', base: 'main', url: 'https://github.com/acme/platform/pull/12',
+    { number: 12, state: 'MERGED', base: 'main', head: 'abc123', url: 'https://github.com/acme/platform/pull/12',
       openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z' })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,baseRefName,url,createdAt,mergedAt', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,url,createdAt,mergedAt', '--limit', '1'])
 })
 
 test('gh adapter: prForBranch answers the base the PR lands on now, in the same call', () => {

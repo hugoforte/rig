@@ -23,7 +23,7 @@ test('commitAll stages everything present, including what nobody staged', () => 
   assert.equal(r.outcome, 'committed')
   assert.equal(r.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7))
   assert.equal(gitMust(local, 'log', '-1', '--format=%s'), 'rig save: a record')
-  // Seven characters is rig's display choice, not git's abbreviation (DESIGN.md decision 103).
+  // Seven characters is rig's display choice, not git's abbreviation (DESIGN.md decision 104).
   gitMust(local, 'config', 'core.abbrev', '12')
   fs.writeFileSync(path.join(local, 'record.md'), 'a second record\n')
   const again = c().commitAll(local, 'rig save: again')

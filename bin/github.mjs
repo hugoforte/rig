@@ -58,15 +58,17 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // `baseRefName` is the base the PR lands on *now* — repoint a PR at another branch and
     // it changes, where the base a work recorded at `rig attach` never does. It rides along
     // with the PR state for no extra round trip, which is what makes a live base affordable
-    // on every `list`, `status` and `close`.
+    // on every `list`, `status` and `close`. `headRefOid` rides along the same way: it is the
+    // commit the PR carried, and the only thing that lets `close` tell a branch whose every
+    // commit landed from one somebody pushed to after the merge.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,baseRefName,url,createdAt,mergedAt', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,url,createdAt,mergedAt', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
     // Every pull request a commit belongs to, for assembling a release. Asked of the API per
     // commit rather than parsed out of commit messages: a squash subject carries `(#12)` and a
@@ -168,7 +170,7 @@ export function githubInMemory (state, { env } = {}) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
     },
     // Every pull request whose `commits` list contains this sha, in the order the fixture
     // declares them — a commit in two of them answers with both, which is the case the real

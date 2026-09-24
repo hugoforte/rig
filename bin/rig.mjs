@@ -3030,6 +3030,10 @@ cmds.close = ({ flags }) => {
     if (failed) warn(`${r.repo}: ${failed}`)
     else step(`removed worktree ${r.repo}`)
   }
+  // A work that landed has no use for its branches, and every one it leaves in the mirror is
+  // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
+  // `done` is every PR merged with nothing in the way, which a forced or abandoned close is not.
+  if (verdict.done && !abandoned) dropMergedBranches(cfg, work, states, stack)
   commitAs(id)
   if (exists(wd)) {
     try {
@@ -3064,6 +3068,28 @@ cmds.close = ({ flags }) => {
     // Named rather than closed: closing someone's pull request is an outward-facing act, and
     // an abandoned work is exactly the case where someone else may still want what is on it.
     for (const v of open) say(`  ${C.dim(`${v.repo}: PR #${v.pr.number} left open — ${v.pr.url}`)}`)
+  }
+}
+
+// Every branch of a finished work whose PR merged — the work branch in each repo, and each
+// stage that landed — deleted wherever its copies are safe to delete. A PR known only from
+// the record has no head to check against, so its branch is named and left.
+function dropMergedBranches (cfg, work, states, stack) {
+  const merged = [
+    ...work.repos.map((entry, i) => ({ entry, branch: work.branch, pr: states[i].pr })),
+    ...stack.flatMap(st => st.prs.map(pr => ({ entry: work.repos.find(r => r.repo === pr.repo), branch: st.branch, pr }))),
+  ].filter(b => b.entry && b.pr?.state === 'MERGED')
+  for (const { entry, branch, pr } of merged) {
+    if (!pr.head) {
+      say(`  ${C.dim(`${entry.repo}: kept ${branch} — GitHub did not say which commit PR #${pr.number} merged`)}`)
+      continue
+    }
+    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head })
+    const gone = [local === 'deleted' && 'mirror', remote === 'deleted' && 'remote'].filter(Boolean)
+    if (gone.length) step(`deleted branch ${branch} from ${entry.repo} (${gone.join(' and ')})`)
+    for (const [where, what] of [['mirror', local], ['remote', remote]]) {
+      if (what.startsWith('kept')) say(`  ${C.dim(`${entry.repo}: ${where} copy of ${branch} ${what}`)}`)
+    }
   }
 }
 
@@ -3785,7 +3811,8 @@ cmds.help = () => {
                                   re-renders its deploy order from the stack
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
                                   --designed records the "design agreed" gate
-  rig close [--force]             safety-checked teardown
+  rig close [--force]             safety-checked teardown; a work that landed also loses
+                                  its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
                                    checks are dropped, uncommitted changes still refuse,
                                    the ticket is told and open PRs are left alone

@@ -353,7 +353,7 @@ export function checkouts ({ run, env = () => process.env }) {
   // compares it. This is the first seven characters of the sha the files hold. git's
   // `--short` prints more whenever `core.abbrev` says so or seven would be ambiguous in the
   // object store, which is not a question the files answer. That is the one reading here
-  // that is deliberately not git's (DESIGN.md decision 103), decided for the 234 spawns a
+  // that is deliberately not git's (DESIGN.md decision 104), decided for the 234 spawns a
   // suite run spent on it (hugoforte/rig#153), and it is a display choice: a caller that
   // needed git's abbreviation would ask git for it.
   const shortHead = dir => {
