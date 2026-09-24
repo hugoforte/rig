@@ -252,6 +252,8 @@ test('close removes every worktree and the work folder once the work is pushed',
   assert.match(r.out, /removed worktree billing/)
   assert.match(r.out, /catalogue still a draft for billing — correct it and `rig save --work t1 -m "catalogue corrections"`/,
     'the last call: next offers the correction while the trees exist, close names what nobody made')
+  assert.match(r.out, /lessons never reviewed — the rig-learn skill, then `rig save --work t1 -m "lessons reviewed" --learned`/,
+    'the same last call for the lesson review, which next offers while the trees exist')
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
   assert.doesNotMatch(gitMust(mirrorOf('billing'), 'worktree', 'list'), /[\\/]t1[\\/]/)
   assert.equal(record().closedAt !== undefined, true, 'closing records the gate and no status')
@@ -272,6 +274,14 @@ test('the command close hands over works after the work folder is gone', () => {
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(fs.readFileSync(entry, 'utf8'), /DRAFT: unreviewed/)
   assert.equal(gitMust(dataRoot, 'status', '--porcelain'), '', 'and the correction is committed')
+})
+
+test('the lesson review can still be recorded once the work is closed', () => {
+  // The catalogue and rig's tracker outlive the work, so a review after the close is late but
+  // real; only a lesson for a repo needed the worktree.
+  const r = rig(['save', '--work', 't1', '-m', 'lessons reviewed', '--learned'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(record().learnedAt, 'the gate is stored with its date')
 })
 
 // The catalogue's own freshness. `doctor` measures each entry against the mirror of the repo

@@ -68,7 +68,7 @@ stateDiagram-v2
 
 That is the **phase** — where a work is now. It is always derived, from the repos attached, the branches, the PRs and the gates recorded, and never stored, so it cannot go stale. Active phases are present participles and the two terminal ones are past, so the word itself tells you whether the work is still moving. Any phase can end in `abandoned`: the recorded decision to stop a work without finishing it, terminal like `closed` and deliberately distinct from it.
 
-The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` is the one you pass by hand.
+The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `learnedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` and `rig save -m "lessons reviewed" --learned` are the two you pass by hand; the second follows the lesson review `rig next` offers once a PR is open.
 
 ### Branches and stages
 
@@ -319,7 +319,7 @@ rig demo --data employer --no-open --out C:	mp
 ig.html
 ```
 
-**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships two agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, and `rig-handoff`, which writes a handoff into the work's record for the next session to pick up. rig links neither into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
+**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
 
 ### Staying up to date
 

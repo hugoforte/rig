@@ -45,9 +45,10 @@ export const PHASES = ['planning', 'designing', 'building', 'reviewing', 'landin
 // have to lie about it (the old alternative was `rig close --force`, which did).
 export const TERMINAL = ['closed', 'abandoned']
 
-// Each gate and the field its date is stored in. `closedAt` predates all of this; the other
-// two join it rather than replacing anything.
-export const GATES = { designed: 'designedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+// Each gate and the field its date is stored in. `closedAt` predates all of this; the others
+// join it rather than replacing anything. `learnedAt` is the lesson review, and unlike the
+// design gate it may be passed after the close: the catalogue and rig's tracker outlive the work.
+export const GATES = { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
 
 const MERGED = 'MERGED'
 
