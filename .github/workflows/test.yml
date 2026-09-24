@@ -3,9 +3,16 @@
 # `merge_group` is not optional once `main` has a merge queue: a required check that never
 # reports against the group's ref leaves every entry stalled until the queue's timeout ejects
 # it, and the failure looks like the queue being broken rather than like a missing trigger.
-# The job id and the matrix are shared with the `pull_request` run on purpose — the check names
-# GitHub matches against the ruleset (`test (ubuntu-latest)`, `test (windows-latest)`) have to
-# be identical across the two events, and they are identical because there is one job.
+# The jobs are shared with the `pull_request` run on purpose — the check names GitHub matches
+# against the ruleset (`test (ubuntu-latest)`, `test (windows-latest)`) have to be identical
+# across the two events, and they are identical because there is one workflow.
+#
+# Windows is where the suite is slow — a process costs more to start there, and the suite is
+# mostly processes — so it runs as six shard jobs at once, dealt by `bin/shards.mjs`, and the
+# check the ruleset requires is a gate job carrying that name which waits on them. Two traps,
+# both handled below: a gate without `if: always()` is *skipped* when a shard fails, and a
+# skipped required check counts as passing; and the gate must fail on any result but success,
+# because a cancelled shard is not a passed one either.
 
 name: test
 
@@ -23,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -36,3 +43,36 @@ jobs:
         with:
           node-version: 20
       - run: node --test
+
+  shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    name: windows shard ${{ matrix.shard }} of ${{ strategy.job-total }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # PowerShell on purpose: Git Bash puts its own git first on PATH, and which git the
+      # fixtures start is part of what the suite proves.
+      - run: node bin/shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  windows:
+    name: test (windows-latest)
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: every shard passed
+        env:
+          RESULT: ${{ needs.shard.result }}
+        run: |
+          echo "shards: $RESULT"
+          test "$RESULT" = success

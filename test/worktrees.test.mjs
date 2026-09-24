@@ -1,90 +1,22 @@
-// The mirror and worktree lifecycle, against real git. The module's seam is where a
-// repo's remote lives, so these tests point it at a directory of bare repos with
-// `remotesInDirectory`: every clone, fetch, push and `worktree add` below is the real
-// thing, only local. Nothing here needs a network or `gh`.
+// The mirror and worktree lifecycle, against real git. The module's seam is where a repo's
+// remote lives, so these tests point it at a directory of bare repos: every clone, fetch,
+// push and `worktree add` below is the real thing, only local. The tree and the moves are
+// `test/worktrees-fixture.mjs`, which says why the family is two files.
 //
 // One temp tree, shared, and the tests run in order — each leaves the mirrors and
 // worktrees where the next one expects them.
-import { test, before, beforeEach, after } from 'node:test'
+import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { worktrees, remotesOnGitHub, remotesInDirectory } from '../bin/worktrees.mjs'
+import { remotesOnGitHub } from '../bin/worktrees.mjs'
 import { RigError } from '../bin/errors.mjs'
+import { worktreesFixture } from './worktrees-fixture.mjs'
 
-let tmp, remotesDir, mirrorRoot, workRoot, env
-// What the module narrated, newest last. Reset before every test, so `said()` only ever
-// reads — a test that narrates without asserting cannot then weaken the next one.
-let steps = []
-let warnings = []
-
-// `run` is spawnSync-shaped, the way rig.mjs passes it in.
-const run = (cmd, args) => {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', env })
-  if (r.error) throw r.error
-  return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
-}
-const git = (dir, ...args) => run('git', ['-C', dir, ...args])
-const gitMust = (dir, ...args) => {
-  const r = git(dir, ...args)
-  assert.equal(r.code, 0, `git ${args.join(' ')}: ${r.err || r.out}`)
-  return r.out
-}
-
-const trees = () => worktrees({
-  mirrorRoot,
-  remotes: remotesInDirectory(remotesDir),
-  run,
-  step: s => steps.push(s),
-  warn: s => warnings.push(s),
-})
-const said = () => ({ steps: steps.join('\n'), warnings: warnings.join('\n') })
-const mirrorOf = (org, repo) => path.join(mirrorRoot, org, `${repo}.git`)
-const remoteOf = (org, repo) => path.join(remotesDir, org, `${repo}.git`)
-const workDir = (work, repo) => path.join(workRoot, work, repo)
-
-// A bare repo standing in for `https://github.com/<org>/<repo>.git`, with one commit on
-// `branch` and a checkout beside it that can push more.
-const publish = (org, repo, branch = 'main') => {
-  const seed = path.join(tmp, 'seed', `${org}-${repo}`)
-  fs.mkdirSync(seed, { recursive: true })
-  gitMust(seed, 'init', '-q', '-b', branch)
-  fs.writeFileSync(path.join(seed, 'README.md'), `# ${repo}\n`)
-  gitMust(seed, 'add', '-A')
-  gitMust(seed, 'commit', '-q', '-m', `${repo}: first`)
-  const bare = remoteOf(org, repo)
-  fs.mkdirSync(path.dirname(bare), { recursive: true })
-  assert.equal(run('git', ['clone', '-q', '--bare', seed, bare]).code, 0)
-  gitMust(seed, 'remote', 'add', 'origin', bare)
-  return seed
-}
-// One more commit on the remote, as a colleague would leave it.
-const pushToRemote = (seed, branch, message) => {
-  fs.appendFileSync(path.join(seed, 'README.md'), `${message}\n`)
-  gitMust(seed, 'add', '-A')
-  gitMust(seed, 'commit', '-q', '-m', message)
-  gitMust(seed, 'push', '-q', 'origin', branch)
-}
-
-before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-worktrees-'))
-  remotesDir = path.join(tmp, 'remotes')
-  mirrorRoot = path.join(tmp, 'w', '.mirrors')
-  workRoot = path.join(tmp, 'w')
-  env = { ...process.env }
-  // Keep every inherited setting — and anything a test writes — out of the real config.
-  fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
-  env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = 'rig worktrees'
-  env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = 'worktrees@example.invalid'
-})
-
-beforeEach(() => { steps = []; warnings = [] })
-
-after(() => { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }) })
+const f = worktreesFixture('rig-worktrees-')
+const { tmp, remotesDir, run, git, gitMust, trees, said, mirrorOf, remoteOf, workDir, publish, pushToRemote } = f
+beforeEach(f.reset)
+after(f.cleanup)
 
 test('the production adapter resolves a repo to its github.com clone URL', () => {
   assert.equal(remotesOnGitHub().url('acme', 'billing'), 'https://github.com/acme/billing.git')
@@ -373,117 +305,4 @@ test('an unreachable remote warns and works from what the mirror already has', (
 test('remove answers git\'s reason when there is no mirror to remove the worktree from', () => {
   const failed = trees().remove({ org: 'nobody', repo: 'nothing', dir: workDir('t8', 'nothing') })
   assert.ok(failed, 'a removal that could not happen is reported, never reported as done')
-})
-
-// A work's stack, built by hand in its worktree the way someone would build it: `stages`
-// is declaration order, which is all `chain()` is told.
-//
-// The mirror is made by an earlier work and main moves on before this one is cut, because
-// that is the mirror every work after the first gets: its own `refs/heads/main` is the clone's
-// and never moves, so anything reading it for where this work began reads the wrong commit.
-const stacked = repo => {
-  const seed = publish('acme', repo)
-  trees().cut({ org: 'acme', repo, branch: 'feat/earlier', dest: workDir('earlier', repo) })
-  pushToRemote(seed, 'main', 'main moves on')
-  const dir = workDir('stacked', repo)
-  trees().cut({ org: 'acme', repo, branch: 'feat/work', dest: dir })
-  return {
-    dir,
-    commit: message => {
-      fs.appendFileSync(path.join(dir, 'README.md'), `${message}\n`)
-      gitMust(dir, 'commit', '-q', '-am', message)
-    },
-    bases: stages => Object.fromEntries(
-      trees().chain({ org: 'acme', repo, branch: 'feat/work', base: 'main', stages }).map(s => [s.branch, s.base])),
-  }
-}
-
-test('a stack merged down into the work branch keeps its order, because the stages still say it', () => {
-  const s = stacked('merged-down')
-  for (const stage of ['feat/one', 'feat/two', 'feat/three']) {
-    gitMust(s.dir, 'checkout', '-q', '-b', stage)
-    s.commit(stage)
-  }
-  gitMust(s.dir, 'checkout', '-q', 'feat/work')
-  gitMust(s.dir, 'merge', '-q', '--ff-only', 'feat/three')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two', 'feat/three']),
-    { 'feat/one': 'feat/work', 'feat/two': 'feat/one', 'feat/three': 'feat/two' })
-})
-
-test('a stage cut from the work branch after the one below merged in sits on that one', () => {
-  const s = stacked('merged-then-cut')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  s.commit('the schema')
-  gitMust(s.dir, 'checkout', '-q', 'feat/work')
-  gitMust(s.dir, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/one')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/two')
-  s.commit('the endpoints')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': 'feat/one' })
-})
-
-test('stages cut but not yet committed on sit on the work branch, one on the next', () => {
-  const s = stacked('fresh')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/two')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': 'feat/one' })
-})
-
-test('a stage cut from the base branch has no base, as it always had', () => {
-  const s = stacked('off-stack')
-  s.commit('the work branch has its own commit')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  s.commit('the schema')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/two', 'origin/main')
-  s.commit('the endpoints')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': null })
-})
-
-test('a stage nobody has committed on is never what a stage with commits sits on', () => {
-  // Cut up front, both on the work branch; only the first is worked on, and the work branch
-  // then catches up with it. The empty one is still where both were cut, which is an ancestor
-  // of everything — the shape a stage merged down first would have, with none of its commits.
-  const s = stacked('cut-up-front')
-  gitMust(s.dir, 'branch', 'feat/two')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  s.commit('the schema')
-  gitMust(s.dir, 'checkout', '-q', 'feat/work')
-  gitMust(s.dir, 'merge', '-q', '--ff-only', 'feat/one')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': null })
-})
-
-test('a stage cut from the base branch and not committed on stays out of the stack', () => {
-  const s = stacked('empty-off-stack')
-  s.commit('the work branch has its own commit')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  s.commit('the schema')
-  gitMust(s.dir, 'branch', 'feat/stray', 'origin/main')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/stray']), { 'feat/one': 'feat/work', 'feat/stray': null })
-})
-
-test('a merged-down stack keeps its order after the work branch lands in the base branch', () => {
-  const s = stacked('landed')
-  for (const stage of ['feat/one', 'feat/two']) {
-    gitMust(s.dir, 'checkout', '-q', '-b', stage)
-    s.commit(stage)
-  }
-  gitMust(s.dir, 'checkout', '-q', 'feat/work')
-  gitMust(s.dir, 'merge', '-q', '--ff-only', 'feat/two')
-  gitMust(s.dir, 'push', '-q', 'origin', 'feat/work:main')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': 'feat/one' })
-})
-
-test('on a work branch nobody has committed on, a stage with commits still does not sit on an empty one', () => {
-  const s = stacked('unmoved')
-  gitMust(s.dir, 'branch', 'feat/two')
-  gitMust(s.dir, 'checkout', '-q', '-b', 'feat/one')
-  s.commit('the schema')
-
-  assert.deepEqual(s.bases(['feat/one', 'feat/two']), { 'feat/one': 'feat/work', 'feat/two': 'feat/work' })
 })

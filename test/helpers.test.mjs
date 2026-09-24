@@ -154,7 +154,7 @@ test('statusLine: what a document may carry, which is only what the record can p
 // its deadline when nothing else was running, so the behavioural test went green on exactly
 // the machines that were fine. A wrong option here is not a refactor; it is the regression.
 // The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
-// `test/checkouts.test.mjs`, where the operation it guards now lives.
+// `test/checkouts-read.test.mjs`, where the operation it guards now lives.
 test('only the console-less run hides its spawns, because a hidden console is a whole process', () => {
   // `CREATE_NO_WINDOW` does not suppress a console, it allocates a hidden one — a
   // `conhost.exe` per spawn, and a process creation on Windows is ~17ms. Set on everything it
@@ -259,7 +259,9 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
 // because its answer is remembered and the run after it must not be handed it.
 const launcherOnPath = process.platform === 'win32' && process.env.PATH.split(';').find(dir => realGitFor(dir) !== 'git')
 test('a hook starts through the git a run is handed, with MSYSTEM set or not', { skip: !launcherOnPath }, () => {
-  const m = makeInstall({ prefix: 'rig-launcher-hook-', localConfig: true })
+  // GitHub faked, as every installation in the suite fakes it. `gh` is not on this run's PATH
+  // anyway, so the fake only keeps the warning about that off the output.
+  const m = makeInstall({ prefix: 'rig-launcher-hook-', localConfig: true, github: { auth: 'ok', repos: {} } })
   try {
     const posix = p => p.replaceAll('\\', '/')
     const hooks = path.join(m.tmp, 'hooks')
