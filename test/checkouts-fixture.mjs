@@ -72,19 +72,43 @@ function build (tmp) {
   const c = (runner = run) => checkouts({ run: runner, env: () => env })
 
   // A bare remote with one commit, and a checkout of it that tracks `main`.
+  //
+  // Made with git once per file — the canonical pair below — and copied for every caller,
+  // because most tests want a pair of their own and a clone is five processes where a copy
+  // is none (hugoforte/rig#164). A bare repository and a plain clone are ordinary files whose
+  // one absolute path is the clone's `remote.origin.url`, rewritten here to the copied bare;
+  // the reflog's `clone: from …` is text git never resolves. A linked worktree is not
+  // copyable this way — its `.git` file and the mirror's `worktrees/<name>/gitdir` point
+  // back at the original — and none is copied. Every checkout in a file shares one first
+  // commit as a result, which no test reads.
   const cloned = name => {
     const bare = path.join(tmp, `${name}.git`)
-    const seed = path.join(tmp, `${name}-seed`)
+    const local = path.join(tmp, name)
+    fs.cpSync(canon.bare, bare, { recursive: true })
+    fs.cpSync(canon.local, local, { recursive: true })
+    const config = path.join(local, '.git', 'config')
+    const lines = fs.readFileSync(config, 'utf8').split('\n')
+    const urls = lines.map((line, i) => [line, i]).filter(([line]) => /^\s*url\s*=/.test(line))
+    assert.equal(urls.length, 1, `one remote url in ${config}`)
+    const [line, i] = urls[0]
+    lines[i] = line.slice(0, line.indexOf('=') + 1) + ' ' + bare.split(path.sep).join('/')
+    fs.writeFileSync(config, lines.join('\n'))
+    return { bare, local }
+  }
+  const canonical = () => {
+    const seed = path.join(tmp, 'canon-seed')
+    const bare = path.join(tmp, 'canon.git')
+    const local = path.join(tmp, 'canon')
     fs.mkdirSync(seed, { recursive: true })
     gitMust(seed, 'init', '-q', '-b', 'main')
-    fs.writeFileSync(path.join(seed, 'README.md'), `# ${name}\n`)
+    fs.writeFileSync(path.join(seed, 'README.md'), '# canon\n')
     gitMust(seed, 'add', '-A')
     gitMust(seed, 'commit', '-q', '-m', 'first')
     assert.equal(run('git', ['clone', '-q', '--bare', seed, bare]).code, 0)
-    const local = path.join(tmp, name)
     assert.equal(run('git', ['clone', '-q', bare, local]).code, 0)
     return { bare, local }
   }
+  const canon = canonical()
   // A checkout whose upstream is still configured and whose ref has gone: what a
   // squash-merge-and-delete, or a remote renaming its default branch, leaves after a prune.
   const goneUpstream = name => {
