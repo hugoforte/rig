@@ -204,15 +204,16 @@ test('HEAD is the worktree\'s own, and its per-worktree refs are handed back', (
 test('a ref packed between the loose miss and the packed read is still found', t => {
   const dir = seeded('packing')
   const sha = gitMust(dir, 'rev-parse', 'refs/heads/main')
-  const loose = path.join(dir, '.git', 'refs', 'heads', 'main')
-  assert.ok(fs.existsSync(loose))
+  // The reader opens the file under the real path `discover` resolved, which on a Windows
+  // runner is the long form of a temp directory git was handed in its 8.3 short form.
+  const loose = fs.realpathSync.native(path.join(dir, '.git', 'refs', 'heads', 'main')).toLowerCase()
   // The first read of the loose file is where a concurrent `pack-refs` lands: the ref has
   // gone from `refs/heads/` to `packed-refs` before the file is opened. A reader that took
   // its snapshot of `packed-refs` first would have seen no line for it and said no such ref.
   const original = fs.readFileSync
   let packed = false
   fs.readFileSync = function (file, ...rest) {
-    if (!packed && path.resolve(String(file)) === loose) {
+    if (!packed && path.resolve(String(file)).toLowerCase() === loose) {
       packed = true
       gitMust(dir, 'pack-refs', '--all')
       assert.ok(!fs.existsSync(loose), 'pack-refs moved the ref')
