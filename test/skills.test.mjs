@@ -29,6 +29,18 @@ test('rig ships its entry-point skill', () => {
   assert.ok(skills.includes('rig'), `skills/ holds ${skills.join(', ')}`)
 })
 
+test('every skill rig sends someone to is one it ships', () => {
+  // rig names its skills in what it prints and in the entry point. A skill renamed or removed
+  // without them would leave rig pointing at nothing, and no list here to fall out of date.
+  const sources = [
+    ...fs.readdirSync(path.join(ROOT, 'bin')).filter(f => f.endsWith('.mjs')).map(f => path.join(ROOT, 'bin', f)),
+    path.join(SKILLS, 'rig', 'SKILL.md'),
+  ]
+  const named = new Set(sources.flatMap(f => [...fs.readFileSync(f, 'utf8').matchAll(/\b(rig-[a-z-]+)`? skill\b/g)].map(m => m[1])))
+  assert.ok(named.size > 0, 'rig names at least one skill, or this reads nothing')
+  for (const name of named) assert.ok(skills.includes(name), `${name} is named, and skills/ holds ${skills.join(', ')}`)
+})
+
 for (const name of skills) {
   test(`skills/${name} is a skill a host can link: SKILL.md, name equal to the folder, a description`, () => {
     const fm = frontmatter(path.join(SKILLS, name, 'SKILL.md'))
