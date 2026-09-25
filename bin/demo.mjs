@@ -45,7 +45,7 @@ function seeded (seed) {
 
 // How big a node is drawn. A busy repo gets a bigger dot, which is the one piece of the
 // catalogue's shape you can read without clicking anything.
-export const nodeRadius = node => 9 + Math.min(9, node.degree * 2)
+const nodeRadius = node => 9 + Math.min(9, node.degree * 2)
 
 // What a node actually occupies once it is drawn, as half-extents. The circle is the small
 // part: `texo-frontend-admin-portal-app` is thirty characters of label and nearly four times

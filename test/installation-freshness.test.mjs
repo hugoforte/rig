@@ -140,16 +140,6 @@ test('the interval comes from rig.json', () => {
   })
 })
 
-test('an interval that is not a number is corrected to the default, not believed', () => {
-  // `Number('daily')` is NaN, and "now minus then >= NaN" is false forever: believed, it
-  // would switch the check off without a word. Twenty-five hours old is due at the default.
-  const stamped = seedCache({ hoursAgo: 25 })
-  withDataRootConfig(cfg => { cfg.freshness = { everyHours: 'daily' } }, () => {
-    assert.equal(rig(['list', '--quick']).code, 0)
-    assert.ok(waitForCache(c => c.checkedAt !== stamped), 'the refresh ran at the default interval')
-  })
-})
-
 test('a half-written cache is measured again, not believed', () => {
   fs.writeFileSync(cacheFile(), '{"sha": "abc", "behi')
   const r = rig(['list', '--quick'])

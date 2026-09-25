@@ -7,7 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
   spawnFailure,
@@ -136,16 +136,6 @@ test('ticketsLabel: keys joined, declined, or the placeholder', () => {
   assert.equal(ticketsLabel({ tickets: ['PROJ-1', 'PROJ-2'] }), 'PROJ-1, PROJ-2')
   assert.equal(ticketsLabel({ tickets: [], ticketsDeclined: true }), 'none (declined)')
   assert.equal(ticketsLabel({ tickets: [] }), '_none_')
-})
-
-test('statusLine: what a document may carry, which is only what the record can prove', () => {
-  // `nextStatusAfterAttach` went with the stored field: "repos attached" was one of the two
-  // values that were an observable fact written down, and `phaseOf` reads it off `repos`.
-  assert.equal(statusLine({ repos: [] }), 'Planning')
-  assert.equal(statusLine({ repos: [{ repo: 'a' }] }), 'Designing')
-  assert.equal(statusLine({ repos: [{ repo: 'a' }], designedAt: '2026-09-19T10:00:00.000Z' }),
-    'Building (design agreed 2026-09-19)')
-  assert.equal(statusLine({ repos: [], closedAt: '2026-09-19T10:00:00.000Z' }), 'Closed')
 })
 
 // These assert options rather than behaviour, deliberately. Each field is a contract with

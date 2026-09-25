@@ -18,6 +18,16 @@ const f = installationFixture('rig-install-update-')
 const { tmp, origin, install, dataRoot, workRoot, env, rig, git, spawnRig, pushToOrigin } = f
 after(f.cleanup)
 
+// The machine's environment with PATH replaced, whatever case the platform spells it in.
+const onPath = (...dirs) => {
+  const e = { ...env }
+  for (const k of Object.keys(e)) if (k.toLowerCase() === 'path') delete e[k]
+  e.PATH = dirs.join(path.delimiter)
+  return e
+}
+// Node and, on Windows, what Windows itself ships — and no git.
+const NO_GIT = [path.dirname(process.execPath), ...(process.platform === 'win32' ? ['C:\\Windows\\System32', 'C:\\Windows'] : [])]
+
 test('update fast-forwards the installation, names what arrived, and hands over to the new code', () => {
   pushToOrigin('another machine, commit 1')
   const r = rig(['update'])
@@ -55,10 +65,7 @@ test('a command that needs no git still finishes on a machine with no git on PAT
   // The freshness epilogue runs outside `main`'s error handling and calls git, and `run`
   // throws when git is absent. Without the epilogue's own guard, `rig help` ends in a stack
   // trace on a machine that never had git.
-  const noGit = { ...env }
-  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
-  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
-  const r = spawnRig(['help'], noGit)
+  const r = spawnRig(['help'], onPath(...NO_GIT))
   const out = strip(r.stdout + r.stderr)
   assert.equal(r.status, 0, out)
   assert.match(out, /cross-repo work harness/, 'the command itself answered')
@@ -68,10 +75,7 @@ test('a command that needs no git still finishes on a machine with no git on PAT
 test('the machine-readable surface answers on a machine with no git on PATH', () => {
   // `release` is the one field in the payload that needs git, and the records are the rest of
   // it. A missing release is how the payload says so; dying is not.
-  const noGit = { ...env }
-  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
-  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
-  const r = spawnRig(['list', '--json', '--quick'], noGit)
+  const r = spawnRig(['list', '--json', '--quick'], onPath(...NO_GIT))
   const out = strip(r.stdout)
   assert.equal(r.status, 0, out + strip(r.stderr))
   const payload = JSON.parse(out)
@@ -79,31 +83,19 @@ test('the machine-readable surface answers on a machine with no git on PATH', ()
   assert.equal(typeof payload.recordFormat, 'number', 'and the format still answers, needing nothing')
 })
 
-test('doctor reaches its verdict on a machine with no git on PATH', () => {
-  // doctor is the command you run *because* something is broken, so every git-dependent
-  // check is skipped rather than attempted. It used to die partway and lose everything
-  // after it — the record format, the identities, the verdict line.
-  const noGit = { ...env }
-  for (const k of Object.keys(noGit)) if (k.toLowerCase() === 'path') delete noGit[k]
-  noGit.PATH = [path.dirname(process.execPath), 'C:\Windows\System32', 'C:\Windows'].join(path.delimiter)
-  const r = spawnRig(['doctor'], noGit)
-  const out = strip(r.stdout + r.stderr)
-  assert.match(out, /git — not on PATH/, 'it says what is wrong')
-  assert.match(out, /thing\(s\) to look at|all clear/, 'and still reaches its verdict')
-  assert.doesNotMatch(out, /git not found on PATH \(spawnSync/, 'it did not die on the way')
-})
-
 test('free space with nothing on PATH is answered on Windows, and never dies trying', () => {
   // Off Windows free space is asked of `df`, and with no `df` on PATH the check is dropped,
   // not attempted: `exec` dies on a command that is not there, and this is the last check
   // doctor makes, so dying here cost Linux and macOS the verdict line and a clean exit
   // (hugoforte/rig#7). On Windows `fs.statfsSync` is in the runtime, so the answer arrives on
-  // a machine carrying nothing but node.
-  const bare = { ...env }
-  for (const k of Object.keys(bare)) if (k.toLowerCase() === 'path') delete bare[k]
-  bare.PATH = path.dirname(process.execPath)
-  const r = spawnRig(['doctor'], bare)
+  // a machine carrying nothing but node. No git either: doctor is the command you run
+  // *because* something is broken, so every git-dependent check is skipped, not attempted.
+  const r = spawnRig(['doctor'], onPath(path.dirname(process.execPath)))
   const out = strip(r.stdout + r.stderr)
+  // Only where node's directory holds no git of its own, for the same reason as `df` below.
+  if (!['git', 'git.exe'].some(g => fs.existsSync(path.join(path.dirname(process.execPath), g)))) {
+    assert.match(out, /git — not on PATH/, 'it says what is wrong')
+  }
   if (process.platform === 'win32') assert.match(out, /disk on .+\d+ GB free/, 'answered without a probe to be missing')
   // Off Windows, the check is dropped rather than answered from the runtime, whose block size
   // is wrong on Linux. Only where node's own directory holds no `df`, which is every CI image

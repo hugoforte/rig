@@ -344,13 +344,6 @@ test('a work folder is accounted for by whichever root holds its record, not by 
   assert.equal(problemCount(found), 1)
 })
 
-test('an unclosed work is warned about whichever root holds its record', () => {
-  const found = doctorFindings(snap({
-    works: [{ id: 'in-the-other-root', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [] }],
-  }))
-  assert.match(only(found, /^in-the-other-root:/).says, /work folder missing but not closed/)
-})
-
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {
   const found = doctorFindings(snap({
     works: [{

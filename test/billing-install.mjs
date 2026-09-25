@@ -107,7 +107,6 @@ export function billingInstall (prefix) {
   return {
     ...m,
     bare,
-    publish,
     github,
     setGithub,
     squashMergeAndDeleteBranch,
