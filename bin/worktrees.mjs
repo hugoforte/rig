@@ -102,7 +102,6 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         `  compare: git -C ${mirror} log --oneline --left-right ${branch}...origin/${branch}\n` +
         `  if the remote is right, remove any worktree that has it checked out, then: git -C ${mirror} branch -D ${branch}`)
     }
-    warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
     if (behind) {
       must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)])
       return
@@ -110,6 +109,27 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     step(`keeping the mirror's copy of ${branch}, which is ahead of the remote`)
     must('git', ['-C', mirror, 'branch', `--set-upstream-to=origin/${branch}`, branch])
     must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+  }
+
+  // A branch that already exists somewhere this machine can see, checked out into `dest`:
+  // the remote's copy, or failing that the one the mirror kept. Answers where it came from, or
+  // null when neither has it — and then nothing has been made. A folder deleted by hand leaves
+  // the mirror a record still claiming its branch, so the mirror is pruned first
+  // (hugoforte/rig#151). Prune drops only records whose folder is gone; a live worktree keeps
+  // its claim.
+  function existing (mirror, org, repo, branch, dest) {
+    if (fs.existsSync(dest)) throw new RigError(`${dest} already exists`)
+    git(mirror, 'worktree', 'prune')
+    if (onRemote(mirror, branch)) {
+      checkOutRemote(mirror, org, repo, branch, dest)
+      return 'remote'
+    }
+    if (kept(mirror, branch)) {
+      warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
+      must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+      return 'mirror'
+    }
+    return null
   }
 
   return {
@@ -121,27 +141,41 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // A branch only the mirror has — never pushed, or deleted from the remote once merged —
     // is checked out as it is, with a warning: its commits exist nowhere else, and whether
     // they are still wanted is for whoever is looking at them to say.
-    //
-    // A worktree folder deleted by hand leaves the mirror a record still claiming its branch,
-    // so the mirror is pruned first (hugoforte/rig#151). Prune drops only records whose folder
-    // is gone; a live worktree keeps its claim.
     cut ({ org, repo, branch, dest }) {
       const mirror = fetched(org, repo)
       const base = remoteHead(mirror, org, repo)
-      if (fs.existsSync(dest)) throw new RigError(`${dest} already exists`)
-      git(mirror, 'worktree', 'prune')
-      if (onRemote(mirror, branch)) {
-        checkOutRemote(mirror, org, repo, branch, dest)
-        return { base }
-      }
-      if (kept(mirror, branch)) {
-        warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
-        must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
-        return { base }
-      }
+      const from = existing(mirror, org, repo, branch, dest)
+      if (from === 'remote') warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
+      if (from) return { base }
       step(`worktree ${repo} → ${branch} (base ${base})`)
       must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)])
       return { base }
+    },
+
+    // Fetch a repo's mirror, making it on first use, without cutting anything. `rig restore`
+    // reads the stack out of the mirror before it knows which branch to check out, and a stack
+    // read from a mirror this machine has never fetched is no stack at all.
+    fetch ({ org, repo }) {
+      fetched(org, repo)
+    },
+
+    // Check out a branch that already exists, and never make one: `cut` above, less its last
+    // resort. A restore puts back what the record describes, and a branch gone from the remote
+    // and the mirror alike is something to report, not to recreate from the remote HEAD as if
+    // the work were starting over (hugoforte/rig#112). Answers `remote`, `mirror`, or null when
+    // neither has the branch. Call `fetch` first.
+    checkOut ({ org, repo, branch, dest }) {
+      return existing(mirrorPath(org, repo), org, repo, branch, dest)
+    },
+
+    // Does `branch` already hold every commit of `other`? True when any copy of `branch` —
+    // the remote's or the one the mirror kept — holds any copy of `other`, because the mirror's
+    // copy is wherever a worktree last left it and the remote may have moved on since. False
+    // when either is nowhere to be found.
+    contains ({ org, repo, branch, other }) {
+      const mirror = mirrorPath(org, repo)
+      const copies = b => [ref(b), local(b)].filter(r => has(mirror, r))
+      return copies(branch).some(a => copies(other).some(b => isAncestor(mirror, b, a)))
     },
 
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which

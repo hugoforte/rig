@@ -70,6 +70,17 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
+    // The open pull requests that land on a branch — what is stacked on top of it. `rig
+    // restore` follows these up from the highest branch a work records, to name the stack
+    // somebody built on it without telling rig.
+    prsOnto (org, name, base) {
+      const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--base', base,
+        '--state', 'open', '--json', 'number,headRefName,url'])
+      if (r.code !== 0 || !r.out) return []
+      const prs = parseJson(r.out, 'gh pr list')
+      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
+      return prs.map(pr => ({ number: pr.number, branch: pr.headRefName, url: pr.url }))
+    },
     // Every pull request a commit belongs to, for assembling a release. Asked of the API per
     // commit rather than parsed out of commit messages: a squash subject carries `(#12)` and a
     // merge commit does not, and neither is a record.
@@ -171,6 +182,12 @@ export function githubInMemory (state, { env } = {}) {
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
       return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+    },
+    prsOnto (org, name, base) {
+      if (!answers()) return []
+      return (lookup(`${org}/${name}`)?.repo.prs || [])
+        .filter(p => p.base === base && p.state === 'OPEN')
+        .map(p => ({ number: p.number, branch: p.branch, url: p.url }))
     },
     // Every pull request whose `commits` list contains this sha, in the order the fixture
     // declares them — a commit in two of them answers with both, which is the case the real

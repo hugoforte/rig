@@ -103,6 +103,7 @@ test('the status line carries the phase and the design gate once it is passed', 
 
 test('the status line is the phase alone before the design gate', () => {
   assert.equal(statusLine(work({ repos: [{ repo: 'r' }] }), [repo()]), 'Designing')
+  assert.equal(statusLine(work({ repos: [{ repo: 'r' }] })), 'Designing', 'and without repo facts, as a document is written')
 })
 
 test('an abandoned work says so and keeps its design gate', () => {

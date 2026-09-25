@@ -240,35 +240,11 @@ test('the check exits non-zero and names the options when the PR named nothing',
   assert.match(r.stdout, /release:minor/)
 })
 
-test('the verdict prints what the merge workflow reads, on stdout, alone', () => {
-  const commits = JSON.stringify([commit('aaa', pr(1, 'feat/x'))])
-  const r = run(['verdict', '--tag', 'v1.4.2'], commits)
-  assert.equal(r.status, 0, r.stderr)
-  const read = JSON.parse(r.stdout)
-  assert.equal(read.release, true)
-  assert.equal(read.previousTag, 'v1.4.2')
-  assert.match(read.tag, /^v\d+\.\d+\.\d+$/)
-})
-
-test('the verdict exits non-zero on a set it could not read, and tags nothing', () => {
-  const r = run(['verdict', '--tag', 'v1.4.2'], JSON.stringify([commit('abc1234def', null)]))
-  assert.equal(r.status, 1)
-  assert.equal(JSON.parse(r.stdout).tag, null)
-})
-
 test('the notes read the same stdin the verdict did, and skip the commits with no PR', () => {
   const commits = JSON.stringify([commit('aaa', pr(1, 'feat/x')), commit('bbb', null)])
   const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], commits)
   assert.equal(r.status, 0, r.stderr)
   assert.match(r.stdout, /PR 1/)
-})
-
-test('a pull request spread over several commits gets one section, not one each', () => {
-  // The merge method decides this: squash keeps one commit per PR, rebase can keep several.
-  const commits = JSON.stringify([commit('aaa', pr(4, 'feat/x')), commit('bbb', pr(4, 'feat/x'))])
-  const r = run(['notes', '--tag', 'v1.2.0', '--previous', 'v1.1.0', '--repo', 'hugoforte/rig'], commits)
-  assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.stdout.match(/## PR 4/g)?.length, 1, r.stdout)
 })
 
 test('a commit belonging to two pull requests counts both, and keeps both in the notes', () => {

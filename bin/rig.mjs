@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -628,7 +628,7 @@ function freshnessEpilogue (command) {
 // `demo` is here because it writes into the data root by default, so it must fast-forward
 // before it reads: a page rendered from stale records and committed on top of them would be
 // wrong twice. It is the only member that changes no work.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'plan', 'save', 'close', 'backfill', 'demo'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'close', 'backfill', 'demo'])
 
 // Before a mutating command reads anything. rig pushes the data root but never pulled it, so
 // a second machine read stale records and wrote on top of them. Fast-forward only: a data
@@ -750,7 +750,14 @@ function findWorkId (cfg, explicit) {
 }
 
 function loadWork (cfg, id, root = dataRoot()) {
-  if (!exists(recordFile(id, root))) die(`no work record for "${id}" at ${recordFile(id, root)}`)
+  if (!exists(recordFile(id, root))) {
+    // A work id is unique across every root on the machine, so the one that has it is worth
+    // naming: on a second machine the work in hand is often not in the current root.
+    const holders = Object.entries(where().roots || {})
+      .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
+    const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
+    die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
+  }
   const w = readJson(recordFile(id, root))
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
@@ -1041,7 +1048,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -1150,12 +1157,15 @@ function dataRemoteUrl () {
   return r.out.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/')
 }
 
+// A file of a work's record on the data root's remote, or null when it has none.
+const recordUrl = (id, file) => {
+  const remote = dataRemoteUrl()
+  return remote ? `${remote}/blob/main/work/${id}/${file}` : null
+}
+
 // A relative reference when the data root has no remote: a machine path in an
 // issue body would leak into a tracker that may be public.
-const contextDocRef = id => {
-  const remote = dataRemoteUrl()
-  return remote ? `${remote}/blob/main/work/${id}/context.md` : `work/${id}/context.md in the rig data root`
-}
+const contextDocRef = id => recordUrl(id, 'context.md') || `work/${id}/context.md in the rig data root`
 
 // Ticket keys: Jira `PROJ-42`, or GitHub `owner/repo#n`. Only the Jira shape is
 // safe in a branch name.
@@ -1983,10 +1993,19 @@ cmds.new = ({ flags, positional }) => {
 }
 
 // Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
+// Answers whether the repo joined the work, which is what decides whether its neighbours are
+// worth naming: a repo already in the record joined it some other day.
 function attachRepo (cfg, work, repoName, { setup = false } = {}) {
-  if (work.repos.some(r => r.repo.toLowerCase() === repoName.toLowerCase())) {
-    say(`${repoName} already attached — nothing to do`)
-    return
+  const recorded = work.repos.find(r => r.repo.toLowerCase() === repoName.toLowerCase())
+  if (recorded) {
+    // The record is not the territory: a repo attached on another machine, or whose folder
+    // was deleted, is put back rather than declared done (hugoforte/rig#99). Through the
+    // restore, never a fresh cut, so the branch is the one the work carries and `attachedAt`
+    // still says when the repo joined.
+    if (exists(recorded.path)) say(`${repoName} already attached — nothing to do`)
+    else if (restoreRepo(cfg, work, recorded, { setup })) regenerate(cfg, work)
+    else current.exitCode = 1
+    return false
   }
   // The other side of a repo naming its data root. A work lives in exactly one root — one
   // `work.json`, one `context.md` — so a repo catalogued in a different one cannot join it.
@@ -2002,21 +2021,7 @@ function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   const { org, repo, language } = resolveOrg(cfg, repoName)
   const dest = path.join(workDir(cfg, work.id), repo)
   const { base } = trees(cfg).cut({ org, repo, branch: work.branch, dest })
-
-  const configured = identityFor(cfg, org)
-  if (configured) {
-    gitMust(dest, 'config', 'user.email', configured)
-    step(`identity ${configured}`)
-  } else {
-    // No override to write, so report what git resolves in this very worktree rather than
-    // assuming the global address: a conditional include on the remote URL answers per-org.
-    const resolved = git(dest, 'config', 'user.email')
-    if (resolved.code === 0 && resolved.out) step(`identity ${resolved.out} — from git, not rig`)
-    else warn(`no identity for org "${org}" — git has no user.email to commit with`)
-  }
-
-  const sec = copySecrets(cfg, repo, dest)
-  if (sec.copied) step(`copied ${sec.copied} secrets file(s)`)
+  prepareWorktree(cfg, org, repo, dest)
 
   // Draft only for a repo the catalogue does not know: a hit means its file exists, or
   // that its frontmatter names a different path — a misconfiguration, not a gap to fill.
@@ -2035,14 +2040,169 @@ function attachRepo (cfg, work, repoName, { setup = false } = {}) {
   })
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
+  offerSetup(cat, repo, dest, setup)
+  return true
+}
 
-  if (cat?.setup?.length) {
-    if (setup) runCatalogCommands(dest, cat.setup, 'setup')
-    else {
-      say(`  ${C.dim('setup (not run — `rig setup ' + repo + '` or --setup):')}`)
-      for (const s of cat.setup) say(`    ${s}`)
-    }
+// What a worktree needs beyond its checkout, whether it was just cut or put back: the
+// identity its commits go out under and the secrets its catalogue entry says it wants.
+function prepareWorktree (cfg, org, repo, dest) {
+  const configured = identityFor(cfg, org)
+  if (configured) {
+    gitMust(dest, 'config', 'user.email', configured)
+    step(`identity ${configured}`)
+  } else {
+    // No override to write, so report what git resolves in this very worktree rather than
+    // assuming the global address: a conditional include on the remote URL answers per-org.
+    const resolved = git(dest, 'config', 'user.email')
+    if (resolved.code === 0 && resolved.out) step(`identity ${resolved.out} — from git, not rig`)
+    else warn(`no identity for org "${org}" — git has no user.email to commit with`)
   }
+
+  const sec = copySecrets(cfg, repo, dest)
+  if (sec.copied) step(`copied ${sec.copied} secrets file(s)`)
+}
+
+// The catalogue's setup commands, printed unless `--setup` asked for them to run.
+function offerSetup (cat, repo, dest, setup) {
+  if (!cat?.setup?.length) return
+  if (setup) runCatalogCommands(dest, cat.setup, 'setup')
+  else {
+    say(`  ${C.dim('setup (not run — `rig setup ' + repo + '` or --setup):')}`)
+    for (const s of cat.setup) say(`    ${s}`)
+  }
+}
+
+// ---------------------------------------------------------------- restore
+
+// The highest branch of this work the repo carries, read out of a freshly fetched mirror: the
+// top declared stage it has that has not landed, or the work branch when there is none — or
+// when the work branch already holds that stage, which is what a stack merged down looks like.
+// A landed stage is asked of its PR as well as of ancestry, because a stage squashed into the
+// work branch is never an ancestor of it and its branch outlives the merge wherever the remote
+// keeps head branches.
+function topBranch (cfg, work, entry) {
+  const t = trees(cfg)
+  const { org, repo } = entry
+  const stages = work.stages.map(s => s.branch)
+  const chain = t.chain({ org, repo, branch: work.branch, base: entry.base, stages })
+  const carried = new Set(chain.map(c => c.branch))
+  const landed = b => {
+    if (branchRecord(entry, b)?.pr) return true
+    let pr = null
+    trackerFailure(() => { pr = github().prForBranch(org, repo, b) })
+    return pr?.state === 'MERGED'
+  }
+  const top = stageOrder(work, [chain]).map(s => s.branch).filter(b => carried.has(b)).reverse().find(b => !landed(b))
+  if (!top || t.contains({ org, repo, branch: work.branch, other: top })) return work.branch
+  return top
+}
+
+// The open pull requests stacked on `top` that the record does not know, followed up the
+// stack while it is one line. Two landing on the same branch is a fork, returned as it is:
+// which of them is the work is not something rig can tell.
+function stackedAbove (work, entry, top) {
+  const known = new Set([work.branch, ...work.stages.map(s => s.branch)])
+  const line = []
+  let fork = []
+  for (let at = top; ;) {
+    let onto = []
+    const error = trackerFailure(() => { onto = github().prsOnto(entry.org, entry.repo, at) })
+    if (error) return { line, fork, error }
+    onto = onto.filter(pr => !known.has(pr.branch))
+    if (onto.length !== 1) { fork = onto; break }
+    line.push(onto[0])
+    known.add(onto[0].branch)
+    at = onto[0].branch
+  }
+  return { line, fork, error: null }
+}
+
+// Why a branch could not be put back, in its pull request's terms.
+function whyAbsent (entry, branch) {
+  let pr = null
+  const error = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, branch) })
+  if (error) return `GitHub would not say whether it had a PR (${error})`
+  // A lookup gh refused answers null too, and "never pushed" would then be a guess.
+  const auth = pr ? 'ok' : github().auth()
+  if (auth !== 'ok') return `GitHub would not say whether it had a PR (gh is ${auth})`
+  if (!pr) return 'it has no PR, so it was never pushed from the machine that made it'
+  return `PR #${pr.number} ${pr.state} ${pr.url}`
+}
+
+// Put one recorded repo's worktree back, on the top of its stack, and write nothing down
+// (hugoforte/rig#112). A restore is not an attach: the record already says which repo, which
+// org and which branches, and a restore that wrote any of it again could only be less right.
+// A branch gone from the remote and the mirror is named and left gone. Answers whether a
+// worktree was checked out.
+function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
+  const { org, repo, path: dest } = entry
+  const t = trees(cfg)
+  t.fetch({ org, repo })
+  const top = topBranch(cfg, work, entry)
+  const above = stackedAbove(work, entry, top)
+  const tipBranch = above.line.at(-1)?.branch
+  let branch = tip && tipBranch ? tipBranch : top
+  let from = t.checkOut({ org, repo, branch, dest })
+  if (!from && branch !== top) {
+    warn(`${repo}: ${branch} is not on the remote — falling back to ${top}`)
+    branch = top
+    from = t.checkOut({ org, repo, branch, dest })
+  }
+  if (!from) {
+    warn(`${repo}: ${branch} is on neither the remote nor the mirror — not recreated; ${whyAbsent(entry, branch)}`)
+    return false
+  }
+  prepareWorktree(cfg, org, repo, dest)
+  ok(`restored ${C.bold(repo)} on ${branch}`)
+
+  const pr = p => `${p.branch} (#${p.number})`
+  if (above.error) warn(`${repo}: GitHub would not say what is stacked on ${top} (${above.error})`)
+  if (above.line.length) {
+    if (branch !== tipBranch) {
+      say(`  stacked on ${top}, not in the record: ${above.line.map(pr).join(' → ')}`)
+      say(`    ${C.dim(`check out the top: git -C ${dest} switch ${tipBranch}`)}`)
+    }
+    say(`    ${C.dim(`record them as stages: ${above.line.map(p => `rig stage ${p.branch}`).join('; ')}`)}`)
+  }
+  if (above.fork.length) {
+    const on = tipBranch || top
+    say(`  ${above.fork.length} open PRs land on ${on} and are not in the record: ${above.fork.map(pr).join(', ')} — rig will not pick between them`)
+  }
+  offerSetup(findCatalog(repo), repo, dest, setup)
+  return true
+}
+
+// Rebuild a work's folder from its record — every missing worktree, on the top of its stack,
+// and the generated files beside them — on a machine that has only the data root. Present
+// worktrees are left alone, so running it twice is running it once. Nothing is recorded and
+// nothing is committed: `restore` is mutating only so the data root is brought forward first,
+// and a second machine restores from the newest records rather than the ones it last pulled.
+cmds.restore = ({ flags, positional }) => {
+  const cfg = config()
+  const work = loadWork(cfg, findWorkId(cfg, positional[0] || flags.work))
+  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore`)
+  if (!work.repos.length) die(`${work.id} has no repos attached — there is nothing to restore`)
+  const missing = work.repos.filter(r => !exists(r.path))
+  for (const r of work.repos) if (!missing.includes(r)) step(`${r.repo} is already here`)
+  // One repo git refuses — a diverged branch, a clone that failed — is said and the rest are
+  // still put back, and the folder's generated files are still written. The exit code says a
+  // refusal happened; a branch that is simply gone is a finding, reported and not a failure.
+  const restored = missing.filter(r => {
+    try {
+      return restoreRepo(cfg, work, r, { tip: !!flags.tip, setup: !!flags.setup })
+    } catch (e) {
+      if (!(e instanceof RigError)) throw e
+      warn(`${r.repo}: ${e.message}`)
+      current.exitCode = 1
+      return false
+    }
+  })
+  regenerate(cfg, work)
+  if (!missing.length) return ok(`${work.id}: every worktree is already here — ${workDir(cfg, work.id)}`)
+  const left = missing.filter(r => !restored.includes(r))
+  if (left.length) warn(`${work.id}: ${left.map(r => r.repo).join(', ')} could not be restored — see above`)
+  ok(`${work.id}: restored ${restored.length} of ${missing.length} — cd ${workDir(cfg, work.id)}`)
 }
 
 cmds.ticket = ({ flags, positional }) => {
@@ -2064,8 +2224,7 @@ cmds.attach = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
   commitAs(work.id, name)
-  attachRepo(cfg, work, name, { setup: !!flags.setup })
-  offerNeighbours(work, name)
+  if (attachRepo(cfg, work, name, { setup: !!flags.setup })) offerNeighbours(work, name)
 }
 
 // What else this repo travels with, said once, at the moment the repo set is being chosen.
@@ -2586,6 +2745,11 @@ cmds.status = ({ flags }) => {
   if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
   say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
+  // The handoff is read by the next session, which may be on another machine, so it is named
+  // where every machine can reach it: on the data root's remote, which `rig save` pushed it to
+  // (hugoforte/rig#171). This machine's path only when there is no remote, and said as such.
+  const handoff = path.join(recordDir(id), 'handoff.md')
+  if (exists(handoff)) say(`handoff ${recordUrl(id, 'handoff.md') || `${handoff} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
@@ -2672,7 +2836,7 @@ cmds.check = ({ flags, positional }) => {
 
 // ------------------------------------------------------ run, verify, deploy
 
-// Three more abilities on `check`'s rule (decision 106): how a repo is brought up on this
+// Three more abilities on `check`'s rule (decision 107): how a repo is brought up on this
 // machine, how the running site is verified in a browser, and how it is deployed to an
 // environment. Each is a command in the catalogue and never a result — nothing about a
 // start, a pass or a deploy is written anywhere — and each is printed unless `--run`.
@@ -4040,6 +4204,10 @@ cmds.help = () => {
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
+  rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
+                                  on the top of its stack; a branch the remote and the
+                                  mirror have both lost is named, never recreated
+       --tip                       check out the top of an unrecorded PR stack instead
   rig list [--json] [--quick]     every work, least recently touched first
        --json                      the records plus live PR timestamps, for a consumer
        --quick                     skip the git and GitHub lookups
@@ -4239,7 +4407,7 @@ export function run (argv, io = {}) {
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel, statusLine,
+  anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
   directionSection, directionBody, directionIsTodo,

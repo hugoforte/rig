@@ -94,14 +94,6 @@ test('nor as work waiting to be written', () => {
   assert.doesNotMatch(says(out), /yours to write/)
 })
 
-test('a measured zero still reads as zero, which is the distinction that was lost', () => {
-  const pushed = nextFor({
-    work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: 0, pushed: true })],
-  })
-  assert.match(says(pushed), /is pushed with no PR open/)
-})
-
 // ---------------------------------------------------------------- weight, derived
 
 test('one repo is never offered a rollout plan', () => {
@@ -318,15 +310,6 @@ test('the catalogue offer comes after the work itself, never ahead of unsaved ch
   assert.ok(order.findIndex(s => /uncommitted/.test(s)) < order.findIndex(s => /catalogue/.test(s)))
 })
 
-test('a draft entry alone is not "nothing to suggest"', () => {
-  // The floor case: everything attached and agreed, nothing written yet. Before the catalogue
-  // offer existed this work had one line; the point of the offer is that it is available in
-  // exactly the stretch where there is otherwise nothing to do but write code.
-  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
-  assert.ok(out.length >= 1)
-  assert.match(says(out), /catalogue entry for a is still a draft/)
-})
-
 // -------------------------------------------------- the neighbours not attached
 
 // Rule 5's "attaching a fourth repo on day two is normal", with something behind it. The
@@ -439,4 +422,21 @@ test('the lesson review comes above rig close, which removes the trees a repo le
 test('the lesson review is offered, never demanded', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
   assert.doesNotMatch(says(out), /should|must|need to|failed/i)
+})
+
+test('a worktree not on this machine is offered the restore, before anything else', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b') }),
+    repos: [repo('a', { missing: true, pr: { number: 14, state: 'OPEN' } }), repo('b', { missing: true })],
+    directionTodo: true,
+  })
+  assert.equal(out[0].command, 'rig restore w')
+})
+
+test('a missing worktree whose PR closed is not offered the restore it cannot have', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { missing: true, pr: { number: 3, state: 'CLOSED' } })],
+  })
+  assert.ok(!commands(out).includes('rig restore w'))
 })

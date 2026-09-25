@@ -1,7 +1,7 @@
 // The mirror and worktree lifecycle, against real git. The module's seam is where a repo's
 // remote lives, so these tests point it at a directory of bare repos: every clone, fetch,
 // push and `worktree add` below is the real thing, only local. The tree and the moves are
-// `test/worktrees-fixture.mjs`, which says why the family is two files.
+// `test/worktrees-fixture.mjs`, which says why the family is three files.
 //
 // One temp tree, shared, and the tests run in order — each leaves the mirrors and
 // worktrees where the next one expects them.
@@ -14,7 +14,7 @@ import { RigError } from '../bin/errors.mjs'
 import { worktreesFixture } from './worktrees-fixture.mjs'
 
 const f = worktreesFixture('rig-worktrees-')
-const { tmp, remotesDir, run, git, gitMust, trees, said, mirrorOf, remoteOf, workDir, publish, pushToRemote } = f
+const { tmp, remotesDir, mirrorRoot, run, git, gitMust, trees, said, mirrorOf, remoteOf, workDir, publish, pushToRemote } = f
 beforeEach(f.reset)
 after(f.cleanup)
 
@@ -320,7 +320,7 @@ test('whether a branch is on the remote is read from the mirror\'s files, and as
     calls.push(bare.slice(0, 2).join(' '))
     return run(cmd, args)
   }
-  const asked = env => worktrees({ mirrorRoot: path.join(tmp, 'w', '.mirrors'), remotes: remotesInDirectory(remotesDir), run: counting, env })
+  const asked = env => worktrees({ mirrorRoot, remotes: remotesInDirectory(remotesDir), run: counting, env })
   const refQuestions = () => calls.filter(c => /^(rev-parse|symbolic-ref)/.test(c))
 
   assert.equal(asked(() => process.env).cut({ org: 'acme', repo: 'billing', branch: 'feat/t9a', dest: workDir('t9a', 'billing') }).base, 'main')
@@ -329,4 +329,41 @@ test('whether a branch is on the remote is read from the mirror\'s files, and as
   const moved = () => ({ ...process.env, GIT_DIR: mirrorOf('acme', 'billing') })
   assert.equal(asked(moved).cut({ org: 'acme', repo: 'billing', branch: 'feat/t9b', dest: workDir('t9b', 'billing') }).base, 'main')
   assert.ok(refQuestions().includes('symbolic-ref refs/remotes/origin/HEAD'), `handed back to git: ${calls.join(', ')}`)
+})
+
+test('checkOut answers null for a branch the remote and the mirror have both lost, and makes nothing', () => {
+  publish('acme', 'restored')
+  trees().fetch({ org: 'acme', repo: 'restored' })
+  const dest = workDir('r1', 'restored')
+
+  assert.equal(trees().checkOut({ org: 'acme', repo: 'restored', branch: 'feat/gone', dest }), null)
+  assert.ok(!fs.existsSync(dest), 'no worktree')
+  assert.notEqual(git(mirrorOf('acme', 'restored'), 'rev-parse', '--verify', '--quiet', 'refs/heads/feat/gone').code, 0, 'no branch')
+})
+
+test('checkOut puts a branch the remote has back, tracking it', () => {
+  const seed = path.join(tmp, 'seed', 'acme-restored')
+  gitMust(seed, 'checkout', '-q', '-b', 'feat/kept')
+  pushToRemote(seed, 'feat/kept', 'on the remote')
+  trees().fetch({ org: 'acme', repo: 'restored' })
+  const dest = workDir('r2', 'restored')
+
+  assert.equal(trees().checkOut({ org: 'acme', repo: 'restored', branch: 'feat/kept', dest }), 'remote')
+  assert.equal(gitMust(dest, 'rev-parse', '--abbrev-ref', '@{u}'), 'origin/feat/kept')
+})
+
+test('contains says whether one branch already holds another, from whichever copy each has', () => {
+  const t = trees()
+  assert.equal(t.contains({ org: 'acme', repo: 'restored', branch: 'feat/kept', other: 'main' }), true)
+  assert.equal(t.contains({ org: 'acme', repo: 'restored', branch: 'main', other: 'feat/kept' }), false)
+  assert.equal(t.contains({ org: 'acme', repo: 'restored', branch: 'feat/nowhere', other: 'main' }), false)
+})
+
+test('contains asks the remote\'s copy too, when the one the mirror kept is where a worktree left it', () => {
+  const seed = path.join(tmp, 'seed', 'acme-restored')
+  pushToRemote(seed, 'feat/kept', 'the remote moves on')
+  gitMust(seed, 'push', '-q', 'origin', 'feat/kept:feat/landed')
+  trees().fetch({ org: 'acme', repo: 'restored' })
+
+  assert.equal(trees().contains({ org: 'acme', repo: 'restored', branch: 'feat/kept', other: 'feat/landed' }), true)
 })

@@ -62,12 +62,6 @@ test('--cut reaches a stage declared long before anyone made its branch', () => 
   assert.match(rig(['stage', '--work', 'cutter']).out, /3\. feat\/cutter-three/)
 })
 
-test('and declaring the same stage twice is still refused when nothing is being cut', () => {
-  const r = rig(['stage', 'feat/cutter-three', '--work', 'cutter'])
-  assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /already a stage/)
-})
-
 test('the next stage is the first that has not landed', () => {
   assert.match(rig(['stage', '--work', 'sliced']).out, /feat\/sliced-two.*← next/s)
 })

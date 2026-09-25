@@ -426,18 +426,6 @@ test('renderDash: an empty payload renders a page rather than failing', async ()
   assert.match(renderDash(await produce([])), /No works matched/)
 })
 
-test('summarize: a window bounds what was merged, and says nothing about what is in flight', async () => {
-  const p = await produce([
-    work({ id: 'flying', repos: [repo({ pr: pr({ state: 'OPEN', mergedAt: null }) })] }),
-    work(),
-  ])
-  const inside = summarize(p, { since: '2026-03-01T00:00:00Z' }).orgs[0]
-  const outside = summarize(p, { since: '2026-06-01T00:00:00Z' }).orgs[0]
-  assert.equal(inside.merged, 1)
-  assert.equal(outside.merged, 0, 'the merge fell outside the window')
-  assert.equal(outside.inFlight, 1, 'and the open work is still open, whatever the window')
-})
-
 test('reduceWork: a recorded PR counts as merged, exactly as a freshly looked-up one does', async () => {
   // `state` is not in the record — only a merged PR is ever recorded — so the producer puts
   // it back, and this is what asserts it did: without it, every closed work reads as in

@@ -55,17 +55,24 @@ test('the body carries the title, the ticket line and the context doc, not a par
 })
 
 test('the Direction the design was agreed in is lifted verbatim, and the stub never is', () => {
-  const doc = path.join(dataRoot, 'work', 'to-review', 'context.md')
   // The scaffolded `_TODO_` says nothing, and an empty section is worse than none.
   assert.doesNotMatch(github().repos['acme/billing'].prs.find(pr => pr.branch === 'feat/work-to-review').body,
     /## Direction/)
 
-  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('_TODO_', 'Because the adjacent effort would have cost a third major.'))
+  // A second work, so the first is left as it is for the idempotence test below.
   assert.equal(rig(['new', 'reviewed-2', '--title', 'Second', '--type', 'feat', '--no-ticket']).code, 0)
+  const doc = path.join(dataRoot, 'work', 'reviewed-2', 'context.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('_TODO_', 'Because the adjacent effort would have cost a third major.'))
+  assert.equal(rig(['attach', 'billing', '--work', 'reviewed-2']).code, 0)
+  const dest = worktree('reviewed-2', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'second\n')
+  gitMust(dest, 'commit', '-qam', 'second')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
 
-  // Re-read through a second work so the first is left as it is for the idempotence test.
-  const body = fs.readFileSync(doc, 'utf8')
-  assert.match(body, /Because the adjacent effort/)
+  const r = rig(['pr', '--work', 'reviewed-2'])
+  assert.equal(r.code, 0, r.out)
+  const opened = github().repos['acme/billing'].prs.find(pr => pr.branch === 'feat/second')
+  assert.match(opened.body, /## Direction\n\nBecause the adjacent effort would have cost a third major\./)
 })
 
 test('running it again reports the open PR instead of opening a second', () => {
