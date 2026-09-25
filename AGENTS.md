@@ -123,7 +123,7 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `run`, `verify`, `deploy`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -188,6 +188,23 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 **Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
 
 **The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
+
+Three more abilities sit beside them on the same rule — `run`, `verify` and `deploy` — for
+the loop `check` cannot close: bring the repo up on this machine, verify the running site in
+a browser, deploy it to an environment. `run` and each `deploy.<env>` are a `start` command
+and a `ready` URL; `verify` is a list like `check`, kept apart from it because it is slow and
+needs a running site, and folding it in would make `rig check --run` unusable in the fast loop.
+
+```bash
+rig run billing --run                    # start run.start detached, wait for run.ready
+rig verify billing --run                 # the browser pass, RIG_BASE_URL=run.ready
+rig verify billing --run --env develop   # the same pass against deploy.develop.ready
+rig deploy billing --env develop --run   # deploy.develop.start, then wait for its ready URL
+```
+
+All three print unless `--run`, store no result, and name the catalogue file when the ability
+is missing. An `--env` the entry does not name is refused rather than guessed. `rig run`
+prints the pid and where the log is and keeps no hold on the process past that.
 
 ## Writing a context doc
 
