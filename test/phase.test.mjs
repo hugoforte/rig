@@ -120,6 +120,11 @@ test('the gates passed are listed with their dates, in lifecycle order', () => {
   assert.deepEqual(gatesOf(work()), [])
 })
 
+test('a lesson review recorded after the close is listed after it', () => {
+  const later = '2026-09-28T00:00:00.000Z'
+  assert.deepEqual(gatesOf(work({ closedAt: AT, learnedAt: later })).map(g => g.gate), ['closed', 'learned'])
+})
+
 // ---------------------------------------------------------------- contradictions
 
 test('a clean record contradicts nothing', () => {
