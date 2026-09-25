@@ -289,9 +289,12 @@ test('renderDemo: counts only the works that spanned more than one repo as cross
 })
 
 test('renderDemo: a merged PR is reported with the stretches it spent, not a duration invented for it', () => {
-  const landed = work({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] })
-  const html = page({ works: [landed] })
-  assert.match(html, /What survived the branch/)
+  // Nobody reviewed before approving, so the two stretches that end or start at a review have
+  // nothing to be measured from.
+  const merged = pr({ firstCommitAt: '2026-01-02T09:30:00Z', firstReviewAt: null, mergedAt: '2026-01-02T15:00:00Z' })
+  const html = page({ works: [work({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: merged }] })] })
+  const row = /<th>a<\/th>([\s\S]*?)<\/tr>/.exec(html)?.[1] ?? ''
+  assert.deepEqual([...row.matchAll(/<td>([^<]*)<\/td>/g)].map(m => m[1]), ['#7', '30m', '—', '—', '3.0h'], row)
 })
 
 // --------------------------------------------------------- both record formats
