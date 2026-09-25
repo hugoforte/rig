@@ -122,7 +122,7 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `run`, `verify`, `deploy`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -170,6 +170,26 @@ in, `rig check` prints the check commands and `--run` opts in. A command that ca
 succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
 repo whose `check` is empty is named, with the file to write one in; write it while the
 repo is still loaded in your head (rule 4).
+
+Three more abilities sit beside them on the same rule — `run`, `verify` and `deploy` — for
+the loop `check` cannot close: bring the repo up on this machine, verify the running site in
+a browser, deploy it to an environment. `run` and each `deploy.<env>` are a `start` command
+and a `ready` URL; `verify` is a list like `check`, kept apart from it because it is slow and
+needs a running site, and folding it in would make `rig check --run` unusable in the fast loop.
+
+```bash
+rig run billing --run                    # start run.start detached, wait for run.ready
+rig verify billing --run                 # the browser pass, RIG_BASE_URL=run.ready
+rig verify billing --run --env develop   # the same pass against deploy.develop.ready
+rig deploy billing --env develop --run   # deploy.develop.start, then wait for its ready URL
+```
+
+All three print unless `--run`, store no result, and name the catalogue file when the ability
+is missing. An `--env` the entry does not name is refused rather than guessed. `rig run`
+prints the pid (the launcher's — the site runs under it) and where the log is, and keeps no hold
+on the process past that; a site already answering at `run.ready` is reported, not started
+twice. **Stop the site before `rig close`**: it stands in the worktree, and Windows will not
+remove a folder a process is standing in.
 
 ## Writing a context doc
 

@@ -182,7 +182,10 @@ function buildInstall (tmp, {
         out: s => { stdout += s },
         err: s => { stderr += s },
       })
-      return { code, out: strip(stdout + stderr), stdout: strip(stdout) }
+      const settled = code => ({ code, out: strip(stdout + stderr), stdout: strip(stdout) })
+      // A command that waits on a site — `run --run`, `deploy --run` — answers with a
+      // promise, and so does the call that made it: `await` those.
+      return code instanceof Promise ? code.then(settled) : settled(code)
     }
     const r = spawnSync(process.execPath, [path.join(root, 'bin', 'rig.mjs'), ...args],
       { encoding: 'utf8', env: envOverride, input, ...(cwd ? { cwd } : {}) })

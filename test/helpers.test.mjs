@@ -65,6 +65,66 @@ test('parseFrontmatter: no frontmatter means empty data and the whole text as bo
   assert.equal(body, 'just text')
 })
 
+test('parseFrontmatter: the abilities — a map, a list, and a map two levels down', () => {
+  const { data } = parseFrontmatter(`---
+repo: billing
+run:
+  start: npm run dev
+  ready: http://localhost:5173
+verify:
+  - npx playwright test
+deploy:
+  develop:
+    start: gh workflow run deploy.yml --ref develop
+    ready: https://dev.example.invalid
+  uat:
+    start: gh workflow run deploy.yml --ref uat
+    ready: https://uat.example.invalid
+check: []
+---
+`)
+  assert.deepEqual(data.run, { start: 'npm run dev', ready: 'http://localhost:5173' })
+  assert.deepEqual(data.verify, ['npx playwright test'])
+  assert.deepEqual(data.deploy, {
+    develop: { start: 'gh workflow run deploy.yml --ref develop', ready: 'https://dev.example.invalid' },
+    uat: { start: 'gh workflow run deploy.yml --ref uat', ready: 'https://uat.example.invalid' },
+  })
+  assert.deepEqual(data.check, [], 'a key after the nested map lands back at the top')
+})
+
+test('parseFrontmatter: a list may start at its key\'s own column, and the next key ends it', () => {
+  const { data } = parseFrontmatter(`---
+check:
+- npm test
+- npm run lint
+role: flush lists, as some editors write them
+talks_to:
+- repo: orders
+  how: at column zero too
+---
+`)
+  assert.deepEqual(data.check, ['npm test', 'npm run lint'])
+  assert.equal(data.role, 'flush lists, as some editors write them')
+  assert.deepEqual(data.talks_to, [{ repo: 'orders', how: 'at column zero too' }])
+})
+
+test('parseFrontmatter: CRLF line endings read the same as LF', () => {
+  const text = '---\r\nrepo: billing\r\nrun:\r\n  start: npm run dev\r\n  ready: http://localhost:5173\r\ncheck:\r\n  - npm test\r\n---\r\n\r\nProse.\r\n'
+  const { data, body } = parseFrontmatter(text)
+  assert.deepEqual(data, { repo: 'billing', run: { start: 'npm run dev', ready: 'http://localhost:5173' }, check: ['npm test'] })
+  assert.equal(body.trim(), 'Prose.')
+})
+
+test('parseFrontmatter: an entry with none of the abilities has none, and a bare key is empty', () => {
+  const { data } = parseFrontmatter(`---
+repo: billing
+setup: []
+check:
+---
+`)
+  assert.deepEqual(data, { repo: 'billing', setup: [], check: [] })
+})
+
 test('isJiraKey: upper-case PROJECT-number only', () => {
   assert.ok(isJiraKey('PROJ-42'))
   assert.ok(!isJiraKey('proj-42'))
