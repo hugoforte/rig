@@ -91,9 +91,13 @@ test('e2e: a feature and a fix since the tag release as a minor, with both descr
       { number: 8, branch: 'fix/the-probe', base: 'main', title: 'Fix the probe', body: 'Why the probe.', commits: [s['fix-the-probe']] },
     ],
   })
-  const { decision, notes } = release(repo)
+  const { verdict, decision, notes } = release(repo)
+  assert.equal(verdict.status, 0, verdict.stderr)
   assert.equal(decision.release, true)
   assert.equal(decision.tag, `v${MAJOR}.5.0`, 'a feature in the set makes it a minor')
+  // The release workflow reads this field for the notes' compare link; the unit tests read the
+  // function, and only this reads what the command prints.
+  assert.equal(decision.previousTag, repo.tag, 'and the verdict names the tag it moved from')
   assert.match(notes, /Why retries\./)
   assert.match(notes, /Why the probe\./)
 })
