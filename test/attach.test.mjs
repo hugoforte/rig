@@ -279,6 +279,7 @@ test('the command close hands over works after the work folder is gone', () => {
 test('the lesson review can still be recorded once the work is closed', () => {
   // The catalogue and rig's tracker outlive the work, so a review after the close is late but
   // real; only a lesson for a repo needed the worktree.
+  assert.ok(record().closedAt, 'precondition: t1 is closed')
   const r = rig(['save', '--work', 't1', '-m', 'lessons reviewed', '--learned'])
   assert.equal(r.code, 0, r.out)
   assert.ok(record().learnedAt, 'the gate is stored with its date')

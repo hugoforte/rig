@@ -583,6 +583,7 @@ test('list --json carries the record plus the timestamps a consumer cannot deriv
   assert.deepEqual(old.tickets, ['acme/platform#3', 'PROJ-1'])
   assert.equal(old.branch, 'feat/old')
   assert.equal(old.createdAt, '2026-01-01T00:00:00.000Z')
+  assert.equal(old.learnedAt, null, 'a gate not passed is null, not missing')
   const [billing] = old.repos
   assert.equal(billing.pr.number, 12)
   assert.equal(billing.pr.openedAt, '2026-01-02T00:00:00Z')
