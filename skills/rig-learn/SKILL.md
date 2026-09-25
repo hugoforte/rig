@@ -11,12 +11,12 @@ Run it while the worktrees are still on disk, before `rig close`, because a less
 
 ## 1. Read the story
 
-Run `rig status` from the work folder. It names the context doc, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
 - Each PR's checks, including failed runs that were re-run: `gh pr checks <n> --repo <owner/repo>`.
-- The commit log on the work branch: `git -C <repo worktree> log --oneline <base>..HEAD`. Fixups, reverts and "try again" commits mark where something took more than one attempt.
+- The commit log on the work branch: `git -C <repo worktree> log --oneline <base>..HEAD`, or `gh pr view <n> --repo <owner/repo> --json commits` once the worktree is gone. Fixups, reverts and "try again" commits mark where something took more than one attempt.
 
 A lesson is usually hiding in *this took three attempts*, not in the design.
 
@@ -34,14 +34,14 @@ Present the lessons as one list, each with the home you propose, and **stop for 
 
 | The lesson is about | Home | Machine check first | Prose otherwise |
 | --- | --- | --- | --- |
-| a repo, for anyone working across it | the catalogue | a command in the entry's `check` list | the entry's prose, under *Facts worth not rediscovering* |
+| a repo, for anyone working across it | the catalogue | a command in the entry's `check` list | the entry's prose |
 | a repo, for anyone working in it | the attached repo | a test or a CI step | the repo's own docs |
-| rig itself | rig's tracker | — | an issue, via `gh issue create` |
+| rig itself | rig's tracker, which is public | — | an issue, via `gh issue create` |
 
 - **Correct before appending.** Read the entry first (`rig catalog <repo>` names the file). A lesson that contradicts a sentence replaces it. A catalogue that only grows ends up unread.
 - **Write to the data root its readers can see.** `rig use` says which root is in hand, and a work lives in exactly one. Do not carry an employer's lesson into a personal root, or the reverse.
 - **A repo lesson goes in the work's last PR** while one is open. It sits next to the code that taught it. If everything has merged, a small follow-up PR carries it.
-- **Filing an issue is outward-facing.** Show the title and body and wait for a yes.
+- **Filing an issue is outward-facing, and rig's tracker is public.** Write the issue about rig alone: no repo names, schemas, hosts or people from a private data root. Show the title and body and wait for a yes.
 
 Scale the review to the work. A one-repo, one-PR work gets one question: *anything worth keeping?* A work with stages across several repos gets the full walk.
 
