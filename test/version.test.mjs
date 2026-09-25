@@ -51,7 +51,7 @@ test('package.json carries no version for anything to read', () => {
   assert.equal(majorOf(pkg.version), null, 'package.json must not look like a version')
 })
 
-test('a data root written before stamping existed is record format 0, readable and migratable', () => {
+test('a data root written before stamping existed is record format 0, and readable', () => {
   assert.equal(dataMajor({}), 0)
   assert.equal(stampUnreadable({}), false)
   assert.equal(dataMajor({ writtenBy: '1.2.0' }), 1)

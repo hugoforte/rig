@@ -72,8 +72,8 @@ test('a second stage, stacked on the first, is placed under it with no PR to ask
   assert.equal(rig(['stage', 'feat/sliced-two', '--delivers', 'the endpoints', '--work', 'sliced']).code, 0)
   cutStage({ work: 'sliced', repo: 'billing', branch: 'feat/sliced-two', from: 'feat/sliced-one', back: 'feat/sliced-work', message: 'the endpoints' })
 
-  // Declared and stacked in the same order, so this cannot tell the chain from the array: the
-  // test after the next one is the one that can.
+  // Declared and stacked in the same order, so this cannot tell the chain from the array: "the
+  // chain outranks the order the stages were declared in" is the test that can.
   const out = rig(['stage', '--work', 'sliced']).out
   assert.match(out, /1\. feat\/sliced-one/)
   assert.match(out, /2\. feat\/sliced-two/)

@@ -294,7 +294,7 @@ test('renderDemo: a merged PR is reported with the stretches it spent, not a dur
   const merged = pr({ firstCommitAt: '2026-01-02T09:30:00Z', firstReviewAt: null, mergedAt: '2026-01-02T15:00:00Z' })
   const html = page({ works: [work({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: merged }] })] })
   const row = /<th>a<\/th>([\s\S]*?)<\/tr>/.exec(html)?.[1] ?? ''
-  assert.deepEqual([...row.matchAll(/<td>([^<]*)<\/td>/g)].map(m => m[1]), ['#7', '30m', '—', '—', '3.0h'], row)
+  assert.deepEqual([...row.matchAll(/<td>(?:<code>)?([^<]*)(?:<\/code>)?<\/td>/g)].map(m => m[1]), ['main', '#7', '30m', '—', '—', '3.0h'], row)
 })
 
 // --------------------------------------------------------- both record formats
