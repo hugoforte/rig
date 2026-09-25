@@ -1108,12 +1108,15 @@ function dataRemoteUrl () {
   return r.out.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/')
 }
 
+// A file of a work's record on the data root's remote, or null when it has none.
+const recordUrl = (id, file) => {
+  const remote = dataRemoteUrl()
+  return remote ? `${remote}/blob/main/work/${id}/${file}` : null
+}
+
 // A relative reference when the data root has no remote: a machine path in an
 // issue body would leak into a tracker that may be public.
-const contextDocRef = id => {
-  const remote = dataRemoteUrl()
-  return remote ? `${remote}/blob/main/work/${id}/context.md` : `work/${id}/context.md in the rig data root`
-}
+const contextDocRef = id => recordUrl(id, 'context.md') || `work/${id}/context.md in the rig data root`
 
 // Ticket keys: Jira `PROJ-42`, or GitHub `owner/repo#n`. Only the Jira shape is
 // safe in a branch name.
@@ -2693,6 +2696,11 @@ cmds.status = ({ flags }) => {
   if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
   say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
+  // The handoff is read by the next session, which may be on another machine, so it is named
+  // where every machine can reach it: on the data root's remote, which `rig save` pushed it to
+  // (hugoforte/rig#171). This machine's path only when there is no remote, and said as such.
+  const handoff = path.join(recordDir(id), 'handoff.md')
+  if (exists(handoff)) say(`handoff ${recordUrl(id, 'handoff.md') || `${handoff} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]

@@ -154,4 +154,13 @@ scenario('a work is restored on a second machine from its record alone', {
     assert.doesNotMatch(r.out, new RegExp(`restored ${STAGED} on ${SLICE}`))
     assert.match(r.out, new RegExp(`${STAGED}: ${WORK_BRANCH} is on neither the remote nor the mirror`))
   }),
+
+  step('status names a handoff where the next machine can read it, and a local path only without a remote', m => {
+    fs.writeFileSync(path.join(m.dataRoot, 'work', ID, 'handoff.md'), '# handoff\n')
+    assert.match(m.rig(['status', '--work', ID]).out, /handoff .*handoff\.md \(this machine only — the data root has no remote\)/)
+
+    m.gitMust(m.dataRoot, 'remote', 'add', 'origin', `https://github.com/${ORG}/rig-data.git`)
+    assert.match(m.rig(['status', '--work', ID]).out,
+      new RegExp(`handoff https://github\.com/${ORG}/rig-data/blob/main/work/${ID}/handoff\.md\n`))
+  }),
 ])

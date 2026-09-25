@@ -34,16 +34,14 @@ rig save -m "handoff: <one line naming the next focus>"
 
 ## End with the prompt that continues it
 
-The last thing in the reply is a prompt the user can paste into a fresh session, as one fenced block. Inside a work:
+The last thing in the reply is a prompt the user can paste into a fresh session, as one fenced block. Inside a work, run `rig status` once more after the save: its `handoff` line names the handoff on the data root's remote, which is the address every machine can read.
 
 ```text
-rig restore <id>
-cd <work folder, from the `path` line of any repo in rig status, one level up>
-/rig Pick up the work <id>. Read <path to handoff.md> first, then continue with: <next focus>.
+/rig Pick up the work <id>. Run `rig restore <id>` and work from the folder it names. Read <the handoff line of rig status> first, then continue with: <next focus>.
 ```
 
-`rig restore` comes first because the next session may be on a machine that has the data root and no work folder. It rebuilds the folder from the record, and on a machine that already has it, it changes nothing. Its last line names the folder, which is where to `cd` if that machine keeps its work root somewhere else.
+Nothing in it is this machine's. The next session may be on a machine that has the data root and no work folder, and `rig restore` rebuilds the folder from the record — on a machine that already has it, it changes nothing — and its last line names where the folder is. When the data root has no remote, `rig status` names a local path and says so; keep it, and tell the user the prompt only works on this machine.
 
 If any of the work lives on branches rig does not know — a stack of pull requests nobody recorded with `rig stage` — name them in the handoff. `rig restore` reports what is stacked on the branches it knows, and `--tip` checks out the top of that stack.
 
-Outside a work, the same shape without the `cd` and the `/rig`: where the handoff was saved and what to continue with.
+Outside a work, the same shape without the `/rig` and the `rig restore`: where the handoff was saved and what to continue with.
