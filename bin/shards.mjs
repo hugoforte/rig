@@ -26,6 +26,7 @@ export const WEIGHTS = {
   'install.test.mjs': 10.5,
   'worktrees.test.mjs': 10.5,
   'attach.test.mjs': 9.4,
+  'restore-e2e.test.mjs': 8.8,   // not yet measured: attach.test's weight, by the ratio of the two run locally
   'scenarios.test.mjs': 8.9,
   'installation-update.test.mjs': 8.6,
   'close.test.mjs': 8.4,

@@ -323,6 +323,16 @@ test('a work folder that is missing is said once, and nothing under it is guesse
   assert.equal(problemCount(found), 1)
 })
 
+test('a missing work folder or worktree names the command that puts it back', () => {
+  const found = doctorFindings(snap({
+    works: [
+      { id: 'gone', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [] },
+      { id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [{ repo: 'billing', worktreeMissing: true }] },
+    ],
+  }))
+  assert.deepEqual(matching(found, /rig restore/).map(f => f.says.match(/`rig restore \S+`/)[0]), ['`rig restore gone`', '`rig restore w`'])
+})
+
 test('rig owns the work folder, so anything it did not put there is named', () => {
   const found = doctorFindings(snap({
     works: [{ id: 'w', closed: false, contradictions: [], folderMissing: false, strays: ['notes.md', 'scratch'], repos: [] }],

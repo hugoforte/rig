@@ -308,12 +308,12 @@ export function doctorFindings (snap = {}) {
   // whatever root holds its record.
   for (const w of snap.works || []) {
     if (w.closed) continue
-    if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed`)); continue }
+    if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
     }
     for (const r of w.repos || []) {
-      if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone`))
+      if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))
       if (r.secretsUnconfigured) {
         out.push(warn(`${w.id}: ${r.repo} mentions secrets in its catalogue entry but has no source in rig.local.json`))
       }
