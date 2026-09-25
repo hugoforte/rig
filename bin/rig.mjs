@@ -874,7 +874,9 @@ function parseFrontmatter (text) {
     const indent = raw.length - raw.trimStart().length
     const item = /^-\s+(.*)$/.exec(line)
     if (pending) {
-      if (indent <= pending.indent) closeEmpty()
+      // A list may start at its key's own column (`check:` over `- npm test`); a map's keys
+      // must be indented past it, or they are the next keys of the map the key is in.
+      if (item ? indent < pending.indent : indent <= pending.indent) closeEmpty()
       else {
         const node = item ? [] : {}
         pending.parent[pending.key] = node
@@ -882,7 +884,9 @@ function parseFrontmatter (text) {
         pending = null
       }
     }
-    while (open.at(-1).indent > indent) open.pop()
+    // Back out to the container this line belongs in — and out of a list at this very column
+    // when the line is a key, since a list holds items and never keys.
+    while (open.at(-1).indent > indent || (!item && open.at(-1).indent === indent && Array.isArray(open.at(-1).node))) open.pop()
     const { node } = open.at(-1)
     if (item) {
       if (!Array.isArray(node)) continue
@@ -2691,28 +2695,59 @@ function deployEnv (r, cat, name) {
     : `add \`deploy:\` to ${catalogFile(r.org, r.repo)}`}`)
 }
 
-// Polls `url` until it answers below 400 — a redirect to a login page is a site that is up —
-// or `seconds` have passed. Node's own fetch; a refused connection is the ordinary answer
-// while a site is starting, so it is not worth a line.
-async function untilReady (url, seconds) {
+// The URL an ability says a site answers at, checked before anything is started: a `ready`
+// nobody could fetch is a poll that can only time out. Empty is allowed — a start nothing
+// polls for — and named for the key it came from.
+function readyUrl (r, key, url) {
+  if (!url) return ''
+  try { new URL(url) } catch { die(`${r.repo}: ${key} is not a URL: ${url}`) }
+  return url
+}
+
+// One request. Up is anything below 400 — a redirect to a login page is a site that is up —
+// and what it said is kept for the line printed when it never came up: `HTTP 503`, or the
+// reason the request failed (`ECONNREFUSED` while nothing is listening yet). Bounded by the
+// poll's deadline, so `--timeout` cannot overrun by a whole request.
+async function answers (url, deadline = Date.now() + 5000) {
+  const budget = Math.max(1, Math.min(5000, deadline - Date.now()))
+  try {
+    const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(budget) })
+    await r.body?.cancel()
+    return { up: r.status < 400, said: `HTTP ${r.status}` }
+  } catch (e) {
+    return { up: false, said: e.cause?.code || e.name || String(e) }
+  }
+}
+
+// Polls `url` until it answers, `seconds` pass, or `stopped()` names a reason to give up —
+// the start command having exited, for a `run`. Node's own fetch; a refused connection is
+// the ordinary answer while a site is starting, so nothing is said until the end.
+async function untilReady (url, seconds, stopped = () => null) {
   const deadline = Date.now() + seconds * 1000
+  let last = 'never asked'
   for (;;) {
-    try {
-      const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) })
-      await r.body?.cancel()
-      if (r.status < 400) return true
-    } catch { /* not up yet */ }
-    if (Date.now() >= deadline) return false
-    await new Promise(resolve => setTimeout(resolve, 500))
+    const a = await answers(url, deadline)
+    if (a.up) return { up: true }
+    last = a.said
+    const why = stopped()
+    if (why) return { up: false, why, last }
+    // The wait never runs past the deadline, and a deadline reached ends the poll before
+    // another request is made — one with no time left would only say it was cut short.
+    const left = deadline - Date.now()
+    if (left <= 0) return { up: false, why: `did not answer within ${seconds}s`, last }
+    await new Promise(resolve => setTimeout(resolve, Math.min(500, left)))
+    if (Date.now() >= deadline) return { up: false, why: `did not answer within ${seconds}s`, last }
   }
 }
 
 // Waits for a site and says what it found. A site that never answered is the exit code —
-// the one place a result lands — and `where` is how to go and look: the pid and the log for
-// a `run`, nothing for a deploy.
-async function reportReady (repo, url, seconds, where = '') {
-  if (await untilReady(url, seconds)) ok(`${repo} is up at ${url}${where}`)
-  else { warn(`${repo} did not answer at ${url} within ${seconds}s${where}`); current.exitCode = 1 }
+// the one place a result lands — with what it last said, and `where` is how to go and look:
+// the pid and the log for a `run`, nothing for a deploy.
+async function reportReady (repo, url, seconds, where = '', stopped) {
+  const { up, why, last } = await untilReady(url, seconds, stopped)
+  if (up) { ok(`${repo} is up at ${url}${where}`); return }
+  warn(`${repo} ${why} — ${url} last answered ${last}${where}`)
+  current.exitCode = 1
 }
 
 const startAndReadyLines = ({ start, ready }) => {
@@ -2720,15 +2755,52 @@ const startAndReadyLines = ({ start, ready }) => {
   say(`  ready  ${ready || C.dim('(none — nothing is polled)')}`)
 }
 
-// `--run` starts `run.start` detached, so the site outlives the command that started it, with
-// its output in the work folder's `.rig/` rather than the worktree — a log inside the tree
-// would be an untracked change `rig close` refuses over. rig keeps no hold on the process
-// past printing its pid; stopping it is yours.
+// What a `run.start` is started through: a detached node that runs the command line in the
+// shell and exits with its status. Not the shell directly, because on Windows a `cmd.exe`
+// started DETACHED_PROCESS — no console, which is what lets the site outlive the command —
+// hands its own children no stdout: `node`, `git`, anything under it writes nothing to the
+// log and takes most of a second to start (measured; a console-less node passes the handles
+// on intact). The same reason the freshness refresh is a node and not a script.
+const LAUNCHER = 'process.exitCode = require("child_process").spawnSync(process.argv[1], { shell: true, stdio: "inherit" }).status ?? 1'
+
+// The site brought up. Not started when `ready` already answers — a second `rig run` while
+// the first is up is a question, not a second server. Otherwise `start` goes off detached so
+// the site outlives the command, through the launcher above — so the pid printed is the
+// launcher's, and the site is its grandchild. Output appends to a log in the work folder's
+// `.rig/`, never the worktree, where an untracked log would be a change `rig close` refuses
+// over; appended, because an earlier server may still be writing the file. The launcher and
+// the site stand in the worktree, so `rig close` cannot remove that folder until the site is
+// stopped, and stopping it is yours: rig keeps no hold on it.
+async function startAndWait (cfg, work, r, { start }, ready, seconds) {
+  if (ready && (await answers(ready)).up) { ok(`${r.repo} already up at ${ready} — not started`); return }
+  const log = path.join(workDir(cfg, work.id), WORK_FOLDER.marker, `${r.repo}.run.log`)
+  fs.mkdirSync(path.dirname(log), { recursive: true })
+  const fd = fs.openSync(log, 'a')
+  const child = spawn(process.execPath, ['-e', LAUNCHER, start],
+    { cwd: r.path, detached: true, windowsHide: true, stdio: ['ignore', fd, fd], env: env() })
+  fs.closeSync(fd)
+  child.unref()
+  // Watched while the poll runs: a start that has already exited will never answer, so the
+  // poll ends there rather than at the deadline — and one that never started (a worktree
+  // that is gone) is a refusal, raised from inside the poll so it is said once.
+  let gone = null
+  child.on('error', e => { gone = { error: e } })
+  child.on('exit', (code, signal) => { gone = { why: `exited with ${signal ? `signal ${signal}` : `code ${code}`} before the site answered` } })
+  const stopped = () => {
+    if (gone?.error) die(spawnFailure(start, [], gone.error, r.path))
+    return gone?.why ?? null
+  }
+  const where = ` — pid ${child.pid} (the launcher's; the site is under it), log ${log}`
+  step(`${start}  ${C.dim(`(in ${path.basename(r.path)}${where})`)}`)
+  if (!ready) { ok(`${r.repo} started${where}`); return }
+  await reportReady(r.repo, ready, seconds, where, stopped)
+}
+
 cmds.run = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const seconds = timeoutSeconds(flags)
-  const started = []
+  const targets = []
   for (const r of attachedRepos(work, positional)) {
     const cat = findCatalog(r.repo)
     if (!cat?.run) { missingAbility(r, 'run'); continue }
@@ -2737,21 +2809,12 @@ cmds.run = ({ flags, positional }) => {
       startAndReadyLines(cat.run)
       continue
     }
-    const log = path.join(workDir(cfg, work.id), WORK_FOLDER.marker, `${r.repo}.run.log`)
-    fs.mkdirSync(path.dirname(log), { recursive: true })
-    const fd = fs.openSync(log, 'w')
-    const child = spawn(cat.run.start, { cwd: r.path, shell: true, detached: true, stdio: ['ignore', fd, fd], env: env() })
-    child.unref()
-    fs.closeSync(fd)
-    step(`${cat.run.start}  ${C.dim(`(in ${path.basename(r.path)})`)}`)
-    started.push({ repo: r.repo, ready: cat.run.ready, where: ` — pid ${child.pid}, log ${log}` })
+    // Every URL checked before any site is started.
+    targets.push({ r, run: cat.run, ready: readyUrl(r, 'run.ready', cat.run.ready) })
   }
-  if (!started.length) return
+  if (!targets.length) return
   return (async () => {
-    for (const { repo, ready, where } of started) {
-      if (ready) await reportReady(repo, ready, seconds, where)
-      else ok(`${repo} started${where}`)
-    }
+    for (const { r, run, ready } of targets) await startAndWait(cfg, work, r, run, ready, seconds)
   })()
 }
 
@@ -2796,8 +2859,9 @@ cmds.deploy = ({ flags, positional }) => {
     startAndReadyLines(target)
     return
   }
+  const ready = readyUrl(r, `deploy.${flags.env}.ready`, target.ready)
   if (!runCatalogCommands(r.path, [target.start], 'deploy')) { current.exitCode = 1; return }
-  if (target.ready) return reportReady(r.repo, target.ready, seconds)
+  if (ready) return reportReady(r.repo, ready, seconds)
 }
 
 // Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
@@ -4000,7 +4064,8 @@ cmds.help = () => {
                                   its build; --run runs them and exits non-zero on a failure
   rig run [repo...] [--run]       print how each repo is brought up here (run.start) and the
        [--timeout s]               URL that says it is (run.ready); --run starts it detached,
-                                  logs into the work folder's .rig/, and waits for the URL
+                                  logs into the work folder's .rig/, and waits for the URL;
+                                  the site stands in the worktree, so stop it before rig close
   rig verify [repo...] [--run]    print the browser-level pass and the URL it gets as
        [--env <name>]              RIG_BASE_URL — run.ready, or deploy.<env>.ready; --run runs it
   rig deploy <repo> --env <name>  print deploy.<env>.start and deploy.<env>.ready; --run runs

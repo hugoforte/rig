@@ -186,7 +186,10 @@ rig deploy billing --env develop --run   # deploy.develop.start, then wait for i
 
 All three print unless `--run`, store no result, and name the catalogue file when the ability
 is missing. An `--env` the entry does not name is refused rather than guessed. `rig run`
-prints the pid and where the log is and keeps no hold on the process past that.
+prints the pid (the launcher's — the site runs under it) and where the log is, and keeps no hold
+on the process past that; a site already answering at `run.ready` is reported, not started
+twice. **Stop the site before `rig close`**: it stands in the worktree, and Windows will not
+remove a folder a process is standing in.
 
 ## Writing a context doc
 
