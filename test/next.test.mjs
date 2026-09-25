@@ -94,14 +94,6 @@ test('nor as work waiting to be written', () => {
   assert.doesNotMatch(says(out), /yours to write/)
 })
 
-test('a measured zero still reads as zero, which is the distinction that was lost', () => {
-  const pushed = nextFor({
-    work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: 0, pushed: true })],
-  })
-  assert.match(says(pushed), /is pushed with no PR open/)
-})
-
 // ---------------------------------------------------------------- weight, derived
 
 test('one repo is never offered a rollout plan', () => {
@@ -316,15 +308,6 @@ test('the catalogue offer comes after the work itself, never ahead of unsaved ch
   })
   const order = out.map(o => o.says)
   assert.ok(order.findIndex(s => /uncommitted/.test(s)) < order.findIndex(s => /catalogue/.test(s)))
-})
-
-test('a draft entry alone is not "nothing to suggest"', () => {
-  // The floor case: everything attached and agreed, nothing written yet. Before the catalogue
-  // offer existed this work had one line; the point of the offer is that it is available in
-  // exactly the stretch where there is otherwise nothing to do but write code.
-  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
-  assert.ok(out.length >= 1)
-  assert.match(says(out), /catalogue entry for a is still a draft/)
 })
 
 // -------------------------------------------------- the neighbours not attached

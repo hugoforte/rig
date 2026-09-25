@@ -104,6 +104,8 @@ test('twg adapter: getIssue separates ADF paragraphs with a blank line', () => {
   assert.equal(twg.getIssue('KTLO-42').body, 'First.\n\nSecond.')
 })
 
+// twg's --description-format defaults to html, so a multi-paragraph markdown brief sent
+// without the flag arrives as one run-on paragraph (hugoforte/rig#54).
 test('twg adapter: createIssue passes summary, description and fields, and reads the new key', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-43' } }))
   const key = twg.createIssue({
@@ -114,15 +116,6 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
     '--summary', 'New work', '--description', 'The brief', '--description-format', 'markdown',
     '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
-})
-
-// twg's --description-format defaults to html, so a multi-paragraph markdown brief sent
-// without this flag arrives as one run-on paragraph (hugoforte/rig#54).
-test('twg adapter: createIssue sends the description as markdown, never twg\'s default html', () => {
-  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
-  twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'First.\n\nSecond.', fields: {} })
-  assert.deepEqual(calls[0].slice(calls[0].indexOf('--description')),
-    ['--description', 'First.\n\nSecond.', '--description-format', 'markdown', '-o', 'json', '-y'])
 })
 
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {

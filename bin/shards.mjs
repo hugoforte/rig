@@ -52,7 +52,6 @@ export const WEIGHTS = {
   'dash.test.mjs': 2.1,
   'doctor-selection.test.mjs': 1.6,
   'helpers.test.mjs': 1.4,
-  'package.test.mjs': 0.9,
   'jira.test.mjs': 0.8,
   'identity.test.mjs': 0.7,
   'release.test.mjs': 0.7,

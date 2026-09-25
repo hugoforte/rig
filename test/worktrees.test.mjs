@@ -1,7 +1,7 @@
 // The mirror and worktree lifecycle, against real git. The module's seam is where a repo's
 // remote lives, so these tests point it at a directory of bare repos: every clone, fetch,
 // push and `worktree add` below is the real thing, only local. The tree and the moves are
-// `test/worktrees-fixture.mjs`, which says why the family is two files.
+// `test/worktrees-fixture.mjs`, which says why the family is three files.
 //
 // One temp tree, shared, and the tests run in order — each leaves the mirrors and
 // worktrees where the next one expects them.
@@ -14,7 +14,7 @@ import { RigError } from '../bin/errors.mjs'
 import { worktreesFixture } from './worktrees-fixture.mjs'
 
 const f = worktreesFixture('rig-worktrees-')
-const { tmp, remotesDir, run, git, gitMust, trees, said, mirrorOf, remoteOf, workDir, publish, pushToRemote } = f
+const { tmp, remotesDir, mirrorRoot, run, git, gitMust, trees, said, mirrorOf, remoteOf, workDir, publish, pushToRemote } = f
 beforeEach(f.reset)
 after(f.cleanup)
 
@@ -320,7 +320,7 @@ test('whether a branch is on the remote is read from the mirror\'s files, and as
     calls.push(bare.slice(0, 2).join(' '))
     return run(cmd, args)
   }
-  const asked = env => worktrees({ mirrorRoot: path.join(tmp, 'w', '.mirrors'), remotes: remotesInDirectory(remotesDir), run: counting, env })
+  const asked = env => worktrees({ mirrorRoot, remotes: remotesInDirectory(remotesDir), run: counting, env })
   const refQuestions = () => calls.filter(c => /^(rev-parse|symbolic-ref)/.test(c))
 
   assert.equal(asked(() => process.env).cut({ org: 'acme', repo: 'billing', branch: 'feat/t9a', dest: workDir('t9a', 'billing') }).base, 'main')
