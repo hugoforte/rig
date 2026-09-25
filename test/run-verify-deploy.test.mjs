@@ -6,10 +6,10 @@
 // command held and never a result; the file to write it in named when it is missing.
 //
 // The site the two polling commands wait for is an http server this file starts, told how
-// many requests to refuse before answering 200 — so what is asserted is the poll and its
-// timeout, with no real site and nothing on the network. The commands themselves are `echo`
-// and `node -e`, so no npm is spawned; what is asserted is where they ran, what they were
-// handed, and that nothing about the outcome was written down.
+// many requests to refuse before answering — and with what — so what is asserted is the poll,
+// its timeout and what it says, with no real site and nothing on the network. The commands
+// themselves are `echo` and `node -e`, so no npm is spawned; what is asserted is where they
+// ran, what they were handed, and that nothing about the outcome was written down.
 //
 // `RIG_FAKE_REMOTES` points bin/worktrees.mjs at a directory of bare repos, so the mirror
 // and the worktrees are real git, only local. One temp installation, shared, and the tests
@@ -48,17 +48,28 @@ const SUBPROCESS = { inProcess: false }
 const catalogEntry = repo => path.join(dataRoot, 'catalog', 'acme', `${repo}.md`)
 const recordFile = path.join(dataRoot, 'work', 't1', 'work.json')
 const runLog = repo => path.join(workRoot, 't1', '.rig', `${repo}.run.log`)
+const timesStarted = repo => (fs.readFileSync(runLog(repo), 'utf8').match(/started-by-rig/g) || []).length
+// The site answering and its first log line landing are two events, and on Windows the
+// console-less shell takes most of a second to start the command: a count is read once the
+// log has had time to catch up, and a count that never arrives is the assertion's to fail.
+const startedAfterAWhile = async (repo, n) => {
+  const deadline = Date.now() + 5_000
+  while (timesStarted(repo) < n && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+  return timesStarted(repo)
+}
 
-// The site: refuses the first `refuse` requests with 503 and answers 200 after that.
+// The site: refuses the first `refuse` requests with 503 and answers `status` after that.
 let hits = 0
 let refuse = 0
+let status = 200
 const server = http.createServer((_req, res) => {
   hits += 1
-  res.statusCode = hits > refuse ? 200 : 503
+  res.statusCode = hits > refuse ? status : 503
+  if (status >= 300 && status < 400) res.setHeader('location', '/login')
   res.end()
 })
 const site = () => `http://127.0.0.1:${server.address().port}/`
-const answeringAfter = n => { hits = 0; refuse = n }
+const answering = (after, withStatus = 200) => { hits = 0; refuse = after; status = withStatus }
 // A second URL on the same server, standing in for a deployed environment.
 const deployed = () => `${site()}develop`
 
@@ -91,19 +102,30 @@ ${abilities}
 Prose.
 `)
 
-const START = 'echo started-by-rig'
+// A start that stays up for a while, as a server would, and one that exits at once.
+const SERVER = 'node -e "console.log(\'started-by-rig\'); setTimeout(() => {}, 4000)"'
+const EXITS = 'echo started-by-rig'
 const SAYS_BASE_URL = 'node -e "console.log(\'base=\' + process.env.RIG_BASE_URL)"'
 // A deploy that leaves its mark where it ran, so an in-process run can be asked what it did.
 const DEPLOY = 'node -e "require(\'fs\').writeFileSync(\'deployed.marker\', \'\')"'
 const deployMarker = repo => path.join(workRoot, 't1', repo, 'deployed.marker')
 
+// The shells `run --run` started, read off what it printed. Each stands in a worktree the
+// cleanup removes, so the cleanup waits for them — which is the rule AGENTS.md states for
+// `rig close`, kept here for the same reason.
+const shells = []
+const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
+const noteShell = out => { const m = /pid (\d+)/.exec(out); if (m) shells.push(Number(m[1])) }
+
 publish('billing')
 publish('orders')
 publish('web')
 
-after(() => {
+after(async () => {
   server.closeAllConnections()
   server.close()
+  const deadline = Date.now() + 10_000
+  while (shells.some(alive) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 200))
   cleanup()
 })
 
@@ -138,7 +160,7 @@ test('a repo with none of the three is told which file to write each in', () => 
 
 test('run prints start and ready, and starts nothing', () => {
   correct('billing', `run:
-  start: ${START}
+  start: ${SERVER}
   ready: ${site()}
 verify:
   - ${SAYS_BASE_URL}
@@ -149,8 +171,8 @@ deploy:
   const r = rig(['run', 'billing', '--work', 't1'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /billing[\s\S]*not run — `rig run billing --run`/)
-  assert.match(r.out, new RegExp(`start\\s+${START}`))
-  assert.match(r.out, new RegExp(`ready\\s+${site()}`))
+  assert.ok(r.out.includes(`start  ${SERVER}`), r.out)
+  assert.ok(r.out.includes(`ready  ${site()}`), r.out)
   assert.ok(!fs.existsSync(runLog('billing')), 'no log, because nothing was started')
 })
 
@@ -207,7 +229,7 @@ test('verify --run --env hands it the environment instead', () => {
 
 test('a failed verify is reported, and the exit code carries the verdict', () => {
   correct('orders', `run:
-  start: ${START}
+  start: ${EXITS}
   ready: ${site()}
 verify:
   - node -e "process.exit(1)"
@@ -221,37 +243,77 @@ deploy:
 })
 
 test('run --run starts the site detached with a log, and waits for ready to answer', async () => {
-  answeringAfter(2)
+  answering(2)
   const r = await rig(['run', 'billing', '--work', 't1', '--run'])
+  noteShell(r.out)
   assert.equal(r.code, 0, r.out)
   assert.ok(r.out.includes(`billing is up at ${site()}`), r.out)
-  assert.match(r.out, /pid \d+/, 'the process is yours from here, so its pid is said')
+  assert.match(r.out, /pid \d+ \(the launcher's; the site is under it\)/, 'the process is yours from here, so its pid is said for what it is')
   assert.ok(r.out.includes(runLog('billing')), 'and where its output goes')
-  assert.equal(hits, 3, 'polled until the site answered, and not after')
-  assert.match(fs.readFileSync(runLog('billing'), 'utf8'), /started-by-rig/, 'the command ran, into the log')
+  assert.equal(hits, 3, 'asked once before starting, then polled until the site answered, and not after')
+  assert.equal(await startedAfterAWhile('billing', 1), 1, 'the command ran, into the log')
   assert.ok(!fs.existsSync(path.join(workRoot, 't1', 'billing', '.rig-run.log')),
     'the log is outside the worktree, where it cannot read as an uncommitted change')
 })
 
+test('a site already answering is reported, and not started a second time', async () => {
+  answering(0)
+  const r = await rig(['run', 'billing', '--work', 't1', '--run'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(r.out.includes(`billing already up at ${site()} — not started`), r.out)
+  assert.doesNotMatch(r.out, /pid \d+/, 'nothing was started')
+  assert.equal(hits, 1)
+  assert.equal(await startedAfterAWhile('billing', 1), 1, 'and the log the first server writes was left alone')
+})
+
+test('a redirect — to a login page, say — is a site that is up', async () => {
+  answering(0, 302)
+  const r = await rig(['run', 'billing', '--work', 't1', '--run'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(r.out.includes(`billing already up at ${site()}`), r.out)
+})
+
 test('a run records nothing — not in the catalogue, not in the work record', async () => {
-  answeringAfter(0)
+  answering(0)
   const before = [fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)]
   assert.equal((await rig(['run', 'billing', '--work', 't1', '--run'])).code, 0)
   assert.deepEqual([fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)], before,
     'the catalogue holds the command; a result is nobody\'s durable fact')
 })
 
-test('a site that never answers is the exit code, and the log is named', async () => {
-  answeringAfter(Infinity)
+test('a site that never answers is the exit code, with what it last said and where the log is', async () => {
+  answering(Infinity)
   const r = await rig(['run', 'billing', '--work', 't1', '--run', '--timeout', '1'])
+  noteShell(r.out)
   assert.equal(r.code, 1, r.out)
-  assert.ok(r.out.includes(`billing did not answer at ${site()} within 1s`), r.out)
+  assert.ok(r.out.includes(`billing did not answer within 1s — ${site()} last answered HTTP 503`), r.out)
   assert.ok(r.out.includes(runLog('billing')), 'where to look, when it did not come up')
   assert.ok(hits >= 2, 'it kept asking until the deadline')
+  assert.equal(await startedAfterAWhile('billing', 2), 2, 'appended to the log, not written over the first server\'s')
+})
+
+test('a start that exits before the site answers ends the poll at once, not at the deadline', async () => {
+  answering(Infinity)
+  const t = Date.now()
+  const r = await rig(['run', 'orders', '--work', 't1', '--run', '--timeout', '60'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /orders exited with code 0 before the site answered/, r.out)
+  assert.ok(r.out.includes(runLog('orders')), 'the log is where to read why')
+  assert.ok(Date.now() - t < 10_000, 'well inside the sixty seconds asked for')
+})
+
+test('a ready that is not a URL is refused before anything is started', async () => {
+  correct('web', `run:
+  start: ${EXITS}
+  ready: not a url`)
+  const r = await rig(['run', 'web', '--work', 't1', '--run'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /web: run\.ready is not a URL: not a url/)
+  assert.ok(!fs.existsSync(runLog('web')), 'nothing started')
 })
 
 test('deploy --run runs start in the worktree, then waits for the environment to answer', async () => {
-  answeringAfter(2)
+  answering(2)
   const r = await rig(['deploy', 'billing', '--env', 'develop', '--work', 't1', '--run'])
   assert.equal(r.code, 0, r.out)
   assert.ok(fs.existsSync(deployMarker('billing')), 'the start command ran, in billing\'s worktree')
@@ -260,10 +322,31 @@ test('deploy --run runs start in the worktree, then waits for the environment to
 })
 
 test('a deploy whose start fails never polls', async () => {
-  answeringAfter(0)
+  answering(0)
   const r = await rig(['deploy', 'orders', '--env', 'develop', '--work', 't1', '--run'])
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /deploy command failed/)
   assert.doesNotMatch(r.out, /is up at/)
   assert.equal(hits, 0)
+})
+
+// The one refusal a polling command can raise after it has answered with a promise: a start
+// that never started, because its worktree is gone. What is asserted beyond the message is
+// that the run ended as a run — `current` put back — so the next in-process call gets its own
+// streams rather than writing into a finished one. The same `finally` puts it back when the
+// promise rejects with a bug, which nothing here can provoke on purpose.
+test('a refusal raised from inside the poll is printed once, is the exit code, and ends the run', async () => {
+  correct('web', `run:
+  start: ${EXITS}
+  ready: ${site()}`)
+  answering(Infinity)
+  fs.rmSync(path.join(workRoot, 't1', 'web'), { recursive: true, force: true, maxRetries: 5 })
+  const r = await rig(['run', 'web', '--work', 't1', '--run'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /✗ .*could not start in .*web, which no longer exists/, r.out)
+  assert.doesNotMatch(r.out, /web did not answer|web exited/, 'said once, as a refusal')
+  const next = rig(['help'])
+  assert.equal(next.code, 0)
+  assert.match(next.out, /cross-repo work harness/, 'the next run has its own streams')
+  assert.doesNotMatch(r.out, /cross-repo work harness/, 'and the finished one did not receive them')
 })
