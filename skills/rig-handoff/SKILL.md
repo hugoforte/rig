@@ -23,6 +23,8 @@ rig save -m "handoff: <one line naming the next focus>"
 
 `rig save` commits the whole data root and pushes it when it has an upstream, so the handoff is on every machine the next session might start on.
 
+Check that the push landed before going on: the save's last line must end `and pushed`. A push that failed is only a warning, and the prompt below would then send the next session to a handoff GitHub does not have, or to the one before it. Fix what stopped the push — usually `rig save` again once the rebase conflict or the network is sorted — and if it cannot be fixed, say so to the user in so many words.
+
 **Not inside a work** — `rig status` says so — save to the temporary directory of the user's OS, not the current workspace, and skip the commit.
 
 ## What it says
@@ -40,7 +42,7 @@ The last thing in the reply is a prompt the user can paste into a fresh session,
 /rig Pick up the work <id>. Run `rig restore <id>` and work from the folder it names. Read <the handoff line of rig status> first, then continue with: <next focus>.
 ```
 
-Nothing in it is this machine's. The next session may be on a machine that has the data root and no work folder, and `rig restore` rebuilds the folder from the record — on a machine that already has it, it changes nothing — and its last line names where the folder is. When the data root has no remote, `rig status` names a local path and says so; keep it, and tell the user the prompt only works on this machine.
+Nothing in it is this machine's, and nothing needs pulling first: `rig restore` fast-forwards the data root before it reads the record. The next session may be on a machine that has the data root and no work folder, and `rig restore` rebuilds the folder from the record — on a machine that already has it, it changes nothing — and its last line names where the folder is. When the data root has no remote, `rig status` names a local path and says so; keep it, and tell the user the prompt only works on this machine.
 
 If any of the work lives on branches rig does not know — a stack of pull requests nobody recorded with `rig stage` — name them in the handoff. `rig restore` reports what is stacked on the branches it knows, and `--tip` checks out the top of that stack.
 
