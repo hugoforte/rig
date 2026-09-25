@@ -402,3 +402,41 @@ test('with no neighbour to offer, the floor still says the code is yours to writ
   const out = nextFor({ work: work({ repos: attached('billing'), designedAt: AT }), repos: [repo('billing')] })
   assert.match(says(out), /everything is attached and agreed/)
 })
+
+// ------------------------------------------------------------- the lesson review
+
+// What the work taught is asked once there is a story to read — a pull request — and while
+// the worktrees are still on disk, because a lesson for a repo has to be committed in one.
+// `rig close` cannot ask it for the reason it cannot ask for catalogue corrections.
+
+const inReview = () => repo('a', { pr: { number: 1, state: 'OPEN' } })
+const landed = () => repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })
+
+test('a work under review is offered the lesson review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [inReview()] })
+  assert.match(says(out), /rig-learn/)
+  assert.ok(commands(out).includes('rig save -m "lessons reviewed" --learned'))
+})
+
+test('a work still being built is not asked what it taught', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { ahead: 1 })] })
+  assert.doesNotMatch(says(out), /rig-learn/)
+})
+
+test('a recorded lesson review is not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
+  assert.doesNotMatch(says(out), /rig-learn/)
+})
+
+test('the lesson review comes above rig close, which removes the trees a repo lesson lands in', () => {
+  const order = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] }).map(o => o.says)
+  const learn = order.findIndex(s => /rig-learn/.test(s))
+  const close = order.findIndex(s => /every PR is merged/.test(s))
+  assert.ok(learn !== -1 && close !== -1, 'both are reachable in this state')
+  assert.ok(learn < close)
+})
+
+test('the lesson review is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.doesNotMatch(says(out), /should|must|need to|failed/i)
+})

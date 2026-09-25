@@ -85,7 +85,7 @@ rig attach orders-web
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
    **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
    hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
-   `abandonedAt` and `closedAt`, each a decision on a date that nothing can observe
+   `learnedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing can observe
    afterwards. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
    terminating in `closed` or `abandoned`) is computed from those gates and the repos,
    branches and PRs every time it is shown — see `bin/phase.mjs`. A merged PR's terminal
@@ -110,6 +110,13 @@ rig attach orders-web
    nothing. The offer is on `next` rather than on `close` because no rig command waits for a
    human — close tears the worktrees down and exits, so asking there would be asking for work on
    repos it had already deleted.
+
+   What the work *taught* is the same kind of knowledge, asked the same way. Once a PR is open
+   `rig next` offers the lesson review: the `rig-learn` skill reads the story (the context doc,
+   review threads, failed checks, the commit log) and offers each lesson a home — the
+   catalogue, an attached repo, or an issue on rig — a machine check before prose, and never a
+   new rule. `rig save --learned` records the gate, and `rig close` names a work that never
+   passed it. Neither refuses.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
 ## The catalogue
@@ -295,7 +302,8 @@ rig next        # what is available on the current work, read off live state
 ```
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
-attach something, record the design gate, push, open a PR, scaffold a rollout plan, close.
+attach something, record the design gate, push, open a PR, scaffold a rollout plan, review
+what the work taught, close.
 
 Two things it will never do, and both are the point:
 
@@ -427,9 +435,10 @@ overridden.
 ### Skills rig ships
 
 `skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
-the work's record. Both are shipped, never linked: whatever manages a machine symlinks
-`skills/*` into its agent hosts' skills directories. Every skill but the entry point is
-prefixed `rig-`, and `test/skills.test.mjs` holds the shape a host's linker relies on.
+the work's record; `skills/rig-learn` runs the lesson review before a close. All are shipped,
+never linked: whatever manages a machine symlinks `skills/*` into its agent hosts' skills
+directories. Every skill but the entry point is prefixed `rig-`, and `test/skills.test.mjs`
+holds the shape a host's linker relies on.
 
 ### Issue tracker
 

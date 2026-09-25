@@ -57,7 +57,7 @@ The recorded decision that a work in a tracked org deliberately has no ticket. D
 _Avoid_: ticketless, none
 
 **Gate**:
-A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed, closed. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
+A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed, lessons reviewed, closed. Lessons reviewed is the one gate that may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
 _Avoid_: step, checkpoint, phase
 
 **Phase**:

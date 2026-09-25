@@ -46,6 +46,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | How is a repo verified | `rig check [--run]` |
 | Context doc edited by hand | `rig save -m "…"` |
 | Design agreed with the user | `rig save -m "design agreed" --designed` |
+| What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close` |
 | Stopped without finishing | `rig close --abandoned` |

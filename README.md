@@ -68,7 +68,7 @@ stateDiagram-v2
 
 That is the **phase** — where a work is now. It is always derived, from the repos attached, the branches, the PRs and the gates recorded, and never stored, so it cannot go stale. Active phases are present participles and the two terminal ones are past, so the word itself tells you whether the work is still moving. Any phase can end in `abandoned`: the recorded decision to stop a work without finishing it, terminal like `closed` and deliberately distinct from it.
 
-The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` is the one you pass by hand.
+The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `learnedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` and `rig save -m "lessons reviewed" --learned` are the two you pass by hand; the second follows the lesson review `rig next` offers once a PR is open.
 
 ### Branches and stages
 
@@ -151,7 +151,7 @@ rig status
 
 The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` passes the design gate. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees and the merged branches, keeping the record.
 
-**What now.** `rig next` answers it, by reading live state rather than a remembered plan: nothing attached yet, the design gate not recorded, commits not pushed, a branch waiting for a pull request, three repos that want a rollout plan, everything merged and ready to close. It **only ever offers** — it never warns, never blocks and never says you should have; warnings live in `rig doctor`, and only for contradictions. And it speaks only when asked: a command you run, not a hook. How much ceremony a work carries is derived from what it contains, never declared — there is no `--track`, because a declaration made at `rig new` is a prediction and predictions rot.
+**What now.** `rig next` answers it, by reading live state rather than a remembered plan: nothing attached yet, the design gate not recorded, commits not pushed, a branch waiting for a pull request, three repos that want a rollout plan, a PR up and its lessons not yet reviewed, everything merged and ready to close. It **only ever offers** — it never warns, never blocks and never says you should have; warnings live in `rig doctor`, and only for contradictions. And it speaks only when asked: a command you run, not a hook. How much ceremony a work carries is derived from what it contains, never declared — there is no `--track`, because a declaration made at `rig new` is a prediction and predictions rot.
 
 **Slicing a work up.** A big work is delivered in stages: `rig stage feat/schema --delivers "the write path"` declares one, and `rig stage` reads the stack back in the order the branches are actually stacked. What is stored is the branch and that one line; whether a stage has started, is up for review or has landed, which repos carry it and where it sits in the stack are all derived from the branches and the PRs every time you ask. rig does not cut the branch — you do, where branches are made — and declaring it is what joins those branches into one slice across repos. A work with no stages behaves exactly as it always did, which is most works.
 
@@ -319,7 +319,7 @@ rig demo --data employer --no-open --out C:	mp
 ig.html
 ```
 
-**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships two agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, and `rig-handoff`, which writes a handoff into the work's record for the next session to pick up. rig links neither into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
+**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
 
 ### Staying up to date
 

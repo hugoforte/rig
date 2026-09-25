@@ -992,7 +992,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message' }
@@ -2052,6 +2052,7 @@ function offerNeighbours (work, name) {
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
 // records the "design agreed" gate, which is what the flag's name always said it did: a
 // decision someone took, on a date nothing else can recover. It used to set a status.
+// `--learned` records the lesson review the same way.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -2065,6 +2066,13 @@ cmds.save = ({ flags }) => {
     // do after a rethink, and the date that matters is the one the current design was agreed.
     work.designedAt = new Date().toISOString()
     ok(`${id}: design agreed`)
+  }
+  // The lesson review. Allowed on a closed work, unlike the design gate: `close` names an
+  // unreviewed work on its way out, and the catalogue a lesson lands in is still there.
+  if (flags.learned) {
+    if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
+    work.learnedAt = new Date().toISOString()
+    ok(`${id}: lessons reviewed`)
   }
   saveWork(cfg, work)
 }
@@ -2221,6 +2229,7 @@ const workJson = (cfg, work, live) => ({
   stages: (work.stages || []).map(st => ({ branch: st.branch, delivers: st.delivers || '' })),
   createdAt: work.createdAt || null,
   designedAt: work.designedAt || null,
+  learnedAt: work.learnedAt || null,
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
@@ -3063,6 +3072,11 @@ cmds.close = ({ flags }) => {
   if (stillDraft.length) {
     say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`rig save --work ${id} -m "catalogue corrections"\``))
   }
+  // The lesson review, named the same way and for the same reason. An abandoned work is not
+  // asked: `rig save --learned` refuses one, so naming it would hand over a command that dies.
+  if (!abandoned && !work.learnedAt) {
+    say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`rig save --work ${id} -m "lessons reviewed" --learned\``))
+  }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
     // Named rather than closed: closing someone's pull request is an outward-facing act, and
@@ -3810,7 +3824,8 @@ cmds.help = () => {
   rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
                                   re-renders its deploy order from the stack
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
-                                  --designed records the "design agreed" gate
+       [--learned]                 --designed records the "design agreed" gate,
+                                   --learned the lesson review (the rig-learn skill)
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land

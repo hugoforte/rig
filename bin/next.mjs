@@ -186,6 +186,16 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       + ` (\`rig catalog ${drafts[0]}\` names the file)`))
   }
 
+  // What the work taught, asked once a pull request gives it a story to read, and in this
+  // command rather than `close` for the same reason as the catalogue offer above: a lesson for
+  // a repo is committed in its worktree, and close removes the trees and exits. Above the close
+  // offer for that reason too. The skill does the conversation; the command records the gate.
+  if (!work?.learnedAt && (phase === 'reviewing' || phase === 'landing')) {
+    out.push(offer(phase,
+      'what did this work teach? — the rig-learn skill offers each lesson a home in the catalogue, the repos or rig\'s tracker',
+      'rig save -m "lessons reviewed" --learned'))
+  }
+
   // Rule 5 says attaching a fourth repo on day two is normal, and §6 says the repo you forget
   // is almost always one hop from one you remembered. This is that, with a graph behind it
   // rather than a reminder.

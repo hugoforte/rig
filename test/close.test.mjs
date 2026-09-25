@@ -179,6 +179,14 @@ test('an abandoned work keeps its branches, merged PR or not', () => {
   assert.equal(hasBranch(bare('billing'), 'feat/left-standing-work'), true)
 })
 
+test('a work whose lessons were reviewed closes without naming the review', () => {
+  landedWork('reviewed', 45)
+  assert.equal(rig(['save', '--work', 'reviewed', '-m', 'lessons reviewed', '--learned']).code, 0)
+  const r = rig(['close', '--work', 'reviewed'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /lessons never reviewed/)
+})
+
 // `close` asks the stack whether a slice is still up for review and `list` does not, because
 // a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
 // `list` has to stop at what it measured: the two works below differ only in whether a stage
@@ -243,6 +251,14 @@ test('abandoning drops the did-it-land checks that would refuse a close', () => 
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /unfinished business/)
   assert.match(r.out, /abandoned given-up/)
+  assert.doesNotMatch(r.out, /lessons never reviewed/, 'the command it would name refuses an abandoned work')
+})
+
+test('an abandoned work refuses the lesson review, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '-m', 'lessons reviewed', '--learned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').learnedAt, undefined)
 })
 
 test('it records the decision and the teardown as two dates, and reads back as abandoned', () => {
