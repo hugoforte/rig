@@ -30,20 +30,46 @@ A lesson is a fact about a repo, a system or the tool that was true before this 
 
 ## 3. Offer each lesson a home
 
-Present the lessons as one list, each with the home you propose, and **stop for the user**. Nothing is written until they agree. For each lesson, prefer a machine check over prose, and never add a rule to an `AGENTS.md` or `CLAUDE.md`. A check fails when it goes stale; prose does not.
+Present the lessons under the four headings below, in this order, and **stop for the user**. Nothing is written until they agree. A heading with nothing under it says "nothing" rather than disappearing, so the user can see it was asked.
 
-| The lesson is about | Home | Machine check first | Prose otherwise |
-| --- | --- | --- | --- |
-| a repo, for anyone working across it | the catalogue | a command in the entry's `check` list | the entry's prose |
-| a repo, for anyone working in it | the attached repo | a test or a CI step | the repo's own docs |
-| rig itself | rig's tracker, which is public | — | an issue, via `gh issue create` |
+For every lesson, prefer a machine check over prose, and never add a rule to an `AGENTS.md` or `CLAUDE.md`. A check fails when it goes stale; prose does not.
 
-- **Correct before appending.** Read the entry first (`rig catalog <repo>` names the file). A lesson that contradicts a sentence replaces it. A catalogue that only grows ends up unread.
-- **Write to the data root its readers can see.** `rig use` says which root is in hand, and a work lives in exactly one. Do not carry an employer's lesson into a personal root, or the reverse.
-- **A repo lesson goes in the work's last PR** while one is open. It sits next to the code that taught it. If everything has merged, a small follow-up PR carries it.
-- **Filing an issue is outward-facing, and rig's tracker is public.** Write the issue about rig alone: no repo names, schemas, hosts or people from a private data root. Show the title and body and wait for a yes.
+### Repos we touched: updates needed there
 
-Scale the review to the work. A one-repo, one-PR work gets one question: *anything worth keeping?* A work with stages across several repos gets the full walk.
+One entry per attached repo, for anyone working *in* it. A test that pins the behaviour that surprised us, a CI step that would have failed sooner, or, failing both, a line in the repo's own docs. Name the file each one lands in.
+
+- **It goes in the work's last PR** while one is open, next to the code that taught it. If everything has merged, a small follow-up PR carries it.
+
+### Rig catalogue: potential updates for the repos we touched
+
+One entry per attached repo, for anyone working *across* it. Read the entry first (`rig catalog <repo>` names the file), then propose the change against what it says now:
+
+- a command for its `check` list: the verification this work had to discover;
+- a correction or addition to `talks_to`: a neighbour the work found, or a stated direction that turned out wrong;
+- a sentence of prose, replacing the one it contradicts. A catalogue that only grows ends up unread.
+
+Write to the data root its readers can see. `rig use` says which root is in hand, and a work lives in exactly one: do not carry an employer's lesson into a personal root, or the reverse.
+
+### Why each update goes where it goes
+
+One line per lesson above: why that home, and why not the others. The test is who has to see it, and when:
+
+| Who needs it | Home |
+| --- | --- |
+| someone changing the repo's code | the repo: a test or CI step, then its docs |
+| someone planning a work that touches the repo | the catalogue: `check`, `talks_to`, prose |
+| anyone using rig, on any data root | rig's tracker |
+| only this work | nowhere new: `context.md` already keeps it |
+
+A lesson that seems to fit two homes usually is two lessons. Split it rather than writing it twice.
+
+### Rig updates in general
+
+What the work taught about rig itself: a command that got in the way, a gap it had no answer for, a doc that said the wrong thing. Each one is a proposed issue on rig's tracker, shown as its title and body.
+
+- **Filing an issue is outward-facing, and rig's tracker is public.** Write the issue about rig alone: no repo names, schemas, hosts or people from a private data root. Wait for a yes on each.
+
+Scale the review to the work. A one-repo, one-PR work may have one line under each heading. A work with stages across several repos gets the full walk.
 
 ## 4. Record it
 
