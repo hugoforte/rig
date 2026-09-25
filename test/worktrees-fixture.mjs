@@ -123,5 +123,5 @@ function build (tmp) {
     }
   }
 
-  return { tmp, remotesDir, mirrorRoot, workRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote, stacked }
+  return { tmp, remotesDir, mirrorRoot, run, git, gitMust, trees, said, reset, mirrorOf, remoteOf, workDir, publish, pushToRemote, stacked }
 }

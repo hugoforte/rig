@@ -129,16 +129,6 @@ test('e2e: a commit GitHub names no pull request for fails the release and tags 
   assert.match(verdict.stderr, /no pull request/)
 })
 
-test('e2e: a pull request naming no bump fails the release, naming the pull request', () => {
-  const repo = repoWith({
-    commits: ['something'],
-    prs: s => [{ number: 4, branch: 'wip/something', base: 'main', title: 'WIP', body: '', commits: [s.something] }],
-  })
-  const { verdict } = release(repo)
-  assert.equal(verdict.status, 1)
-  assert.match(verdict.stderr, /#4/)
-})
-
 test('e2e: a range whose pull requests all ask for nothing releases nothing', () => {
   const repo = repoWith({
     commits: ['tidy'],

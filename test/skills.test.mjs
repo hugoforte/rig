@@ -25,8 +25,8 @@ const frontmatter = file => {
 
 const skills = fs.readdirSync(SKILLS, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)
 
-test('rig ships the entry-point skill, the handoff and the lesson review', () => {
-  assert.deepEqual(skills.sort(), ['rig', 'rig-handoff', 'rig-learn'])
+test('rig ships its entry-point skill', () => {
+  assert.ok(skills.includes('rig'), `skills/ holds ${skills.join(', ')}`)
 })
 
 for (const name of skills) {

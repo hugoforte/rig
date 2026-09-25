@@ -317,6 +317,10 @@ test('a catalogue entry is reported as behind once the repo it describes has mov
   // doctor does not fetch a mirror — an attach does (decision 9) — so it measures as of the
   // last fetch, which this stands in for.
   gitMust(mirrorOf('billing'), 'fetch', '-q', '--prune', 'origin')
+  // A mirror is cloned `--bare` and then given the refspec `+refs/heads/*:refs/remotes/origin/*`,
+  // so its own `refs/heads/main` never moves again. Measuring against that reported the drift as
+  // of the day the repo was first attached; the two refs differing is what lets this catch it.
+  assert.equal(gitMust(mirrorOf('billing'), 'rev-list', '--count', 'refs/heads/main..refs/remotes/origin/main'), '1')
 
   assert.match(rig(['doctor']).out,
     /1 catalogue entry behind its repo: billing \(1 commit since \d{4}-\d{2}-\d{2}\)/)
@@ -340,14 +344,6 @@ test('rig impact weighs a neighbour by how far behind its entry is', () => {
   const out = strip(rig(['impact', 'orders']).out)
   assert.match(out, /billing\s+upstream.*entry 1 commit behind, since \d{4}-\d{2}-\d{2}/,
     'billing is upstream of orders, and its entry is a commit behind the repo it describes')
-})
-
-test('the measure reads what the mirror last fetched, not the ref frozen at clone time', () => {
-  // The bug this pins: a mirror is cloned `--bare` and then given the refspec
-  // `+refs/heads/*:refs/remotes/origin/*`, so its own `refs/heads/main` never moves again.
-  // Measuring against it reported the drift as of the day the repo was first attached.
-  assert.equal(gitMust(mirrorOf('billing'), 'rev-list', '--count', 'refs/heads/main..refs/remotes/origin/main'), '1',
-    'the fetched ref is ahead of the frozen one, which is what makes the two distinguishable')
 })
 
 test('a symref left pointing at a renamed default branch falls back rather than going unmeasured', () => {

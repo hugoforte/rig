@@ -24,7 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
-import { SRC, makeInstall, readJson, strip } from './harness.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 // What this tool stamps a data root with: the record format, derived (ADR 0004). Not read
@@ -642,13 +642,6 @@ test('dash renders the captured payload, and writes nothing into the data root',
   assert.ok(!fs.existsSync(path.join(dataRoot, 'dash.html')), 'and nothing was written into it')
 })
 
-test('dash reads the works itself when given no payload', () => {
-  const r = rig(['dash', '--no-open'])
-  assert.equal(r.code, 0, r.out)
-  // A directory of rig's own under the temp root, so the filename can stay stable.
-  assert.match(r.out, /dashboard at .+rig-dash.dash\.html/)
-})
-
 test('dash --quick looks nothing up, and still renders what is recorded', () => {
   // The flag was parsed and then never read, so the only symptom was a page that took as
   // long as the live one. With gh gone, a dash that reaches for it cannot quietly succeed.
@@ -1027,6 +1020,8 @@ test('acceptance: with gh unavailable, rig list --json still emits complete PR t
   // quietly drop out of every figure on the way.
   const page = rig(['dash', '--no-open'])
   assert.equal(page.code, 0, page.out)
+  // A directory of rig's own under the temp root, so the filename can stay stable.
+  assert.match(page.out, /dashboard at .+rig-dash.dash\.html/)
   const html = fs.readFileSync(/dashboard at (.+)$/m.exec(strip(page.out))[1].trim(), 'utf8')
   // t10 is backfilled, single-repo and merged. Before the reader put `state` back, a recorded
   // PR reduced to "not merged" and every closed work left the figures as in flight instead.
