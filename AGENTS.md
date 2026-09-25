@@ -302,7 +302,8 @@ rig next        # what is available on the current work, read off live state
 ```
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
-attach something, record the design gate, push, open a PR, scaffold a rollout plan, close.
+attach something, record the design gate, push, open a PR, scaffold a rollout plan, review
+what the work taught, close.
 
 Two things it will never do, and both are the point:
 
@@ -434,9 +435,10 @@ overridden.
 ### Skills rig ships
 
 `skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
-the work's record; `skills/rig-learn` runs the lesson review before a close. All are shipped, never linked: whatever manages a machine symlinks
-`skills/*` into its agent hosts' skills directories. Every skill but the entry point is
-prefixed `rig-`, and `test/skills.test.mjs` holds the shape a host's linker relies on.
+the work's record; `skills/rig-learn` runs the lesson review before a close. All are shipped,
+never linked: whatever manages a machine symlinks `skills/*` into its agent hosts' skills
+directories. Every skill but the entry point is prefixed `rig-`, and `test/skills.test.mjs`
+holds the shape a host's linker relies on.
 
 ### Issue tracker
 
