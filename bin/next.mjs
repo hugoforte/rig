@@ -38,7 +38,8 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   work           the record: repos, gates, tickets
 //   repos          one `{ repo, merged, pr, dirty, ahead, pushed, missing }` per attached
 //                  repo — what `workState` already decided for `list`, `status` and `close`,
-//                  plus `pushed` from the worktree state
+//                  plus `pushed` from the worktree state; `missing` is a worktree not on
+//                  this machine
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
@@ -64,6 +65,16 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   if (!entries.length) {
     out.push(offer('planning', 'nothing is attached yet — pick the repos this touches', 'rig prompt select-repos'))
     return out
+  }
+
+  // A worktree that is not on this machine comes first, because everything below happens in
+  // one: a work picked up on a second machine, or whose folder was cleared, is where being
+  // missing is the thing most worth saying rather than a reason to say less. Only for a repo
+  // that can still come back — a pull request that merged or closed usually took its branch
+  // with it, and `rig restore` has already said so once.
+  const away = repos.filter(r => r.missing && !r.merged && r.pr?.state !== 'CLOSED')
+  if (away.length) {
+    out.push(offer(phase, `${away.map(r => r.repo).join(', ')} ${away.length === 1 ? 'is' : 'are'} not on this machine — put back from the record`, `rig restore ${work.id}`))
   }
 
   // The design gate is offered whenever it has not been recorded, and it is an *offer*: a

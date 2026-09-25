@@ -423,3 +423,20 @@ test('the lesson review is offered, never demanded', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
   assert.doesNotMatch(says(out), /should|must|need to|failed/i)
 })
+
+test('a worktree not on this machine is offered the restore, before anything else', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b') }),
+    repos: [repo('a', { missing: true, pr: { number: 14, state: 'OPEN' } }), repo('b', { missing: true })],
+    directionTodo: true,
+  })
+  assert.equal(out[0].command, 'rig restore w')
+})
+
+test('a missing worktree whose PR closed is not offered the restore it cannot have', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { missing: true, pr: { number: 3, state: 'CLOSED' } })],
+  })
+  assert.ok(!commands(out).includes('rig restore w'))
+})
