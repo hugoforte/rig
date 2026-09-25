@@ -65,6 +65,43 @@ test('parseFrontmatter: no frontmatter means empty data and the whole text as bo
   assert.equal(body, 'just text')
 })
 
+test('parseFrontmatter: the abilities — a map, a list, and a map two levels down', () => {
+  const { data } = parseFrontmatter(`---
+repo: billing
+run:
+  start: npm run dev
+  ready: http://localhost:5173
+verify:
+  - npx playwright test
+deploy:
+  develop:
+    start: gh workflow run deploy.yml --ref develop
+    ready: https://dev.example.invalid
+  uat:
+    start: gh workflow run deploy.yml --ref uat
+    ready: https://uat.example.invalid
+check: []
+---
+`)
+  assert.deepEqual(data.run, { start: 'npm run dev', ready: 'http://localhost:5173' })
+  assert.deepEqual(data.verify, ['npx playwright test'])
+  assert.deepEqual(data.deploy, {
+    develop: { start: 'gh workflow run deploy.yml --ref develop', ready: 'https://dev.example.invalid' },
+    uat: { start: 'gh workflow run deploy.yml --ref uat', ready: 'https://uat.example.invalid' },
+  })
+  assert.deepEqual(data.check, [], 'a key after the nested map lands back at the top')
+})
+
+test('parseFrontmatter: an entry with none of the abilities has none, and a bare key is empty', () => {
+  const { data } = parseFrontmatter(`---
+repo: billing
+setup: []
+check:
+---
+`)
+  assert.deepEqual(data, { repo: 'billing', setup: [], check: [] })
+})
+
 test('isJiraKey: upper-case PROJECT-number only', () => {
   assert.ok(isJiraKey('PROJ-42'))
   assert.ok(!isJiraKey('proj-42'))

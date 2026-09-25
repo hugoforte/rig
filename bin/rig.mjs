@@ -852,37 +852,67 @@ const sayUnreadable = ids => {
 
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
 
-// Minimal purpose-built frontmatter reader. Handles scalars and the one list
-// shape the catalogue uses (`talks_to:` / `setup:` / `check:`). Not a general YAML parser.
+// Minimal purpose-built frontmatter reader. Handles scalars, the list shapes the catalogue
+// uses (`talks_to:` / `setup:` / `check:` / `verify:`), and the two levels of map `run:` and
+// `deploy:` need (`run.start`, `deploy.<env>.ready`). Indentation says which container a line
+// belongs to, as in YAML; nothing else of YAML is read. Not a general YAML parser.
 function parseFrontmatter (text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
   if (!m) return { data: {}, body: text }
   const data = {}
-  let key = null
-  let item = null
+  // The containers a line may land in, innermost last: the node, and the indent its lines sit at.
+  const open = [{ indent: -1, node: data }]
+  // A `key:` with nothing after it opens a container whose kind the next line decides — a
+  // list under `- item`, a map under `key: value`, and empty (a list, as `[]` reads) when
+  // nothing indented follows.
+  let pending = null
+  const closeEmpty = () => { pending.parent[pending.key] = []; pending = null }
+  const KV = /^([A-Za-z_][\w-]*):\s*(.*)$/
   for (const raw of m[1].split(/\r?\n/)) {
-    if (!raw.trim() || raw.trim().startsWith('#')) continue
-    const listItem = /^\s*-\s+(.*)$/.exec(raw)
-    if (listItem && key) {
-      const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(listItem[1])
-      if (kv) { item = { [kv[1]]: strip(kv[2]) }; data[key].push(item) }
-      else { data[key].push(strip(listItem[1])); item = null }
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const indent = raw.length - raw.trimStart().length
+    const item = /^-\s+(.*)$/.exec(line)
+    if (pending) {
+      if (indent <= pending.indent) closeEmpty()
+      else {
+        const node = item ? [] : {}
+        pending.parent[pending.key] = node
+        open.push({ indent, node })
+        pending = null
+      }
+    }
+    while (open.at(-1).indent > indent) open.pop()
+    const { node } = open.at(-1)
+    if (item) {
+      if (!Array.isArray(node)) continue
+      const kv = KV.exec(item[1])
+      if (!kv) { node.push(strip(item[1])); continue }
+      const entry = { [kv[1]]: strip(kv[2]) }
+      node.push(entry)
+      // The item's other keys line up under its first one, past the dash.
+      open.push({ indent: indent + line.length - item[1].length, node: entry })
       continue
     }
-    const nested = /^\s{4,}([A-Za-z_][\w-]*):\s*(.*)$/.exec(raw)
-    if (nested && item) { item[nested[1]] = strip(nested[2]); continue }
-    const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(raw)
-    if (kv) {
-      key = kv[1]; item = null
-      const v = strip(kv[2])
-      if (v === '' || v === '[]') data[key] = []
-      else { data[key] = v; key = null }
-    }
+    const kv = KV.exec(line)
+    if (!kv || Array.isArray(node)) continue
+    const v = strip(kv[2])
+    if (v === '[]') node[kv[1]] = []
+    else if (v === '') pending = { parent: node, key: kv[1], indent }
+    else node[kv[1]] = v
   }
+  if (pending) closeEmpty()
   return { data, body: m[2] }
 }
 
 const strip = s => s.trim().replace(/^["'](.*)["']$/, '$1')
+
+// The shapes an ability takes in the frontmatter. A list of commands reads a bare scalar as
+// a list of one; a `start`/`ready` pair is an ability only when it can be started, and a
+// `ready` left out is a start nothing polls for.
+const commandList = v => Array.isArray(v) ? v : (v ? [v] : [])
+const isMap = v => v && typeof v === 'object' && !Array.isArray(v)
+const startAndReady = v => isMap(v) && typeof v.start === 'string' ? { start: v.start, ready: typeof v.ready === 'string' ? v.ready : '' } : null
 
 function loadCatalog (dataRootPath = dataRoot()) {
   const root = path.join(dataRootPath, 'catalog')
@@ -900,8 +930,12 @@ function loadCatalog (dataRootPath = dataRoot()) {
         role: data.role || '',
         stack: data.stack || '',
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
-        setup: Array.isArray(data.setup) ? data.setup : (data.setup ? [data.setup] : []),
-        check: Array.isArray(data.check) ? data.check : (data.check ? [data.check] : []),
+        setup: commandList(data.setup),
+        check: commandList(data.check),
+        run: startAndReady(data.run),
+        verify: commandList(data.verify),
+        deploy: Object.fromEntries(Object.entries(isMap(data.deploy) ? data.deploy : {})
+          .map(([name, v]) => [name, startAndReady(v)]).filter(([, v]) => v)),
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -960,6 +994,17 @@ talks_to: []
 #     direction: downstream
 setup: []
 check: []
+# How the repo is brought up on this machine, verified in a browser once it is up, and
+# deployed to an environment — each a command rig prints unless --run, never a result.
+# run:
+#   start: npm run dev
+#   ready: http://localhost:3000
+# verify:
+#   - npx playwright test
+# deploy:
+#   develop:
+#     start: gh workflow run deploy.yml --ref develop
+#     ready: https://dev.example.invalid
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
@@ -2559,27 +2604,38 @@ cmds.status = ({ flags }) => {
 }
 
 // The catalogue's commands for one repo, in that repo's worktree. `label` is the
-// frontmatter key they came from, so a failure names the thing that failed.
-function runCatalogCommands (dir, commands, label) {
+// frontmatter key they came from, so a failure names the thing that failed. `extra` goes on
+// top of the run's environment — `RIG_BASE_URL` for a verify pass.
+function runCatalogCommands (dir, commands, label, extra = {}) {
   for (const c of commands) {
     step(`${c}  ${C.dim(`(in ${path.basename(dir)})`)}`)
     // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
     // and watching it is the point — which is also why a run this is part of has to be the
     // process for its output to reach whoever asked. The environment is still the run's.
-    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
+    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: { ...env(), ...extra } })
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
   return true
 }
 
-cmds.setup = ({ flags, positional }) => {
-  const cfg = config()
-  const work = openWork(cfg, flags)
+// The attached repos a catalogue command is about: the ones named, or all of them.
+function attachedRepos (work, positional) {
   const targets = positional.length
     ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
     : work.repos
   if (!targets.length) die('no matching attached repos')
-  for (const r of targets) {
+  return targets
+}
+
+// A repo without the ability asked for is told where to write it: the moment you went
+// looking is the moment that knowledge is cheap (AGENTS.md rule 4).
+const missingAbility = (r, key, what = key) =>
+  warn(`${r.repo}: no ${what} in the catalogue — add \`${key}:\` to ${catalogFile(r.org, r.repo)}`)
+
+cmds.setup = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  for (const r of attachedRepos(work, positional)) {
     const cat = findCatalog(r.repo)
     if (!cat?.setup?.length) { warn(`${r.repo}: no setup commands in the catalogue`); continue }
     runCatalogCommands(r.path, cat.setup, 'setup')
@@ -2598,18 +2654,9 @@ cmds.setup = ({ flags, positional }) => {
 cmds.check = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
-  // Repo selection reads like `setup`'s twice over on purpose: two are a coincidence, and
-  // the third is when it earns a name of its own.
-  const targets = positional.length
-    ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
-    : work.repos
-  if (!targets.length) die('no matching attached repos')
-  for (const r of targets) {
+  for (const r of attachedRepos(work, positional)) {
     const cat = findCatalog(r.repo)
-    if (!cat?.check?.length) {
-      warn(`${r.repo}: no check commands in the catalogue — add \`check:\` to ${catalogFile(r.org, r.repo)}`)
-      continue
-    }
+    if (!cat?.check?.length) { missingAbility(r, 'check', 'check commands'); continue }
     if (flags.run) {
       if (!runCatalogCommands(r.path, cat.check, 'check')) current.exitCode = 1
       continue
@@ -2617,6 +2664,140 @@ cmds.check = ({ flags, positional }) => {
     say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
     for (const c of cat.check) say(`  ${c}`)
   }
+}
+
+// ------------------------------------------------------ run, verify, deploy
+
+// Three more abilities on `check`'s rule (decision 106): how a repo is brought up on this
+// machine, how the running site is verified in a browser, and how it is deployed to an
+// environment. Each is a command in the catalogue and never a result — nothing about a
+// start, a pass or a deploy is written anywhere — and each is printed unless `--run`.
+
+const timeoutSeconds = flags => {
+  const s = flags.timeout === undefined ? 300 : Number(flags.timeout)
+  if (!Number.isFinite(s) || s <= 0) die('--timeout wants a number of seconds')
+  return s
+}
+
+// The environment a deploy names, refused when the entry does not: a deploy aimed at an
+// environment nobody wrote down is a guess, and `--env` is never defaulted.
+function deployEnv (r, cat, name) {
+  if (typeof name !== 'string') die('--env wants an environment name')
+  const found = cat?.deploy?.[name]
+  if (found) return found
+  const known = Object.keys(cat?.deploy || {})
+  die(`${r.repo}: no deploy env "${name}" in the catalogue — ${known.length
+    ? `it names ${known.join(', ')}`
+    : `add \`deploy:\` to ${catalogFile(r.org, r.repo)}`}`)
+}
+
+// Polls `url` until it answers below 400 — a redirect to a login page is a site that is up —
+// or `seconds` have passed. Node's own fetch; a refused connection is the ordinary answer
+// while a site is starting, so it is not worth a line.
+async function untilReady (url, seconds) {
+  const deadline = Date.now() + seconds * 1000
+  for (;;) {
+    try {
+      const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) })
+      await r.body?.cancel()
+      if (r.status < 400) return true
+    } catch { /* not up yet */ }
+    if (Date.now() >= deadline) return false
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+}
+
+// Waits for a site and says what it found. A site that never answered is the exit code —
+// the one place a result lands — and `where` is how to go and look: the pid and the log for
+// a `run`, nothing for a deploy.
+async function reportReady (repo, url, seconds, where = '') {
+  if (await untilReady(url, seconds)) ok(`${repo} is up at ${url}${where}`)
+  else { warn(`${repo} did not answer at ${url} within ${seconds}s${where}`); current.exitCode = 1 }
+}
+
+const startAndReadyLines = ({ start, ready }) => {
+  say(`  start  ${start}`)
+  say(`  ready  ${ready || C.dim('(none — nothing is polled)')}`)
+}
+
+// `--run` starts `run.start` detached, so the site outlives the command that started it, with
+// its output in the work folder's `.rig/` rather than the worktree — a log inside the tree
+// would be an untracked change `rig close` refuses over. rig keeps no hold on the process
+// past printing its pid; stopping it is yours.
+cmds.run = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const seconds = timeoutSeconds(flags)
+  const started = []
+  for (const r of attachedRepos(work, positional)) {
+    const cat = findCatalog(r.repo)
+    if (!cat?.run) { missingAbility(r, 'run'); continue }
+    if (!flags.run) {
+      say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig run ${r.repo} --run\`)`)}`)
+      startAndReadyLines(cat.run)
+      continue
+    }
+    const log = path.join(workDir(cfg, work.id), WORK_FOLDER.marker, `${r.repo}.run.log`)
+    fs.mkdirSync(path.dirname(log), { recursive: true })
+    const fd = fs.openSync(log, 'w')
+    const child = spawn(cat.run.start, { cwd: r.path, shell: true, detached: true, stdio: ['ignore', fd, fd], env: env() })
+    child.unref()
+    fs.closeSync(fd)
+    step(`${cat.run.start}  ${C.dim(`(in ${path.basename(r.path)})`)}`)
+    started.push({ repo: r.repo, ready: cat.run.ready, where: ` — pid ${child.pid}, log ${log}` })
+  }
+  if (!started.length) return
+  return (async () => {
+    for (const { repo, ready, where } of started) {
+      if (ready) await reportReady(repo, ready, seconds, where)
+      else ok(`${repo} started${where}`)
+    }
+  })()
+}
+
+// The browser-level pass, apart from `check` because it is slow and needs a running site:
+// folded in, `rig check --run` would stop being the fast loop. The site is named to the
+// commands as `RIG_BASE_URL` — `run.ready` by default, `deploy.<env>.ready` with `--env`.
+cmds.verify = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  for (const r of attachedRepos(work, positional)) {
+    const cat = findCatalog(r.repo)
+    if (!cat?.verify?.length) { missingAbility(r, 'verify', 'verify commands'); continue }
+    const url = flags.env !== undefined ? deployEnv(r, cat, flags.env).ready : cat.run?.ready
+    if (!url) {
+      warn(`${r.repo}: nothing to point verify at — add \`run.ready\` to ${catalogFile(r.org, r.repo)}, or name an environment with --env`)
+      continue
+    }
+    if (flags.run) {
+      if (!runCatalogCommands(r.path, cat.verify, 'verify', { RIG_BASE_URL: url })) current.exitCode = 1
+      continue
+    }
+    const how = `rig verify ${r.repo} --run${flags.env !== undefined ? ` --env ${flags.env}` : ''}`
+    say(`${C.bold(r.repo)} ${C.dim(`(not run — \`${how}\`)`)}  RIG_BASE_URL=${url}`)
+    for (const c of cat.verify) say(`  ${c}`)
+  }
+}
+
+// One repo, one environment, both named: a deploy is an outward-facing act, so nothing about
+// it is defaulted. `--run` runs `deploy.<env>.start` here and polls `deploy.<env>.ready`.
+cmds.deploy = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  if (!positional[0]) die('rig deploy wants a repo — `rig deploy <repo> --env <name>`')
+  if (flags.env === undefined) die('rig deploy wants an environment — `rig deploy <repo> --env <name>`')
+  const seconds = timeoutSeconds(flags)
+  const [r] = attachedRepos(work, [positional[0]])
+  const cat = findCatalog(r.repo)
+  if (!Object.keys(cat?.deploy || {}).length) { missingAbility(r, 'deploy'); return }
+  const target = deployEnv(r, cat, flags.env)
+  if (!flags.run) {
+    say(`${C.bold(r.repo)} → ${flags.env} ${C.dim(`(not run — \`rig deploy ${r.repo} --env ${flags.env} --run\`)`)}`)
+    startAndReadyLines(target)
+    return
+  }
+  if (!runCatalogCommands(r.path, [target.start], 'deploy')) { current.exitCode = 1; return }
+  if (target.ready) return reportReady(r.repo, target.ready, seconds)
 }
 
 // Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
@@ -3817,6 +3998,14 @@ cmds.help = () => {
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
+  rig run [repo...] [--run]       print how each repo is brought up here (run.start) and the
+       [--timeout s]               URL that says it is (run.ready); --run starts it detached,
+                                  logs into the work folder's .rig/, and waits for the URL
+  rig verify [repo...] [--run]    print the browser-level pass and the URL it gets as
+       [--env <name>]              RIG_BASE_URL — run.ready, or deploy.<env>.ready; --run runs it
+  rig deploy <repo> --env <name>  print deploy.<env>.start and deploy.<env>.ready; --run runs
+       [--run] [--timeout s]       the one and waits for the other; an env the entry does not
+                                  name is refused
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig impact <repo>               what else a change in that repo reaches: the repos one and
                                   two hops away in talks_to, each with what was said, which
@@ -3874,6 +4063,17 @@ function invoke (argv) {
   current.command = cmdName
   // What the data root was before the command ran, for the commit at the end of it.
   let prepared = null
+  const refused = e => {
+    if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
+    err(`${C.red('✗')} ${e.message}\n`)
+    current.exitCode = 1
+  }
+  const finish = () => {
+    if (current.pendingCommit) commitDataRoot(current.pendingCommit, where(), prepared)
+    freshnessEpilogue(cmdName)
+    return current.exitCode
+  }
+  let outcome
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
     // Before the first `where()`: the data root a command names decides every path it reads.
@@ -3886,17 +4086,16 @@ function invoke (argv) {
       current.requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
     }
     if (MUTATING.has(cmdName)) prepared = prepareDataRoot()
-    cmd(args)
+    outcome = cmd(args)
   } catch (e) {
-    if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is
-    err(`${C.red('✗')} ${e.message}\n`)
-    current.exitCode = 1
+    refused(e)
   } finally {
-    persistFakeTrackers()
+    if (!(outcome instanceof Promise)) persistFakeTrackers()
   }
-  if (current.pendingCommit) commitDataRoot(current.pendingCommit, where(), prepared)
-  freshnessEpilogue(cmdName)
-  return current.exitCode
+  // A command that waits on a site — `run --run`, `deploy --run` — answers with a promise,
+  // and the run ends when it settles: the same refusal, the same epilogue, one exit code.
+  if (outcome instanceof Promise) return outcome.catch(refused).finally(persistFakeTrackers).then(finish)
+  return finish()
 }
 
 // Reading fd 0 blocks until whoever holds the other end closes it, so the CLI reads it when a
@@ -3955,11 +4154,19 @@ export function run (argv, io = {}) {
   // invocation current for whatever its caller does next.
   const previous = current
   current = invocationOf(io)
+  const restore = () => { current = previous }
+  let outcome
   try {
-    return invoke(argv)
-  } finally {
-    current = previous
+    outcome = invoke(argv)
+  } catch (e) {
+    restore()
+    throw e
   }
+  // A command that waits on a site answers with a promise, and its invocation stays current
+  // until it settles — so what the wait prints still lands in this run's streams.
+  if (outcome instanceof Promise) return outcome.finally(restore)
+  restore()
+  return outcome
 }
 
 // Importable by tests: `run`, the pure helpers, and `listing` — the one machine-readable
@@ -3991,5 +4198,7 @@ const isMain = (() => {
 // left to read what rig would have said, so a closed pipe is where the output ends.
 if (isMain) {
   for (const stream of [process.stdout, process.stderr]) stream.on('error', e => { if (e.code !== 'EPIPE') throw e })
-  process.exitCode = run(process.argv.slice(2), { chdir: dir => process.chdir(dir) })
+  const code = run(process.argv.slice(2), { chdir: dir => process.chdir(dir) })
+  if (code instanceof Promise) code.then(c => { process.exitCode = c })
+  else process.exitCode = code
 }

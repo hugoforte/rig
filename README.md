@@ -262,6 +262,14 @@ rig check                    # every attached repo, printed
 rig check billing --run      # run billing's
 ```
 
+Three more abilities sit beside `check` on the same rule: `run` (a `start` command and a `ready` URL — how the repo is brought up on this machine), `verify` (a list like `check` — the browser-level pass, which needs a running site and so stays out of the fast loop `check` is), and `deploy` (one `start`/`ready` pair per environment name). `rig run`, `rig verify` and `rig deploy` print them unless `--run`, store no result, and name the catalogue file when the ability is missing. `rig run --run` starts the site detached, logs into the work folder's `.rig/`, and waits for `ready` to answer (`--timeout`, default 300 s); `rig verify --run` hands the commands the site as `RIG_BASE_URL` — `run.ready`, or `deploy.<env>.ready` with `--env`; `rig deploy <repo> --env <name> --run` runs that environment's `start` and waits for its `ready`. An `--env` the entry does not name is refused, never guessed.
+
+```powershell
+rig run billing --run                    # up on this machine, pid and log printed
+rig verify billing --run --env develop   # the browser pass, against deploy.develop.ready
+rig deploy billing --env develop --run   # deploy, then wait for the environment to answer
+```
+
 ### What a change reaches
 
 The catalogue's `talks_to` is a graph, and `rig impact <repo>` walks it: the repos one hop and
