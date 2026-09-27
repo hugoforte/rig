@@ -891,6 +891,26 @@ function parseFrontmatter (text) {
 
 const strip = s => s.trim().replace(/^["'](.*)["']$/, '$1')
 
+// ----------------------------------------------------------------- org docs
+
+// What an org is trying to do, in its own words (hugoforte/rig#184). Absent means no
+// constraints: nothing reads a missing doc as a problem, and nothing offers to write one
+// except the lesson review.
+const orgDocFile = org => path.join(dataRoot(), 'orgs', `${org}.md`)
+
+// The orgs a work touches are its repos' orgs, in the order they were attached.
+const orgsOf = work => [...new Set(work.repos.map(r => r.org))]
+
+// An org doc's body, its headings pushed one level down to sit under the org's own heading.
+// A `#` inside a fenced block is a comment, not a heading, and is left alone.
+function nestedOrgDoc (file) {
+  let fenced = false
+  return parseFrontmatter(readText(file)).body.trim().split(/\r?\n/).map(line => {
+    if (/^(```|~~~)/.test(line)) fenced = !fenced
+    return !fenced && /^#+ /.test(line) ? `#${line}` : line
+  }).join('\n')
+}
+
 function loadCatalog (dataRootPath = dataRoot()) {
   const root = path.join(dataRootPath, 'catalog')
   if (!exists(root)) return []
@@ -1428,6 +1448,18 @@ function regenerate (cfg, work) {
     lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
     if (c?.check?.length) lines.push(`- Check: ${c.check.map(s => `\`${s}\``).join(' · ')}`)
+    lines.push('')
+  }
+  // Inlined in full rather than linked, because a link is what an agent skips, and the doc
+  // is only worth writing if every session starts knowing it.
+  for (const org of orgsOf(work)) {
+    const file = orgDocFile(org)
+    if (!exists(file)) continue
+    lines.push(`## ${org}`)
+    lines.push('')
+    lines.push(`What this org is trying to do. **Org doc (the only copy, edit it there):** \`${file}\``)
+    lines.push('')
+    lines.push(nestedOrgDoc(file))
     lines.push('')
   }
   lines.push('## Rules in this folder')
@@ -2696,6 +2728,12 @@ cmds.status = ({ flags }) => {
   if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
   say(`tickets ${ticketsLabel(work)}`)
   say(`context ${contextFile(id)}`)
+  // Named for the lesson review, which asks for a doc only where there is none and writes it
+  // where this says, and which may run after the work folder that inlines them is gone.
+  for (const org of orgsOf(work)) {
+    const file = orgDocFile(org)
+    say(`org ${org} ${exists(file) ? file : C.dim(`no org doc — ${file}`)}`)
+  }
   // The handoff is read by the next session, which may be on another machine, so it is named
   // where every machine can reach it: on the data root's remote, which `rig save` pushed it to
   // (hugoforte/rig#171). This machine's path only when there is no remote, and said as such.

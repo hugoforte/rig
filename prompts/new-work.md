@@ -14,6 +14,14 @@ does not. If `rig new` refuses for exactly this reason ("several orgs have track
 pass --org"), **ask the user which org** rather than guessing; it is a fast question and
 a wrong guess creates the ticket in the wrong tracker.
 
+## Name the problem it addresses
+
+An org may say what it is trying to do in `orgs/<org>.md` in the data root (`rig use`
+names the root). When the org this work is in has one, read its "What hurts now" and
+"What we're trying to accomplish", and tell the user which stated problem this work
+addresses. When it addresses none, say so plainly and let the user decide. It is still
+theirs to start. With no doc, there is nothing to name, so go straight on.
+
 ## You already have a key
 
 Fetch its title and description yourself only for a GitHub key (`owner/repo#7`) — pipe

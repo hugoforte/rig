@@ -10,7 +10,7 @@ how to *use* it.
 | | |
 |---|---|
 | `C:\rig` (this repo) | **The tool.** Committed, generic, public. |
-| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
+| the data root | **The knowledge.** Committed, private. `catalog/`, `orgs/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
 | `C:\w` (the work root) | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
 
 Never put durable prose in the work root. Never put anything that names a real org, repo or
@@ -170,6 +170,14 @@ in, `rig check` prints the check commands and `--run` opts in. A command that ca
 succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
 repo whose `check` is empty is named, with the file to write one in; write it while the
 repo is still loaded in your head (rule 4).
+
+## The org doc
+
+One file per org at `<data root>/orgs/<org>.md`. It has a frontmatter holding only `org`, then prose under up to four headings: what we're trying to accomplish, what hurts now, what we believe, whose call it is. It says what the org is for, so a work stops starting with the human explaining it again.
+
+**Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, and `rig status` names each one, or says there is none and where it would go.
+
+**Absent means no constraints.** Nothing asks for a doc and nothing blocks on one. It starts at the lesson review: `rig-learn` asks one optional question in an org that has no doc, and writes the answer as the first heading.
 
 ## Writing a context doc
 

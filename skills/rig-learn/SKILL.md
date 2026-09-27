@@ -76,6 +76,26 @@ Say **go** for all of them, or name the numbers you want.
 - **Write to the data root its readers can see.** `rig use` says which root is in hand. Do not carry an employer's lesson into a personal root, or the reverse.
 - **Rig's tracker is public, and filing an issue is outward-facing.** Write about rig alone: no repo names, schemas, hosts or people from a private data root. "Go" covers the issues in the TL;DR; show the title and body of any other issue before filing it.
 
+### An org with no doc
+
+`rig status` lists each org the work touches. For each one it shows the org's doc, or `no org doc` with the path where one would go. For every org with no doc, end the reply with one question, below the TL;DR:
+
+> Optional, and fine to skip: in one sentence, what is `<org>` trying to accomplish?
+
+If the user answers, write their answer at that path, in their words, and nothing more:
+
+```markdown
+---
+org: <org>
+---
+
+## What we're trying to accomplish
+
+<the answer>
+```
+
+Leave the other headings for later works to fill. A skip writes nothing, and the next review in that org asks again. An org that already has a doc gets no question.
+
 ## 4. Record it
 
 Once the lessons have landed, or the user says there are none:
@@ -84,4 +104,4 @@ Once the lessons have landed, or the user says there are none:
 rig save -m "lessons reviewed" --learned
 ```
 
-This commits the catalogue changes with the rest of the data root and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
+This commits the catalogue changes and any new org doc with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
