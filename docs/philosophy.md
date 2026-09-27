@@ -56,11 +56,11 @@ The rule that follows: the question is never "what should we write down about th
 
 ### 8. Keep it refactorable; don't factor it early
 
-The rule of three, stated as a pair. A seam you can move later is worth more than an abstraction guessed at now, so two similar things are a coincidence and the third names the pattern. What "refactorable" buys is the right to wait: pure modules where the logic is hard, one seam per external system, and no caller composing three steps that one operation should own.
+Two similar things are a coincidence and the third names the pattern; until then, keep the code easy to move. [DESIGN.md's principles](../DESIGN.md#principles) state it in full.
 
 ### 9. Strong convictions, loosely held
 
-Decide, write the reason down, then let evidence move you. A superseded decision is struck through and names what replaced it; a refuted hypothesis stays with its date and its evidence. Decision 86 chose a merge queue; decision 89 recorded that GitHub would not give this repository one, and the up-to-date rule stayed. A position with no reason attached cannot be argued out of, and an opinion nobody recorded cannot be corrected.
+Decide, write the reason down, then let evidence move you; [DESIGN.md's principles](../DESIGN.md#principles) state it in full. Decision 86 chose a merge queue; decision 89 recorded that GitHub would not give this repository one, and the up-to-date rule stayed.
 
 ## What rig asks of an org
 
