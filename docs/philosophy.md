@@ -6,7 +6,7 @@ It is a living document. A principle here is a strong conviction, loosely held: 
 
 ## The one idea
 
-The scarce resource in agentic engineering is human attention per accepted change. It is spent three times: choosing what to work on, gathering enough context to execute, and accepting the result. Code got cheap; those three did not. rig exists to spend less of that attention, and it must never spend any of it on rig.
+What runs out first is the human's attention, and review is not where most of it goes. Deciding what to work on next, and having enough context to do it, cost as much of it as reading what comes back. rig exists to spend less of that attention, and it must never spend any of it on rig.
 
 Everything below is one idea about how to do that.
 
@@ -42,7 +42,7 @@ The rule that follows: a feature that saves the agent effort but costs the human
 
 The seam is deliberate. Code changes with a release and is tested; a prompt changes with an edit and is judged. Judgement that is put into code ossifies before it is understood, and facts left to a prompt drift.
 
-### 6. Evidence over declaration, and dated
+### 6. Prove it or mark it, and say when
 
 A claim rig can prove, it proves, and it records when. A claim it cannot, it marks: a catalogue entry drafted at attach says `DRAFT: unreviewed` until a human corrects it. Weight is derived from what a work contains, never declared (decision 67). The catalogue has a freshness of its own, measured against the mirror and reported without a verdict (decision 93). A reader says what it measured (decision 78).
 
@@ -64,7 +64,7 @@ Decide, write the reason down, then let evidence move you. A superseded decision
 
 ## What rig asks of an org
 
-rig will ask an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Who decides? An org's answers live in its own data root, they are read by every work, and they grow the same way this page does: from what the works teach, one optional question at close.
+rig will ask an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, they are read by every work, and they grow the same way this page does: from what the works teach, one optional question at close.
 
 ## How this page grows
 
