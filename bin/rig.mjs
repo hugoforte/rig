@@ -1587,7 +1587,7 @@ function ensureFirstCommit (target, name) {
   if (!exists(path.join(target, 'README.md'))) {
     writeText(path.join(target, 'README.md'), `# ${name}
 
-The data root for [rig](https://github.com/hugoforte/rig): the repo catalogue, the work records and \`rig.json\`. Private — this is everything rig knows about these orgs.
+The data root for [rig](https://github.com/hugoforte/rig): the repo catalogue, the org docs, the work records and \`rig.json\`. Private — this is everything rig knows about these orgs.
 
 rig finds this checkout through \`dataRoot\` in its \`rig.local.json\`. Records commit straight to \`main\`; rig reads the working tree, so a record on a branch is invisible until merged.
 `)

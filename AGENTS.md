@@ -173,11 +173,18 @@ repo is still loaded in your head (rule 4).
 
 ## The org doc
 
-One file per org at `<data root>/orgs/<org>.md`. It has a frontmatter holding only `org`, then prose under up to four headings: what we're trying to accomplish, what hurts now, what we believe, whose call it is. It says what the org is for, so a work stops starting with the human explaining it again.
+One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so a work stops starting with the human explaining it again. Its frontmatter holds only `org`, then prose under any of these four headings, each written exactly so:
 
-**Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, and `rig status` names each one, or says there is none and where it would go.
+```markdown
+## What we're trying to accomplish
+## What hurts now
+## What we believe
+## Whose call it is
+```
 
-**Absent means no constraints.** Nothing asks for a doc and nothing blocks on one. It starts at the lesson review: `rig-learn` asks one optional question in an org that has no doc, and writes the answer as the first heading.
+**Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, from that work's next mutating command on, and `rig status` names each one, or says there is none and where it would go.
+
+**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading. The other three are written by hand for now.
 
 ## Writing a context doc
 

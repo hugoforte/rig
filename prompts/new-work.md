@@ -14,14 +14,6 @@ does not. If `rig new` refuses for exactly this reason ("several orgs have track
 pass --org"), **ask the user which org** rather than guessing; it is a fast question and
 a wrong guess creates the ticket in the wrong tracker.
 
-## Name the problem it addresses
-
-An org may say what it is trying to do in `orgs/<org>.md` in the data root (`rig use`
-names the root). When the org this work is in has one, read its "What hurts now" and
-"What we're trying to accomplish", and tell the user which stated problem this work
-addresses. When it addresses none, say so plainly and let the user decide. It is still
-theirs to start. With no doc, there is nothing to name, so go straight on.
-
 ## You already have a key
 
 Fetch its title and description yourself only for a GitHub key (`owner/repo#7`) — pipe
@@ -100,7 +92,16 @@ link points at, so the ticket has to stand on its own.
 
 ## After
 
-Continue with the repo interview: `rig prompt select-repos`. Once the Direction section
+Continue with the repo interview: `rig prompt select-repos`.
+
+Once the repos are attached, name the problem the work addresses. The work's orgs are
+its repos' orgs, and `rig status` names each one's org doc or says it has none. Read the
+headings each doc has, "What hurts now" and "What we're trying to accomplish" among
+them, and tell the user which stated problem this work addresses. When it addresses
+none, say so plainly and let the user decide; it is still theirs to do. An org with no
+doc has nothing to name.
+
+Once the Direction section
 of the context doc is agreed with the user, end that gate with
 `rig save -m "design agreed" --designed` — rig commits the data root after its own
 commands, but the context doc is yours to edit, so this is how those edits get committed.

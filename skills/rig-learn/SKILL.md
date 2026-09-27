@@ -11,7 +11,7 @@ Run it while the worktrees are still on disk, before `rig close`, because a less
 
 ## 1. Read the story
 
-Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
@@ -78,11 +78,11 @@ Say **go** for all of them, or name the numbers you want.
 
 ### An org with no doc
 
-`rig status` lists each org the work touches. For each one it shows the org's doc, or `no org doc` with the path where one would go. For every org with no doc, end the reply with one question, below the TL;DR:
+`rig status` lists each org the work touches, with its doc, or `no org doc` and the path where one would go. When any org has no doc, put one line right after "Say **go**…", naming every such org:
 
-> Optional, and fine to skip: in one sentence, what is `<org>` trying to accomplish?
+> Optional: in one sentence, what is `<org>` trying to accomplish? A bare **go** skips it.
 
-If the user answers, write their answer at that path, in their words, and nothing more:
+If the user answers, write their answer for each org at the path `rig status` gave, in their words, and nothing more:
 
 ```markdown
 ---
@@ -94,7 +94,7 @@ org: <org>
 <the answer>
 ```
 
-Leave the other headings for later works to fill. A skip writes nothing, and the next review in that org asks again. An org that already has a doc gets no question.
+The other three headings named in rig's `AGENTS.md` ("The org doc") are written by hand for now. A skip writes nothing, and the next review in that org asks again. An org that already has a doc gets no question.
 
 ## 4. Record it
 

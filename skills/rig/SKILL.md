@@ -5,7 +5,7 @@ description: Cross-repo work harness. Use when a ticket or task spans more than 
 
 # rig
 
-`rig` assembles one git worktree per repo for a piece of **work**, all on one shared branch, and keeps that work's durable knowledge in a **data root** — a committed checkout holding the repo catalogue, the work records and `rig.json`.
+`rig` assembles one git worktree per repo for a piece of **work**, all on one shared branch, and keeps that work's durable knowledge in a **data root** — a committed checkout holding the repo catalogue, the org docs, the work records and `rig.json`.
 
 rig documents itself, and this skill ships with it. It finds rig and routes you inside it, and restates nothing on purpose: `rig doctor`, `rig help` and `AGENTS.md` are always the current answer, and this file is not.
 
