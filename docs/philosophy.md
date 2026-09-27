@@ -20,7 +20,7 @@ The rule that follows: a feature without a friction to cite waits. Ideas are rec
 
 ### 2. Trivial to start, deep to master
 
-A great game brings you in with one move and reveals its depth as you go. rig should feel the same. Install is one command. `rig new` asks one decision, the ticket. `rig attach` asks nothing new. Nothing is required up front that the first work does not need. The further in you get, the more rig knows about your repos, your org and your works, and the more it can offer: stages, impact, a rollout plan, a restore on a second machine, a lesson loop at close.
+A great game brings you in with one move and reveals its depth as you go. rig should feel the same. Install is one command. `rig new` asks one decision, the ticket, and then you confirm which repos the work touches. Nothing is required up front that the first work does not need. The further in you get, the more rig knows about your repos, your org and your works, and the more it can offer: stages, impact, a rollout plan, a restore on a second machine, a lesson review before close.
 
 The rule that follows: any new question rig asks must say when it can be skipped, and "you don't have to do this now" is the default, not the exception.
 
@@ -32,7 +32,7 @@ The game analogy has a second half: mastery at this level before the next. rig s
 
 ### 4. Attention is the budget
 
-The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A close never re-asks GitHub what a merged PR did, because the terminal facts were recorded the first time. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line. The demo page makes the case for rig out of a data root so nobody has to make it by hand.
+The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A closed work never re-asks GitHub what its merged PRs did: close records the terminal facts once, and every later read uses them. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line. The demo page makes the case for rig out of a data root so nobody has to make it by hand.
 
 The rule that follows: a feature that saves the agent effort but costs the human a question has the sign wrong.
 
@@ -50,7 +50,7 @@ The rule that follows: anything that must be hand-maintained to stay true will r
 
 ### 7. Everything accretes
 
-Knowledge enters rig at the moment it is fresh, never through a form filled in up front. A catalogue entry is drafted when a repo is attached and corrected when a work touches it. A lesson is offered a home at close, when the work that taught it is still on disk. A decision is logged when it is made, with its rejected alternatives.
+Knowledge enters rig at the moment it is fresh, never through a form filled in up front. A catalogue entry is drafted when a repo is attached and corrected when a work touches it. A lesson is offered a home before close, while the work that taught it is still on disk. A decision is logged when it is made, with its rejected alternatives.
 
 The rule that follows: the question is never "what should we write down about this repo?" but "what did this work just teach about it?"
 
