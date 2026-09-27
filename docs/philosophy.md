@@ -6,7 +6,7 @@ It is a living document. A principle here is a strong conviction, loosely held: 
 
 ## The one idea
 
-What runs out first is the human's attention, and review is not where most of it goes. Deciding what to work on next, and having enough context to do it, cost as much of it as reading what comes back. rig exists to spend less of that attention, and it must never spend any of it on rig.
+What runs out first is the human's attention, and most of it goes either side of the implementation, not on it. Before: deciding what to do next, and gathering enough context to do it. After: checking that it actually got done. rig exists to spend less of that attention, and it must never spend any of it on rig.
 
 Everything below is one idea about how to do that.
 
