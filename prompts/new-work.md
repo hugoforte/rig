@@ -92,7 +92,16 @@ link points at, so the ticket has to stand on its own.
 
 ## After
 
-Continue with the repo interview: `rig prompt select-repos`. Once the Direction section
+Continue with the repo interview: `rig prompt select-repos`.
+
+Once the repos are attached, name the problem the work addresses. The work's orgs are
+its repos' orgs, and `rig status` names each one's org doc or says it has none. Read the
+headings each doc has, "What hurts now" and "What we're trying to accomplish" among
+them, and tell the user which stated problem this work addresses. When it addresses
+none, say so plainly and let the user decide; it is still theirs to do. An org with no
+doc has nothing to name.
+
+Once the Direction section
 of the context doc is agreed with the user, end that gate with
 `rig save -m "design agreed" --designed` — rig commits the data root after its own
 commands, but the context doc is yours to edit, so this is how those edits get committed.

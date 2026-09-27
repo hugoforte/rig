@@ -36,6 +36,7 @@ flowchart LR
   subgraph data["the data root — committed, private"]
     B["rig.json<br/>orgs, trackers,<br/>freshness policy"]
     C["catalog/org/repo.md<br/>what each repo is,<br/>and what it talks to"]
+    F["orgs/org.md<br/>what the org<br/>is trying to do"]
     D["work/id/context.md<br/>the only copy<br/>of the prose"]
   end
   subgraph work["the work root — disposable, reconstructible"]

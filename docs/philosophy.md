@@ -64,7 +64,7 @@ Decide, write the reason down, then let evidence move you; [DESIGN.md's principl
 
 ## What rig asks of an org
 
-None of this is built yet. rig will ask an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers will live in its own data root, every work will read them, and they will grow the same way this page does: from what the works teach, one optional question at the lesson review.
+rig puts to an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, in its org doc, and every work reads them: the file each work's agents start from carries the doc of every org the work touches. Today rig asks only the first question, as one optional sentence at the lesson review in an org that has no doc, and the other answers are written by hand. The doc is meant to grow the way this page does, from what later works teach, and that part is not built yet.
 
 ## How this page grows
 

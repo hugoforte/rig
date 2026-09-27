@@ -11,7 +11,7 @@ Run it while the worktrees are still on disk, before `rig close`, because a less
 
 ## 1. Read the story
 
-Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
@@ -76,6 +76,26 @@ Say **go** for all of them, or name the numbers you want.
 - **Write to the data root its readers can see.** `rig use` says which root is in hand. Do not carry an employer's lesson into a personal root, or the reverse.
 - **Rig's tracker is public, and filing an issue is outward-facing.** Write about rig alone: no repo names, schemas, hosts or people from a private data root. "Go" covers the issues in the TL;DR; show the title and body of any other issue before filing it.
 
+### An org with no doc
+
+`rig status` lists each org the work touches, with its doc, or `no org doc` and the path where one would go. When any org has no doc, put one line right after "Say **go**…", naming every such org:
+
+> Optional: in one sentence, what is `<org>` trying to accomplish? A bare **go** skips it.
+
+If the user answers, write their answer for each org at the path `rig status` gave, in their words, and nothing more:
+
+```markdown
+---
+org: <org>
+---
+
+## What we're trying to accomplish
+
+<the answer>
+```
+
+The other three headings named in rig's `AGENTS.md` ("The org doc") are written by hand for now. A skip writes nothing, and the next review in that org asks again. An org that already has a doc gets no question.
+
 ## 4. Record it
 
 Once the lessons have landed, or the user says there are none:
@@ -84,4 +104,4 @@ Once the lessons have landed, or the user says there are none:
 rig save -m "lessons reviewed" --learned
 ```
 
-This commits the catalogue changes with the rest of the data root and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
+This commits the catalogue changes and any new org doc with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
