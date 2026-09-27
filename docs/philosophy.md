@@ -1,6 +1,6 @@
 # What rig believes
 
-rig grew out of frictions, one at a time, and this page says what those frictions taught. [The timeline](./timeline.md) is the evidence; [DESIGN.md](../DESIGN.md) holds the decisions. This is what the decisions have in common, written so that someone deciding whether and how to use rig can read it in five minutes, and so that the next decision can be checked against it.
+rig grew out of frictions, one at a time, and this page says what those frictions taught. [The timeline](./timeline.md) shows what grew and when; [DESIGN.md](../DESIGN.md) holds the decisions, and every "decision N" and "§" below refers to it. This is what the decisions have in common, written so that someone deciding whether and how to use rig can read it in five minutes, and so that the next decision can be checked against it.
 
 It is a living document. A principle here is a strong conviction, loosely held: when a friction changes one, the old wording is struck through with the friction that killed it, never deleted. The last section says how it grows.
 
