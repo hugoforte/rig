@@ -64,8 +64,8 @@ Decide, write the reason down, then let evidence move you. A superseded decision
 
 ## What rig asks of an org
 
-rig will ask an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, they are read by every work, and they grow the same way this page does: from what the works teach, one optional question at close.
+None of this is built yet. rig will ask an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers will live in its own data root, every work will read them, and they will grow the same way this page does: from what the works teach, one optional question at the lesson review.
 
 ## How this page grows
 
-By hand, when a friction changes a belief. And from the lesson loop: rig-learn offers rig's tracker as a home for a lesson about rig in general; a lesson that changed a belief rather than reported a bug belongs here instead. The bar for a new principle is a friction to cite. The bar for removing one is the same.
+By hand, when a friction changes a belief. And from the lesson review: rig-learn offers rig's tracker as a home for a lesson about rig in general, and a lesson that turns out to change a belief rather than report a bug is carried here by hand. The bar for a new principle is a friction to cite. The bar for striking one through is the same.
