@@ -113,9 +113,10 @@ rig attach orders-web
 
    What the work *taught* is the same kind of knowledge, asked the same way. Once a PR is open
    `rig next` offers the lesson review: the `rig-learn` skill reads the story (the context doc,
-   review threads, failed checks, the commit log) and offers each lesson a home — the
-   catalogue, an attached repo, or an issue on rig — a machine check before prose, and never a
-   new rule. `rig save --learned` records the gate, and `rig close` names a work that never
+   review threads, failed checks, the commit log) and offers each lesson a home — an
+   attached repo, the catalogue, the org doc, an issue on rig, or rig's philosophy page — a
+   machine check before prose, and never a new rule. The org doc is the one home for prose
+   every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, and `rig close` names a work that never
    passed it. Neither refuses.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
@@ -184,7 +185,9 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 
 **Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, from that work's next mutating command on, and `rig status` names each one, or says there is none and where it would go.
 
-**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading. The other three are written by hand for now.
+**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
+
+**The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
 
 ## Writing a context doc
 

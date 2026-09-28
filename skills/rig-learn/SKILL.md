@@ -1,13 +1,13 @@
 ---
 name: rig-learn
-description: Review what a rig work taught before it closes, and offer each lesson a home — the catalogue, an attached repo, or rig's own tracker. Use when `rig next` offers the lesson review, when a work's PRs are up or merged, or when asked what a work taught or to carry its lessons forward.
+description: Review what a rig work taught before it closes, and offer each lesson a home — an attached repo, the catalogue, the org doc, or rig itself. Use when `rig next` offers the lesson review, when a work's PRs are up or merged, or when asked what a work taught or to carry its lessons forward.
 ---
 
 # rig-learn
 
 Read the story of the current work, find what it taught, and offer each lesson a home. Then record the review with `rig save --learned`.
 
-Run it while the worktrees are still on disk, before `rig close`, because a lesson for a repo has to be committed in one. `rig next` offers it once a pull request is open. After a close, only the catalogue and the tracker are left to write to. A late review is still worth doing.
+Run it while the worktrees are still on disk, before `rig close`, because a lesson for a repo has to be committed in one. `rig next` offers it once a pull request is open. After a close, only the catalogue, the org doc and the tracker are left to write to. A late review is still worth doing.
 
 ## 1. Read the story
 
@@ -32,7 +32,7 @@ A lesson is a fact about a repo, a system or the tool that was true before this 
 
 The user should be able to answer with one word. Open with the recommendation, keep the detail below it short, and **stop for the user**. Nothing is written until they agree.
 
-For every lesson, prefer a machine check over prose, and never add a rule to an `AGENTS.md` or `CLAUDE.md`. A check fails when it goes stale; prose does not.
+For every lesson, prefer a machine check over prose, and never add a rule to an `AGENTS.md` or `CLAUDE.md`. A check fails when it goes stale; prose does not. The org doc is the one exception, and "The org doc" below says why.
 
 ### The shape of the reply
 
@@ -50,8 +50,12 @@ Say **go** for all of them, or name the numbers you want.
 **Catalogue**
 - <repo>: <what changes> → `check` / `talks_to` / prose. <why here>
 
+**Org doc**
+- <org>: <retire / reword / add> "<the line>" → <heading>. <what in this work showed it>
+
 **Rig in general**
 - <issue title> — <one line of what it asks>. <why here>
+- Philosophy: <the belief, as it should now read> → `docs/philosophy.md`. <the friction that moved it>
 
 **Dropped:** <lesson> (<why, in a few words>); …
 ```
@@ -66,7 +70,9 @@ Say **go** for all of them, or name the numbers you want.
 | --- | --- | --- | --- |
 | someone changing the repo's code | **Repos we touched** | a test or CI step | the repo's docs |
 | someone planning a work that touches the repo | **Catalogue** | a command for `check`, a fix to `talks_to` | the entry's prose |
+| every work in the org | **Org doc** | a test in the repo, or a `check` in the catalogue, when the belief can be checked | the org doc, under its heading |
 | anyone using rig, on any data root | **Rig in general** | — | an issue on rig's tracker |
+| anyone deciding how rig should work | **Rig in general**, as philosophy | — | `docs/philosophy.md` |
 | only this work | nowhere new | — | `context.md` already keeps it |
 
 - **When rig is the repo you touched**, a fix inside its code or tests is a repo lesson; a change to how a rig command behaves is a rig lesson.
@@ -75,10 +81,25 @@ Say **go** for all of them, or name the numbers you want.
 - **Correct the catalogue before appending to it.** Read the entry first (`rig catalog <repo>` names the file). A lesson that contradicts a sentence replaces it; a catalogue that only grows ends up unread.
 - **Write to the data root its readers can see.** `rig use` says which root is in hand. Do not carry an employer's lesson into a personal root, or the reverse.
 - **Rig's tracker is public, and filing an issue is outward-facing.** Write about rig alone: no repo names, schemas, hosts or people from a private data root. "Go" covers the issues in the TL;DR; show the title and body of any other issue before filing it.
+- **Philosophy is for beliefs about rig the tool**, never about the repos a work used. A lesson that changes how rig should work, rather than reporting a bug, goes there instead of the tracker. With rig attached, the edit goes in the work's rig PR; without it, it becomes an issue on rig titled "Philosophy: …" carrying the proposed wording. A dropped principle is struck through with the friction that killed it, never deleted. The page is public, so the tracker's rule applies.
 
-### An org with no doc
+### The org doc
 
-`rig status` lists each org the work touches, with its doc, or `no org doc` and the path where one would go. When any org has no doc, put one line right after "Say **go**…", naming every such org:
+`rig status` lists each org the work touches, with its doc, or `no org doc` and the path where one would go.
+
+The doc is inlined into every generated work `AGENTS.md`, so it is the one place this skill writes prose that every session reads. That is allowed because it is the org speaking about itself rather than a rule rig invents, and because every review corrects it. Keep it true and keep it short.
+
+**An org with a doc.** Read it against the story, and propose edits as lessons under **Org doc**:
+
+- retire a "What hurts now" line this work resolved;
+- reword a belief the work had to bend;
+- add what the work taught about the org, under the heading rig's `AGENTS.md` ("The org doc") names for it.
+
+Correct it before appending to it, as with the catalogue: an edit that contradicts a line replaces it. When a belief could be checked, offer the check under **Repos we touched** or **Catalogue** instead of the line. Then put one line right after "Say **go**…", for what only the user knows:
+
+> Optional: did this work confirm, contradict or add to anything in `<org>`'s org doc? A bare **go** skips it.
+
+**An org with no doc.** Put one line right after "Say **go**…", naming every such org:
 
 > Optional: in one sentence, what is `<org>` trying to accomplish? A bare **go** skips it.
 
@@ -94,7 +115,7 @@ org: <org>
 <the answer>
 ```
 
-The other three headings named in rig's `AGENTS.md` ("The org doc") are written by hand for now. A skip writes nothing, and the next review in that org asks again. An org that already has a doc gets no question.
+Later reviews fill the other headings. A skip writes nothing, and the next review in that org asks again.
 
 ## 4. Record it
 
@@ -104,4 +125,4 @@ Once the lessons have landed, or the user says there are none:
 rig save -m "lessons reviewed" --learned
 ```
 
-This commits the catalogue changes and any new org doc with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
+This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
