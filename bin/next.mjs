@@ -203,7 +203,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // offer for that reason too. The skill does the conversation; the command records the gate.
   if (!work?.learnedAt && (phase === 'reviewing' || phase === 'landing')) {
     out.push(offer(phase,
-      'what did this work teach? — the rig-learn skill offers each lesson a home in the catalogue, the repos or rig\'s tracker',
+      'what did this work teach? — the rig-learn skill offers each lesson a home',
       'rig save -m "lessons reviewed" --learned'))
   }
 
