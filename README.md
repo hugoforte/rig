@@ -259,18 +259,20 @@ A name selects which knowledge is in hand and nothing else: there are no per-roo
 
 ### Checking a repo
 
-A catalogue entry carries a `check` beside its `setup` — the commands that verify that repo: its test run, its lint, its build. `rig check` prints them for every repo attached to the work, and `rig check <repo> --run` runs them in that repo's worktree and exits non-zero when one fails. Printed rather than run is the default for the same reason it is for `setup`: a check in a worktree nothing has installed yet fails for a reason that is not the code's. The catalogue holds the command and never the result, so there is nothing in it that can go stale — and a repo with no `check` yet is told which file to write one in.
+A catalogue entry says what its repo can do under one `can:` block: `check` (its test run, its lint, its build), `run` (a `start` command and a `ready` URL — how the repo is brought up on this machine), `verify` (the browser-level pass, which needs a running site and so stays out of the fast loop `check` is), `deploy` (one `start`/`ready` pair per environment name) and `provision` (how it is rebuilt from scratch). `how:` in place of a command declares an ability rig is not the one to run. A top-level `check:`, the shape before `can:`, still works.
+
+Each has a command of the same name. It prints the ability for every repo attached to the work, or for the ones named, and `--run` runs it in that repo's worktree and exits non-zero when it fails. Printed rather than run is the default for the same reason it is for `setup`: a check in a worktree nothing has installed yet fails for a reason that is not the code's. The catalogue holds the command and never the result, and a repo missing an ability is told which file to write it in.
 
 ```powershell
 rig check                    # every attached repo, printed
 rig check billing --run      # run billing's
 ```
 
-Three more abilities sit beside `check` on the same rule: `run` (a `start` command and a `ready` URL — how the repo is brought up on this machine), `verify` (a list like `check` — the browser-level pass, which needs a running site and so stays out of the fast loop `check` is), and `deploy` (one `start`/`ready` pair per environment name). `rig run`, `rig verify` and `rig deploy` print them unless `--run`, store no result, and name the catalogue file when the ability is missing. `rig run --run` starts the site detached, logs into the work folder's `.rig/`, and waits for `ready` to answer (`--timeout`, default 300 s); `rig verify --run` hands the commands the site as `RIG_BASE_URL` — `run.ready`, or `deploy.<env>.ready` with `--env`; `rig deploy <repo> --env <name> --run` runs that environment's `start` and waits for its `ready`. An `--env` the entry does not name is refused, never guessed.
+`rig run --run` starts the site detached, logs into the work folder's `.rig/`, and waits for `ready` to answer (`--timeout`, default 300 s); `rig verify --run` hands the commands the site as `RIG_BASE_URL` — `can.run.ready`, or `can.deploy.<env>.ready` with `--env`; `rig deploy <repo> --env <name> --run` runs that environment's `start` and waits for its `ready`. An `--env` the entry does not name is refused, never guessed.
 
 ```powershell
 rig run billing --run                    # up on this machine, pid and log printed
-rig verify billing --run --env develop   # the browser pass, against deploy.develop.ready
+rig verify billing --run --env develop   # the browser pass, against can.deploy.develop.ready
 rig deploy billing --env develop --run   # deploy, then wait for the environment to answer
 ```
 

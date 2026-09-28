@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { scenario, step, previousRelease, previousReleaseTag, releaseTags, readJson, strip } from './harness.mjs'
 import { dataAnchorFile, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
+import { MAJOR, majorOf } from '../bin/version.mjs'
 
 const ORG = 'e2e-acme'
 const machineFile = m => readJson(m.localConfig)
@@ -201,12 +202,19 @@ scenario('the previous release, against a machine file this one wrote', {
       'pointed at whichever root is current, so the two rigs are working on the same knowledge')
   }),
 
-  step('a work the previous release records is one this rig reads', m => {
+  step('a work the previous release records is one this rig reads, unless a major stands between them', m => {
     // The other half of the window: the rig on PATH goes on being used while the update waits,
     // so what it writes has to come back. Run in the work root, because the previous release
     // resolves the same way this one does and `current` is where both of them look.
     const r = m.rig(['new', 'e2e-window-old', '--title', 'Written by the old rig', '--no-ticket'],
       { root: m.previous.root })
+    // Across a major the window is closed on purpose: the older rig does not know the newer
+    // record format, so its writes are refused until it updates (ADR-0002).
+    if (majorOf(m.previous.version) < MAJOR) {
+      assert.notEqual(r.code, 0, r.out)
+      assert.match(strip(r.out), /run `rig update`/)
+      return
+    }
     assert.equal(r.code, 0, r.out)
     const here = m.rig(['status'], { cwd: path.join(m.workRoot, 'e2e-window-old') })
     assert.equal(here.code, 0, here.out)

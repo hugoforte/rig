@@ -48,7 +48,7 @@ Say **go** for all of them, or name the numbers you want.
 - <repo>: <what changes> → <file>. <why here, in a clause>
 
 **Catalogue**
-- <repo>: <what changes> → `check` / `talks_to` / prose. <why here>
+- <repo>: <what changes> → `can` / `talks_to` / prose. <why here>
 
 **Org doc**
 - <org>: <retire / reword / add> "<the line>" → <heading>. <what in this work showed it>
@@ -69,8 +69,8 @@ Say **go** for all of them, or name the numbers you want.
 | Who needs it | Home | Machine check first | Prose otherwise |
 | --- | --- | --- | --- |
 | someone changing the repo's code | **Repos we touched** | a test or CI step | the repo's docs |
-| someone planning a work that touches the repo | **Catalogue** | a command for `check`, a fix to `talks_to` | the entry's prose |
-| every work in the org | **Org doc** | a test in the repo, or a `check` in the catalogue, when the belief can be checked | the org doc, under its heading |
+| someone planning a work that touches the repo | **Catalogue** | a command under `can`, a fix to `talks_to` | the entry's prose |
+| every work in the org | **Org doc** | a test in the repo, or a command under `can` in the catalogue, when the belief can be checked | the org doc, under its heading |
 | anyone using rig, on any data root | **Rig in general** | — | an issue on rig's tracker |
 | anyone deciding how rig should work | **Rig in general**, as philosophy | — | `docs/philosophy.md` |
 | only this work | nowhere new | — | `context.md` already keeps it |

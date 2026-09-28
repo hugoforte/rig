@@ -142,6 +142,12 @@ function rootFindings (root) {
     out.push(warn(`${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.join(', ')}`, { counts: false }))
   }
 
+  // One ability in two homes: a `check` under `can:` and a top-level one from before `can:`.
+  // A contradiction, so it warns; it does not count, because rig reads `can:` and works.
+  for (const repo of root.twoChecks || []) {
+    out.push(warn(`${repo} has a check under can: and a top-level check: — rig reads can:, so fold the other into it`, { counts: false }))
+  }
+
   // An entry behind the repo it describes is the same kind of finding as a draft — an invitation
   // to correct it, not a fault — so it warns and does not count. Drafts are left out: a stub
   // nobody has written yet is already reported above, and saying it twice would make the shorter
@@ -194,7 +200,7 @@ function rootFindings (root) {
 //                     minus the two things rig keeps there itself
 //   mirrorRoot        { path, exists }
 //   dataRoots         one per root this installation configures, each
-//                     { name, path, split, exists, state, repoConfig, orgs, drafts,
+//                     { name, path, split, exists, state, repoConfig, orgs, drafts, twoChecks,
 //                     catalogueFreshness }: `state` is `checkouts.describe()` and null when
 //                     there is nothing readable to describe, `repoConfig` is
 //                     { path, exists, orgs, stamp } with `stamp` the record-format reading,

@@ -375,6 +375,11 @@ test('draft catalogue entries are an invitation, not a fault: they warn and do n
   assert.equal(problemCount(found), 0)
 })
 
+test('an entry with a check in both places is named, with the one rig reads', () => {
+  const one = only(doctorFindings(snap({ dataRoots: [root({ twoChecks: ['billing'] })] })), /check under can/)
+  assert.match(one.says, /billing has a check under can: and a top-level check: — rig reads can:, so fold the other into it/)
+})
+
 test('one draft entry is singular, because the line is read by a person', () => {
   assert.match(only(doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })] })), /draft catalogue/).says, /1 draft catalogue entry: billing/)
 })

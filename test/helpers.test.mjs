@@ -65,31 +65,38 @@ test('parseFrontmatter: no frontmatter means empty data and the whole text as bo
   assert.equal(body, 'just text')
 })
 
-test('parseFrontmatter: the abilities — a map, a list, and a map two levels down', () => {
+test('parseFrontmatter: the abilities — maps four levels down, and a list inside them', () => {
   const { data } = parseFrontmatter(`---
 repo: billing
-run:
-  start: npm run dev
-  ready: http://localhost:5173
-verify:
-  - npx playwright test
-deploy:
-  develop:
-    start: gh workflow run deploy.yml --ref develop
-    ready: https://dev.example.invalid
-  uat:
-    start: gh workflow run deploy.yml --ref uat
-    ready: https://uat.example.invalid
-check: []
+can:
+  check:
+    commands:
+      - npm test
+  run:
+    start: npm run dev
+    ready: http://localhost:5173
+  deploy:
+    develop:
+      start: gh workflow run deploy.yml --ref develop
+      ready: https://dev.example.invalid
+    uat:
+      start: gh workflow run deploy.yml --ref uat
+      ready: https://uat.example.invalid
+  provision:
+    how: rebuilt by the infra pipeline
+setup: []
 ---
 `)
-  assert.deepEqual(data.run, { start: 'npm run dev', ready: 'http://localhost:5173' })
-  assert.deepEqual(data.verify, ['npx playwright test'])
-  assert.deepEqual(data.deploy, {
-    develop: { start: 'gh workflow run deploy.yml --ref develop', ready: 'https://dev.example.invalid' },
-    uat: { start: 'gh workflow run deploy.yml --ref uat', ready: 'https://uat.example.invalid' },
+  assert.deepEqual(data.can, {
+    check: { commands: ['npm test'] },
+    run: { start: 'npm run dev', ready: 'http://localhost:5173' },
+    deploy: {
+      develop: { start: 'gh workflow run deploy.yml --ref develop', ready: 'https://dev.example.invalid' },
+      uat: { start: 'gh workflow run deploy.yml --ref uat', ready: 'https://uat.example.invalid' },
+    },
+    provision: { how: 'rebuilt by the infra pipeline' },
   })
-  assert.deepEqual(data.check, [], 'a key after the nested map lands back at the top')
+  assert.deepEqual(data.setup, [], 'a key after the nested maps lands back at the top')
 })
 
 test('parseFrontmatter: a list may start at its key\'s own column, and the next key ends it', () => {

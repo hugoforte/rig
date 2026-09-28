@@ -68,8 +68,10 @@ stack: JavaScript
 role: a repo with something to verify
 talks_to: []
 setup: []
-check:
-${check.map(c => `  - ${c}`).join('\n')}
+can:
+  check:
+    commands:
+${check.map(c => `      - ${c}`).join('\n')}
 ---
 
 Prose.
@@ -90,8 +92,8 @@ test('a work with three repos attached, each drafted into the catalogue', () => 
   }
 })
 
-test('the drafted entry leaves a check to fill in, beside the setup', () => {
-  assert.match(fs.readFileSync(catalogEntry('billing'), 'utf8'), /^check: \[\]$/m)
+test('the drafted entry leaves a check to fill in, under what the repo can do', () => {
+  assert.match(fs.readFileSync(catalogEntry('billing'), 'utf8'), /^can:\r?\n  check:\r?\n    commands: \[\]$/m)
 })
 
 test('check prints what verifies each repo, and runs none of it', () => {
@@ -136,4 +138,17 @@ test('a failed check is reported, and the exit code carries the verdict', () => 
 test('the generated work file carries the check beside the setup', () => {
   assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
   assert.match(generatedAgents(), /- Check: `git rev-parse --abbrev-ref HEAD`/)
+})
+
+test('a top-level check, the shape before can:, is still read', () => {
+  fs.writeFileSync(catalogEntry('web'), `---
+repo: web
+org: acme
+stack: TypeScript
+role: a repo written before can:
+check:
+  - git rev-parse --abbrev-ref HEAD
+---
+`)
+  assert.match(rig(['check', 'web', '--work', 't1']).out, /web[\s\S]*git rev-parse --abbrev-ref HEAD/)
 })

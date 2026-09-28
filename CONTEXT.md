@@ -16,6 +16,10 @@ _Avoid_: spin up, bootstrap, onboard
 Committed, hand-corrected knowledge about an org's repos, one file per repo.
 _Avoid_: inventory, registry
 
+**Ability**:
+One thing a repo can do, named under its catalogue entry's `can:`: `check`, `run`, `verify`, `deploy` or `provision`. Held as the command that does it, printed unless `--run`. **Declared** when the entry says how it is done (`how:`) without a command rig runs.
+_Avoid_: capability, skill, level
+
 **Org doc**:
 What an org is trying to do, in its own words: `orgs/<org>.md` in the data root, under the four headings AGENTS.md's "The org doc" names. Every work reads the docs of its repos' orgs. Absent means no constraints.
 _Avoid_: charter, mission statement, org config (it is prose, not settings)

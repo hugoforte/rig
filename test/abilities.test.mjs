@@ -1,9 +1,11 @@
-// `rig run`, `rig verify` and `rig deploy` end to end — hugoforte/rig#175.
+// What a repo can do, end to end: `rig run`, `rig verify`, `rig deploy` and `rig provision`
+// — hugoforte/rig#175 and #188.
 //
 // The catalogue knew how a repo is set up and how it is checked, and nothing about how it is
-// brought up on this machine, verified in a browser once it is, or deployed. The three sit
-// beside `check` on its rule (DESIGN.md decision 106): printed, never run, until `--run`; a
-// command held and never a result; the file to write it in named when it is missing.
+// brought up on this machine, verified in a browser once it is, deployed, or rebuilt from
+// scratch. Every ability sits under the entry's `can:` on `check`'s rule (DESIGN.md decision
+// 109): printed, never run, until `--run`; the file to write it in named when it is missing;
+// and an ability the entry declares with `how:` said as declared, with nothing run.
 //
 // The site the two polling commands wait for is an http server this file starts, told how
 // many requests to refuse before answering — and with what — so what is asserted is the poll,
@@ -24,7 +26,7 @@ import { makeInstall } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
   inProcess: true,
-  prefix: 'rig-run-verify-deploy-',
+  prefix: 'rig-abilities-',
   author: 'rig run',
   email: 'run@example.invalid',
   remotes: true,
@@ -86,8 +88,9 @@ const publish = repo => {
   gitMust(tmp, 'clone', '-q', '--bare', seed, bare)
 }
 
-// The correction rule 4 asks for, made by hand: the abilities, put where `rig attach` left
-// commented examples.
+// The correction rule 4 asks for, made by hand: the abilities, put under `can:` where
+// `rig attach` left commented examples. Each fixture is written as if at the top level and
+// indented here, so it reads as the ability it is.
 const correct = (repo, abilities) => fs.writeFileSync(catalogEntry(repo), `---
 repo: ${repo}
 org: acme
@@ -95,8 +98,10 @@ stack: JavaScript
 role: a repo with a site to bring up
 talks_to: []
 setup: []
-check: []
-${abilities}
+can:
+  check:
+    commands: []
+${abilities.split('\n').map(line => `  ${line}`).join('\n')}
 ---
 
 Prose.
@@ -139,17 +144,18 @@ test('a work with three repos attached, each drafted into the catalogue, and a s
   }
 })
 
-test('the drafted entry shows the three abilities as commented examples, beside the check', () => {
+test('the drafted entry shows the other abilities as commented examples, under the check', () => {
   const drafted = fs.readFileSync(catalogEntry('billing'), 'utf8')
-  assert.match(drafted, /^check: \[\]$/m)
-  for (const key of ['run', 'verify', 'deploy']) assert.match(drafted, new RegExp(`^# ${key}:$`, 'm'))
+  const shown = ['run', 'verify', 'deploy', 'provision'].filter(key => new RegExp(`^#   ${key}:$`, 'm').test(drafted))
+  assert.deepEqual(shown, ['run', 'verify', 'deploy', 'provision'])
 })
 
-test('a repo with none of the three is told which file to write each in', () => {
+test('a repo with none of them is told which file to write each in', () => {
   for (const [args, key] of [
     [['run', 'web'], 'run'],
     [['verify', 'web'], 'verify'],
     [['deploy', 'web', '--env', 'develop'], 'deploy'],
+    [['provision', 'web'], 'provision'],
   ]) {
     const r = rig([...args, '--work', 't1'])
     assert.equal(r.code, 0, r.out)
@@ -163,7 +169,8 @@ test('run prints start and ready, and starts nothing', () => {
   start: ${SERVER}
   ready: ${site()}
 verify:
-  - ${SAYS_BASE_URL}
+  commands:
+    - ${SAYS_BASE_URL}
 deploy:
   develop:
     start: ${DEPLOY}
@@ -232,7 +239,8 @@ test('a failed verify is reported, and the exit code carries the verdict', () =>
   start: ${EXITS}
   ready: ${site()}
 verify:
-  - node -e "process.exit(1)"
+  commands:
+    - node -e "process.exit(1)"
 deploy:
   develop:
     start: node -e "process.exit(1)"
@@ -308,7 +316,7 @@ test('a ready that is not a URL is refused before anything is started', async ()
   ready: not a url`)
   const r = await rig(['run', 'web', '--work', 't1', '--run'])
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /web: run\.ready is not a URL: not a url/)
+  assert.match(r.out, /web: can\.run\.ready is not a URL: not a url/)
   assert.ok(!fs.existsSync(runLog('web')), 'nothing started')
 })
 
@@ -328,6 +336,59 @@ test('a deploy whose start fails never polls', async () => {
   assert.match(r.out, /deploy command failed/)
   assert.doesNotMatch(r.out, /is up at/)
   assert.equal(hits, 0)
+})
+
+// Rebuilding a repo from scratch is a list of commands, on `check`'s rule.
+const PROVISION = 'node -e "require(\'fs\').writeFileSync(\'provisioned.marker\', \'\')"'
+const provisionMarker = repo => path.join(workRoot, 't1', repo, 'provisioned.marker')
+
+test('provision prints its commands, and runs none of them', () => {
+  correct('orders', `provision:
+  commands:
+    - ${PROVISION}`)
+  const r = rig(['provision', 'orders', '--work', 't1'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /orders[\s\S]*not run — `rig provision orders --run`/)
+  assert.equal(fs.existsSync(provisionMarker('orders')), false)
+})
+
+test('provision --run runs them, in the repo\'s own worktree', () => {
+  assert.equal(rig(['provision', 'orders', '--work', 't1', '--run']).code, 0)
+  assert.ok(fs.existsSync(provisionMarker('orders')))
+})
+
+test('an ability the entry declares with how: is said as declared, and nothing runs', () => {
+  fs.rmSync(provisionMarker('orders'))
+  correct('orders', `provision:
+  how: rebuilt by the infra pipeline`)
+  const r = rig(['provision', 'orders', '--work', 't1', '--run'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /orders: provision is declared, not run from here — rebuilt by the infra pipeline/)
+  assert.equal(fs.existsSync(provisionMarker('orders')), false)
+})
+
+test('the generated work file names each ability the entry has', () => {
+  correct('billing', `run:
+  start: ${EXITS}
+  ready: ${site()}
+verify:
+  commands:
+    - ${SAYS_BASE_URL}
+deploy:
+  develop:
+    start: ${DEPLOY}
+    ready: ${deployed()}
+provision:
+  how: rebuilt by the infra pipeline`)
+  assert.equal(rig(['save', '-m', 'abilities corrected', '--work', 't1']).code, 0)
+  const agents = fs.readFileSync(path.join(workRoot, 't1', 'AGENTS.md'), 'utf8')
+  const billing = agents.slice(agents.indexOf('### billing'), agents.indexOf('### orders'))
+  assert.deepEqual(billing.split('\n').filter(l => /^- (Check|Run|Verify|Deploy|Provision)/.test(l)), [
+    `- Run: \`${EXITS}\` · ready at ${site()}`,
+    `- Verify: \`${SAYS_BASE_URL}\``,
+    `- Deploy to develop: \`${DEPLOY}\` · ready at ${deployed()}`,
+    '- Provision: declared — rebuilt by the infra pipeline',
+  ])
 })
 
 // The one refusal a polling command can raise after it has answered with a promise: a start

@@ -123,7 +123,7 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `run`, `verify`, `deploy`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `can`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -158,19 +158,57 @@ ones, through planning, designing and building, and goes quiet from `reviewing` 
 pull request is open, adding a repo is a decision already taken. Neither blocks, and neither
 attaches anything for you.
 
-`setup` is how a repo is made ready; `check` is how it is verified — its test run, its
-lint, its build. Both are commands and never results: no pass or fail is ever stored.
+`setup` is how a repo is made ready. Everything else a repo can do sits under one `can:`
+block, one home per ability: `check` (its test run, its lint, its build), `run` (brought up on
+this machine), `verify` (the browser-level pass against a running site), `deploy` (one per
+environment) and `provision` (rebuilt from scratch). Each is a command, never a result: no
+pass or fail is ever stored.
 
-```bash
-rig check                 # what verifies every repo in this work — printed, not run
-rig check billing --run   # run billing's, in its worktree; non-zero if one fails
+```yaml
+can:
+  check:
+    commands:
+      - npm test
+  run:
+    start: npm run dev
+    ready: http://localhost:3000
+  verify:
+    commands:
+      - npx playwright test
+  deploy:
+    develop:
+      start: gh workflow run deploy.yml --ref develop
+      ready: https://dev.example.invalid
+  provision:
+    how: rebuilt by the infra pipeline; nothing to run from here
 ```
 
-Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
-in, `rig check` prints the check commands and `--run` opts in. A command that cannot
-succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
-repo whose `check` is empty is named, with the file to write one in; write it while the
-repo is still loaded in your head (rule 4).
+`check`, `verify` and `provision` are lists of `commands`; `run` and each `deploy.<env>` are a
+`start` command and a `ready` URL. `how:` in place of a command **declares** an ability that
+exists but is not rig's to run, and rig says so rather than calling it missing. `verify` is
+kept apart from `check` because it is slow and needs a running site, and folding it in would
+make `rig check --run` unusable in the fast loop. A top-level `check:`, the shape before
+`can:`, is still read; `rig doctor` names an entry that has both.
+
+```bash
+rig check                                # what verifies every repo in this work — printed, not run
+rig check billing --run                  # run billing's, in its worktree; non-zero if one fails
+rig run billing --run                    # start can.run.start detached, wait for its ready URL
+rig verify billing --run                 # the browser pass, RIG_BASE_URL=can.run.ready
+rig verify billing --run --env develop   # the same pass against can.deploy.develop.ready
+rig deploy billing --env develop --run   # can.deploy.develop.start, then wait for its ready URL
+rig provision billing                    # how billing is rebuilt from scratch, printed
+```
+
+Nothing is run behind your back: `rig attach` prints the setup commands and `--setup` opts
+in, and every ability prints unless `--run`. A command that cannot succeed yet — a test run in
+a worktree nothing has installed — is worse run than shown. A repo missing an ability is named,
+with the file to write it in; write it while the repo is still loaded in your head (rule 4).
+An `--env` the entry does not name is refused rather than guessed. `rig run` prints the pid
+(the launcher's — the site runs under it) and where the log is, and keeps no hold on the
+process past that; a site already answering at its ready URL is reported, not started twice.
+**Stop the site before `rig close`**: it stands in the worktree, and Windows will not remove a
+folder a process is standing in.
 
 ## The org doc
 
@@ -188,26 +226,6 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 **Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
 
 **The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
-
-Three more abilities sit beside them on the same rule — `run`, `verify` and `deploy` — for
-the loop `check` cannot close: bring the repo up on this machine, verify the running site in
-a browser, deploy it to an environment. `run` and each `deploy.<env>` are a `start` command
-and a `ready` URL; `verify` is a list like `check`, kept apart from it because it is slow and
-needs a running site, and folding it in would make `rig check --run` unusable in the fast loop.
-
-```bash
-rig run billing --run                    # start run.start detached, wait for run.ready
-rig verify billing --run                 # the browser pass, RIG_BASE_URL=run.ready
-rig verify billing --run --env develop   # the same pass against deploy.develop.ready
-rig deploy billing --env develop --run   # deploy.develop.start, then wait for its ready URL
-```
-
-All three print unless `--run`, store no result, and name the catalogue file when the ability
-is missing. An `--env` the entry does not name is refused rather than guessed. `rig run`
-prints the pid (the launcher's — the site runs under it) and where the log is, and keeps no hold
-on the process past that; a site already answering at `run.ready` is reported, not started
-twice. **Stop the site before `rig close`**: it stands in the worktree, and Windows will not
-remove a folder a process is standing in.
 
 ## Writing a context doc
 

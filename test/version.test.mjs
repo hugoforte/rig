@@ -103,7 +103,7 @@ test('migration 3 is additive on the way in and lossy on the way out, which is w
   assert.equal(unrunnableHook(MIGRATIONS[2]), null)
   const before = { orgs: ['acme'], writtenBy: '2.3.0' }
   const { config, ran } = applyMigrations(before, '3.0.0')
-  assert.deepEqual(ran, [MIGRATIONS[2].name], 'a data root already at 2 has only migration 3 pending')
+  assert.deepEqual(ran, MIGRATIONS.slice(2).map(m => m.name), 'a data root already at 2 has migration 3 and those after it pending')
   assert.equal(config.writtenBy, '3.0.0')
   assert.deepEqual(config.orgs, before.orgs)
 })
@@ -114,9 +114,17 @@ test('two record changes that ship together are one migration, because a major i
   // between these two, because the intermediate state existed only on a work branch. Counting
   // them separately would claim a format nothing can be in and leave a hole in the published
   // majors. This is the assertion that would catch someone splitting them back apart.
-  assert.equal(MAJOR, 3)
   assert.match(MIGRATIONS[2].name, /phase replaces status/)
   assert.match(MIGRATIONS[2].name, /stages/)
+  assert.match(MIGRATIONS[3].name, /under can:/, 'and the next format is the one after both')
+})
+
+test('migration 4 moves only the major: no hook, and no catalogue entry is rewritten', () => {
+  // `check` moved under `can:` on the read path, in `abilitiesOf`, which still reads a
+  // top-level `check:`. What the major buys is the write refusal: an older rig would read
+  // `can.check` as no check and ask for a second one at the top level.
+  assert.equal(unrunnableHook(MIGRATIONS[3]), null)
+  assert.equal('config' in MIGRATIONS[3], false)
 })
 
 test('migrating twice changes nothing the second time', () => {

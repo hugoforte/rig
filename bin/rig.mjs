@@ -970,6 +970,29 @@ const commandList = v => Array.isArray(v) ? v : (v ? [v] : [])
 const isMap = v => v && typeof v === 'object' && !Array.isArray(v)
 const startAndReady = v => isMap(v) && typeof v.start === 'string' ? { start: v.start, ready: typeof v.ready === 'string' ? v.ready : '' } : null
 
+// An entry's `can:`, each ability read into one shape whatever the frontmatter wrote: a list
+// ability as its `commands`, a started one as its `start` and `ready`, deploy as one of those
+// per environment, and `how` beside any of them for an ability the entry declares rather than
+// runs. A top-level `check:` is the shape before `can:` and is still read when `can` has none;
+// no entry is ever rewritten to move it.
+function abilitiesOf (data) {
+  const can = isMap(data.can) ? data.can : {}
+  const how = v => isMap(v) && typeof v.how === 'string' ? v.how : ''
+  const listed = v => isMap(v) ? { commands: commandList(v.commands), how: how(v) } : null
+  const started = v => isMap(v) ? { ...(startAndReady(v) || { start: '', ready: '' }), how: how(v) } : null
+  const envs = isMap(can.deploy) ? Object.entries(can.deploy).filter(([env]) => env !== 'how') : []
+  return {
+    check: listed(can.check) ?? (data.check === undefined ? null : { commands: commandList(data.check), how: '' }),
+    run: started(can.run),
+    verify: listed(can.verify),
+    deploy: {
+      envs: Object.fromEntries(envs.map(([env, v]) => [env, started(v)]).filter(([, v]) => v?.start || v?.how)),
+      how: how(can.deploy),
+    },
+    provision: listed(can.provision),
+  }
+}
+
 function loadCatalog (dataRootPath = dataRoot()) {
   const root = path.join(dataRootPath, 'catalog')
   if (!exists(root)) return []
@@ -987,11 +1010,9 @@ function loadCatalog (dataRootPath = dataRoot()) {
         stack: data.stack || '',
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
         setup: commandList(data.setup),
-        check: commandList(data.check),
-        run: startAndReady(data.run),
-        verify: commandList(data.verify),
-        deploy: Object.fromEntries(Object.entries(isMap(data.deploy) ? data.deploy : {})
-          .map(([name, v]) => [name, startAndReady(v)]).filter(([, v]) => v)),
+        can: abilitiesOf(data),
+        // Two homes for one ability: `rig doctor` names it, and `can:` is the one read.
+        twoChecks: data.check !== undefined && isMap(data.can) && data.can.check !== undefined,
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -1049,18 +1070,24 @@ talks_to: []
 #     how: one line — what actually passes between them
 #     direction: downstream
 setup: []
-check: []
-# How the repo is brought up on this machine, verified in a browser once it is up, and
-# deployed to an environment — each a command rig prints unless --run, never a result.
-# run:
-#   start: npm run dev
-#   ready: http://localhost:3000
-# verify:
-#   - npx playwright test
-# deploy:
-#   develop:
-#     start: gh workflow run deploy.yml --ref develop
-#     ready: https://dev.example.invalid
+# What the repo can do: verified, brought up on this machine, verified in a browser once it
+# is up, deployed to an environment, rebuilt from scratch. Each is a command rig prints unless
+# --run. \`how:\` in place of the command says the ability exists but is not run from here.
+can:
+  check:
+    commands: []
+#   run:
+#     start: npm run dev
+#     ready: http://localhost:3000
+#   verify:
+#     commands:
+#       - npx playwright test
+#   deploy:
+#     develop:
+#       start: gh workflow run deploy.yml --ref develop
+#       ready: https://dev.example.invalid
+#   provision:
+#     how: rebuilt by the infra pipeline; nothing to run from here
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
@@ -1491,6 +1518,22 @@ function stageWriteBack (work, stages, { abandoned }) {
 const WORK_FOLDER = { agents: 'AGENTS.md', claude: 'CLAUDE.md', marker: '.rig' }
 const WORK_FOLDER_ENTRIES = Object.values(WORK_FOLDER)
 
+// One line per ability an entry names, in the suggested order, for the generated work file:
+// what each runs, where a started one answers, and an ability declared with `how:` as that.
+function abilityLines (can) {
+  const code = commands => commands.map(s => `\`${s}\``).join(' · ')
+  const started = ({ start, ready }) => `\`${start}\`${ready ? ` · ready at ${ready}` : ''}`
+  const line = (label, ability, runs) => ability?.how && !runs ? `- ${label}: declared — ${ability.how}` : runs ? `- ${label}: ${runs}` : null
+  return [
+    line('Check', can.check, can.check?.commands.length && code(can.check.commands)),
+    line('Run', can.run, can.run?.start && started(can.run)),
+    line('Verify', can.verify, can.verify?.commands.length && code(can.verify.commands)),
+    line('Deploy', can.deploy, null),
+    ...Object.entries(can.deploy.envs).map(([env, d]) => line(`Deploy to ${env}`, d, d.start && started(d))),
+    line('Provision', can.provision, can.provision?.commands.length && code(can.provision.commands)),
+  ].filter(Boolean)
+}
+
 function regenerate (cfg, work) {
   const wd = workDir(cfg, work.id)
   const cat = loadCatalog()
@@ -1521,7 +1564,7 @@ function regenerate (cfg, work) {
     // refusal costs a label, never the file.
     lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
-    if (c?.check?.length) lines.push(`- Check: ${c.check.map(s => `\`${s}\``).join(' · ')}`)
+    if (c) lines.push(...abilityLines(c.can))
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc
@@ -2858,10 +2901,33 @@ function attachedRepos (work, positional) {
   return targets
 }
 
-// A repo without the ability asked for is told where to write it: the moment you went
-// looking is the moment that knowledge is cheap (AGENTS.md rule 4).
-const missingAbility = (r, key, what = key) =>
-  warn(`${r.repo}: no ${what} in the catalogue — add \`${key}:\` to ${catalogFile(r.org, r.repo)}`)
+// Whether an ability can be run from here, saying why not when it cannot. A repo without it
+// is told where to write it: the moment you went looking is the moment that knowledge is
+// cheap (AGENTS.md rule 4). One the entry declares with `how:` is said as declared — not a
+// gap, only not rig's to run.
+function runnable (r, key, ability, has, what = key) {
+  if (has) return true
+  if (ability?.how) say(`${r.repo}: ${key} is declared, not run from here — ${ability.how}`)
+  else warn(`${r.repo}: no ${what} in the catalogue — add \`can.${key}:\` to ${catalogFile(r.org, r.repo)}`)
+  return false
+}
+
+// A list ability — `check`, `provision` — for each repo named: printed, or with `--run` run in
+// its worktree, the exit code carrying a failure.
+function listAbility (key, { flags, positional }) {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  for (const r of attachedRepos(work, positional)) {
+    const ability = findCatalog(r.repo)?.can[key]
+    if (!runnable(r, key, ability, ability?.commands.length, `${key} commands`)) continue
+    if (flags.run) {
+      if (!runCatalogCommands(r.path, ability.commands, key)) current.exitCode = 1
+      continue
+    }
+    say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig ${key} ${r.repo} --run\`)`)}`)
+    for (const c of ability.commands) say(`  ${c}`)
+  }
+}
 
 cmds.setup = ({ flags, positional }) => {
   const cfg = config()
@@ -2882,20 +2948,12 @@ cmds.setup = ({ flags, positional }) => {
 // the moment that knowledge is cheap (AGENTS.md rule 4). Nothing about a run is recorded
 // anywhere — the catalogue holds the command, never a verdict (decision 3), so the only
 // place a failure lands is `--run`'s exit code, where the caller that asked can read it.
-cmds.check = ({ flags, positional }) => {
-  const cfg = config()
-  const work = openWork(cfg, flags)
-  for (const r of attachedRepos(work, positional)) {
-    const cat = findCatalog(r.repo)
-    if (!cat?.check?.length) { missingAbility(r, 'check', 'check commands'); continue }
-    if (flags.run) {
-      if (!runCatalogCommands(r.path, cat.check, 'check')) current.exitCode = 1
-      continue
-    }
-    say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
-    for (const c of cat.check) say(`  ${c}`)
-  }
-}
+cmds.check = args => listAbility('check', args)
+
+// Whether the repo can be rebuilt from scratch — its infrastructure, its database — on
+// `check`'s rule. Printed unless `--run`, because a rebuild nobody asked for is the most
+// expensive thing a catalogue command could do by accident.
+cmds.provision = args => listAbility('provision', args)
 
 // ------------------------------------------------------ run, verify, deploy
 
@@ -2914,12 +2972,12 @@ const timeoutSeconds = flags => {
 // environment nobody wrote down is a guess, and `--env` is never defaulted.
 function deployEnv (r, cat, name) {
   if (typeof name !== 'string') die('--env wants an environment name')
-  const found = cat?.deploy?.[name]
-  if (found) return found
-  const known = Object.keys(cat?.deploy || {})
+  const found = cat?.can.deploy.envs[name]
+  if (found?.start) return found
+  const known = Object.keys(cat?.can.deploy.envs || {})
   die(`${r.repo}: no deploy env "${name}" in the catalogue — ${known.length
     ? `it names ${known.join(', ')}`
-    : `add \`deploy:\` to ${catalogFile(r.org, r.repo)}`}`)
+    : `add \`can.deploy:\` to ${catalogFile(r.org, r.repo)}`}`)
 }
 
 // The URL an ability says a site answers at, checked before anything is started: a `ready`
@@ -3029,15 +3087,15 @@ cmds.run = ({ flags, positional }) => {
   const seconds = timeoutSeconds(flags)
   const targets = []
   for (const r of attachedRepos(work, positional)) {
-    const cat = findCatalog(r.repo)
-    if (!cat?.run) { missingAbility(r, 'run'); continue }
+    const run = findCatalog(r.repo)?.can.run
+    if (!runnable(r, 'run', run, run?.start)) continue
     if (!flags.run) {
       say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig run ${r.repo} --run\`)`)}`)
-      startAndReadyLines(cat.run)
+      startAndReadyLines(run)
       continue
     }
     // Every URL checked before any site is started.
-    targets.push({ r, run: cat.run, ready: readyUrl(r, 'run.ready', cat.run.ready) })
+    targets.push({ r, run, ready: readyUrl(r, 'can.run.ready', run.ready) })
   }
   if (!targets.length) return
   return (async () => {
@@ -3053,19 +3111,20 @@ cmds.verify = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   for (const r of attachedRepos(work, positional)) {
     const cat = findCatalog(r.repo)
-    if (!cat?.verify?.length) { missingAbility(r, 'verify', 'verify commands'); continue }
-    const url = flags.env !== undefined ? deployEnv(r, cat, flags.env).ready : cat.run?.ready
+    const verify = cat?.can.verify
+    if (!runnable(r, 'verify', verify, verify?.commands.length, 'verify commands')) continue
+    const url = flags.env !== undefined ? deployEnv(r, cat, flags.env).ready : cat.can.run?.ready
     if (!url) {
-      warn(`${r.repo}: nothing to point verify at — add \`run.ready\` to ${catalogFile(r.org, r.repo)}, or name an environment with --env`)
+      warn(`${r.repo}: nothing to point verify at — add \`can.run.ready\` to ${catalogFile(r.org, r.repo)}, or name an environment with --env`)
       continue
     }
     if (flags.run) {
-      if (!runCatalogCommands(r.path, cat.verify, 'verify', { RIG_BASE_URL: url })) current.exitCode = 1
+      if (!runCatalogCommands(r.path, verify.commands, 'verify', { RIG_BASE_URL: url })) current.exitCode = 1
       continue
     }
     const how = `rig verify ${r.repo} --run${flags.env !== undefined ? ` --env ${flags.env}` : ''}`
     say(`${C.bold(r.repo)} ${C.dim(`(not run — \`${how}\`)`)}  RIG_BASE_URL=${url}`)
-    for (const c of cat.verify) say(`  ${c}`)
+    for (const c of verify.commands) say(`  ${c}`)
   }
 }
 
@@ -3079,14 +3138,14 @@ cmds.deploy = ({ flags, positional }) => {
   const seconds = timeoutSeconds(flags)
   const [r] = attachedRepos(work, [positional[0]])
   const cat = findCatalog(r.repo)
-  if (!Object.keys(cat?.deploy || {}).length) { missingAbility(r, 'deploy'); return }
+  if (!runnable(r, 'deploy', cat?.can.deploy, Object.keys(cat?.can.deploy.envs || {}).length)) return
   const target = deployEnv(r, cat, flags.env)
   if (!flags.run) {
     say(`${C.bold(r.repo)} → ${flags.env} ${C.dim(`(not run — \`rig deploy ${r.repo} --env ${flags.env} --run\`)`)}`)
     startAndReadyLines(target)
     return
   }
-  const ready = readyUrl(r, `deploy.${flags.env}.ready`, target.ready)
+  const ready = readyUrl(r, `can.deploy.${flags.env}.ready`, target.ready)
   if (!runCatalogCommands(r.path, [target.start], 'deploy')) { current.exitCode = 1; return }
   if (ready) return reportReady(r.repo, ready, seconds)
 }
@@ -4035,6 +4094,7 @@ function doctorRoot (name, loc, hasGit) {
     },
     orgs: (cfg?.orgs ?? []).map(org => ({ org, identity: effectiveIdentity(cfg, org), tracker: cfg.tracker?.[org] || null })),
     drafts: entries.filter(e => e.draft).map(e => e.repo),
+    twoChecks: entries.filter(e => e.twoChecks).map(e => e.repo),
     catalogueFreshness: cfg ? catalogueFreshness(root, entries, cfg.mirrorRoot, hasGit) : [],
   }
 }
@@ -4293,15 +4353,18 @@ cmds.help = () => {
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
-  rig run [repo...] [--run]       print how each repo is brought up here (run.start) and the
-       [--timeout s]               URL that says it is (run.ready); --run starts it detached,
-                                  logs into the work folder's .rig/, and waits for the URL;
-                                  the site stands in the worktree, so stop it before rig close
+  rig run [repo...] [--run]       print how each repo is brought up here (can.run.start) and
+       [--timeout s]               the URL that says it is (can.run.ready); --run starts it
+                                  detached, logs into the work folder's .rig/, and waits for
+                                  the URL; the site stands in the worktree, so stop it before
+                                  rig close
   rig verify [repo...] [--run]    print the browser-level pass and the URL it gets as
-       [--env <name>]              RIG_BASE_URL — run.ready, or deploy.<env>.ready; --run runs it
-  rig deploy <repo> --env <name>  print deploy.<env>.start and deploy.<env>.ready; --run runs
+       [--env <name>]              RIG_BASE_URL — can.run.ready, or can.deploy.<env>.ready;
+                                  --run runs it
+  rig deploy <repo> --env <name>  print can.deploy.<env>.start and its ready URL; --run runs
        [--run] [--timeout s]       the one and waits for the other; an env the entry does not
                                   name is refused
+  rig provision [repo...] [--run] print how each repo is rebuilt from scratch; --run runs it
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig impact <repo>               what else a change in that repo reaches: the repos one and
                                   two hops away in talks_to, each with what was said, which
