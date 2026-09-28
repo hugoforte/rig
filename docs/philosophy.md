@@ -62,6 +62,12 @@ Two similar things are a coincidence and the third names the pattern; until then
 
 Decide, write the reason down, then let evidence move you; [DESIGN.md's principles](../DESIGN.md#principles) state it in full. Decision 86 chose a merge queue; decision 89 recorded that GitHub would not give this repository one, and the up-to-date rule stayed.
 
+### 10. Say it once
+
+A copy is a promise to keep two things in step, and nothing keeps it. When the org doc arrived (decision 107), a review found it described seven different ways across the tool, and four of the six lists of what a data root holds had missed it. Those lists are now checked against each other (`test/data-root-lists.test.mjs`), and the list of lesson homes that `rig next` printed was deleted rather than checked (decision 108).
+
+The rule that follows: before writing something down a second time, point at the first. When a second copy has to exist, a test holds the two together. Deleting a copy beats checking it, and checking beats trusting it.
+
 ## What rig asks of an org
 
 rig puts to an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, in its org doc, and every work reads them: the file each work's agents start from carries the doc of every org the work touches. The doc starts from one optional sentence at the lesson review in an org that has none, and grows the way this page does: each later review reads the work against it, retires what the work resolved, rewords what it had to bend and adds what it taught.
