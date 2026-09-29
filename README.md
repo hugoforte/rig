@@ -110,7 +110,7 @@ Everything from here down is detail. Nothing above needs it.
 
 ### Prerequisites
 
-- Node 18.17 or newer on the 18 line, or 20.3 or newer, and `git`. (Those are the first releases whose test runner runs a file's top-level `before` and `after`, which the suite relies on. rig itself needs `fs.statfsSync`, which is older.)
+- Node 18.17 or newer on the 18 line, or 20.3 or newer, and `git`. (Those are the first releases whose test runner runs a file's top-level `before` and `after`, which the suite relies on. rig itself uses `fs.statfsSync`, which is older.)
 - `gh`, logged in (`gh auth login`). rig uses it to find repos, read PR state and open issues.
 - `twg` on PATH, only for an org whose tickets live in Jira. GitHub-only setups never need it.
 

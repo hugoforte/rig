@@ -13,7 +13,7 @@ rig documents itself, and this skill ships with it. It finds rig and routes you 
 
 `rig <command>` works in every shell on a set-up machine: the npm global install is a link to the checkout, so one `rig update` moves the command. Confirm with `command -v rig`. If it is missing, the checkout is at `RIG_ROOT`, else `C:\rig` or `~/rig`, and `node <root>/bin/rig.mjs <command>` runs it from there.
 
-**No checkout at all:** the README's one-command install — `install.sh` on a POSIX shell, `install.ps1` on PowerShell — clones the tool and installs it globally. It needs Node 18.17+ or 20.3+, `git` and `npm`; `gh` must be authenticated before a private repo can be mirrored. Everything after the clone is `rig prompt setup`'s to ask; do not guess the data root, the email or the orgs.
+**No checkout at all:** the README's one-command install — `install.sh` on a POSIX shell, `install.ps1` on PowerShell — clones the tool and installs it globally. It needs Node 18.17+ on the 18 line or 20.3+, `git` and `npm`; `gh` must be authenticated before a private repo can be mirrored. Everything after the clone is `rig prompt setup`'s to ask; do not guess the data root, the email or the orgs.
 
 ## Step 2: Orient
 

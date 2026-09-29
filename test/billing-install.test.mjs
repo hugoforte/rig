@@ -1,6 +1,4 @@
-// `billingInstall` builds an installation and then publishes a repo and runs `rig init` in it.
-// Those two steps can fail, and they fail before the caller has been handed a `cleanup` to
-// register, so the installation has to take its temp directory with it.
+// `billingInstall` itself, rather than the commands the files built on it test.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
