@@ -307,6 +307,8 @@ rig stage                                          # the stack, in the order the
 rig stage feat/schema --delivers "the write path"  # declare one
 rig stage feat/schema --cut                        # and make the branch, here, on this repo's stack
 rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
+rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
+rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -341,6 +343,15 @@ it has started (does the branch exist), whether it is up for review (is there a 
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
 branches already answer, and the two disagree the moment anything is rebased.
+
+**A plan that changed is not a plan that stalled.** Declaring a stage is a decision rig records,
+and so is withdrawing one: `--dropped "why"` records `droppedAt` and the reason, and
+`--replaced-by <stage>` records `replacedAt` and the declared stage that did the work. Neither
+deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work started from is what
+a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
+rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
+next stage. A stage that landed cannot be withdrawn, and a withdrawn stage's own ticket is told
+why at `rig close` and left open.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 

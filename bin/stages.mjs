@@ -25,7 +25,8 @@
 //   list is per-work**. Same branch name in two repos means the same stage — that is the join,
 //   and it is why the branch name *is* the stage's identity rather than a field beside it.
 //
-// **Stored (intent):** the branch and one line of what it delivers. That is all.
+// **Stored (intent):** the branch and one line of what it delivers, and once a stage is
+// withdrawn from the plan, when and why: dropped with a reason, or replaced by another stage.
 // **Derived (state):** started (does the branch exist), up for review (is there a PR), landed
 // (did it merge), which repos it touches (where the branch is found), and what it sits on
 // (what it was cut from, read live — decision 63) — and whether what it was cut from is part
@@ -112,6 +113,10 @@ export function stageState (stage, perRepo = []) {
     // pull request that merges into the default branch, and a stage's never does — so a
     // slice's ticket cannot close itself, and rig is the only thing that can.
     tickets: stage.tickets || [],
+    // Withdrawn from the plan: dropped with a reason, or replaced by another stage. Kept with
+    // its date rather than deleted, so a plan that changed does not read as one that stalled.
+    withdrawn: stage.droppedAt ? { at: stage.droppedAt, reason: stage.reason || '' }
+      : stage.replacedAt ? { at: stage.replacedAt, by: stage.replacedBy } : null,
     repos: repos.map(r => r.repo),
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
@@ -148,9 +153,10 @@ const groupByRepo = perRepo => {
   return [...by.values()]
 }
 
-// The next stage to look at: the first that has not landed. Null when every stage is in, which
-// is what makes the work branch's own PR the thing that is available next.
-export const nextStage = stack => stack.find(s => !s.landed) || null
+// The next stage to look at: the first that has neither landed nor been withdrawn. Null when
+// every stage is in or withdrawn, which is what makes the work branch's own PR the thing that
+// is available next.
+export const nextStage = stack => stack.find(s => !s.landed && !s.withdrawn) || null
 
 // Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
 // GitHub merges that stage and deletes its branch, while the work branch it merged into moves on
@@ -197,8 +203,9 @@ export function adriftNote (stack, mark = b => b) {
 // compares the rendered region against the live stack, so a note rendered outside would leave a
 // plan that says one thing and a stack that says another, with nothing able to tell.
 export function stageTable (stack) {
-  const where = st => st.landed ? 'landed' : st.open ? 'up for review'
-    : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
+  const where = st => st.landed ? 'landed'
+    : st.withdrawn ? (st.withdrawn.by ? `replaced by \`${st.withdrawn.by}\`` : `dropped: ${st.withdrawn.reason}`)
+      : st.open ? 'up for review' : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
   const note = adriftNote(stack, b => `\`${b}\``)
   return [

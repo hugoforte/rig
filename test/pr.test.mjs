@@ -203,6 +203,16 @@ test('a stage GitHub will not answer for stops the refresh, rather than writing 
   assert.match(r.out, /would not say what became of feat\/sliced-one, feat\/sliced-two — nothing refreshed/)
 })
 
+test('dropping a stage changes the stage table, so the open PR is offered a refresh that says so', () => {
+  assert.equal(rig(['stage', 'feat/sliced-three', '--delivers', 'the UI', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['pr', '--refresh', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['stage', 'feat/sliced-three', '--dropped', 'the UI moved to its own work', '--work', 'sliced']).code, 0)
+  assert.match(rig(['next', '--work', 'sliced']).out, /rig pr --refresh/)
+  assert.equal(rig(['pr', '--refresh', '--work', 'sliced']).code, 0)
+  const body = github().repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body
+  assert.match(body, /\| `feat\/sliced-three` \| the UI \| — \| — \| dropped: the UI moved to its own work \|/)
+})
+
 test('pr --refresh with no open PR says so and opens nothing', () => {
   assert.equal(rig(['new', 'unopened', '--title', 'Not up yet', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'unopened']).code, 0)

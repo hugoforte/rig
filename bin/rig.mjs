@@ -1446,10 +1446,12 @@ function stageWriteBack (work, stages, { abandoned }) {
     if (!keys.length) continue
     const landed = !abandoned && st.landed
     const prs = st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)
+    const w = st.withdrawn
+    const ran = `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}.`
     const body = [
-      landed
-        ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
-        : `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}. This slice did not land, so the issue stays open.`,
+      landed ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
+        : w ? `${ran} This slice was ${w.by ? `replaced by \`${w.by}\`` : `dropped: ${w.reason}`}. The issue stays open.`
+          : `${ran} This slice did not land, so the issue stays open.`,
       '', `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`,
       ...(prs.length ? ['', ...prs] : []),
       '', `Context doc: ${contextDocRef(work.id)}`,
@@ -2149,7 +2151,8 @@ function topBranch (cfg, work, entry) {
     trackerFailure(() => { pr = github().prForBranch(org, repo, b) })
     return pr?.state === 'MERGED'
   }
-  const top = stageOrder(work, [chain]).map(s => s.branch).filter(b => carried.has(b)).reverse().find(b => !landed(b))
+  const top = stageOrder(work, [chain]).filter(s => !s.droppedAt && !s.replacedAt).map(s => s.branch)
+    .filter(b => carried.has(b)).reverse().find(b => !landed(b))
   if (!top || t.contains({ org, repo, branch: work.branch, other: top })) return work.branch
   return top
 }
@@ -3229,6 +3232,8 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (branch && (flags.dropped !== undefined || flags['replaced-by'] !== undefined)) return withdrawStage(cfg, work, branch, flags)
+
   if (branch) {
     // Declaring and cutting are two acts on two days: a stage is normally declared before
     // anyone makes its branch, which is why recording the branch at declaration time could
@@ -3273,11 +3278,13 @@ cmds.stage = ({ flags, positional }) => {
   say('')
   const upNext = nextStage(stack)
   for (const [i, st] of stack.entries()) {
-    const mark = st.landed ? C.green('✓') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
+    const mark = st.landed ? C.green('✓') : st.withdrawn ? C.dim('✕') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
     say(`  ${mark} ${i + 1}. ${C.bold(st.branch)}${st === upNext ? C.dim('  ← next') : ''}`)
     if (st.delivers) say(`       ${st.delivers}`)
     if (st.tickets.length) say(`       ${C.dim(st.tickets.join(', '))}`)
-    say(`       ${C.dim(st.started ? st.repos.join(', ') : 'not cut in any repo yet')}`)
+    if (st.withdrawn) say(`       ${C.dim(withdrawnLine(st.withdrawn))}`)
+    // A withdrawn stage nobody cut is not waiting to be cut, so it is not said to be.
+    if (st.started || !st.withdrawn) say(`       ${C.dim(st.started ? st.repos.join(', ') : 'not cut in any repo yet')}`)
     for (const pr of st.prs) {
       say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
     }
@@ -3294,6 +3301,38 @@ cmds.stage = ({ flags, positional }) => {
     say('')
     say(`  ${C.yellow(adrift)}`)
   }
+}
+
+// How `rig stage` says a stage was withdrawn, and when.
+const withdrawnLine = w => (w.by ? `replaced by ${w.by} on ${w.at.slice(0, 10)}` : `dropped on ${w.at.slice(0, 10)}: ${w.reason}`)
+
+// `--dropped` and `--replaced-by`: a declared stage withdrawn from the plan. Declaring a stage
+// is a decision rig records, and so is withdrawing one. It is kept with the date, as a work's
+// `abandonedAt` is, and never deleted, because the plan a work started from is what a reader
+// wants a year later. A stage that landed is in the work branch, so it cannot be withdrawn.
+function withdrawStage (cfg, work, branch, flags) {
+  const reason = typeof flags.dropped === 'string' ? flags.dropped.trim() : flags.dropped
+  const by = flags['replaced-by']
+  if (reason !== undefined && by !== undefined) die('--dropped and --replaced-by are alternatives; pass one')
+  if (flags.cut || flags.key !== undefined || flags.delivers !== undefined) die('--dropped and --replaced-by withdraw a stage, and take nothing else')
+  if (reason === true || reason === '') die('--dropped needs the reason, in one line')
+  if (by === true) die('--replaced-by needs the branch of the stage that replaced it')
+  const declared = work.stages.find(s => s.branch === branch) || die(`${branch} is not a stage of ${work.id}`)
+  if (by === branch) die(`${branch} cannot replace itself`)
+  if (by !== undefined && !work.stages.some(s => s.branch === by)) {
+    die(`${by} is not a stage of ${work.id} — declare it first: \`rig stage ${by} --delivers "..."\``)
+  }
+  if (stackOf(work, branchRows(cfg, work)).find(s => s.branch === branch)?.landed) {
+    die(`${branch} has landed — it is in ${work.branch}, so it cannot be withdrawn`)
+  }
+  // A second withdrawal replaces the first: the date that matters is the current decision's.
+  for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]
+  const at = new Date().toISOString()
+  Object.assign(declared, by !== undefined ? { replacedAt: at, replacedBy: by } : { droppedAt: at, reason })
+  const done = by !== undefined ? `${branch} replaced by ${by}` : `${branch} dropped`
+  commitAs(work.id, done)
+  saveWork(cfg, work)
+  ok(`${work.id}: stage ${done}${reason ? ` — ${reason}` : ''}`)
 }
 
 // `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
@@ -4234,6 +4273,11 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
   rig stage <branch> --key <k>    give the stage its own ticket, closed when the slice lands
        --delivers "..."            the one line of prose a stage carries
+  rig stage <branch> --dropped "why"
+                                  withdraw a stage from the plan: kept in the record with
+                                  the date and the reason, never deleted
+  rig stage <branch> --replaced-by <stage>
+                                  mark it done under another stage's branch instead
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
