@@ -655,7 +655,10 @@ function prepareDataRoot () {
     // next line dwarfs it.
     // The reading worth keeping cheap is the freshness one, which runs after every command.
     before = co.describe(root)
-    if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
+    // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
+    // empty remote that another machine has since pushed to — and only a fetch can say
+    // whether it exists.
+    if (before.repo === 'own' && before.branch && before.tracks && dataFetchDue()) {
       const fetched = co.fetch(root)
       if (!fetched.ok) {
         stampDataFetchFailure()
@@ -674,6 +677,8 @@ function prepareDataRoot () {
         } else if (outcome === 'moved') {
           say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
         }
+        // The upstream the fetch found is the one the commit at the end pushes to.
+        if (!before.upstream) before = co.describe(root)
       }
     }
   }
@@ -3569,7 +3574,9 @@ function updateCheckout (label, root) {
   // `clean` is what `commitDataRoot` would sweep up, and that is `git add -A` — untracked
   // files included, so an unfinished note nobody staged makes the tree unsafe to migrate in.
   const clean = state.dirty === 0
-  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
+  // An upstream whose ref is not here yet is still one to fetch: the fast-forward below reads
+  // the checkout again, and says "nothing to update from" if the fetch did not find it either.
+  if (!state.tracks) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
   // Asked before the fetch, unlike `fastForward`'s own `blocked`: an update you ran is a
   // command that should say what is in the way rather than go quiet because there happened
   // to be nothing to bring down anyway.
@@ -3589,8 +3596,11 @@ function updateCheckout (label, root) {
     case 'moved': break
     case 'current':
       ok(`${label}: already up to date`); return { status: 'current', clean }
-    case 'no-upstream': case 'detached': case 'not-a-checkout':
-      say(`${C.dim('·')} ${C.dim(`${label}: nothing to update from`)}`); return { status: 'current', clean }
+    case 'no-upstream': case 'detached': case 'not-a-checkout': {
+      // An upstream the fetch did not find either: gone from the remote, or never pushed.
+      const missing = moved.state.tracks ? `${moved.state.tracks} is not on the remote — ` : ''
+      say(`${C.dim('·')} ${C.dim(`${label}: ${missing}nothing to update from`)}`); return { status: 'current', clean }
+    }
     case 'unmeasurable':
       warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean }
     // Divergence is only one reason a fast-forward does not happen. For the others — a

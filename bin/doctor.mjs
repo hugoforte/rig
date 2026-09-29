@@ -89,6 +89,7 @@ function rootFindings (root) {
       if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
       else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
       if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
+      else if (!state.upstream && state.tracks) out.push(warn(`data root tracks ${state.tracks}, which has not been fetched or is gone from the remote — \`rig update\` fetches it`, { counts: false }))
       else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
       else if (state.ahead === null) out.push(warn(`data root: git could not measure the distance from ${state.upstream} — \`git -C ${root.path} status\` says why`))
       else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))

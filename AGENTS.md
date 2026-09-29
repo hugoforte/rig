@@ -364,7 +364,9 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. How the check is
+before they read it, so a second machine never works from stale records. A data root whose
+branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
+another machine has since pushed to, is fetched too, rather than read as local only. How the check is
 measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
 ## The rollout plan

@@ -52,6 +52,10 @@ export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
 //   branch        null on a detached HEAD
 //   defaultBranch what `origin/HEAD` names, but only when that branch still exists
 //   upstream      the tracking branch's *name*, never a boolean
+//   tracks        the upstream the branch's config names, whether or not its ref is here.
+//                 It differs from `upstream` when the ref has not been fetched yet — a
+//                 clone of an empty remote — or has gone, and a fetch is what tells the two
+//                 apart. Only `describe` reads it
 //   ahead/behind  against the upstream as last fetched — a caller that wants them current
 //                 fetches first. 0 with no upstream; null when git could not answer
 //   dirty         entries `git status --porcelain` reports, untracked included — the
@@ -62,7 +66,7 @@ export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
 //   modified      tracked changes only: what actually stops a fast-forward
 const UNREAD = Object.freeze({
   repo: 'none', top: null, linked: false, branch: null, defaultBranch: null,
-  upstream: null, head: null, ahead: null, behind: null, dirty: null, modified: null,
+  upstream: null, tracks: null, head: null, ahead: null, behind: null, dirty: null, modified: null,
 })
 
 // What a directory git cannot answer for looks like — including the one case the readings
@@ -181,6 +185,7 @@ export function checkouts ({ run, env = () => process.env }) {
     return {
       head: unborn ? null : header['branch.oid'] ?? null,
       upstream,
+      tracks: configured,
       ahead: upstream ? (ab ? Number(ab[1]) : null) : 0,
       behind: upstream ? (ab ? Number(ab[2]) : null) : 0,
       // Untracked entries are the `?` ones, exactly as `??` was in v1.
@@ -220,6 +225,9 @@ export function checkouts ({ run, env = () => process.env }) {
       ...state,
       branch,
       upstream: tracking,
+      // `@{u}` fails for a configured upstream whose ref is missing, so here that reads as
+      // none at all, as it did before `tracks` existed.
+      tracks: tracking,
       head: head.code === 0 ? head.out : null,
       ahead: tracking ? countCommits(dir, '@{u}..HEAD') : 0,
       behind: tracking ? countCommits(dir, 'HEAD..@{u}') : 0,
