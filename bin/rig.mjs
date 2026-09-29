@@ -22,7 +22,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -765,12 +765,16 @@ function findWorkId (cfg, explicit) {
   die('not inside a work (no .rig/id found). Pass --work <id> or cd into one.')
 }
 
+// Every configured root that holds a record for this work id, by name. One, normally: a work
+// id is unique across the roots, and two holders is a split left half done.
+const rootsHolding = (id, roots = where().roots) => Object.entries(roots || {})
+  .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
+
 function loadWork (cfg, id, root = dataRoot()) {
   if (!exists(recordFile(id, root))) {
     // A work id is unique across every root on the machine, so the one that has it is worth
     // naming: on a second machine the work in hand is often not in the current root.
-    const holders = Object.entries(where().roots || {})
-      .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
+    const holders = rootsHolding(id)
     const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
@@ -1516,9 +1520,14 @@ function regenerate (cfg, work) {
   writeText(path.join(wd, WORK_FOLDER.marker, 'id'), work.id + '\n')
   // Beside the work id, the data root that holds its record. This is what lets every command
   // run from inside a work folder resolve without `--data`, and so what keeps `current` off
-  // the path of all but the rootless few. Nothing is written when the root has no name — an
-  // installation still on the fallback has nothing to anchor to.
-  if (where().name) writeText(path.join(wd, WORK_FOLDER.marker, 'data'), where().name + '\n')
+  // the path of all but the rootless few. Written only when the root in hand is the one root
+  // holding the record: a folder that resolved by `current`, in a split left half done, would
+  // otherwise be pinned to whichever copy it happened to read. Nothing is written when the
+  // root has no name — an installation still on the fallback has nothing to anchor to.
+  const holders = rootsHolding(work.id)
+  if (where().name && holders.length === 1 && holders[0] === where().name) {
+    writeText(dataAnchorFile(wd), where().name + '\n')
+  }
 }
 
 // ------------------------------------------------------ data root commits
@@ -3768,7 +3777,7 @@ function doctorStamp (written) {
 // worktrees are gone on purpose. The record and the catalogue entry it reads are the data
 // root's, and the work folder is the machine's, which is the whole shape of a shared work
 // root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
-function doctorWork (cfg, id, root) {
+function doctorWork (cfg, id, root, roots) {
   const work = loadWork(cfg, id, root)
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
   if (out.closed) return out
@@ -3776,6 +3785,9 @@ function doctorWork (cfg, id, root) {
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
   out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
+  const marker = dataAnchorFile(wd)
+  out.marker = exists(marker) ? readText(marker).trim() || null : null
+  out.holders = rootsHolding(id, roots)
   out.repos = work.repos.map(r => {
     const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {
@@ -3997,7 +4009,7 @@ function doctorSnapshot () {
     // Every root's works in one list, because the two checks made of them are made of the work
     // root, which is shared. A work id is unique across the roots, so the union needs no
     // tie-breaking and the findings need not say which root a work came from.
-    works: roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path))),
+    works: roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots))),
     disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
   }
 }

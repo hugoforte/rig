@@ -422,6 +422,36 @@ test('the work folder records which root holds its record', () => {
   assert.equal(fs.readFileSync(dataAnchorFile(path.join(workRoot, 'only-here')), 'utf8').trim(), 'hugoforte')
 })
 
+test('a work folder with no marker gets one from a command that finds its record in one root', () => {
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  const r = rig(['save', '-m', 'marked again', '--data', 'hugoforte'], { cwd: path.join(workRoot, 'only-here') })
+  assert.equal(r.code, 0, r.out)
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'hugoforte')
+})
+
+test('no marker is written for a work whose record is in two roots, since either may be wrong', (t) => {
+  // A data root split half done: both roots hold a copy, and the root the command happened to
+  // resolve to is no evidence of which one is the real record.
+  const copy = path.join(second, 'work', 'only-here')
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
+  fs.cpSync(path.join(dataRoot, 'work', 'only-here'), copy, { recursive: true })
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
+  const r = rig(['save', '-m', 'which one', '--data', 'personal'], { cwd: path.join(workRoot, 'only-here') })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(marker))
+  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data.*hugoforte and personal both hold its record/)
+})
+
+test('doctor names a work folder with no marker, and the command that writes one', (t) => {
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
+  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data, so commands run in it read `current` — `rig save --data hugoforte` in it writes the right one/)
+})
+
 test('a command run inside a work folder reads that work\'s root, whatever is current', () => {
   assert.equal(rig(['use', 'personal']).code, 0)
   const r = rig(['status'], { cwd: path.join(workRoot, 'only-here') })

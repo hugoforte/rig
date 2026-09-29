@@ -203,7 +203,9 @@ function rootFindings (root) {
 //                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
 //                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos }]
+//                     folderMissing, strays, repos, marker, holders }]: `marker` is the
+//                     folder's `.rig/data`, null when it has none, and `holders` the roots
+//                     that hold the work's record
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -312,6 +314,17 @@ export function doctorFindings (snap = {}) {
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
+    }
+    // The marker is what a command run in the folder resolves by. Without one it falls to
+    // `current`, which only matters when there is more than one root to fall between; one
+    // naming a root that does not hold the record sends it to the wrong root, or to none.
+    const fix = w.holders?.length > 1
+      ? `data roots ${w.holders.join(' and ')} both hold its record; delete the copy that is wrong`
+      : `\`rig save --data ${w.holders?.[0]}\` in it writes the right one`
+    if (w.marker === null && (snap.dataRoots || []).length > 1) {
+      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it read \`current\` — ${fix}`))
+    } else if (w.marker && !w.holders?.includes(w.marker)) {
+      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${w.holders?.join('", "')}" — ${fix}`))
     }
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))

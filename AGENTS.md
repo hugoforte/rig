@@ -259,7 +259,10 @@ Two consequences worth holding on to:
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
   shared, so a folder the current root has no record for is usually another root's live work
-  rather than junk. It is also the one command that **reports a selection it cannot make**
+  rather than junk. It names a work folder with no `.rig/data`, which reads `current`, and one
+  whose marker names a root that does not hold its record. rig writes the marker only when
+  the root in hand is the one root holding the record. It is also the one command that
+  **reports a selection it cannot make**
   rather than dying on it: two roots and no `current` is a finding like any other, and every
   check that did not need a root in hand still runs. `list`, `status`, `catalog` and `next`
   die there, and should — each answers a question about a root's *contents*, and with none
