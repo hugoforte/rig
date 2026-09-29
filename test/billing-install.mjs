@@ -100,9 +100,15 @@ export function billingInstall (prefix) {
     setGithub(state)
   }
 
-  publish('billing')
-  assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
-    '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
+  // Either step can fail, and the caller has not been handed `cleanup` yet to register it.
+  try {
+    publish('billing')
+    assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
+      '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
+  } catch (e) {
+    m.cleanup()
+    throw e
+  }
 
   return {
     ...m,
