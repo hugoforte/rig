@@ -838,21 +838,23 @@ function listWorkIds (dataRootPath = dataRoot()) {
 
 // Every work record in a root that parses, and the ids of the ones that do not. For the readers
 // that want the records as *evidence* rather than as the thing they act on — the observed graph
-// behind `rig impact` and the offer `rig attach` makes. One unreadable record must not cost those
-// their answer, and for `attach` it must not cost the command it follows: the offer runs after
-// the worktree is cut and the record saved, and a throw there skipped the commit and left the
-// data root half-written. So a record that will not read is left out and named, never swallowed.
-function readRecords (root) {
+// behind `rig impact` and the offer `rig attach` makes — and for the ones that list every work:
+// `list`, `dash` and `demo`. One unreadable record must not cost those their answer, and for
+// `attach` it must not cost the command it follows: the offer runs after the worktree is cut and
+// the record saved, and a throw there skipped the commit and left the data root half-written. So
+// a record that will not read is left out and named, never swallowed.
+function readRecords (root, read = id => readJson(recordFile(id, root))) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
-    try { works.push(readJson(recordFile(id, root))) } catch { unreadable.push(id) }
+    try { works.push(read(id)) } catch { unreadable.push(id) }
   }
   return { works, unreadable }
 }
 
-const sayUnreadable = ids => {
-  if (ids.length) say(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
+// On stdout beside the answer it qualifies, or on stderr (`aside`) when stdout is a payload.
+const sayUnreadable = (ids, tell = say) => {
+  if (ids.length) tell(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
 }
 
 // ---------------------------------------------------------------- catalogue
@@ -2519,12 +2521,18 @@ function repoEntryJson (cfg, entry, branch, live) {
   return out
 }
 
-// Every work, least recently touched first. ISO-8601 exists so that byte order is
+// Every work, least recently touched first, and the ids of any record that would not read
+// (`readRecords`). ISO-8601 exists so that byte order is
 // chronological order; decorate once rather than recomputing the key inside the comparator.
-const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
-  .map(work => [activityAt(work), work])
-  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  .map(([, work]) => work)
+const worksByActivity = cfg => {
+  const { works, unreadable } = readRecords(dataRoot(), id => loadWork(cfg, id))
+  return {
+    works: works.map(work => [activityAt(work), work])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, work]) => work),
+    unreadable,
+  }
+}
 
 // The release this checkout stands on, or null when nothing here was ever tagged. One spawn,
 // inside a command somebody ran on purpose — never in `toolState`, which every command's
@@ -2546,13 +2554,17 @@ const releaseHere = () => (onPath('git')
 // derived and free and gates writes, `release` costs a spawn and names what was published.
 // There used to be a `rig` beside them holding `MAJOR.minor.patch`, which was the format said a
 // second time in a semver's clothing (ADR 0004).
-const listPayload = (cfg, live) => ({
-  recordFormat: MAJOR,
-  release: releaseHere(),
-  generatedAt: new Date().toISOString(),
-  live,
-  works: worksByActivity(cfg).map(w => workJson(cfg, w, live)),
-})
+const listPayload = (cfg, live) => {
+  const { works, unreadable } = worksByActivity(cfg)
+  sayUnreadable(unreadable, aside)
+  return {
+    recordFormat: MAJOR,
+    release: releaseHere(),
+    generatedAt: new Date().toISOString(),
+    live,
+    works: works.map(w => workJson(cfg, w, live)),
+  }
+}
 
 // The same payload, for a consumer inside this process rather than downstream of a pipe — a
 // test asserting the shape of the published surface should not have to parse a subprocess's
@@ -2574,8 +2586,8 @@ cmds.list = ({ flags }) => {
 
   if (flags.json) return say(JSON.stringify(listPayload(cfg, live), null, 2))
 
-  const works = worksByActivity(cfg)
-  if (!works.length) return say('no works yet — `rig new <id> --title "..."`')
+  const { works, unreadable } = worksByActivity(cfg)
+  if (!works.length && !unreadable.length) return say('no works yet — `rig new <id> --title "..."`')
   for (const work of works) {
     const id = work.id
     const wd = workDir(cfg, id)
@@ -2637,6 +2649,7 @@ cmds.list = ({ flags }) => {
     }
     say('')
   }
+  sayUnreadable(unreadable)
 }
 
 // `--since 14d` or `--since 2026-09-01`. A window nobody can parse is worth dying over: a
@@ -2702,7 +2715,7 @@ cmds.dash = ({ flags }) => {
 cmds.demo = ({ flags }) => {
   sayCurrentRoot()
   const root = dataRoot()
-  const works = listWorkIds(root).map(id => readJson(recordFile(id, root)))
+  const { works, unreadable } = readRecords(root)
   const catalog = loadCatalog(root)
   if (!catalog.length) die(`no catalogue in ${root} — there is nothing to show. \`rig attach\` drafts an entry the first time it sees a repo.`)
 
@@ -2723,6 +2736,7 @@ cmds.demo = ({ flags }) => {
   ok(`demo at ${out}`)
   say(C.dim(`  ${model.counts.repos} repos · ${model.counts.edges} relationships · ${model.steps.length} steps` +
     `${model.example ? ` · walking through ${model.example.id}` : ''}`))
+  sayUnreadable(unreadable)
   if (insideDir(out, root)) commitAs('', path.relative(root, out).replace(/\\/g, '/'))
 
   if (flags['no-open']) return
@@ -3410,7 +3424,7 @@ cmds.catalog = ({ flags, positional }) => {
     const flag = e.draft ? C.yellow(' [draft]') : ''
     say(`${e.repo.padEnd(34)} ${C.dim(e.org.padEnd(15))} ${e.role}${flag}`)
     if (flags.verbose && e.talks_to.length) {
-      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
+      for (const t of e.talks_to) say(`  ${C.dim('→')} ${typeof t === 'string' ? t : t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
     }
   }
 }
@@ -3501,10 +3515,16 @@ cmds.impact = ({ positional }) => {
       say(`  ${o.repo.padEnd(width)}  ${C.dim(count)}${o.declared ? C.dim(' — and talks_to says why') : C.yellow(' — and nothing in talks_to says why')}`)
       say(C.dim(`    ${o.works.join(', ')}`))
     }
+    // "Keeps happening" is a claim that the pair repeats. The observed graph has no threshold
+    // (decision 95), so the wording is what tells the reader how strong the evidence is.
     const quiet = answer.observed.filter(o => !o.declared)
     if (quiet.length) {
+      const one = quiet.length === 1
+      const gap = quiet.every(o => o.works.length > 1)
+        ? `${one ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why`
+        : `the catalogue does not say why ${one ? 'that pair was' : 'those pairs were'} worked on together`
       say('')
-      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — ${answer.catalogued
+      say(C.dim(`${gap} — ${answer.catalogued
         ? `\`rig catalog ${answer.repo}\` names the file to correct`
         : `and ${answer.repo} has no catalogue entry — one is drafted the first time it is attached`}`))
     }

@@ -677,6 +677,30 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
   setGithub(state)
 })
 
+test('a record that will not parse is named and left out by list, list --json and dash', () => {
+  const cut = path.join(dataRoot, 'work', 'cut')
+  fs.mkdirSync(cut)
+  fs.writeFileSync(path.join(cut, 'work.json'), '{"id": "cut", "repos": [')
+  try {
+    const named = /1 work record could not be read and was left out: cut/
+    const list = rig(['list', '--quick'])
+    assert.equal(list.code, 0, list.out)
+    assert.match(list.out, named)
+    assert.match(list.out, /^old\b/m, 'the records that read are still listed')
+
+    const json = rig(['list', '--json', '--quick'])
+    assert.equal(json.code, 0, json.out)
+    assert.ok(JSON.parse(json.stdout).works.length, 'the payload on stdout still parses')
+    assert.match(json.out, named, 'and the unreadable record is named off it, on stderr')
+
+    const dash = rig(['dash', '--quick', '--no-open'])
+    assert.equal(dash.code, 0, dash.out)
+    assert.match(dash.out, named)
+  } finally {
+    fs.rmSync(cut, { recursive: true })
+  }
+})
+
 test('dash dies on a window it cannot parse rather than showing everything', () => {
   const captured = path.join(tmp, 'window-payload.json')
   fs.writeFileSync(captured, rig(['list', '--json', '--quick']).stdout)
