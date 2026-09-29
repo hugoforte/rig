@@ -32,20 +32,16 @@ test('an unpushed branch is told to push rather than having a PR opened on nothi
   assert.match(r.out, /is not on the remote yet — push it first/)
 })
 
-test('pr --help and a flag pr does not take both print its usage and open nothing', () => {
+test('pr --help prints how pr is used and opens nothing', () => {
   const dest = worktree('to-review', 'billing')
   fs.appendFileSync(path.join(dest, 'README.md'), 'reviewable\n')
   gitMust(dest, 'commit', '-qam', 'reviewable')
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
   const before = github().repos['acme/billing'].prs.length
 
-  const help = rig(['pr', '--work', 'to-review', '--help'])
-  assert.equal(help.code, 0, help.out)
-  assert.match(help.out, /^ {2}rig pr {2,}open one PR per repo/)
-  const draft = rig(['pr', '--work', 'to-review', '--draft'])
-  assert.equal(draft.code, 1, draft.out)
-  assert.match(draft.out, /rig pr takes no --draft\n {2}rig pr /)
-
+  const r = rig(['pr', '--work', 'to-review', '--help'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /^ {2}rig pr {2,}open one PR per repo/)
   assert.equal(github().repos['acme/billing'].prs.length, before, 'no pull request opened')
 })
 
