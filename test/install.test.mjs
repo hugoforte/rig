@@ -63,12 +63,15 @@ const PATH_FOR_SCRIPTS = [path.dirname(process.execPath), ...(process.env.PATH ?
 // A run of one script, against a global prefix of its own: `npm_config_prefix` is what keeps
 // `npm install -g` away from the rig this machine actually uses.
 // `first` is a directory put ahead of the rest, for a test that stands a tool in for the real one.
+// For bash it is put ahead again inside the shell: Git for Windows' `bin\bash.exe`, the `bash`
+// a Windows runner finds, puts its own directories first as it starts, and the real `git` with them.
+const FIRST_THEN_RUN = 'if [ -n "$1" ]; then PATH="$(cygpath -u "$1" 2>/dev/null || printf %s "$1"):$PATH"; fi; shift; exec bash "$@"'
 const install = (script, target, prefix, first = null) => {
   const e = { ...env, npm_config_prefix: prefix }
   for (const k of Object.keys(e)) if (k.toLowerCase() === 'path') delete e[k]
   e.PATH = first ? [first, PATH_FOR_SCRIPTS].join(path.delimiter) : PATH_FOR_SCRIPTS
   const r = script === 'install.sh'
-    ? spawnSync(BASH, [slash(path.join(ROOT, script)), slash(target)], { encoding: 'utf8', env: e })
+    ? spawnSync(BASH, ['-c', FIRST_THEN_RUN, 'bash', first ? slash(first) : '', slash(path.join(ROOT, script)), slash(target)], { encoding: 'utf8', env: e })
     : spawnSync(POWERSHELL, ['-NoProfile', '-File', path.join(ROOT, script), target], { encoding: 'utf8', env: e })
   return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') }
 }
