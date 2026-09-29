@@ -19,7 +19,8 @@ or secrets in either committed repo.
 
 ## First run
 
-Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH.
+Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH. rig
+needs git 2.38 or newer.
 `rig doctor` says "not set up" until there is a data root — separate from this checkout —
 with a `rig.json` in it. Run the setup interview; its first question is where the knowledge
 lives:

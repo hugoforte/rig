@@ -62,10 +62,11 @@ const PATH_FOR_SCRIPTS = [path.dirname(process.execPath), ...(process.env.PATH ?
 
 // A run of one script, against a global prefix of its own: `npm_config_prefix` is what keeps
 // `npm install -g` away from the rig this machine actually uses.
-const install = (script, target, prefix) => {
+// `first` is a directory put ahead of the rest, for a test that stands a tool in for the real one.
+const install = (script, target, prefix, first = null) => {
   const e = { ...env, npm_config_prefix: prefix }
   for (const k of Object.keys(e)) if (k.toLowerCase() === 'path') delete e[k]
-  e.PATH = PATH_FOR_SCRIPTS
+  e.PATH = first ? [first, PATH_FOR_SCRIPTS].join(path.delimiter) : PATH_FOR_SCRIPTS
   const r = script === 'install.sh'
     ? spawnSync(BASH, [slash(path.join(ROOT, script)), slash(target)], { encoding: 'utf8', env: e })
     : spawnSync(POWERSHELL, ['-NoProfile', '-File', path.join(ROOT, script), target], { encoding: 'utf8', env: e })
@@ -134,5 +135,27 @@ for (const [script, where, skip] of [
     assert.match(r.out, /leaving it exactly as it is/)
     assert.equal(head(target), was, 'nothing was fetched')
     assert.ok(fs.existsSync(path.join(target, 'MINE.md')), 'and nothing was reset')
+  })
+}
+
+// A `git` older than rig needs, first on PATH: a shell script for bash and pwsh on Linux, and a
+// `.cmd` for Windows, each saying only what `git --version` says.
+const oldGit = () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'old-git-'))
+  fs.writeFileSync(path.join(dir, 'git'), '#!/bin/sh\necho "git version 2.37.1"\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(dir, 'git.cmd'), '@echo git version 2.37.1\r\n')
+  return dir
+}
+
+for (const [script, skip] of [
+  ['install.sh', BASH ? false : 'no bash that can open this checkout'],
+  ['install.ps1', POWERSHELL ? false : 'neither pwsh nor powershell on PATH'],
+]) {
+  test(`${script} refuses a git older than 2.38, before it clones anything`, { skip }, () => {
+    const { target, prefix } = place(`old-git-${script}`)
+    const r = install(script, target, prefix, oldGit())
+    assert.notEqual(r.code, 0, r.out)
+    assert.match(r.out, /rig needs git 2\.38 or newer, and this is git 2\.37\.1/)
+    assert.ok(!fs.existsSync(target), 'nothing was cloned')
   })
 }

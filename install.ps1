@@ -27,6 +27,13 @@ foreach ($tool in 'git', 'npm') {
   }
 }
 
+# rig asks git for `merge-tree --write-tree` and offers `rebase --update-refs`, both 2.38.
+$gitVersion = if ("$(git --version)" -match 'git version (\d+)\.(\d+)\S*') { $Matches[0] -replace '^git version ', '' } else { $null }
+if (-not $gitVersion -or [int]$Matches[1] -lt 2 -or ([int]$Matches[1] -eq 2 -and [int]$Matches[2] -lt 38)) {
+  $shown = if ($gitVersion) { $gitVersion } else { 'of an unknown version' }
+  throw "rig install: rig needs git 2.38 or newer, and this is git $shown - update it and run this again"
+}
+
 if (Test-Path -LiteralPath (Join-Path $Path '.git')) {
   Write-Host "a checkout is already at $Path - leaving it exactly as it is"
 } elseif ((Test-Path -LiteralPath $Path) -and (Get-ChildItem -LiteralPath $Path -Force | Select-Object -First 1)) {

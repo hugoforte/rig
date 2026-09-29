@@ -110,7 +110,8 @@ Everything from here down is detail. Nothing above needs it.
 
 ### Prerequisites
 
-- Node 18.15 or newer on the 18 line, or 19.6 or newer, and `git`. (Those are the releases `fs.statfsSync` arrived in, which is how rig reads free space on Windows without starting a process for it.)
+- Node 18.15 or newer on the 18 line, or 19.6 or newer. (Those are the releases `fs.statfsSync` arrived in, which is how rig reads free space on Windows without starting a process for it.)
+- `git` 2.38 or newer, for `git merge-tree --write-tree` and `git rebase --update-refs`. The install scripts refuse an older one.
 - `gh`, logged in (`gh auth login`). rig uses it to find repos, read PR state and open issues.
 - `twg` on PATH, only for an org whose tickets live in Jira. GitHub-only setups never need it.
 
