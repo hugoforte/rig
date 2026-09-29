@@ -3329,7 +3329,7 @@ function dropMergedBranches (cfg, work, states, stack) {
       say(`  ${C.dim(`${entry.repo}: kept ${branch} — GitHub did not say which commit PR #${pr.number} merged`)}`)
       continue
     }
-    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head })
+    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head, number: pr.number })
     const gone = [local === 'deleted' && 'mirror', remote === 'deleted' && 'remote'].filter(Boolean)
     if (gone.length) step(`deleted branch ${branch} from ${entry.repo} (${gone.join(' and ')})`)
     for (const [where, what] of [['mirror', local], ['remote', remote]]) {

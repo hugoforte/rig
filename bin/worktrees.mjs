@@ -206,15 +206,24 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // copy must be `head` or behind it; the remote's must be `head` exactly, and the push leases
     // on it, so a commit pushed after the merge keeps the branch rather than being lost with it.
     //
+    // The mirror may never have seen `head`: a PR updated on GitHub — "Update branch" — carries
+    // a commit no fetch brought here, and asking whether the copy is behind a commit git does not
+    // have answers no. So that commit is fetched first, from `refs/pull/<number>/head`, which
+    // GitHub keeps after the branch is deleted (hugoforte/rig#181). A fetch that fails keeps the
+    // copy and says why.
+    //
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
     // thing to say, not a reason to fail.
-    dropMerged ({ org, repo, branch, head }) {
+    dropMerged ({ org, repo, branch, head, number }) {
       const mirror = mirrorPath(org, repo)
       const out = { local: 'absent', remote: 'absent' }
       if (!fs.existsSync(mirror)) return out
       if (kept(mirror, branch)) {
-        out.local = !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
+        const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
+          : git(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+        out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
+          : !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
