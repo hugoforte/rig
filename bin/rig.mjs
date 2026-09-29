@@ -2497,7 +2497,7 @@ function repoEntryJson (cfg, entry, branch, live) {
   }
   if (!live) return out
   const s = repoState(cfg, entry, branch)
-  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind })
+  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind, unpushed: s.unpushed })
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else out.pr = s.pr
