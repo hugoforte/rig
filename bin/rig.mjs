@@ -14,7 +14,7 @@ import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
-import { releaseMark } from './release.mjs'
+import { releaseMark, BRANCH_PREFIXES } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
 import { workState } from './workstate.mjs'
@@ -1894,6 +1894,10 @@ cmds.new = ({ flags, positional }) => {
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
   }
+  // The branch prefix is the release check's bump (ADR 0004), so a type it does not know is
+  // refused here, when the branch is named, rather than on the pull request.
+  const type = flags.type || 'feat'
+  if (!BRANCH_PREFIXES.includes(type)) die(`--type ${type} is not a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}`)
   const noTicket = !!flags['no-ticket']
   const dryRun = !!flags['dry-run']
   if (dryRun && !flags.ticket) die('--dry-run only makes sense with --ticket')
@@ -1943,7 +1947,6 @@ cmds.new = ({ flags, positional }) => {
   // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`;
   // the PR links those with "Fixes #n" instead.
   const branchKey = keys.find(isJiraKey) || idKey
-  const type = flags.type || 'feat'
   const branchSlug = flags.slug || slug(title || id.replace(/^[A-Z][A-Z0-9]+-\d+-?/, '') || id)
   const branch = flags.branch ||
     `${type}/${branchKey ? branchKey + '-' : ''}${branchSlug}`.replace(/-$/, '')

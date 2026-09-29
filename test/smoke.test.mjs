@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
+import { BRANCH_PREFIXES } from '../bin/release.mjs'
 import { makeInstall, readJson, strip } from './harness.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
@@ -127,6 +128,13 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
   assert.equal(r.code, 1)
   assert.match(r.out, /--key.*--ticket.*--no-ticket/)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
+})
+
+test('new refuses a --type the release check would refuse, and names the ones it knows', () => {
+  const r = rig(['new', 'wip-work', '--title', 'Wip', '--type', 'wip', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.ok(r.out.includes(`--type wip is not a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}`), r.out)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'wip-work')), 'no record written')
 })
 
 test('--help prints the command\'s own usage and does nothing else, and so does -h', () => {

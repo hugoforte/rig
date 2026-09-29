@@ -41,6 +41,10 @@ const PREFIX_BUMPS = {
   refactor: 'none',
 }
 
+// The prefixes `rig new --type` may write. One list, so rig never names a branch its own
+// release check will refuse.
+export const BRANCH_PREFIXES = Object.keys(PREFIX_BUMPS)
+
 // Strongest first: a release containing a feature is a minor release, whatever else is in it.
 const STRENGTH = ['minor', 'patch', 'none']
 

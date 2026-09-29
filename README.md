@@ -350,7 +350,7 @@ Nothing pulls a checkout for you, so rig measures its own freshness — how far 
 | a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
 | a PR that adds a migration | `MAJOR.0.0`, whatever the PR asked for |
 
-So branching the way `rig new` already branches is the whole contribution. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
+So branching the way `rig new` already branches is the whole contribution: `rig new --type` takes only a prefix this table lists, and refuses any other by naming them. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
 
 **The check asks one question, about your PR alone: does it name a bump?** Nothing another pull request does can change that answer, so a merge elsewhere never turns your check red and never sends you back to rebase. That is the rule the whole design obeys: a pull request is only ever gated on questions about itself.
 
