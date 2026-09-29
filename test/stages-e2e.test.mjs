@@ -10,7 +10,7 @@ import fs from 'node:fs'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, github, setGithub, commitWork, cutStage, worktree, record, planFile, cleanup } = billingInstall('rig-stages-')
+const { rig, github, setGithub, gitMust, commitWork, cutStage, worktree, record, planFile, cleanup } = billingInstall('rig-stages-')
 
 after(cleanup)
 
@@ -265,4 +265,44 @@ test('a stage whose line contains $& is rendered as written, not as a regex repl
   const text = fs.readFileSync(planFile('dollar'), 'utf8')
   assert.match(text, /the \$& path/)
   assert.equal(text.match(/rig:deploy-order/g).length, 2, 'one region, not a region pasted inside itself')
+})
+
+test('a stage squashed into the work branch is named by rig next, with the rebase that replays the one above (#193)', () => {
+  assert.equal(rig(['new', 'squash', '--title', 'Squash work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'squash']).code, 0)
+  assert.equal(rig(['stage', 'feat/squash-one', '--delivers', 'the schema', '--work', 'squash']).code, 0)
+  assert.equal(rig(['stage', 'feat/squash-two', '--delivers', 'the endpoints', '--work', 'squash']).code, 0)
+  const work = record('squash').branch
+  const dest = worktree('squash', 'billing')
+  const opts = { work: 'squash', repo: 'billing', back: work }
+  cutStage({ ...opts, branch: 'feat/squash-one', from: work, message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/squash-two', from: 'feat/squash-one', message: 'the endpoints' })
+
+  // What the squash button does: one new commit on the work branch, the stage's own gone.
+  gitMust(dest, 'merge', '-q', '--squash', 'feat/squash-one')
+  gitMust(dest, 'commit', '-q', '-m', 'the schema (#95)')
+  gitMust(dest, 'push', '-q', 'origin', work, 'feat/squash-one', 'feat/squash-two')
+  const tip = gitMust(dest, 'rev-parse', 'feat/squash-one')
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/squash-one', number: 95, state: 'MERGED', head: tip, merge: gitMust(dest, 'rev-parse', work), url: 'https://github.com/acme/billing/pull/95', base: work, openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] },
+    { branch: 'feat/squash-two', number: 96, state: 'OPEN', url: 'https://github.com/acme/billing/pull/96', base: work, openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+  )
+  setGithub(state)
+
+  const out = rig(['next', '--work', 'squash']).out
+  assert.match(out, /feat\/squash-one landed as new commits \(a squash or a rebase\), and feat\/squash-two in billing still carries the commits it replaced/)
+  const commands = ['git switch feat/squash-two', `git rebase --onto origin/${work} ${tip}`, 'git push --force-with-lease origin feat/squash-two']
+  for (const c of commands) assert.ok(out.includes(c), `${c} in:\n${out}`)
+
+  // The commands do what they say: after the rebase only the push is offered, and after the
+  // push only the stage's own commit is left over the work branch, and nothing is said.
+  gitMust(dest, ...commands[0].split(' ').slice(1))
+  gitMust(dest, ...commands[1].split(' ').slice(1))
+  const between = rig(['next', '--work', 'squash']).out
+  assert.match(between, /feat\/squash-two is replayed onto the work branch here and not pushed/)
+  assert.doesNotMatch(between, /\n\s+git push\n/, 'not a plain push, which the remote would refuse')
+  gitMust(dest, ...commands[2].split(' ').slice(1))
+  assert.equal(gitMust(dest, 'rev-list', '--count', `origin/${work}..feat/squash-two`), '1')
+  assert.doesNotMatch(rig(['next', '--work', 'squash']).out, /landed as new commits|replayed onto/)
 })

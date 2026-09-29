@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -2504,7 +2504,7 @@ function repoEntryJson (cfg, entry, branch, live) {
   }
   if (!live) return out
   const s = repoState(cfg, entry, branch)
-  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind })
+  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind, unpushed: s.unpushed })
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else out.pr = s.pr
@@ -2887,10 +2887,10 @@ cmds.next = ({ flags }) => {
   // so a verdict here that did not ask would disagree with the command it is describing.
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   const verdict = workState(work, states, { stages: stack })
-  // `workState` answers the verdict half and the worktree state answers `pushed`; joined
-  // here rather than in either, because "is this branch on the remote" is not a question
-  // about whether the work is finished.
-  const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed }))
+  // `workState` answers the verdict half and the worktree state answers `pushed` and `on`;
+  // joined here rather than in either, because "is this branch on the remote" and "which
+  // branch is checked out" are not questions about whether the work is finished.
+  const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
   const offers = nextFor({
@@ -2901,6 +2901,7 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
@@ -2921,8 +2922,30 @@ cmds.next = ({ flags }) => {
   say('')
   for (const o of offers) {
     say(`  ${C.cyan('→')} ${o.says}`)
-    if (o.command) say(`    ${C.dim(o.command)}`)
+    for (const line of [].concat(o.command || [])) say(`    ${C.dim(line)}`)
   }
+}
+
+// What `worktrees.replaced` answers for each merged stage, asked about the stages above it that
+// the same repo carries and has not merged. Only `rig next` asks, the one command that already
+// reads the stack and offers what to do about it.
+function replacedStages (cfg, work, stack) {
+  const found = []
+  stack.forEach((st, i) => {
+    for (const pr of st.prs.filter(p => p.state === 'MERGED')) {
+      const entry = work.repos.find(r => r.repo === pr.repo)
+      const above = stack.slice(i + 1)
+        .filter(up => up.repos.includes(pr.repo) && !up.prs.some(p => p.repo === pr.repo && p.state === 'MERGED'))
+        .map(up => up.branch)
+      if (!entry || !above.length) continue
+      const r = trees(cfg).replaced({ org: entry.org, repo: entry.repo, work: work.branch, head: pr.head, merge: pr.merge, above })
+      if (r) found.push({ repo: entry.repo, branch: st.branch, head: pr.head, ...r })
+    }
+  })
+  // Two squashed stages in a row are both carried by the stage above them, and the higher one's
+  // rebase is the one that replays only that stage's own commits, so the lower one is dropped.
+  const overlap = (a, b) => a.repo === b.repo && (a.carriers || []).some(c => (b.carriers || []).includes(c))
+  return found.filter((f, i) => !found.slice(i + 1).some(g => overlap(f, g)))
 }
 
 // The Direction section of a context doc, sliced out by hand rather than by one clever
@@ -3003,6 +3026,9 @@ cmds.pr = ({ flags }) => {
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
+    // Said beside the PR rather than instead of it: the PR is opened from the remote's work
+    // branch, which is right, and the worktree is what is behind.
+    if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
     if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
@@ -3345,7 +3371,7 @@ function dropMergedBranches (cfg, work, states, stack) {
       say(`  ${C.dim(`${entry.repo}: kept ${branch} — GitHub did not say which commit PR #${pr.number} merged`)}`)
       continue
     }
-    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head })
+    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head, number: pr.number })
     const gone = [local === 'deleted' && 'mirror', remote === 'deleted' && 'remote'].filter(Boolean)
     if (gone.length) step(`deleted branch ${branch} from ${entry.repo} (${gone.join(' and ')})`)
     for (const [where, what] of [['mirror', local], ['remote', remote]]) {

@@ -25,6 +25,16 @@ for tool in git npm; do
   }
 done
 
+# rig asks git for `merge-tree --write-tree` and offers `rebase --update-refs`, both 2.38.
+version=$(git --version | sed -n 's/^git version \([0-9][0-9]*\.[0-9][0-9]*[^ ]*\).*/\1/p')
+major=${version%%.*}
+minor=${version#*.}
+minor=${minor%%.*}
+if [ -z "$version" ] || [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 38 ]; }; then
+  echo "rig install: rig needs git 2.38 or newer, and this is git ${version:-of an unknown version} — update it and run this again" >&2
+  exit 1
+fi
+
 if [ -e "$path/.git" ]; then
   echo "a checkout is already at $path — leaving it exactly as it is"
 elif [ -d "$path" ] && [ -n "$(ls -A "$path")" ]; then

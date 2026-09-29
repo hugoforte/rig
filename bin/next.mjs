@@ -25,26 +25,29 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
-import { nextStage } from './stages.mjs'
+import { backToWorkBranch, nextStage, onLandedStage } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
-// conversation, and only the recording of it is a command.
+// conversation, and only the recording of it is a command — and a list of lines, run in
+// order, when there is more than one.
 const offer = (phase, says, command = null) => ({ phase, says, command })
 
 // Everything `rig next` needs that it cannot work out for itself. Gathered by the caller so
 // this module stays pure:
 //
 //   work           the record: repos, gates, tickets
-//   repos          one `{ repo, merged, pr, dirty, ahead, pushed, missing }` per attached
-//                  repo — what `workState` already decided for `list`, `status` and `close`,
-//                  plus `pushed` from the worktree state; `missing` is a worktree not on
-//                  this machine
+//   repos          one `{ repo, merged, pr, dirty, unpushed, pushed, on, missing }` per
+//                  attached repo — what `workState` already decided for `list`, `status` and
+//                  `close`, plus `pushed` and `on`, the branch checked out, from the worktree
+//                  state; `missing` is a worktree not on this machine
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
+//   replaced       one `{ repo, branch, head, ... }` per merged stage `worktrees.replaced`
+//                  answered for, with what it answered: `head` is the commit its PR carried
 //   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
 //   neighbours     one `{ repo, via, direction }` per repo the catalogue says talks to an
 //                  attached one and which is not itself attached — `via` is the attached repo
@@ -53,7 +56,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], drafts = [], neighbours = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], replaced = [], drafts = [], neighbours = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -93,6 +96,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer(phase, `uncommitted changes in ${dirty.map(r => r.repo).join(', ')} — commit them where they belong`))
   }
 
+  // Every stage is in and a worktree is still on one of them. It is moved first, so it is not
+  // also offered a push or a pull request from the stage it is on (`onLandedStage`).
+  const stranded = stack.length && !nextStage(stack) ? repos.filter(r => onLandedStage(stack, r.on)) : []
+
   // A work with stages gets told which one is next and what it delivers, before anything
   // about the work branch — the stack is what you are actually working through, and the work
   // branch's own PR is the thing that happens *after* it. A work with no stages skips all of
@@ -109,31 +116,61 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
-      out.push(offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+      const on = new Map()
+      for (const r of stranded) on.set(r.on, [...(on.get(r.on) || []), r.repo])
+      const where = [...on].map(([b, rs]) => `${rs.join(', ')} ${rs.length === 1 ? 'is' : 'are'} still on ${b}, which has landed`).join('; ')
+      out.push(stranded.length
+        ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
+        : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+    }
+    // Decision 113. The rebase is offered only where the squash is the stage as it stood;
+    // anywhere else, replaying onto it is a merge somebody has to look at.
+    for (const r of replaced) {
+      if (r.unfetched) {
+        out.push(offer('building', `${r.branch} merged in ${r.repo}, and this machine has not fetched it — fetch, then ask \`rig next\` again`, 'git fetch origin'))
+        continue
+      }
+      const one = r.carriers.length === 1
+      const which = r.carriers.join(', ')
+      const push = r.carriers.map(b => `git push --force-with-lease origin ${b}`)
+      if (r.rebased) {
+        out.push(offer('building', `${which} ${one ? 'is' : 'are'} replayed onto the work branch here and not pushed`, push))
+        continue
+      }
+      const says = `${r.branch} landed as new commits (a squash or a rebase), and ${which} in ${r.repo} still ${one ? 'carries' : 'carry'} the commits it replaced`
+      if (r.behind.length) {
+        out.push(offer('building', `${says} — the copy here of ${r.behind.join(', ')} is behind the remote's, so bring it up to date, then ask \`rig next\` again`))
+        continue
+      }
+      out.push(r.sameTree
+        ? offer('building', `${says} — replay only ${one ? 'its' : 'their'} own onto the work branch`, [
+          `git switch ${r.carriers[r.carriers.length - 1]}`,
+          `git rebase ${one ? '' : '--update-refs '}--onto origin/${work.branch} ${r.head}`,
+          ...push,
+        ])
+        : offer('building', `${says}, and the squash is not the stage as it stood — rebase ${one ? 'it' : 'them'} onto the work branch by hand`))
     }
   }
 
-  // `ahead` is `null`, never 0, when git could not measure the distance at all — which is the
-  // *ordinary* state of a branch whose PR was squash-merged and whose refs are gone (decision
-  // 62). Every filter below therefore compares it explicitly: `!r.ahead` is true for both 0 and
-  // null, and treating "nobody could tell" as "nothing outstanding" is the exact mistake
-  // decision 62 exists to prevent, one command further along.
-  //
-  // A repo whose distance is unknown matches none of these and is simply not spoken about. That
-  // is deliberate: this command offers, and there is nothing to offer about a fact nobody has.
-  // `workState` already blocks a close on the same condition, which is where a refusal belongs.
-  const unpushed = repos.filter(r => !r.merged && r.ahead > 0)
+  // Asked of `unpushed`, never of `ahead`, which counts what has not landed on the base
+  // (decision 110). `unpushed` is `null`, never 0, when git could not count, so every filter
+  // below compares it explicitly: `!r.unpushed` is true for both 0 and null, and treating
+  // "nobody could tell" as "nothing outstanding" is the mistake decision 62 exists to prevent.
+  // A repo git could not count for matches none of these and is simply not spoken about: this
+  // command offers, and there is nothing to offer about a fact nobody has.
+  // A repo whose stages are replayed here is offered their force-push above; a plain push fails.
+  const replaying = replaced.filter(r => r.rebased).map(r => r.repo)
+  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r) && !replaying.includes(r.repo))
   if (unpushed.length) {
     out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.
-  // Asked of `pushed` rather than `ahead`: `ahead` counts what is *un*pushed and reads 0 both
-  // for a branch that has been pushed and for one nobody has written anything on, and nagging
-  // the second to open a pull request for nothing is exactly the reproach this command does
-  // not make.
-  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.ahead === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.ahead === 0 && r.pushed)
+  // Asked of `pushed` as well as `unpushed`: `unpushed` reads 0 both for a branch that has
+  // been pushed and for one nobody has written anything on, and nagging the second to open a
+  // pull request for nothing is exactly the reproach this command does not make.
+  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
+  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
     out.push(offer('reviewing', `${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, 'rig pr'))
   }
