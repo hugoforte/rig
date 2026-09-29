@@ -376,6 +376,17 @@ const writeText = (p, v) => {
 // and the catalogue is keyed by the repo's real name; by its folder only when there is no
 // origin to go by. Null for anywhere that is not a checkout, or is one git will not open —
 // both of which simply mean this step has no answer.
+// The repo a remote URL names, as the catalogue files it: `org/repo` when the remote is hosted
+// and its path is exactly two segments, which is what matches a repo to its own org's entry
+// (`rootsCataloguing`). Anything else names the repo alone — a path on disk, whose parent
+// folder is no org, and a host with a deeper path.
+function repoOfRemote (url) {
+  const u = url.replace(/\/+$/, '').replace(/\.git$/i, '')
+  const hosted = /^(?!file:)[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/i.exec(u) ?? /^(?:[^/\\@]+@)?[^/\\:]{2,}:(?!\/\/)(.+)$/.exec(u)
+  const segments = (hosted ? hosted[1] : u).split(/[/\\]/).filter(Boolean)
+  return (hosted && segments.length === 2 ? segments.join('/') : segments.pop()) || null
+}
+
 function repoAtCwd () {
   // Where the checkout is comes from the filesystem (`gitfs.discover`), which is what git
   // would walk anyway — so the answer this step gives most often, that the cwd is not a
@@ -395,17 +406,8 @@ function repoAtCwd () {
   }
   // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
   // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
-  // `org/repo` from a hosted remote, not the repo alone: same-named repos in different orgs
-  // are normal, and every data root is a `rig-data` somewhere. Only a hosted remote whose
-  // path is exactly `org/repo` names an org. A path on disk names its repo alone, because the
-  // folder above it is not an org, and so does a host with a deeper path.
   const url = exec('git', ['remote', 'get-url', 'origin'])
-  if (url.code === 0 && url.out) {
-    const u = url.out.replace(/\/+$/, '').replace(/\.git$/, '')
-    const hosted = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/i.exec(u) ?? /^[^/\\@]+@[^/\\:]+:(.+)$/.exec(u)
-    const segments = (hosted ? hosted[1] : u).split(/[/\\]/).filter(Boolean)
-    return (hosted && segments.length === 2 ? segments.join('/') : segments.pop()) || null
-  }
+  if (url.code === 0 && url.out) return repoOfRemote(url.out)
   // git fails this for a repository it refuses to open — another user's, or one with an
   // extension it does not know — as well as for one with no origin, and the filesystem walk
   // sees neither refusal. The folder is the name only for a checkout git will open, and where
@@ -4209,7 +4211,7 @@ export function run (argv, io = {}) {
 // surface (decision 55), which is neither pure nor cheap, since it reads every record and may
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,

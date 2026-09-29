@@ -10,7 +10,7 @@ import {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
-  spawnFailure,
+  spawnFailure, repoOfRemote,
 } from '../bin/rig.mjs'
 import { makeInstall } from './harness.mjs'
 
@@ -39,6 +39,30 @@ test('parseArgs: -m is --message, and a short flag is never eaten as another fla
 
 test('parseArgs: an unknown short flag fails rather than swallowing a positional', () => {
   assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
+})
+
+test('repoOfRemote: a hosted remote names its org, and a path on disk names its repo alone', () => {
+  const cases = {
+    'https://github.com/acme/ledger.git': 'acme/ledger',
+    'https://github.com/acme/ledger/': 'acme/ledger',
+    'https://github.com/acme/ledger.GIT': 'acme/ledger',
+    'ssh://git@github.com:22/acme/ledger.git': 'acme/ledger',
+    'git@github.com:acme/ledger.git': 'acme/ledger',
+    // An ssh config alias, which is how one machine uses two GitHub accounts.
+    'github-work:linenmaster/rig-data': 'linenmaster/rig-data',
+    'https://ghe.example.com/acme/ledger': 'acme/ledger',
+    // A deeper path is no `org/repo`: an Azure repo, a GitLab subgroup.
+    'https://dev.azure.com/acme/proj/_git/ledger': 'ledger',
+    'https://gitlab.com/acme/team/ledger.git': 'ledger',
+    'host:ledger': 'ledger',
+    'D:/remotes/acme/ledger.git': 'ledger',
+    'D:\\remotes\\acme\\ledger.git': 'ledger',
+    '\\\\server\\share\\ledger': 'ledger',
+    '/srv/git/ledger': 'ledger',
+    'file:///srv/git/ledger.git': 'ledger',
+    'file://localhost/srv/ledger': 'ledger',
+  }
+  for (const [url, repo] of Object.entries(cases)) assert.equal(repoOfRemote(url), repo, url)
 })
 
 test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {

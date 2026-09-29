@@ -126,8 +126,6 @@ test('the repo the current directory is in answers when nothing named one', () =
 })
 
 test('a repo named with its org matches only that org\'s entry', () => {
-  // Every data root is a `rig-data` somewhere, so the bare name matches whichever root
-  // catalogues any of them. The org is what tells them apart.
   fixture(THREE, ({ tmp, toolRoot, machine }) => {
     catalogue(machine.dataRoots.personal.path, 'hugoforte', 'rig-data')
     const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'linenmaster/rig-data' })
@@ -151,6 +149,17 @@ test('standing in a data root\'s own checkout places the command in that root', 
     assert.equal(location.name, 'linenmaster', 'and not `current`, which is hugoforte')
     assert.equal(location.source, 'root')
     assert.equal(asked, 0, 'the checkout answered, so the repo it is was never asked')
+  })
+})
+
+test('a data root cloned inside another root\'s folder answers for itself', () => {
+  const nested = {
+    workRoot: '<tmp>/w',
+    dataRoots: { outer: { path: '<tmp>/outer' }, inner: { path: '<tmp>/outer/inner' } },
+    current: 'outer',
+  }
+  fixture(nested, ({ toolRoot, machine }) => {
+    assert.equal(locate(toolRoot, {}, { cwd: machine.dataRoots.inner.path }).name, 'inner')
   })
 })
 
@@ -478,11 +487,11 @@ test('a checkout of another org\'s repo with the same name is not placed by it',
   assert.match(r.out, /data root: hugoforte \(current\)/)
 })
 
-test('an ssh remote names its org as well as its repo', () => {
+test('an ssh remote is matched by its org too', () => {
   const dir = checkoutAt('somewhere/over-ssh', 'ledger')
-  gitMust(dir, 'remote', 'set-url', 'origin', 'git@github.com:acme/ledger.git')
+  gitMust(dir, 'remote', 'set-url', 'origin', 'git@github.com:someone-else/ledger.git')
   const r = rig(['list', '--quick'], { cwd: dir })
-  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+  assert.match(r.out, /data root: hugoforte \(current\)/)
 })
 
 test('a command run in a data root\'s own checkout reads that root, whatever is current', () => {

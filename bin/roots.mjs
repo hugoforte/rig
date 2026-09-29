@@ -180,12 +180,13 @@ export function rootsCataloguing (roots, repo) {
   return Object.entries(catalogued(roots)).filter(([, files]) => files.some(matches)).map(([name]) => name)
 }
 
-// The configured root whose own checkout the cwd is in, or null. Standing in a data root is
-// the strongest answer the cwd can give about which knowledge is in hand, and it costs no
-// subprocess: the roots are paths, and this is a path comparison.
+// The configured root whose own checkout the cwd is in, or null. It costs no subprocess: the
+// roots are paths, and this is a path comparison. The deepest wins, so a root cloned inside
+// another root's folder answers for itself.
 function rootAt (reg, from) {
-  const hit = Object.entries(reg.roots).find(([, entry]) => insideDir(from, entry.path))
-  return hit ? hit[0] : null
+  const hits = Object.entries(reg.roots).filter(([, entry]) => insideDir(from, entry.path))
+  hits.sort(([, a], [, b]) => b.path.length - a.path.length)
+  return hits.length ? hits[0][0] : null
 }
 
 // The data root the work folder above the cwd belongs to, or null outside one. Walks up
@@ -244,14 +245,14 @@ function chooseRoot (reg, env, opts) {
   if (pinned) return known(pinned, 'env', DATA_ROOT_ENV)
   const anchored = anchoredRoot(opts.cwd ?? process.cwd())
   if (anchored) return known(anchored, 'cwd', `${MARKER_DIR}/${DATA_ANCHOR} in the work folder above the current directory`)
-  // The repos the command named, then the repo the command is standing in. Both answer the
-  // same question — which knowledge is this repo's — and both are asked before `current`,
+  // The repos the command named, then the data root checkout the command is standing in, then
+  // the repo it is standing in. All three answer which knowledge is in hand before `current`,
   // because a repo that has been attached once already said where it belongs and having to
   // remember it afterwards is the thing this is for.
   const byRepos = fromRepos(reg, opts.repos ?? [], 'named on the command')
   if (byRepos) return byRepos
-  // A data root's own checkout, asked before the repo it is: that repo is a `rig-data`, which
-  // is the one name every root's catalogue may hold.
+  // A data root's own checkout, asked before the repo it is: its repo is a `rig-data`, which
+  // any root's catalogue may hold.
   const root = rootAt(reg, opts.cwd ?? process.cwd())
   if (root) return { name: root, source: 'root' }
   // A function, not a value: finding the repo the cwd is in costs a subprocess, and by here
