@@ -17,7 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
-import { discover, refSha, symref } from './gitfs.mjs'
+import { discover, headBranch, refSha, symref } from './gitfs.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -81,6 +81,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (has(mirror, ref(b))) return b
     }
     throw new RigError(`cannot determine the remote HEAD of ${org}/${repo} (${mirror})`)
+  }
+
+  // Which branch a worktree has checked out, read from its HEAD where `gitfs` places it and
+  // asked of git where it does not.
+  const checkedOut = dir => {
+    const place = discover(dir, env())
+    if (place?.gitDir) return headBranch(place.gitDir)
+    const r = git(dir, 'symbolic-ref', '-q', 'HEAD')
+    return r.code === 0 && r.out.startsWith('refs/heads/') ? r.out.slice('refs/heads/'.length) : null
   }
 
   const onRemote = (mirror, branch) => has(mirror, ref(branch))
@@ -178,6 +187,43 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return copies(branch).some(a => copies(other).some(b => isAncestor(mirror, b, a)))
     },
 
+    // Did a stage's pull request land as new commits — a squash or a rebase — while stages
+    // stacked above it still carry the ones it replaced (decision 113)? `head` is the commit the
+    // PR carried, `merge` the one it landed as, and `above` the stages above it in this repo, in
+    // stack order.
+    //
+    // `{ unfetched: true }` when this mirror lacks `merge` or its work branch does not hold it
+    // yet, which a fetch answers. Null when the PR merged the stage's own commits, when the work
+    // branch holds them, or when nothing above carries them. Otherwise `carriers` are the stages
+    // above that do, read from the remote's copy first so a stale copy here never counts;
+    // `rebased` says every carrier's copy here has been replayed and only the push is left;
+    // `behind` names the carriers whose copy here the remote's has moved past, which a replay
+    // from here would overwrite; and `sameTree` says the merge is what merging `head` onto the
+    // work branch gave.
+    replaced ({ org, repo, work, head, merge, above = [] }) {
+      const mirror = mirrorPath(org, repo)
+      if (!fs.existsSync(mirror) || !head || !merge) return null
+      const commit = sha => git(mirror, 'cat-file', '-e', `${sha}^{commit}`).code === 0
+      if (!commit(head) || !has(mirror, ref(work))) return null
+      if (!commit(merge) || !isAncestor(mirror, merge, ref(work))) return { unfetched: true }
+      if (isAncestor(mirror, head, merge) || isAncestor(mirror, head, ref(work))) return null
+      // Carries a commit of the stage the work branch does not have. Asked through the merge
+      // base, not `head` itself: a stage fixed after the one above was cut from it is still
+      // under that one, at an earlier commit.
+      const carries = r => {
+        const base = git(mirror, 'merge-base', head, r)
+        return base.code === 0 && !isAncestor(mirror, base.out.trim(), ref(work))
+      }
+      const copy = b => [ref(b), local(b)].find(r => has(mirror, r))
+      const carriers = above.filter(b => copy(b) && carries(copy(b)))
+      if (!carriers.length) return null
+      const rebased = carriers.every(b => has(mirror, local(b)) && !carries(local(b)))
+      const behind = carriers.filter(b => has(mirror, local(b)) && has(mirror, ref(b)) && !isAncestor(mirror, ref(b), local(b)))
+      const merged = git(mirror, 'merge-tree', '--write-tree', `${merge}^1`, head)
+      const tree = git(mirror, 'rev-parse', `${merge}^{tree}`).out.trim()
+      return { carriers, rebased, behind, sameTree: merged.code === 0 && merged.out.split('\n')[0].trim() === tree }
+    },
+
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which
     // is the only thing the two ever disagreed about, so the message is what comes back and
     // the caller decides how loud it is. The prune runs either way: a remove that failed
@@ -197,15 +243,24 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // copy must be `head` or behind it; the remote's must be `head` exactly, and the push leases
     // on it, so a commit pushed after the merge keeps the branch rather than being lost with it.
     //
+    // The mirror may never have seen `head`: a PR updated on GitHub — "Update branch" — carries
+    // a commit no fetch brought here, and asking whether the copy is behind a commit git does not
+    // have answers no. So that commit is fetched first, from `refs/pull/<number>/head`, which
+    // GitHub keeps after the branch is deleted (hugoforte/rig#181). A fetch that fails keeps the
+    // copy and says why.
+    //
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
     // thing to say, not a reason to fail.
-    dropMerged ({ org, repo, branch, head }) {
+    dropMerged ({ org, repo, branch, head, number }) {
       const mirror = mirrorPath(org, repo)
       const out = { local: 'absent', remote: 'absent' }
       if (!fs.existsSync(mirror)) return out
       if (kept(mirror, branch)) {
-        out.local = !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
+        const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
+          : git(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+        out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
+          : !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
@@ -238,8 +293,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    // `branch` is optional and answers one extra question: has this branch reached the
-    // remote? Only `rig next` asks, and only it passes one.
+    // `branch` is optional and answers three extra questions: has this branch reached the
+    // remote, how much of what is checked out has not, and which branch is checked out?
+    // `repoState` passes one.
     state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
@@ -270,11 +326,23 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         s.ahead = s.behind = null
         s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
           `git could not measure ${dir} against ${fellBack ?? 'its upstream'}`
-        return s
+      } else {
+        const [behind, ahead] = counts.out.split(/\s+/).map(Number)
+        s.behind = behind || 0
+        s.ahead = ahead || 0
       }
-      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-      s.behind = behind || 0
-      s.ahead = ahead || 0
+      // `ahead` is not what is unpushed, for the reason `pushed` is not asked of `@{u}`: against
+      // *main* it counts every commit that has not landed, pushed or not (hugoforte/rig#192).
+      // This counts the commits on HEAD that no branch on the remote holds: the distance from
+      // `origin/<branch>` once it is pushed, and while it never was, what it has over the remote
+      // branch it was cut from. A count git could not make is a distance nobody could tell.
+      if (branch) {
+        const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
+        s.unpushed = u.code === 0 ? Number(u.out) : null
+        if (u.code !== 0) s.distanceUnknown ??= (u.err || u.out).split('\n')[0].trim() || `git could not count what ${dir} has not pushed`
+        // Null on a detached HEAD, and not always `branch` (`onLandedStage` in stages.mjs).
+        s.on = checkedOut(dir)
+      }
       return s
     },
 

@@ -14,14 +14,14 @@ import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
-import { releaseMark } from './release.mjs'
+import { releaseMark, BRANCH_PREFIXES } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -88,8 +88,8 @@ const err = s => current.err(s)
 // property of the run rather than of the process. Line-ending is theirs and not the writer's:
 // `cmds.prompt` and `cmds.catalog` write a file through the same stdout with no line added.
 const say = s => out(`${s}\n`)
-// For the ambient freshness line alone: it is rig talking about itself, not part of any
-// command's answer, so it must not land in a pipe someone is reading the answer out of.
+// For what rig says beside a command's answer rather than as part of it — the freshness line,
+// a note about records it left out — so it never lands in a pipe someone reads the answer from.
 const aside = s => err(`${s}\n`)
 const step = s => out(`${C.cyan('·')} ${s}\n`)
 const warn = s => out(`${C.yellow('!')} ${s}\n`)
@@ -857,23 +857,25 @@ function listWorkIds (dataRootPath = dataRoot()) {
     .map(d => d.name)
 }
 
-// Every work record in a root that parses, and the ids of the ones that do not. For the readers
-// that want the records as *evidence* rather than as the thing they act on — the observed graph
-// behind `rig impact` and the offer `rig attach` makes. One unreadable record must not cost those
-// their answer, and for `attach` it must not cost the command it follows: the offer runs after
-// the worktree is cut and the record saved, and a throw there skipped the commit and left the
-// data root half-written. So a record that will not read is left out and named, never swallowed.
-function readRecords (root) {
+// Every work record in a root that reads, and for each one that does not, its id and why. For
+// the commands that read many records to answer one question: the observed graph behind
+// `rig impact`, the offer `rig attach` makes, and the works `list`, `dash` and `demo` show. One
+// unreadable record must not cost those their answer, and for `attach` it must not cost the
+// command it follows: the offer runs after the worktree is cut and the record saved, and a throw
+// there would skip the commit and leave the data root half-written. So a record that will not
+// read is left out and named with the error it raised, never swallowed.
+function readRecords (root, read = id => readJson(recordFile(id, root))) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
-    try { works.push(readJson(recordFile(id, root))) } catch { unreadable.push(id) }
+    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${e.message})`) }
   }
   return { works, unreadable }
 }
 
-const sayUnreadable = ids => {
-  if (ids.length) say(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
+// Said on stdout, or through `tell` when the caller's stdout is a payload.
+const sayUnreadable = (records, tell = say) => {
+  if (records.length) tell(C.dim(`· ${records.length} work record${records.length === 1 ? '' : 's'} could not be read and ${records.length === 1 ? 'was' : 'were'} left out: ${records.join(', ')}`))
 }
 
 // ---------------------------------------------------------------- catalogue
@@ -1069,7 +1071,7 @@ const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, 
 const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
-const SHORT_FLAGS = { m: 'message' }
+const SHORT_FLAGS = { m: 'message', h: 'help' }
 const isFlag = a => a.startsWith('--') || /^-[a-z]$/.test(a)
 
 function parseArgs (argv) {
@@ -1912,11 +1914,17 @@ cmds.use = ({ positional }) => {
 cmds.new = ({ flags, positional }) => {
   sayCurrentRoot()
   const cfg = config()
-  const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
+  const id = positional[0] || die(`rig new wants a work id\n${usageOf('new')}`)
 
-  const keys = (flags.key || flags.keys || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  const keys = (flags.key || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
+  }
+  // The branch prefix is the release check's bump (ADR 0004), so a type it does not know is
+  // refused here, when the branch is named, rather than on the pull request.
+  const type = flags.type || 'feat'
+  if (!BRANCH_PREFIXES.includes(type)) {
+    die(`--type wants a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}${typeof type === 'string' ? ` — not "${type}"` : ''}`)
   }
   const noTicket = !!flags['no-ticket']
   const dryRun = !!flags['dry-run']
@@ -1967,7 +1975,6 @@ cmds.new = ({ flags, positional }) => {
   // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`;
   // the PR links those with "Fixes #n" instead.
   const branchKey = keys.find(isJiraKey) || idKey
-  const type = flags.type || 'feat'
   const branchSlug = flags.slug || slug(title || id.replace(/^[A-Z][A-Z0-9]+-\d+-?/, '') || id)
   const branch = flags.branch ||
     `${type}/${branchKey ? branchKey + '-' : ''}${branchSlug}`.replace(/-$/, '')
@@ -2523,7 +2530,7 @@ function repoEntryJson (cfg, entry, branch, live) {
   }
   if (!live) return out
   const s = repoState(cfg, entry, branch)
-  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind })
+  Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind, unpushed: s.unpushed })
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else out.pr = s.pr
@@ -2545,12 +2552,18 @@ function repoEntryJson (cfg, entry, branch, live) {
   return out
 }
 
-// Every work, least recently touched first. ISO-8601 exists so that byte order is
-// chronological order; decorate once rather than recomputing the key inside the comparator.
-const worksByActivity = cfg => listWorkIds().map(id => loadWork(cfg, id))
-  .map(work => [activityAt(work), work])
-  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  .map(([, work]) => work)
+// Every work, least recently touched first, and any record that would not read (`readRecords`).
+// ISO-8601 exists so that byte order is chronological order; decorate once rather than
+// recomputing the key inside the comparator.
+const worksByActivity = cfg => {
+  const { works, unreadable } = readRecords(dataRoot(), id => loadWork(cfg, id))
+  return {
+    works: works.map(work => [activityAt(work), work])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, work]) => work),
+    unreadable,
+  }
+}
 
 // The release this checkout stands on, or null when nothing here was ever tagged. One spawn,
 // inside a command somebody ran on purpose — never in `toolState`, which every command's
@@ -2572,13 +2585,17 @@ const releaseHere = () => (onPath('git')
 // derived and free and gates writes, `release` costs a spawn and names what was published.
 // There used to be a `rig` beside them holding `MAJOR.minor.patch`, which was the format said a
 // second time in a semver's clothing (ADR 0004).
-const listPayload = (cfg, live) => ({
-  recordFormat: MAJOR,
-  release: releaseHere(),
-  generatedAt: new Date().toISOString(),
-  live,
-  works: worksByActivity(cfg).map(w => workJson(cfg, w, live)),
-})
+const listPayload = (cfg, live) => {
+  const { works, unreadable } = worksByActivity(cfg)
+  sayUnreadable(unreadable, aside)
+  return {
+    recordFormat: MAJOR,
+    release: releaseHere(),
+    generatedAt: new Date().toISOString(),
+    live,
+    works: works.map(w => workJson(cfg, w, live)),
+  }
+}
 
 // The same payload, for a consumer inside this process rather than downstream of a pipe — a
 // test asserting the shape of the published surface should not have to parse a subprocess's
@@ -2596,12 +2613,12 @@ const listing = live => listPayload(config(), live)
 cmds.list = ({ flags }) => {
   sayCurrentRoot()
   const cfg = config()
-  const live = flags.prs !== false && !flags.quick
+  const live = !flags.quick
 
   if (flags.json) return say(JSON.stringify(listPayload(cfg, live), null, 2))
 
-  const works = worksByActivity(cfg)
-  if (!works.length) return say('no works yet — `rig new <id> --title "..."`')
+  const { works, unreadable } = worksByActivity(cfg)
+  if (!works.length && !unreadable.length) return say('no works yet — `rig new <id> --title "..."`')
   for (const work of works) {
     const id = work.id
     const wd = workDir(cfg, id)
@@ -2663,6 +2680,7 @@ cmds.list = ({ flags }) => {
     }
     say('')
   }
+  sayUnreadable(unreadable)
 }
 
 // `--since 14d` or `--since 2026-09-01`. A window nobody can parse is worth dying over: a
@@ -2728,7 +2746,7 @@ cmds.dash = ({ flags }) => {
 cmds.demo = ({ flags }) => {
   sayCurrentRoot()
   const root = dataRoot()
-  const works = listWorkIds(root).map(id => readJson(recordFile(id, root)))
+  const { works, unreadable } = readRecords(root)
   const catalog = loadCatalog(root)
   if (!catalog.length) die(`no catalogue in ${root} — there is nothing to show. \`rig attach\` drafts an entry the first time it sees a repo.`)
 
@@ -2749,6 +2767,7 @@ cmds.demo = ({ flags }) => {
   ok(`demo at ${out}`)
   say(C.dim(`  ${model.counts.repos} repos · ${model.counts.edges} relationships · ${model.steps.length} steps` +
     `${model.example ? ` · walking through ${model.example.id}` : ''}`))
+  sayUnreadable(unreadable)
   if (insideDir(out, root)) commitAs('', path.relative(root, out).replace(/\\/g, '/'))
 
   if (flags['no-open']) return
@@ -2894,10 +2913,10 @@ cmds.next = ({ flags }) => {
   // so a verdict here that did not ask would disagree with the command it is describing.
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   const verdict = workState(work, states, { stages: stack })
-  // `workState` answers the verdict half and the worktree state answers `pushed`; joined
-  // here rather than in either, because "is this branch on the remote" is not a question
-  // about whether the work is finished.
-  const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed }))
+  // `workState` answers the verdict half and the worktree state answers `pushed` and `on`;
+  // joined here rather than in either, because "is this branch on the remote" and "which
+  // branch is checked out" are not questions about whether the work is finished.
+  const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
   const offers = nextFor({
@@ -2908,6 +2927,7 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
@@ -2928,8 +2948,30 @@ cmds.next = ({ flags }) => {
   say('')
   for (const o of offers) {
     say(`  ${C.cyan('→')} ${o.says}`)
-    if (o.command) say(`    ${C.dim(o.command)}`)
+    for (const line of [].concat(o.command || [])) say(`    ${C.dim(line)}`)
   }
+}
+
+// What `worktrees.replaced` answers for each merged stage, asked about the stages above it that
+// the same repo carries and has not merged. Only `rig next` asks, the one command that already
+// reads the stack and offers what to do about it.
+function replacedStages (cfg, work, stack) {
+  const found = []
+  stack.forEach((st, i) => {
+    for (const pr of st.prs.filter(p => p.state === 'MERGED')) {
+      const entry = work.repos.find(r => r.repo === pr.repo)
+      const above = stack.slice(i + 1)
+        .filter(up => up.repos.includes(pr.repo) && !up.prs.some(p => p.repo === pr.repo && p.state === 'MERGED'))
+        .map(up => up.branch)
+      if (!entry || !above.length) continue
+      const r = trees(cfg).replaced({ org: entry.org, repo: entry.repo, work: work.branch, head: pr.head, merge: pr.merge, above })
+      if (r) found.push({ repo: entry.repo, branch: st.branch, head: pr.head, ...r })
+    }
+  })
+  // Two squashed stages in a row are both carried by the stage above them, and the higher one's
+  // rebase is the one that replays only that stage's own commits, so the lower one is dropped.
+  const overlap = (a, b) => a.repo === b.repo && (a.carriers || []).some(c => (b.carriers || []).includes(c))
+  return found.filter((f, i) => !found.slice(i + 1).some(g => overlap(f, g)))
 }
 
 // The Direction section of a context doc, sliced out by hand rather than by one clever
@@ -3010,6 +3052,9 @@ cmds.pr = ({ flags }) => {
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
+    // Said beside the PR rather than instead of it: the PR is opened from the remote's work
+    // branch, which is right, and the worktree is what is behind.
+    if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
     if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
@@ -3352,7 +3397,7 @@ function dropMergedBranches (cfg, work, states, stack) {
       say(`  ${C.dim(`${entry.repo}: kept ${branch} — GitHub did not say which commit PR #${pr.number} merged`)}`)
       continue
     }
-    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head })
+    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head, number: pr.number })
     const gone = [local === 'deleted' && 'mirror', remote === 'deleted' && 'remote'].filter(Boolean)
     if (gone.length) step(`deleted branch ${branch} from ${entry.repo} (${gone.join(' and ')})`)
     for (const [where, what] of [['mirror', local], ['remote', remote]]) {
@@ -3436,7 +3481,7 @@ cmds.catalog = ({ flags, positional }) => {
     const flag = e.draft ? C.yellow(' [draft]') : ''
     say(`${e.repo.padEnd(34)} ${C.dim(e.org.padEnd(15))} ${e.role}${flag}`)
     if (flags.verbose && e.talks_to.length) {
-      for (const t of e.talks_to) say(`  ${C.dim('→')} ${t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
+      for (const t of e.talks_to) say(`  ${C.dim('→')} ${typeof t === 'string' ? t : t.repo}: ${t.how || ''}${t.direction ? C.dim(` [${t.direction}]`) : ''}`)
     }
   }
 }
@@ -3527,10 +3572,16 @@ cmds.impact = ({ positional }) => {
       say(`  ${o.repo.padEnd(width)}  ${C.dim(count)}${o.declared ? C.dim(' — and talks_to says why') : C.yellow(' — and nothing in talks_to says why')}`)
       say(C.dim(`    ${o.works.join(', ')}`))
     }
+    // "Keeps happening" is a claim that the pair repeats. The observed graph has no threshold
+    // (decision 95), so the wording is what tells the reader how strong the evidence is.
     const quiet = answer.observed.filter(o => !o.declared)
     if (quiet.length) {
+      const one = quiet.length === 1
+      const gap = quiet.every(o => o.works.length > 1)
+        ? `${one ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why`
+        : `the catalogue does not say why ${one ? 'that pair was' : 'those pairs were'} worked on together`
       say('')
-      say(C.dim(`${quiet.length === 1 ? 'that pair keeps' : 'those pairs keep'} happening and the catalogue does not say why — ${answer.catalogued
+      say(C.dim(`${gap} — ${answer.catalogued
         ? `\`rig catalog ${answer.repo}\` names the file to correct`
         : `and ${answer.repo} has no catalogue entry — one is drafted the first time it is attached`}`))
     }
@@ -4042,10 +4093,10 @@ cmds.doctor = () => {
   return found
 }
 
-cmds.help = () => {
-  say(`${C.bold('rig')} — cross-repo work harness
-
-  rig init                        one-time setup; "rig prompt setup" asks the questions
+// Every command's usage, written once: the lines that start with its name and the indented
+// lines under each. `rig help` prints all of it, `rig <command> --help` prints that command's
+// own lines, and the flags those lines name are the flags the command takes.
+const USAGE = `  rig init                        one-time setup; "rig prompt setup" asks the questions
        --data-repo owner/name      join that private data repo, or create it if absent
        --name <name>               what to call this data root; it becomes the current one
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
@@ -4056,7 +4107,7 @@ cmds.help = () => {
        decision must be explicit); --key PROJ-42 fetches its brief from Jira;
        --ticket creates in the org's tracker (rig.json); --dry-run previews and
        creates nothing; --no-ticket records a declined ticket
-       [--type feat] [--repos a,b] [--setup]
+       [--type feat] [--slug s | --branch b] [--repos a,b] [--setup]
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
@@ -4094,6 +4145,7 @@ cmds.help = () => {
                                   way it runs, and how far behind its entry is
   rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
                                   re-renders its deploy order from the stack
+       [--force]                   write it again over the one that exists
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
        [--learned]                 --designed records the "design agreed" gate,
                                    --learned the lesson review (the rig-learn skill)
@@ -4110,7 +4162,41 @@ cmds.help = () => {
   rig doctor                      environment + consistency checks, over every data root
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
-  rig prompt [name]               print an agent prompt
+  rig prompt [name]               print an agent prompt`
+
+// Flags any command may be given, said once in the prose under the usage rather than on each
+// line. A command that acts on no work ignores `--work`.
+const COMMON_FLAGS = ['data', 'work', 'help']
+
+// Flags rig passes to itself and a person never types: `rig update`'s one hop into the code
+// that just arrived.
+const INTERNAL_FLAGS = { update: ['restarted'] }
+
+function usageOf (name) {
+  const lines = []
+  let mine = false
+  for (const line of USAGE.split('\n')) {
+    const starts = /^ {2}rig (\S+)/.exec(line)
+    if (starts) mine = starts[1] === name
+    if (mine) lines.push(line)
+  }
+  return lines.join('\n')
+}
+
+// `--flag` in a command's usage, and `-m` read as the long name it stands for.
+const flagsOf = name => new Set([
+  ...COMMON_FLAGS,
+  ...INTERNAL_FLAGS[name] ?? [],
+  ...[...usageOf(name).matchAll(/(?<![\w-])(?:--([a-z][a-z-]*)|-([a-z])\b)/g)].map(([, long, short]) => long ?? SHORT_FLAGS[short]),
+])
+
+cmds.help = () => {
+  say(`${C.bold('rig')} — cross-repo work harness
+
+${USAGE}
+
+Every command takes --help (or -h), which prints its own lines above and runs
+nothing. A flag its lines do not name is refused, before anything runs.
 
 Commands that act on "the current work" find it by walking up from the cwd,
 or take --work <id>. Every command that changes a work ends by committing the
@@ -4135,8 +4221,9 @@ how far it is behind its remote, \`rig update\` brings it forward.`)
 // which is what stops the data root being committed — `pendingCommit` is never reached — and
 // leaves it exactly as the failed command found it.
 function invoke (argv) {
-  const [cmdName, ...rest] = argv
-  const cmd = cmds[cmdName || 'help']
+  const [first, ...rest] = argv
+  const cmdName = !first || first === '--help' || first === '-h' ? 'help' : first
+  const cmd = cmds[cmdName]
   // Returned rather than exited on: an in-process run has no process to exit, and a command
   // nobody recognised has nothing after it to run either way.
   if (!cmd) {
@@ -4148,6 +4235,17 @@ function invoke (argv) {
   let prepared = null
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
+    // Asking how a command is used never runs it, and neither does a flag its usage does not
+    // name.
+    const usage = usageOf(cmdName)
+    if (args.flags.help) {
+      if (usage) say(usage)
+      else cmds.help()
+      return 0
+    }
+    const takes = flagsOf(cmdName)
+    const unknown = Object.keys(args.flags).filter(k => !takes.has(k))
+    if (unknown.length) die(`rig ${cmdName} takes no ${unknown.map(k => `--${k}`).join(', ')}${usage ? `\n${usage}` : ''}`)
     // Before the first `where()`: the data root a command names decides every path it reads.
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
     if (typeof args.flags.data === 'string') current.requestedData = args.flags.data

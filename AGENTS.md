@@ -19,7 +19,8 @@ or secrets in either committed repo.
 
 ## First run
 
-Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH.
+Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH. rig
+needs git 2.38 or newer.
 `rig doctor` says "not set up" until there is a data root — separate from this checkout —
 with a `rig.json` in it. Run the setup interview; its first question is where the knowledge
 lives:
@@ -308,7 +309,9 @@ keeps one commit per work in the base branch. The merge is what keeps the stack 
 squash replaces a stage's commits, so the stage above stops descending from anything and has
 to be rebased — and a rebase is what breaks the chain rig reads the order from. rig never
 merges anything, so this is a convention it relies on rather than enforces; a stage somebody
-squashes anyway falls back to the order it was declared in.
+squashes anyway falls back to the order it was declared in. `rig next` names the stages above a
+squash, which still carry the commits it replaced, and offers the commands that replay only
+their own commits and force-push them, when the squash is the stage as it stood.
 
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
@@ -436,6 +439,10 @@ repo that already has an open PR is reported, not duplicated.
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
 
+A worktree is often still on the last stage when every stage is in, and that stage's branch is
+gone from GitHub. `rig pr` names a worktree on a landed stage, and `rig next` does once every
+stage is in, each with the commands that move it to the work branch. Neither runs them.
+
 ## Closing
 
 ```bash
@@ -447,8 +454,9 @@ rig close --abandoned     # stopped, not finished: the did-it-land checks are dr
 `rig close` removes the worktrees and keeps `context.md`. When every PR merged, it also deletes
 the work's branches — the work branch and each stage that landed — from the mirror and the
 remote, but only a copy holding nothing its PR did not merge; a branch pushed to after the
-merge is kept and named. A close forced past a blocker, or abandoned, deletes no branch. Nothing
-else is ever auto-deleted.
+merge is kept and named. When the mirror lacks the commit a PR merged, the close fetches it
+first; if that fails, the copy is kept with the reason. A close forced past a blocker, or
+abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot

@@ -127,7 +127,7 @@ export function stageState (stage, perRepo = []) {
     open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
-    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, head: r.pr.head ?? null })),
+    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
   }
 }
 
@@ -151,6 +151,17 @@ const groupByRepo = perRepo => {
 // The next stage to look at: the first that has not landed. Null when every stage is in, which
 // is what makes the work branch's own PR the thing that is available next.
 export const nextStage = stack => stack.find(s => !s.landed) || null
+
+// Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
+// GitHub merges that stage and deletes its branch, while the work branch it merged into moves on
+// without it (hugoforte/rig#200).
+export const onLandedStage = (stack, branch) => stack.some(s => s.landed && s.branch === branch)
+
+// The commands that put such a worktree back on the work branch, brought up to what merged into
+// it on the remote. Two lines, run in order, because Windows PowerShell does not take `&&`.
+// `git pull` names the branch because a work branch's upstream is its base. Named and never run,
+// like `attach --setup` and `check --run`.
+export const backToWorkBranch = work => [`git switch ${work.branch}`, `git pull --ff-only origin ${work.branch}`]
 
 // The one line of honesty under an order that is partly a guess, or null when nothing
 // contradicts it. `mark` is how the caller writes a branch name — backticked for markdown,

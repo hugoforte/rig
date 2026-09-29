@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
+import { BRANCH_PREFIXES } from '../bin/release.mjs'
 import { makeInstall, readJson, strip } from './harness.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
@@ -127,6 +128,46 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
   assert.equal(r.code, 1)
   assert.match(r.out, /--key.*--ticket.*--no-ticket/)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
+})
+
+test('new refuses a --type the release check would refuse, and names the ones it knows', () => {
+  const r = rig(['new', 'wip-work', '--title', 'Wip', '--type', 'wip', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.ok(r.out.includes(`--type wants a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')} — not "wip"`), r.out)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'wip-work')), 'no record written')
+})
+
+test('new --type perf is accepted and names the branch perf/', () => {
+  const r = rig(['new', 'quicker', '--title', 'Quicker', '--type', 'perf', '--no-ticket'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 'quicker', 'work.json')).branch, 'perf/quicker')
+})
+
+test('--help prints the command\'s own usage and does nothing else, and so does -h', () => {
+  const head = lastCommit(dataRoot)
+  for (const help of ['--help', '-h']) {
+    const r = rig(['new', 'helped', '--title', 'Helped', '--no-ticket', help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /^ {2}rig new <id> --title/)
+    assert.doesNotMatch(r.out, /rig attach/, 'only new\'s lines, not the whole help')
+  }
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'helped')), 'no record written')
+  assert.equal(lastCommit(dataRoot), head, 'and nothing committed')
+})
+
+test('rig --help and rig -h are rig help', () => {
+  for (const help of ['--help', '-h']) {
+    const r = rig([help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /cross-repo work harness/)
+  }
+})
+
+test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {
+  const r = rig(['new', 'typo', '--titel', 'Typo', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /rig new takes no --titel\n {2}rig new <id> --title/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'typo')), 'no record written')
 })
 
 test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
@@ -702,6 +743,30 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
   const html = fs.readFileSync(/dashboard at (.+)$/m.exec(strip(r.out))[1].trim(), 'utf8')
   assert.match(html, /no PR state was looked up|read from the records/, 'the page says nothing was looked up')
   setGithub(state)
+})
+
+test('a record that will not parse is named and left out by list, list --json and dash', () => {
+  const cut = path.join(dataRoot, 'work', 'cut')
+  fs.mkdirSync(cut)
+  fs.writeFileSync(path.join(cut, 'work.json'), '{"id": "cut", "repos": [')
+  try {
+    const named = /1 work record could not be read and was left out: cut \(Unexpected end of JSON input\)/
+    const list = rig(['list', '--quick'])
+    assert.equal(list.code, 0, list.out)
+    assert.match(list.out, named)
+    assert.match(list.out, /^old\b/m, 'the records that read are still listed')
+
+    const json = rig(['list', '--json', '--quick'])
+    assert.equal(json.code, 0, json.out)
+    assert.ok(JSON.parse(json.stdout).works.length, 'the payload on stdout still parses')
+    assert.match(json.out, named, 'and the unreadable record is named off it, on stderr')
+
+    const dash = rig(['dash', '--quick', '--no-open'])
+    assert.equal(dash.code, 0, dash.out)
+    assert.match(dash.out, named)
+  } finally {
+    fs.rmSync(cut, { recursive: true })
+  }
 })
 
 test('dash dies on a window it cannot parse rather than showing everything', () => {

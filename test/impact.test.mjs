@@ -195,6 +195,32 @@ test('a pair with no talks_to line between them is the finding, and names the fi
   assert.match(o, /`rig catalog billing` names the file to correct/)
 })
 
+test('a pair made twice with nothing in talks_to keeps happening', () => {
+  assert.match(out('billing'), /that pair keeps happening and the catalogue does not say why/)
+})
+
+test('a pair made once is not said to keep happening', () => {
+  record('w5', 'payroll', 'warehouse')
+  try {
+    const o = out('payroll')
+    assert.match(o, /the catalogue does not say why that pair was worked on together/)
+    assert.doesNotMatch(o, /keeps? happening/)
+  } finally {
+    fs.rmSync(path.join(dataRoot, 'work', 'w5'), { recursive: true })
+  }
+})
+
+test('pairs made twice and once together are not said to keep happening', () => {
+  record('w5', 'payroll', 'ledger')
+  try {
+    const o = out('ledger')
+    assert.match(o, /the catalogue does not say why those pairs were worked on together/)
+    assert.doesNotMatch(o, /keeps? happening/)
+  } finally {
+    fs.rmSync(path.join(dataRoot, 'work', 'w5'), { recursive: true })
+  }
+})
+
 test('a pair the catalogue already explains is shown, and not reported as a gap', () => {
   assert.match(out('billing'), /orders\s+1 work — and talks_to says why/)
 })
@@ -227,4 +253,13 @@ test('the catalogue listing shows a stated direction beside what each edge says'
   const r = rig(['catalog', '--verbose'])
   assert.equal(r.code, 0, r.out)
   assert.match(strip(r.out), /→ orders: pushes invoices as they settle \[downstream\]/)
+})
+
+test('the catalogue listing reads a bare talks_to item as the repo it names', () => {
+  entry('warehouse', { talks_to: `
+  - orders` })
+  const r = rig(['catalog', '--verbose'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /^warehouse\b.*\n {2}→ orders:/m)
+  assert.doesNotMatch(strip(r.out), /undefined/)
 })

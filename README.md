@@ -110,7 +110,8 @@ Everything from here down is detail. Nothing above needs it.
 
 ### Prerequisites
 
-- Node 18.15 or newer on the 18 line, or 19.6 or newer, and `git`. (Those are the releases `fs.statfsSync` arrived in, which is how rig reads free space on Windows without starting a process for it.)
+- Node 18.17 or newer on the 18 line, or 20.3 or newer. (Those are the first releases whose test runner runs a file's top-level `before` and `after`, which the suite relies on. rig itself uses `fs.statfsSync`, which is older.)
+- `git` 2.38 or newer, for `git merge-tree --write-tree` and `git rebase --update-refs`. The install scripts refuse an older one.
 - `gh`, logged in (`gh auth login`). rig uses it to find repos, read PR state and open issues.
 - `twg` on PATH, only for an org whose tickets live in Jira. GitHub-only setups never need it.
 
@@ -129,6 +130,8 @@ rig help
 ```
 
 `npm install -g` links the checkout rather than copying it, so the command always runs whatever is in `C:\rig`. That is what lets `rig update` bring it forward later. In Git Bash, Linux or macOS the same three lines work with a forward-slash path of your choosing, and `rig` is on PATH there too.
+
+`rig <command> --help` prints that command's lines of `rig help` and runs nothing. A flag the command does not take is refused with the same lines, before anything is written.
 
 ### Setting up
 
@@ -157,7 +160,7 @@ The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`
 
 **Slicing a work up.** A big work is delivered in stages: `rig stage feat/schema --delivers "the write path"` declares one, and `rig stage` reads the stack back in the order the branches are actually stacked. What is stored is the branch and that one line; whether a stage has started, is up for review or has landed, which repos carry it and where it sits in the stack are all derived from the branches and the PRs every time you ask. rig does not cut the branch — you do, where branches are made — and declaring it is what joins those branches into one slice across repos. A work with no stages behaves exactly as it always did, which is most works.
 
-**Opening the pull requests.** `rig pr` opens one per repo, work branch to the base it was cut from. The body is assembled from what the record already holds — the title, the tickets, the Direction section of the context doc lifted verbatim, and the stage table rendered from the stack — so the deploy-order table stops being something anyone types. It is not a gate, and it is idempotent: a repo that already has an open PR is reported, not duplicated.
+**Opening the pull requests.** `rig pr` opens one per repo, work branch to the base it was cut from. The body is assembled from what the record already holds — the title, the tickets, the Direction section of the context doc lifted verbatim, and the stage table rendered from the stack — so the deploy-order table stops being something anyone types. It is not a gate, and it is idempotent: a repo that already has an open PR is reported, not duplicated. A worktree still on a stage that has landed is named, with the commands that move it to the work branch; `rig next` names it too, once every stage is in.
 
 **The rollout plan.** For a work spanning enough repos that deploy order matters, `rig plan` writes one — part generated, part prose. The deploy-order table lives between markers and is rendered from the stage list with live PR state; `rig plan --refresh` rewrites it when the stack moves, and touches nothing around it. The rest is yours, and it is the half that earns the document: why the order is mandatory, the rejection window between deploys, the per-tenant prerequisites, the rollback. `rig next` compares the table to the stack and offers the refresh when they disagree — because an artifact nothing reads back is one that quietly goes wrong.
 
@@ -344,12 +347,12 @@ Nothing pulls a checkout for you, so rig measures its own freshness — how far 
 | the pull request | the bump |
 |---|---|
 | a `feat/…` branch — what `rig new --type feat` writes | minor |
-| a `fix/…` branch | patch |
+| a `fix/…` or `perf/…` branch | patch |
 | a `docs/`, `chore/`, `test/`, `ci/` or `refactor/` branch | none |
 | a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
 | a PR that adds a migration | `MAJOR.0.0`, whatever the PR asked for |
 
-So branching the way `rig new` already branches is the whole contribution. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
+So branching the way `rig new` already branches is the whole contribution: `rig new --type` takes only a prefix this table lists, and refuses any other by naming them. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
 
 **The check asks one question, about your PR alone: does it name a bump?** Nothing another pull request does can change that answer, so a merge elsewhere never turns your check red and never sends you back to rebase. That is the rule the whole design obeys: a pull request is only ever gated on questions about itself.
 
