@@ -42,7 +42,7 @@ test('uncommitted changes block the close and are not done', () => {
 })
 
 test('unpushed commits block the close', () => {
-  const v = one(clean({ ahead: 3, unpushed: 3 }))
+  const v = one(clean({ unpushed: 3 }))
   assert.deepEqual(kinds(v), ['unpushed'])
   assert.equal(v.blockers[0].message, 'billing: 3 unpushed commit(s)')
 })

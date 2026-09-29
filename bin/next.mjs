@@ -119,13 +119,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     }
   }
 
-  // Asked of `unpushed`, the commits no branch on the remote holds, and never of `ahead`: a
-  // work branch's upstream is its base, so `ahead` counts what has not landed, and a branch
-  // pushed in full was offered `git push` for ever (hugoforte/rig#192).
-  //
-  // `unpushed` is `null`, never 0, when git could not count. Every filter below therefore
-  // compares it explicitly: `!r.unpushed` is true for both 0 and null, and treating "nobody
-  // could tell" as "nothing outstanding" is the exact mistake decision 62 exists to prevent.
+  // Asked of `unpushed`, never of `ahead`, which counts what has not landed on the base
+  // (decision 110). `unpushed` is `null`, never 0, when git could not count, so every filter
+  // below compares it explicitly: `!r.unpushed` is true for both 0 and null, and treating
+  // "nobody could tell" as "nothing outstanding" is the mistake decision 62 exists to prevent.
   // A repo git could not count for matches none of these and is simply not spoken about: this
   // command offers, and there is nothing to offer about a fact nobody has.
   const unpushed = repos.filter(r => !r.merged && r.unpushed > 0)
