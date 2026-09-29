@@ -55,7 +55,7 @@ export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
 //   tracks        the upstream the branch's config names, whether or not its ref is here.
 //                 It differs from `upstream` when the ref has not been fetched yet — a
 //                 clone of an empty remote — or has gone, and a fetch is what tells the two
-//                 apart. Only `describe` reads it
+//                 apart. Only `describe` fills it; `identify` leaves it null
 //   ahead/behind  against the upstream as last fetched — a caller that wants them current
 //                 fetches first. 0 with no upstream; null when git could not answer
 //   dirty         entries `git status --porcelain` reports, untracked included — the
