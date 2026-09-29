@@ -247,15 +247,6 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       // `refs/remotes/origin/main` makes git set tracking to *main*, so an upstream exists
       // from the moment `rig attach` runs and says nothing about whether anyone pushed.
       s.pushed = branch ? has(dir, ref(branch)) : false
-      // For the same reason `ahead` is not what is unpushed: against *main* it counts every
-      // commit that has not landed, pushed or not (hugoforte/rig#192). This counts the commits
-      // on HEAD that no branch on the remote holds — the distance from `origin/<branch>` once
-      // it is pushed, and everything over the base while it never was. Null when git could
-      // not count.
-      if (branch) {
-        const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
-        s.unpushed = u.code === 0 ? Number(u.out) : null
-      }
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const count = from => git(dir, 'rev-list', '--left-right', '--count', `${from}...HEAD`)
       // The count is the question, so the count is what is asked. `@{u}` fails to resolve for
@@ -279,11 +270,21 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         s.ahead = s.behind = null
         s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
           `git could not measure ${dir} against ${fellBack ?? 'its upstream'}`
-        return s
+      } else {
+        const [behind, ahead] = counts.out.split(/\s+/).map(Number)
+        s.behind = behind || 0
+        s.ahead = ahead || 0
       }
-      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-      s.behind = behind || 0
-      s.ahead = ahead || 0
+      // `ahead` is not what is unpushed, for the reason `pushed` is not asked of `@{u}`: against
+      // *main* it counts every commit that has not landed, pushed or not (hugoforte/rig#192).
+      // This counts the commits on HEAD that no branch on the remote holds: the distance from
+      // `origin/<branch>` once it is pushed, and while it never was, what it has over the remote
+      // branch it was cut from. A count git could not make is a distance nobody could tell.
+      if (branch) {
+        const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
+        s.unpushed = u.code === 0 ? Number(u.out) : null
+        if (u.code !== 0) s.distanceUnknown ??= (u.err || u.out).split('\n')[0].trim() || `git could not count what ${dir} has not pushed`
+      }
       return s
     },
 

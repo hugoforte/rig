@@ -78,8 +78,6 @@ function repoVerdict (entry, s, branch) {
     dirty: s.dirty || 0,
     ahead: s.ahead ?? null,
     behind: s.behind ?? null,
-    // What the remote lacks, which is not `ahead`: a work branch's upstream is its base, so
-    // `ahead` counts commits that have not landed whether or not they were pushed (#192).
     unpushed: s.unpushed ?? null,
     distanceUnknown: s.distanceUnknown || null,
     pr,

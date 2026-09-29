@@ -56,8 +56,6 @@ test('unpushed commits are offered a push, and not also a pull request', () => {
 })
 
 test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
-  // A work branch's upstream is its base, so `ahead` counts what has not landed on main.
-  // What is not pushed is a different question, and `unpushed` is its answer.
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
     repos: [repo('a', { ahead: 3, unpushed: 0, pushed: true })],
@@ -84,7 +82,7 @@ test('a branch nobody has written on is never nagged about opening a PR', () => 
   assert.match(says(out), /yours to write/)
 })
 
-test('a distance git could not measure is never read as nothing outstanding', () => {
+test('an unpushed count git could not make is never read as nothing outstanding', () => {
   // `unpushed: null` is what `worktrees.state()` answers when git could not count at all.
   // Read as 0 it means "pushed, waiting for a PR", which is a confident answer to a question
   // nobody could answer (decision 62).
