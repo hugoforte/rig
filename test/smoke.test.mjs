@@ -686,7 +686,7 @@ test('a record that will not parse is named and left out by list, list --json an
   fs.mkdirSync(cut)
   fs.writeFileSync(path.join(cut, 'work.json'), '{"id": "cut", "repos": [')
   try {
-    const named = /1 work record could not be read and was left out: cut/
+    const named = /1 work record could not be read and was left out: cut \(Unexpected end of JSON input\)/
     const list = rig(['list', '--quick'])
     assert.equal(list.code, 0, list.out)
     assert.match(list.out, named)
