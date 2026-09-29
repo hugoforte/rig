@@ -1,5 +1,5 @@
 // Correcting what rig wrote into a work's record at one moment and a person later found wrong:
-// the title, with `rig save --title`.
+// the title (`rig save --title`) and the tickets (`rig ticket --replaces`, `--remove`).
 //
 // A correction rewrites the record and the views of it — the context doc, the generated
 // AGENTS.md — and never what the record's other facts hang off: the id and the branch.
@@ -12,7 +12,7 @@ import path from 'node:path'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { dataRoot, workRoot, rig, gitMust, record, cleanup } = billingInstall('rig-record-corrections-')
+const { dataRoot, workRoot, rig, gitMust, record, seedIssue, issueNumbered, cleanup } = billingInstall('rig-record-corrections-')
 
 after(cleanup)
 
@@ -73,4 +73,53 @@ test('a gate refused alongside --title leaves the doc as untouched as the record
   assert.equal(r.code, 1, r.out)
   assert.equal(record('stopped').title, 'Before')
   assert.match(doc('stopped'), /^# stopped — Before$/m)
+})
+
+test('ticket --replaces puts the new key where the old one was, in the record and the Tickets: line', () => {
+  assert.equal(rig(['new', 'moved', '--title', 'Moved issues', '--key', 'acme/billing#1,acme/billing#2']).code, 0)
+  const r = rig(['ticket', 'acme/ledger#9', '--replaces', 'acme/billing#1', '--work', 'moved'])
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(record('moved').tickets, ['acme/ledger#9', 'acme/billing#2'])
+  assert.match(doc('moved'), /^Tickets: acme\/ledger#9, acme\/billing#2 · Status: /m)
+  assert.match(agents('moved'), /^Tickets: acme\/ledger#9, acme\/billing#2 · Status: /m)
+})
+
+test('ticket --replaces commits under a message naming both keys', () => {
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig ticket moved: acme/ledger#9 replaces acme/billing#1')
+})
+
+test('ticket --remove takes a key off the record and the Tickets: line', () => {
+  const r = rig(['ticket', '--remove', 'acme/billing#2', '--work', 'moved'])
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(record('moved').tickets, ['acme/ledger#9'])
+  assert.match(doc('moved'), /^Tickets: acme\/ledger#9 · Status: /m)
+})
+
+test('ticket --remove tells the tracker nothing', () => {
+  seedIssue(3, 'shared with another work')
+  assert.equal(rig(['ticket', 'acme/billing#3', '--work', 'moved']).code, 0)
+  assert.equal(rig(['ticket', '--remove', 'acme/billing#3', '--work', 'moved']).code, 0)
+  assert.equal(issueNumbered(3).state, 'OPEN')
+  assert.deepEqual(issueNumbered(3).comments, [])
+})
+
+test("a stage's own key is replaced and removed the same way as the work's", () => {
+  assert.equal(rig(['stage', 'feat/moved-one', '--delivers', 'the schema', '--key', 'acme/billing#4', '--work', 'moved']).code, 0)
+  assert.equal(rig(['ticket', 'acme/ledger#10', '--replaces', 'acme/billing#4', '--work', 'moved']).code, 0)
+  assert.deepEqual(record('moved').stages[0].tickets, ['acme/ledger#10'])
+  assert.deepEqual(record('moved').tickets, ['acme/ledger#9'], "a stage's key is not moved onto the work")
+  assert.equal(rig(['ticket', '--remove', 'acme/ledger#10', '--work', 'moved']).code, 0)
+  assert.equal(record('moved').stages[0].tickets, undefined)
+})
+
+test('a key the record does not hold is refused, and what it does hold is named', () => {
+  const r = rig(['ticket', '--remove', 'acme/billing#99', '--work', 'moved'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /acme\/billing#99 is not recorded on moved — it has acme\/ledger#9/)
+})
+
+test('replacing a key with one the record already holds leaves it there once', () => {
+  assert.equal(rig(['ticket', 'acme/billing#5', '--work', 'moved']).code, 0)
+  assert.equal(rig(['ticket', 'acme/ledger#9', '--replaces', 'acme/billing#5', '--work', 'moved']).code, 0)
+  assert.deepEqual(record('moved').tickets, ['acme/ledger#9'])
 })

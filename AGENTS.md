@@ -67,6 +67,19 @@ No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the de
 comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets
 never auto-transition — that stays with you (`docs/adr/0001-jira-via-twg.md`).
 
+A key the record holds can turn out wrong: an issue transferred to another repo, or deleted and
+opened again, has a new number. Correct it in the record rather than by hand:
+
+```bash
+rig ticket owner/other#12 --replaces owner/repo#7   # in the old key's place, on the work or a stage
+rig ticket --remove owner/repo#7                    # off the record, wherever it is held
+```
+
+Both rewrite `work.json` and the context doc's `Tickets:` line, and neither tells the tracker
+anything: rig speaks to a tracker only at `rig close`. `--remove` says the record was wrong about
+a ticket. It is not the answer for a ticket this work only delivers part of, which the record is
+right to name; DESIGN.md decision 124 says why.
+
 Then run the repo interview and attach what it selects:
 
 ```bash

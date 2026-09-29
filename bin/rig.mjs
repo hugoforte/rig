@@ -2261,12 +2261,52 @@ cmds.restore = ({ flags, positional }) => {
   ok(`${work.id}: restored ${restored.length} of ${missing.length} — cd ${workDir(cfg, work.id)}`)
 }
 
+// Every list of keys in the record: the work's own tickets, and each stage's. A key is
+// corrected wherever it is held, because an issue that moved has a new number whichever list
+// named it.
+const ticketLists = work => [work.tickets, ...work.stages.map(s => s.tickets || [])]
+
+// A stage left with no tickets goes back to the shape it was declared in without one.
+function dropEmptyStageTickets (work) {
+  for (const st of work.stages) if (st.tickets && !st.tickets.length) delete st.tickets
+}
+
+// `--replaces` and `--remove` correct the record and never the tracker: rig speaks to a
+// tracker only at `rig close`, and a ticket the record stops naming is told nothing.
+function correctTicket (cfg, work, { key, old }) {
+  const target = old ?? key
+  const lists = ticketLists(work).filter(list => list.includes(target))
+  if (!lists.length) {
+    const held = [...new Set(ticketLists(work).flat())]
+    die(`${target} is not recorded on ${work.id} — it has ${held.join(', ') || 'no tickets'}`)
+  }
+  for (const list of lists) {
+    const at = list.indexOf(target)
+    if (old === undefined || list.includes(key)) list.splice(at, 1)
+    else list[at] = key
+  }
+  dropEmptyStageTickets(work)
+  commitAs(work.id, old === undefined ? `removed ${key}` : `${key} replaces ${old}`)
+  saveWork(cfg, work)
+  ok(`${work.id}: ${old === undefined ? `removed ${key}` : `${key} replaces ${old}`} — the tracker was not told`)
+}
+
 cmds.ticket = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
-  const key = positional[0] || die('usage: rig ticket <PROJ-123 | owner/repo#n>')
+  if (flags.remove !== undefined) {
+    if (flags.remove === true) die('--remove needs the key to take off the record')
+    if (positional.length || flags.replaces !== undefined) die('--remove takes the one key it removes, and nothing else')
+    return correctTicket(cfg, work, { key: flags.remove })
+  }
+  const key = positional[0] || die(`rig ticket wants a key\n${usageOf('ticket')}`)
   if (!isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
+  if (flags.replaces !== undefined) {
+    if (flags.replaces === true) die('--replaces needs the key it replaces')
+    if (flags.replaces === key) die(`${key} cannot replace itself`)
+    return correctTicket(cfg, work, { key, old: flags.replaces })
+  }
   if (work.tickets.includes(key)) return say(`${key} already recorded — nothing to do`)
   work.tickets.push(key)
   delete work.ticketsDeclined   // a real ticket supersedes an earlier --no-ticket
@@ -4134,6 +4174,10 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
+       --replaces <old>            in place of a key the record holds, on the work or a
+                                   stage — an issue that moved; the tracker is not told
+  rig ticket --remove <key>       take a key off the record, wherever it is held; the
+                                  tracker is not told
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
