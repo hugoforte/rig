@@ -126,6 +126,8 @@ test('state names the branch the worktree is on, which need not be the one asked
     gitMust(dest, 'checkout', '-q', 'feat/t1')
     gitMust(dest, 'branch', '-q', '-D', 'feat/t1-stage')
   }
+  // A `GIT_DIR` in the run's env makes `gitfs` hand the question back, and git answers it.
+  assert.equal(trees({ GIT_DIR: dest }).state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
 })
 
 test('a branch never pushed has every commit over its base unpushed', () => {
