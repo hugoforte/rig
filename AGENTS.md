@@ -230,7 +230,8 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**,
+`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
+(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
 then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
 root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
 first time it saw that repo — names the root that repo belongs to. A checkout's repo is
