@@ -63,7 +63,8 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // commit the PR carried, and the only thing that lets `close` tell a branch whose every
     // commit landed from one somebody pushed to after the merge. `mergeCommit` is the commit it
     // landed as, and the only way to tell a stage that was squashed from one that was merged.
-    // `title` and `body` are what `rig next` compares with what `rig pr` would write now.
+    // `title` and `body` are what `rig next` and `rig pr --refresh` compare with what `rig pr`
+    // would write now.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
         '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body', '--limit', '1'])
@@ -122,8 +123,8 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       if (!url) fail(`could not read the pull request URL from gh output:\n${out}`)
       return { number: Number(/\/pull\/(\d+)$/.exec(url)[1]), url }
     },
-    // The only write to a pull request that exists: `rig pr --refresh` putting back the title
-    // and body `rig pr` would open it with now.
+    // The one write rig makes to a pull request that is already open: `rig pr --refresh`
+    // rewriting its title and body.
     editPr (org, name, number, { title, body }) {
       must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, '--title', title, '--body', body])
     },

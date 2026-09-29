@@ -2588,7 +2588,11 @@ function repoEntryJson (cfg, entry, branch, live) {
   Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind, unpushed: s.unpushed })
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
-  else out.pr = s.pr
+  else if (s.pr) {
+    // Its title and body are for `rig pr --refresh` to compare, not for a listing.
+    const { title: _title, body: _body, ...pr } = s.pr
+    out.pr = pr
+  } else out.pr = null
   const timing = prTiming(entry, s.pr)
   out.firstCommitAt = timing.firstCommitAt ?? null
   // One refusal, two things left unknown: where the work started, and whether it was ever
@@ -2983,9 +2987,10 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
-    // The open PRs that no longer say what `rig pr` would write now: the same comparison
-    // `rig pr --refresh` makes before it edits anything.
-    prStale: repos.filter(r => r.pr?.state === 'OPEN' && !prSaysRecord(r.pr, text)).map(r => r.repo),
+    // The comparison `rig pr --refresh` makes, and never while a stage's PR is unknown, which
+    // is when the refresh would refuse.
+    prStale: stack.some(st => st.prUnknown) ? []
+      : repos.filter(r => r.pr?.state === 'OPEN' && !prSaysRecord(r.pr, text)).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
@@ -3117,7 +3122,7 @@ cmds.pr = ({ flags }) => {
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   const text = prText(work, stack)
-  if (flags.refresh) return refreshPrs(cfg, work, text)
+  if (flags.refresh) return refreshPrs(work, stack, text)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3140,13 +3145,15 @@ cmds.pr = ({ flags }) => {
   }
 }
 
-// `rig pr --refresh`: each repo's open PR rewritten from the record, title and body, with the
-// text `rig pr` would open it with now. The body is the release note, so a PR that went on
-// describing the work as it was when it opened is a release note gone stale. A PR that already
-// says it is left alone, and a repo with no open PR is told so — refreshing never opens one.
-function refreshPrs (cfg, work, text) {
+// `rig pr --refresh`: each repo's open PR rewritten with `prText`. One that already says it is
+// left alone, and a refresh never opens one. A stage GitHub would not answer for renders as
+// "PR state unknown", so nothing is refreshed until it does, rather than writing that over a
+// table that was right.
+function refreshPrs (work, stack, text) {
+  const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
+  if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
   for (const entry of work.repos) {
-    const { pr, prError } = repoState(cfg, entry, work.branch)
+    const { pr, prError } = prAndBase(entry, work.branch)
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
     if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
     if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }

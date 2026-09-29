@@ -179,6 +179,30 @@ test('pr --refresh again finds nothing to change, and edits nothing', () => {
   assert.deepEqual(github().repos['acme/billing'].prs.find(p => p.branch === 'feat/second'), before)
 })
 
+test('a body GitHub hands back with CRLF line ends and a trailing newline still counts as up to date', () => {
+  const state = github()
+  const pr = state.repos['acme/billing'].prs.find(p => p.branch === 'feat/second')
+  pr.body = `${pr.body.replace(/\n/g, '\r\n')}\r\n`
+  setGithub(state)
+  const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
+  assert.match(r.out, /billing: PR #\d+ is already up to date/)
+})
+
+test('list --json leaves out the PR title and body the refresh compares', () => {
+  const listed = JSON.parse(rig(['list', '--json']).out)
+  const repo = listed.works.find(w => w.id === 'reviewed-2').repos[0]
+  assert.ok(repo.pr.number, 'the PR itself is listed')
+  assert.deepEqual([repo.pr.title, repo.pr.body], [undefined, undefined])
+})
+
+test('a stage GitHub will not answer for stops the refresh, rather than writing "PR state unknown" into the PR', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  const r = rig(['pr', '--refresh', '--work', 'sliced'])
+  setGithub(state)
+  assert.match(r.out, /would not say what became of feat\/sliced-one, feat\/sliced-two — nothing refreshed/)
+})
+
 test('pr --refresh with no open PR says so and opens nothing', () => {
   assert.equal(rig(['new', 'unopened', '--title', 'Not up yet', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'unopened']).code, 0)

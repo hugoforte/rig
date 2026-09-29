@@ -190,8 +190,8 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('landing', 'the rollout plan\'s deploy order no longer matches the stack', 'rig plan --refresh'))
   }
 
-  // The same read-back for the pull request, whose body is the release note: the title, the
-  // tickets, the Direction and the stage table, as they were when it opened.
+  // The same read-back for the open pull request: its title and body, compared with what
+  // `rig pr` would write now.
   if (prStale.length) {
     out.push(offer('reviewing', `${prStale.join(', ')}: the open PR no longer says what the record does`, 'rig pr --refresh'))
   }
