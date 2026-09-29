@@ -345,7 +345,7 @@ Nothing pulls a checkout for you, so rig measures its own freshness — how far 
 | the pull request | the bump |
 |---|---|
 | a `feat/…` branch — what `rig new --type feat` writes | minor |
-| a `fix/…` branch | patch |
+| a `fix/…` or `perf/…` branch | patch |
 | a `docs/`, `chore/`, `test/`, `ci/` or `refactor/` branch | none |
 | a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
 | a PR that adds a migration | `MAJOR.0.0`, whatever the PR asked for |

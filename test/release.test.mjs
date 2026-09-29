@@ -33,6 +33,10 @@ test('the branch prefix rig already writes is the bump', () => {
   assert.equal(bumpFor({ branch: 'fix/doctor-exits-1-on-linux', labels: [] }).bump, 'patch')
 })
 
+test('a perf/ branch asks for a patch, because a faster rig is a change its users see', () => {
+  assert.equal(bumpFor({ branch: 'perf/copy-fixtures', labels: [] }).bump, 'patch')
+})
+
 test('a release label overrides the prefix, because the prefix is a default not a decree', () => {
   assert.equal(bumpFor({ ...featPr, labels: ['enhancement', 'release:patch'] }).bump, 'patch')
   assert.equal(bumpFor({ branch: 'fix/typo', labels: ['release:none'] }).bump, 'none')
