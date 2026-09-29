@@ -75,8 +75,8 @@ rig ticket owner/other#12 --replaces owner/repo#7   # in the old key's place, on
 rig ticket --remove owner/repo#7                    # off the record, wherever it is held
 ```
 
-Both rewrite `work.json` and the context doc's `Tickets:` line, and neither tells the tracker
-anything: rig speaks to a tracker only at `rig close`. `--remove` says the record was wrong about
+Both rewrite `work.json`, the context doc's `Tickets:` line and the generated `AGENTS.md`, and
+neither tells the tracker anything: rig speaks to a tracker only at `rig close`. `--remove` says the record was wrong about
 a ticket. It is not the answer for a ticket this work only delivers part of, which the record is
 right to name; DESIGN.md decision 124 says why.
 

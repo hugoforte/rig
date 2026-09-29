@@ -95,12 +95,15 @@ test('ticket --remove takes a key off the record and the Tickets: line', () => {
   assert.match(doc('moved'), /^Tickets: acme\/ledger#9 · Status: /m)
 })
 
-test('ticket --remove tells the tracker nothing', () => {
-  seedIssue(3, 'shared with another work')
+test('neither --replaces nor --remove tells the tracker anything', () => {
+  seedIssue(3, 'moved to another repo')
+  seedIssue(4, 'recorded by mistake')
   assert.equal(rig(['ticket', 'acme/billing#3', '--work', 'moved']).code, 0)
-  assert.equal(rig(['ticket', '--remove', 'acme/billing#3', '--work', 'moved']).code, 0)
-  assert.equal(issueNumbered(3).state, 'OPEN')
-  assert.deepEqual(issueNumbered(3).comments, [])
+  assert.equal(rig(['ticket', 'acme/billing#4', '--work', 'moved']).code, 0)
+  assert.equal(rig(['ticket', 'acme/ledger#3', '--replaces', 'acme/billing#3', '--work', 'moved']).code, 0)
+  assert.equal(rig(['ticket', '--remove', 'acme/billing#4', '--work', 'moved']).code, 0)
+  assert.deepEqual([3, 4].map(n => [issueNumbered(n).state, issueNumbered(n).comments]), [['OPEN', []], ['OPEN', []]])
+  assert.equal(rig(['ticket', '--remove', 'acme/ledger#3', '--work', 'moved']).code, 0)
 })
 
 test("a stage's own key is replaced and removed the same way as the work's", () => {
@@ -122,4 +125,16 @@ test('replacing a key with one the record already holds leaves it there once', (
   assert.equal(rig(['ticket', 'acme/billing#5', '--work', 'moved']).code, 0)
   assert.equal(rig(['ticket', 'acme/ledger#9', '--replaces', 'acme/billing#5', '--work', 'moved']).code, 0)
   assert.deepEqual(record('moved').tickets, ['acme/ledger#9'])
+})
+
+test('a key held twice in one list is removed entirely', () => {
+  assert.equal(rig(['new', 'twice', '--title', 'Twice', '--key', 'acme/billing#6,acme/billing#6']).code, 0)
+  assert.equal(rig(['ticket', '--remove', 'acme/billing#6', '--work', 'twice']).code, 0)
+  assert.deepEqual(record('twice').tickets, [])
+})
+
+test('removing the last ticket says the work has none now', () => {
+  assert.match(rig(['ticket', 'acme/billing#7', '--work', 'twice']).out, /recorded/)
+  const r = rig(['ticket', '--remove', 'acme/billing#7', '--work', 'twice'])
+  assert.match(r.out, /twice has no ticket now/)
 })
