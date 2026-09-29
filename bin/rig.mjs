@@ -3607,8 +3607,6 @@ function updateCheckout (label, root) {
 }
 
 cmds.update = ({ flags }) => {
-  // Not `config()`: with several roots and none current that dies, and nothing here needs a
-  // root in hand. The doctor checks at the end say the refusal, once.
   const inHand = selection().loc
   const cfg = load(inHand)
   let problems = 0
@@ -3890,10 +3888,9 @@ function doctorRootLocations (fallback) {
 // Which data root is in hand, or why there is none. Everywhere else an unresolvable selection
 // is fatal, and rightly: a command that carried on would write a work's records into a root
 // nobody chose. `doctor` and `update` are the exceptions, because neither answers about one
-// root's contents. A selection doctor cannot make is exactly the class of broken configuration
-// it exists to report, and dying on it is the one way to report nothing at all. `update` has
-// every root to bring forward rather than one, and ends in doctor's checks, which say the
-// refusal for it. So the refusal is caught and carried as a finding.
+// root's contents: doctor reports on the installation, and `update` brings every root forward.
+// So the refusal is caught. Doctor carries it as a finding, and `update` leaves it to the
+// doctor checks it ends in, so it is said once.
 //
 // The fallback is the tool checkout, which is what `locate` already falls back to on a machine
 // that configures no data root at all: the org half of a root nobody chose must not be guessed
@@ -3905,7 +3902,7 @@ function doctorRootLocations (fallback) {
 function selection () {
   try { return { loc: where(), error: null } }
   catch (e) {
-    if (!(e instanceof RigError)) throw e   // a bug: not doctor's to swallow
+    if (!(e instanceof RigError)) throw e   // a bug: not ours to swallow
     const reg = registry(toolRoot(), env())
     return {
       loc: withDataRoot({ toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }, toolRoot(),
@@ -3926,8 +3923,7 @@ function workRootEntries (cfg) {
 }
 
 function doctorSnapshot () {
-  // The one command that gathers its location rather than asking for it, and then carries on
-  // whether or not it got one.
+  // Gathers its location rather than asking for it, and carries on whether or not it got one.
   const { loc, error: selectionError } = selection()
   const localFile = loc.localFile
   // Nothing below can be asked of an installation that has no config at all, and `load` is

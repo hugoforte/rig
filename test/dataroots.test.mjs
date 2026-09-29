@@ -504,7 +504,6 @@ test('rig update still brings every root forward when none is current', (t) => {
   }
   const machine = JSON.parse(saved)
   delete machine.current
-  delete machine.dataRoot
   fs.writeFileSync(localConfig, JSON.stringify(machine))
   const out = strip(rig(['update']).out)
   assert.match(out, /data root hugoforte migrated/)
@@ -516,10 +515,10 @@ test('rig update says a selection it cannot make once, through the doctor checks
   t.after(() => fs.writeFileSync(localConfig, saved))
   const machine = JSON.parse(saved)
   delete machine.current
-  delete machine.dataRoot
   fs.writeFileSync(localConfig, JSON.stringify(machine))
   const r = rig(['update'])
   assert.equal(r.code, 1, 'a machine with nothing selected has something to look at')
+  assert.match(strip(r.out), /thing\(s\) to look at/, 'the doctor checks ran')
   assert.equal(strip(r.out).match(/none is current/g)?.length, 1, strip(r.out))
 })
 
