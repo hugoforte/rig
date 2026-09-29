@@ -35,6 +35,7 @@ const BUMPS = ['minor', 'patch', 'none']
 const PREFIX_BUMPS = {
   feat: 'minor',
   fix: 'patch',
+  perf: 'patch',
   docs: 'none',
   chore: 'none',
   test: 'none',

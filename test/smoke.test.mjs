@@ -137,6 +137,12 @@ test('new refuses a --type the release check would refuse, and names the ones it
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'wip-work')), 'no record written')
 })
 
+test('new --type perf is accepted and names the branch perf/', () => {
+  const r = rig(['new', 'quicker', '--title', 'Quicker', '--type', 'perf', '--no-ticket'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 'quicker', 'work.json')).branch, 'perf/quicker')
+})
+
 test('--help prints the command\'s own usage and does nothing else, and so does -h', () => {
   const head = lastCommit(dataRoot)
   for (const help of ['--help', '-h']) {
