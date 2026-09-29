@@ -83,7 +83,8 @@ test('a data root whose tracked branch has gone from its remote is local-only, a
   // The remote renamed its default branch and a prune dropped `origin/main` here, so the
   // config names an upstream that is not there. Nothing can be pushed onto it and nothing
   // arrives from it, which is a data root with no upstream — not one whose distance nobody
-  // could measure, which would rebase onto nothing and refuse the migrations.
+  // could measure, which would rebase onto nothing and refuse the migrations. `update` fetches
+  // first, since the ref might only be missing here, and says what it did not find.
   const { remote, local } = pushedDataRoot()
   assert.equal(git(remote, 'branch', '-m', 'main', 'trunk').status, 0)
   assert.equal(git(local, 'fetch', '-q', '--prune').status, 0)
@@ -97,7 +98,7 @@ test('a data root whose tracked branch has gone from its remote is local-only, a
     const made = rig(['new', 'w1', '--title', 'One', '--no-ticket'])
     assert.match(made.out, /data root: committed [0-9a-f]{7,} \(no upstream — not pushed\)/)
     const updated = rig(['update'])
-    assert.match(updated.out, /data root: no upstream — nothing to update from/)
+    assert.match(updated.out, /data root: origin\/main is not on the remote — nothing to update from/)
     assert.match(updated.out, /migrated:/)
     assert.notEqual(readJson(path.join(local, 'rig.json')).writtenBy, '1.0.0', 'the stamp moved')
   })

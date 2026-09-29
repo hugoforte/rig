@@ -22,7 +22,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -376,6 +376,17 @@ const writeText = (p, v) => {
 // and the catalogue is keyed by the repo's real name; by its folder only when there is no
 // origin to go by. Null for anywhere that is not a checkout, or is one git will not open —
 // both of which simply mean this step has no answer.
+// The repo a remote URL names, as the catalogue files it: `org/repo` when the remote is hosted
+// and its path is exactly two segments, which is what matches a repo to its own org's entry
+// (`rootsCataloguing`). Anything else names the repo alone — a path on disk, whose parent
+// folder is no org, and a host with a deeper path.
+function repoOfRemote (url) {
+  const u = url.replace(/\/+$/, '').replace(/\.git$/i, '')
+  const hosted = /^(?!file:)[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/i.exec(u) ?? /^(?:[^/\\@]+@)?[^/\\:]{2,}:(?!\/\/)(.+)$/.exec(u)
+  const segments = (hosted ? hosted[1] : u).split(/[/\\]/).filter(Boolean)
+  return (hosted && segments.length === 2 ? segments.join('/') : segments.pop()) || null
+}
+
 function repoAtCwd () {
   // Where the checkout is comes from the filesystem (`gitfs.discover`), which is what git
   // would walk anyway — so the answer this step gives most often, that the cwd is not a
@@ -396,7 +407,7 @@ function repoAtCwd () {
   // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
   // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
   const url = exec('git', ['remote', 'get-url', 'origin'])
-  if (url.code === 0 && url.out) return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
+  if (url.code === 0 && url.out) return repoOfRemote(url.out)
   // git fails this for a repository it refuses to open — another user's, or one with an
   // extension it does not know — as well as for one with no origin, and the filesystem walk
   // sees neither refusal. The folder is the name only for a checkout git will open, and where
@@ -646,7 +657,10 @@ function prepareDataRoot () {
     // next line dwarfs it.
     // The reading worth keeping cheap is the freshness one, which runs after every command.
     before = co.describe(root)
-    if (before.repo === 'own' && before.branch && before.upstream && dataFetchDue()) {
+    // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
+    // empty remote that another machine has since pushed to — and only a fetch can say
+    // whether it exists.
+    if (before.repo === 'own' && before.branch && before.tracks && dataFetchDue()) {
       const fetched = co.fetch(root)
       if (!fetched.ok) {
         stampDataFetchFailure()
@@ -665,6 +679,9 @@ function prepareDataRoot () {
         } else if (outcome === 'moved') {
           say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
         }
+        // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
+        // reading the fast-forward decided from, after the fetch, which is all the commit reads.
+        if (!before.upstream) before = state
       }
     }
   }
@@ -749,12 +766,16 @@ function findWorkId (cfg, explicit) {
   die('not inside a work (no .rig/id found). Pass --work <id> or cd into one.')
 }
 
+// Every configured root that holds a record for this work id, by name. One, normally: a work
+// id is unique across the roots, and two holders is a split left half done.
+const rootsHolding = (id, roots = where().roots) => Object.entries(roots)
+  .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
+
 function loadWork (cfg, id, root = dataRoot()) {
   if (!exists(recordFile(id, root))) {
     // A work id is unique across every root on the machine, so the one that has it is worth
     // naming: on a second machine the work in hand is often not in the current root.
-    const holders = Object.entries(where().roots || {})
-      .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
+    const holders = rootsHolding(id)
     const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
@@ -1502,9 +1523,14 @@ function regenerate (cfg, work) {
   writeText(path.join(wd, WORK_FOLDER.marker, 'id'), work.id + '\n')
   // Beside the work id, the data root that holds its record. This is what lets every command
   // run from inside a work folder resolve without `--data`, and so what keeps `current` off
-  // the path of all but the rootless few. Nothing is written when the root has no name — an
-  // installation still on the fallback has nothing to anchor to.
-  if (where().name) writeText(path.join(wd, WORK_FOLDER.marker, 'data'), where().name + '\n')
+  // the path of all but the rootless few. Written only when the root in hand is the one root
+  // holding the record: in a split left half done, a folder resolved to either copy, by
+  // `current` or `--data`, would otherwise be pinned to it. Nothing is written when the
+  // root has no name — an installation still on the fallback has nothing to anchor to.
+  const holders = rootsHolding(work.id)
+  if (where().name && holders.length === 1 && holders[0] === where().name) {
+    writeText(dataAnchorFile(wd), where().name + '\n')
+  }
 }
 
 // ------------------------------------------------------ data root commits
@@ -3611,7 +3637,9 @@ function updateCheckout (label, root) {
   // `clean` is what `commitDataRoot` would sweep up, and that is `git add -A` — untracked
   // files included, so an unfinished note nobody staged makes the tree unsafe to migrate in.
   const clean = state.dirty === 0
-  if (!state.upstream) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
+  // An upstream whose ref is not here yet is still one to fetch: the fast-forward below reads
+  // the checkout again, and says "nothing to update from" if the fetch did not find it either.
+  if (!state.tracks) { say(`${C.dim('·')} ${C.dim(`${label}: no upstream — nothing to update from`)}`); return { status: 'current', clean } }
   // Asked before the fetch, unlike `fastForward`'s own `blocked`: an update you ran is a
   // command that should say what is in the way rather than go quiet because there happened
   // to be nothing to bring down anyway.
@@ -3631,8 +3659,11 @@ function updateCheckout (label, root) {
     case 'moved': break
     case 'current':
       ok(`${label}: already up to date`); return { status: 'current', clean }
-    case 'no-upstream': case 'detached': case 'not-a-checkout':
-      say(`${C.dim('·')} ${C.dim(`${label}: nothing to update from`)}`); return { status: 'current', clean }
+    case 'no-upstream': case 'detached': case 'not-a-checkout': {
+      // An upstream the fetch did not find either: gone from the remote, or never pushed.
+      const missing = moved.state.tracks ? `${moved.state.tracks} is not on the remote — ` : ''
+      say(`${C.dim('·')} ${C.dim(`${label}: ${missing}nothing to update from`)}`); return { status: 'current', clean }
+    }
     case 'unmeasurable':
       warn(`${label}: could not measure the distance from its upstream — not updated`); return { status: 'failed', clean }
     // Divergence is only one reason a fast-forward does not happen. For the others — a
@@ -3658,7 +3689,8 @@ function updateCheckout (label, root) {
 }
 
 cmds.update = ({ flags }) => {
-  const cfg = config()
+  const inHand = selection().loc
+  const cfg = load(inHand)
   let problems = 0
   const tool = toolState()
   if (tool.linked) {
@@ -3697,7 +3729,7 @@ cmds.update = ({ flags }) => {
   const base = { toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }
   const targets = names.length
     ? names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path) }))
-    : [{ name: null, loc: where() }]
+    : [{ name: null, loc: inHand }]
 
   for (const { name, loc } of targets) {
     // Named only when there is more than one: a single-root installation has never had to
@@ -3797,7 +3829,7 @@ function doctorStamp (written) {
 // worktrees are gone on purpose. The record and the catalogue entry it reads are the data
 // root's, and the work folder is the machine's, which is the whole shape of a shared work
 // root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
-function doctorWork (cfg, id, root) {
+function doctorWork (cfg, id, root, roots) {
   const work = loadWork(cfg, id, root)
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
   if (out.closed) return out
@@ -3805,6 +3837,9 @@ function doctorWork (cfg, id, root) {
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
   out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
+  const marker = dataAnchorFile(wd)
+  out.marker = exists(marker) ? readText(marker).trim() || null : null
+  out.holders = rootsHolding(id, roots)
   out.repos = work.repos.map(r => {
     const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {
@@ -3937,21 +3972,22 @@ function doctorRootLocations (fallback) {
 
 // Which data root is in hand, or why there is none. Everywhere else an unresolvable selection
 // is fatal, and rightly: a command that carried on would write a work's records into a root
-// nobody chose. `doctor` is the exception, because a selection it cannot make is exactly the
-// class of broken configuration it exists to report, and dying on it is the one way to report
-// nothing at all. So the refusal is caught and carried as a finding.
+// nobody chose. `doctor` and `update` are the exceptions, because neither answers about one
+// root's contents: doctor reports on the installation, and `update` brings every root forward.
+// So the refusal is caught. Doctor carries it as a finding, and `update` leaves it to the
+// doctor checks it ends in, so it is said once.
 //
 // The fallback is the tool checkout, which is what `locate` already falls back to on a machine
 // that configures no data root at all: the org half of a root nobody chose must not be guessed
-// at, and everything the snapshot still reads off it — the work root, the mirror root, the
-// secrets — is the machine half's to answer, which reads either way. `freshness` sits in
-// both halves, so the fallback does drop a root's own policy; it costs nothing because
-// `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`. The roots
-// themselves come from the registry (`doctorRootLocations`) wherever it has any.
-function doctorSelection () {
+// at, and everything the two commands still read off it — the work root, the mirror root, the
+// secrets, the freshness cache — is the machine half's to answer, which reads either way.
+// `freshness` sits in both halves, so the fallback does drop a root's own policy; it costs
+// nothing because `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`.
+// The roots themselves come from the registry wherever it has any.
+function selection () {
   try { return { loc: where(), error: null } }
   catch (e) {
-    if (!(e instanceof RigError)) throw e   // a bug: not doctor's to swallow
+    if (!(e instanceof RigError)) throw e   // a bug: not ours to swallow
     const reg = registry(toolRoot(), env())
     return {
       loc: withDataRoot({ toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }, toolRoot(),
@@ -3971,10 +4007,11 @@ function workRootEntries (cfg) {
   return fs.readdirSync(cfg.workRoot).filter(e => !ours.has(e))
 }
 
+const uniqueById = works => works.filter((w, i) => works.findIndex(o => o.id === w.id) === i)
+
 function doctorSnapshot () {
-  // The one command that gathers its location rather than asking for it, and then carries on
-  // whether or not it got one.
-  const { loc, error: selectionError } = doctorSelection()
+  // Gathers its location rather than asking for it, and carries on whether or not it got one.
+  const { loc, error: selectionError } = selection()
   const localFile = loc.localFile
   // Nothing below can be asked of an installation that has no config at all, and `load` is
   // the first thing that would die trying.
@@ -4026,7 +4063,9 @@ function doctorSnapshot () {
     // Every root's works in one list, because the two checks made of them are made of the work
     // root, which is shared. A work id is unique across the roots, so the union needs no
     // tie-breaking and the findings need not say which root a work came from.
-    works: roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path))),
+    // A work whose record is in two roots is listed once: its folder is one folder, and each
+    // root's copy would otherwise repeat every finding about it.
+    works: uniqueById(roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots)))),
     disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
   }
 }
@@ -4164,7 +4203,8 @@ or take --work <id>. Every command that changes a work ends by committing the
 whole data root, and pushing it when it has an upstream.
 
 Which data root a command reads, first hit wins: --data <name>, RIG_DATA_ROOT,
-the work folder the command runs in, then the current one (rig use).
+the work folder the command runs in, the repos named by --repos, the data root
+checkout it runs in, the repo checkout it runs in, then the current one (rig use).
 
 rig record format ${MAJOR} — \`rig doctor\` names the release this checkout stands on and
 how far it is behind its remote, \`rig update\` brings it forward.`)
@@ -4296,7 +4336,7 @@ export function run (argv, io = {}) {
 // surface (decision 55), which is neither pure nor cheap, since it reads every record and may
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,

@@ -509,6 +509,56 @@ test('doctor reports a data root that is behind origin, as of the last fetch', (
   assert.equal(gitIn(dataRoot, 'merge', '-q', '--ff-only', '@{u}').status, 0)
 })
 
+// A data root cloned from an empty remote, once another machine has pushed: the branch tracks
+// origin/main and there is no such ref here. Deleting the ref stands in for that.
+const loseUpstreamRef = () => assert.equal(gitIn(dataRoot, 'update-ref', '-d', 'refs/remotes/origin/main').status, 0)
+const pushFromTheOtherMachine = file => {
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, file), 'written elsewhere')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', `the other machine wrote ${file}`).status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+}
+
+test('a mutating command fetches an upstream ref that is not here yet, rather than reading local only', () => {
+  pushFromTheOtherMachine('FETCHED-FOR.md')
+  loseUpstreamRef()
+  // Untracked, so it is committed at the end without blocking the fast-forward at the start.
+  fs.writeFileSync(path.join(dataRoot, 'work', 't7', 'found.md'), 'After the ref went missing.\n')
+  try {
+    const r = rig(['save', '--work', 't7', '-m', 'upstream found'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
+    assert.match(r.out, /and pushed/, 'the upstream it found is the one it pushes to')
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
+})
+
+test('rig update fetches an upstream ref that is not here yet, and fast-forwards to it', () => {
+  pushFromTheOtherMachine('UPDATED-TO.md')
+  loseUpstreamRef()
+  try {
+    const r = rig(['update'])
+    assert.match(strip(r.out), /data root: fast-forwarded 1 commit\(s\)/)
+    assert.ok(fs.existsSync(path.join(dataRoot, 'UPDATED-TO.md')))
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
+})
+
+test('doctor names an upstream a data root tracks but has not fetched, rather than calling it local only', () => {
+  loseUpstreamRef()
+  try {
+    const out = strip(rig(['doctor']).out)
+    assert.match(out, /data root tracks origin\/main, which is not here — `rig update` fetches it; if the remote does not have it, push \(`git push -u origin main`\) or re-point the branch \(`git branch -u`\)/)
+    assert.doesNotMatch(out, /push it to a private repo/)
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
+})
+
 test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
   const remote = path.join(tmp, 'rig-data-remote.git')
   const other = path.join(tmp, 'other-machine')
