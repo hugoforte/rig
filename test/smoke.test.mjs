@@ -150,7 +150,11 @@ test('--help prints the command\'s own usage and does nothing else, and so does 
 })
 
 test('rig --help and rig -h are rig help', () => {
-  for (const help of ['--help', '-h']) assert.match(rig([help]).out, /cross-repo work harness/)
+  for (const help of ['--help', '-h']) {
+    const r = rig([help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /cross-repo work harness/)
+  }
 })
 
 test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {

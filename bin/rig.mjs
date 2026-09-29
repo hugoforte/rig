@@ -1888,7 +1888,7 @@ cmds.use = ({ positional }) => {
 cmds.new = ({ flags, positional }) => {
   sayCurrentRoot()
   const cfg = config()
-  const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
+  const id = positional[0] || die(`rig new wants a work id\n${usageOf('new')}`)
 
   const keys = (flags.key || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   for (const k of keys) {
@@ -4097,7 +4097,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                   run pending record migrations, then the doctor checks
   rig prompt [name]               print an agent prompt`
 
-// Flags every command takes, said once in the prose under the usage rather than on each line.
+// Flags any command may be given, said once in the prose under the usage rather than on each
+// line. A command that acts on no work ignores `--work`.
 const COMMON_FLAGS = ['data', 'work', 'help']
 
 // Flags rig passes to itself and a person never types: `rig update`'s one hop into the code
@@ -4126,6 +4127,9 @@ cmds.help = () => {
   say(`${C.bold('rig')} — cross-repo work harness
 
 ${USAGE}
+
+Every command takes --help (or -h), which prints its own lines above and runs
+nothing. A flag its lines do not name is refused, before anything runs.
 
 Commands that act on "the current work" find it by walking up from the cwd,
 or take --work <id>. Every command that changes a work ends by committing the
@@ -4164,14 +4168,15 @@ function invoke (argv) {
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
     // Asking how a command is used never runs it, and neither does a flag its usage does not
-    // name: `rig pr --help` once opened the pull requests it was asking about.
+    // name.
     const usage = usageOf(cmdName)
     if (args.flags.help) {
       if (usage) say(usage)
       else cmds.help()
       return 0
     }
-    const unknown = Object.keys(args.flags).filter(k => !flagsOf(cmdName).has(k))
+    const takes = flagsOf(cmdName)
+    const unknown = Object.keys(args.flags).filter(k => !takes.has(k))
     if (unknown.length) die(`rig ${cmdName} takes no ${unknown.map(k => `--${k}`).join(', ')}${usage ? `\n${usage}` : ''}`)
     // Before the first `where()`: the data root a command names decides every path it reads.
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
