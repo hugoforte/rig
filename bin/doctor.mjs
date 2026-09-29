@@ -320,16 +320,19 @@ export function doctorFindings (snap = {}) {
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
     }
-    // The marker is what a command run in the folder resolves by. Without one it falls to
+    // The marker is what a command run in the folder resolves by. Without one it falls back to
     // `current`, which only matters when there is more than one root to fall between; one
-    // naming a root that does not hold the record sends it to the wrong root, or to none.
-    const fix = w.holders?.length > 1
-      ? `data roots ${w.holders.join(' and ')} both hold its record; delete the copy that is wrong`
-      : `\`rig save --data ${w.holders?.[0]}\` in it writes the right one`
-    if (w.marker === null && (snap.dataRoots || []).length > 1) {
-      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it read \`current\` — ${fix}`))
-    } else if (w.marker && !w.holders?.includes(w.marker)) {
-      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${w.holders?.join('", "')}" — ${fix}`))
+    // naming a root that does not hold the record sends it to the wrong root, or to none. A
+    // record in two roots is named whatever the marker says, since either copy may be the
+    // wrong one and no marker can say which.
+    const holders = w.holders || []
+    const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
+    if (holders.length > 1) {
+      out.push(warn(`${w.id}: data roots ${holders.join(', ')} each hold its record — delete the copy that is wrong`))
+    } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
+      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
+    } else if (holders.length && w.marker && w.marker !== holders[0]) {
+      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${holders[0]}" — ${rewrite}`))
     }
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))

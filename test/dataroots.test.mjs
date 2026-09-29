@@ -442,14 +442,15 @@ test('no marker is written for a work whose record is in two roots, since either
   const r = rig(['save', '-m', 'which one', '--data', 'personal'], { cwd: path.join(workRoot, 'only-here') })
   assert.equal(r.code, 0, r.out)
   assert.ok(!fs.existsSync(marker))
-  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data.*hugoforte and personal both hold its record/)
+  assert.match(strip(rig(['doctor']).out), /only-here: data roots hugoforte, personal each hold its record/)
+  assert.equal(strip(rig(['doctor']).out).match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
 })
 
 test('doctor names a work folder with no marker, and the command that writes one', (t) => {
   const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
   fs.rmSync(marker)
   t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
-  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data, so commands run in it read `current` — `rig save --data hugoforte` in it writes the right one/)
+  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data, so commands run in it fall back to `current` — `rig save --data hugoforte` in it writes the right one/)
 })
 
 test('a command run inside a work folder reads that work\'s root, whatever is current', () => {

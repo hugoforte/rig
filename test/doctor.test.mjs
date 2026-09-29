@@ -377,9 +377,14 @@ test('a marker naming a root that does not hold the record is named, whatever th
   assert.match(only(found, /^w:/).says, /\.rig\/data names "default", but the record is in "work" — `rig save --data work`/)
 })
 
-test('a marker naming a root that holds the record says nothing', () => {
+test('a marker naming the root that holds the record says nothing', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work')] }))
+  assert.equal(matching(found, /^w:/).length, 0)
+})
+
+test('a record in two roots is named even when the marker names one of them', () => {
   const found = doctorFindings(snap({ ...twoRoots, works: [marked('work', ['work', 'personal'])] }))
-  assert.equal(matching(found, /\.rig\/data/).length, 0)
+  assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
 })
 
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {

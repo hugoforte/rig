@@ -768,7 +768,7 @@ function findWorkId (cfg, explicit) {
 
 // Every configured root that holds a record for this work id, by name. One, normally: a work
 // id is unique across the roots, and two holders is a split left half done.
-const rootsHolding = (id, roots = where().roots) => Object.entries(roots || {})
+const rootsHolding = (id, roots = where().roots) => Object.entries(roots)
   .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
 
 function loadWork (cfg, id, root = dataRoot()) {
@@ -1522,8 +1522,8 @@ function regenerate (cfg, work) {
   // Beside the work id, the data root that holds its record. This is what lets every command
   // run from inside a work folder resolve without `--data`, and so what keeps `current` off
   // the path of all but the rootless few. Written only when the root in hand is the one root
-  // holding the record: a folder that resolved by `current`, in a split left half done, would
-  // otherwise be pinned to whichever copy it happened to read. Nothing is written when the
+  // holding the record: in a split left half done, a folder resolved to either copy, by
+  // `current` or `--data`, would otherwise be pinned to it. Nothing is written when the
   // root has no name — an installation still on the fallback has nothing to anchor to.
   const holders = rootsHolding(work.id)
   if (where().name && holders.length === 1 && holders[0] === where().name) {
@@ -3956,6 +3956,8 @@ function workRootEntries (cfg) {
   return fs.readdirSync(cfg.workRoot).filter(e => !ours.has(e))
 }
 
+const uniqueById = works => works.filter((w, i) => works.findIndex(o => o.id === w.id) === i)
+
 function doctorSnapshot () {
   // Gathers its location rather than asking for it, and carries on whether or not it got one.
   const { loc, error: selectionError } = selection()
@@ -4010,7 +4012,9 @@ function doctorSnapshot () {
     // Every root's works in one list, because the two checks made of them are made of the work
     // root, which is shared. A work id is unique across the roots, so the union needs no
     // tie-breaking and the findings need not say which root a work came from.
-    works: roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots))),
+    // A work whose record is in two roots is listed once: its folder is one folder, and each
+    // root's copy would otherwise repeat every finding about it.
+    works: uniqueById(roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots)))),
     disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
   }
 }
