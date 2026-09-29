@@ -245,7 +245,7 @@ rig catalog [repo]          the repo catalogue: index, or one entry
 rig impact <repo>           what a change there reaches: `talks_to`, and what shared its works
 rig plan [--refresh]        scaffold rollout-testing-plan.md; --refresh re-renders its deploy order
 rig save [-m] [--designed]  commit edits made outside rig; --designed is the design gate,
-     [--learned]            --learned the lesson review
+     [--learned] [--title]  --learned the lesson review, --title corrects the work's title
 rig close [--abandoned]     safety-checked teardown; --abandoned stops a work unfinished
 rig backfill [--work]       store each merged PR's terminal facts, once
 rig doctor                  environment + consistency checks
