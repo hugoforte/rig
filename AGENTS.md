@@ -233,10 +233,12 @@ Which root a command reads is the first of these that answers: `--data <name>`,
 `RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**,
 then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
 root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
-first time it saw that repo — names the root that repo belongs to. So `rig new <id> --repos
-Payments` lands in Payments' root, a command run in a checkout of a catalogued repo answers
-for that repo's root, and `current` decides only for what neither can place — `new` with no
-repos, `list`, `catalog`, `dash` — which say so when it did.
+first time it saw that repo — names the root that repo belongs to. A checkout's repo is
+matched by org as well as name, because same-named repos in different orgs are normal. So
+`rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
+catalogued repo answers for that repo's root, a command run in a data root's own checkout
+answers for that root, and `current` decides only for what none of them can place — `new`
+with no repos, `list`, `catalog`, `dash` — which say so when it did.
 
 **A work lives in one data root.** One `work.json`, one `context.md`, and two roots with
 different readers, so it cannot span them: `rig new --repos a,b` refuses when a and b are

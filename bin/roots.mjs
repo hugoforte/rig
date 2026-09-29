@@ -149,13 +149,13 @@ const dirEntries = dir => {
   try { return fs.readdirSync(dir) } catch { return [] }   // absent, or a file where a directory was expected
 }
 
-// Every catalogue entry each configured root holds, by root name, lower-cased because the
-// file is named for the repo and NTFS does not distinguish. One traversal, because two
-// questions are asked of it: which root catalogues a given repo, and whether any root
-// catalogues anything at all.
+// Every catalogue entry each configured root holds, by root name, as `org/repo.md` and
+// lower-cased because the file is named for the repo and NTFS does not distinguish. One
+// traversal, because two questions are asked of it: which root catalogues a given repo, and
+// whether any root catalogues anything at all.
 const catalogued = roots => Object.fromEntries(Object.entries(roots).map(([name, entry]) => {
   const catalog = path.join(entry.path, 'catalog')
-  return [name, dirEntries(catalog).flatMap(org => dirEntries(path.join(catalog, org)).map(f => f.toLowerCase()))]
+  return [name, dirEntries(catalog).flatMap(org => dirEntries(path.join(catalog, org)).map(f => `${org}/${f}`.toLowerCase()))]
 }))
 
 // Whether any configured root could place a repo at all. An installation with nothing
@@ -168,9 +168,24 @@ const placesRepos = roots => Object.values(catalogued(roots)).some(files => file
 // root the work was in — so this is a binding that already exists rather than a new thing to
 // configure. Returned as a list because two roots cataloguing one repo is a real state, and
 // guessing between them would put a work's records in the wrong repo.
+//
+// `org/repo` matches that org's entry and no other: same-named repos in different orgs are
+// normal, and every data root is a `rig-data` somewhere. A bare name matches the repo in any
+// org, because a name typed on the command or read off a folder carries no org to match.
 export function rootsCataloguing (roots, repo) {
-  const wanted = `${String(repo).toLowerCase()}.md`
-  return Object.entries(catalogued(roots)).filter(([, files]) => files.includes(wanted)).map(([name]) => name)
+  const wanted = String(repo).toLowerCase()
+  const matches = wanted.includes('/')
+    ? file => file === `${wanted}.md`
+    : file => file.endsWith(`/${wanted}.md`)
+  return Object.entries(catalogued(roots)).filter(([, files]) => files.some(matches)).map(([name]) => name)
+}
+
+// The configured root whose own checkout the cwd is in, or null. Standing in a data root is
+// the strongest answer the cwd can give about which knowledge is in hand, and it costs no
+// subprocess: the roots are paths, and this is a path comparison.
+function rootAt (reg, from) {
+  const hit = Object.entries(reg.roots).find(([, entry]) => insideDir(from, entry.path))
+  return hit ? hit[0] : null
 }
 
 // The data root the work folder above the cwd belongs to, or null outside one. Walks up
@@ -235,6 +250,10 @@ function chooseRoot (reg, env, opts) {
   // remember it afterwards is the thing this is for.
   const byRepos = fromRepos(reg, opts.repos ?? [], 'named on the command')
   if (byRepos) return byRepos
+  // A data root's own checkout, asked before the repo it is: that repo is a `rig-data`, which
+  // is the one name every root's catalogue may hold.
+  const root = rootAt(reg, opts.cwd ?? process.cwd())
+  if (root) return { name: root, source: 'root' }
   // A function, not a value: finding the repo the cwd is in costs a subprocess, and by here
   // it is the only question left unanswered — every cheaper one has already missed. And it is
   // only worth the subprocess where a catalogue exists to answer it: what places a command by

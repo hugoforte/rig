@@ -125,6 +125,43 @@ test('the repo the current directory is in answers when nothing named one', () =
   })
 })
 
+test('a repo named with its org matches only that org\'s entry', () => {
+  // Every data root is a `rig-data` somewhere, so the bare name matches whichever root
+  // catalogues any of them. The org is what tells them apart.
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'hugoforte', 'rig-data')
+    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'linenmaster/rig-data' })
+    assert.equal(location.source, 'current', 'another org\'s repo of the same name is not this one')
+  })
+})
+
+test('the same org and repo still places the command in the root that catalogues it', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
+    assert.equal(locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'ACME/Notes' }).name, 'personal')
+  })
+})
+
+test('standing in a data root\'s own checkout places the command in that root', () => {
+  fixture(THREE, ({ toolRoot, machine }) => {
+    let asked = 0
+    const inside = path.join(machine.dataRoots.linenmaster.path, 'work')
+    fs.mkdirSync(inside, { recursive: true })
+    const location = locate(toolRoot, {}, { cwd: inside, repoAt: () => { asked++; return 'rig-data' } })
+    assert.equal(location.name, 'linenmaster', 'and not `current`, which is hugoforte')
+    assert.equal(location.source, 'root')
+    assert.equal(asked, 0, 'the checkout answered, so the repo it is was never asked')
+  })
+})
+
+test('a repo named on the command still beats the data root checkout it runs in', () => {
+  fixture(THREE, ({ toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'acme', 'Payments')
+    const location = locate(toolRoot, {}, { cwd: machine.dataRoots.linenmaster.path, repos: ['Payments'] })
+    assert.equal(location.name, 'personal')
+  })
+})
+
 test('finding the repo the cwd is in costs a subprocess, so it is not asked when something cheaper answered', () => {
   fixture(THREE, ({ tmp, toolRoot }) => {
     let asked = 0
@@ -420,11 +457,11 @@ test('a repo belonging to another root cannot be attached to this work', () => {
 // not named for its repo, so reading the folder name cannot pass for reading the remote. Its
 // repo is ledger, which `personal` catalogues since `rig new --repos` above; current is the
 // other root.
-const checkoutAt = (where, repo) => {
+const checkoutAt = (where, repo, org = 'acme') => {
   const dir = path.join(tmp, where)
   fs.mkdirSync(dir, { recursive: true })
   gitMust(dir, 'init', '-q', '-b', 'main')
-  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/acme/${repo}.git`)
+  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/${org}/${repo}.git`)
   return dir
 }
 
@@ -434,6 +471,25 @@ test('the checkout a command runs in chooses the root that catalogues its repo',
   assert.equal(rig(['use', 'hugoforte']).code, 0)
   const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/my-clone', 'ledger') })
   assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a checkout of another org\'s repo with the same name is not placed by it', () => {
+  const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/other-org', 'ledger', 'someone-else') })
+  assert.match(r.out, /data root: hugoforte \(current\)/)
+})
+
+test('an ssh remote names its org as well as its repo', () => {
+  const dir = checkoutAt('somewhere/over-ssh', 'ledger')
+  gitMust(dir, 'remote', 'set-url', 'origin', 'git@github.com:acme/ledger.git')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a command run in a data root\'s own checkout reads that root, whatever is current', () => {
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  const r = rig(['list', '--quick'], { cwd: second })
+  assert.match(r.out, /ledger-work/, 'the work that root holds')
+  assert.doesNotMatch(r.out, /only-here/, 'and not the current root\'s')
 })
 
 test('a checkout the filesystem walk hands back to git is still placed by its repo', () => {

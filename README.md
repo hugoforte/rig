@@ -226,7 +226,7 @@ cd D:\code\Payments; rig list          # answers for that repo's root, wherever 
 1. `--data <name>` on the command
 2. `RIG_DATA_ROOT` in the environment
 3. **the work folder you are standing in** — `C:\w\<work>\.rig\data` records the root that work's records live in
-4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue
+4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue. A checkout is matched by its remote's org as well as its name, and a data root's own checkout answers for that root
 5. `current`, moved by `rig use`
 
 Rules 3 and 4 are why this stays out of your way: inside a work folder, or inside a repo you have used before, you never pass a flag and never think about which root is current. The commands that fall through to `current` — `new`, `list`, `catalog`, `dash` — print which root chose for them, so a switch you forgot about is visible rather than silent.

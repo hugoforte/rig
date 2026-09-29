@@ -395,8 +395,17 @@ function repoAtCwd () {
   }
   // The remote's URL stays git's: `url.<base>.insteadOf` rewrites it, and a config file read
   // that skipped the rewrite would name the wrong repo on exactly the machines that set one.
+  // `org/repo` from a hosted remote, not the repo alone: same-named repos in different orgs
+  // are normal, and every data root is a `rig-data` somewhere. Only a hosted remote whose
+  // path is exactly `org/repo` names an org. A path on disk names its repo alone, because the
+  // folder above it is not an org, and so does a host with a deeper path.
   const url = exec('git', ['remote', 'get-url', 'origin'])
-  if (url.code === 0 && url.out) return url.out.replace(/\.git$/, '').split(/[/:]/).pop() || null
+  if (url.code === 0 && url.out) {
+    const u = url.out.replace(/\/+$/, '').replace(/\.git$/, '')
+    const hosted = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/i.exec(u) ?? /^[^/\\@]+@[^/\\:]+:(.+)$/.exec(u)
+    const segments = (hosted ? hosted[1] : u).split(/[/\\]/).filter(Boolean)
+    return (hosted && segments.length === 2 ? segments.join('/') : segments.pop()) || null
+  }
   // git fails this for a repository it refuses to open — another user's, or one with an
   // extension it does not know — as well as for one with no origin, and the filesystem walk
   // sees neither refusal. The folder is the name only for a checkout git will open, and where
@@ -4083,7 +4092,8 @@ or take --work <id>. Every command that changes a work ends by committing the
 whole data root, and pushing it when it has an upstream.
 
 Which data root a command reads, first hit wins: --data <name>, RIG_DATA_ROOT,
-the work folder the command runs in, then the current one (rig use).
+the work folder the command runs in, the repos named by --repos, the data root
+checkout it runs in, the repo checkout it runs in, then the current one (rig use).
 
 rig record format ${MAJOR} — \`rig doctor\` names the release this checkout stands on and
 how far it is behind its remote, \`rig update\` brings it forward.`)
