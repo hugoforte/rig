@@ -2882,6 +2882,7 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
@@ -2904,6 +2905,24 @@ cmds.next = ({ flags }) => {
     say(`  ${C.cyan('→')} ${o.says}`)
     if (o.command) say(`    ${C.dim(o.command)}`)
   }
+}
+
+// Each stage that landed as a squash while the stage stacked on it in the same repo still
+// carries the commits it replaced, with what `worktrees.replaced` found. The stage above is the
+// next one in the stack that repo carries and that has not landed. Asked only by `rig next`, the
+// one command that already reads the stack and offers what to do about it.
+function replacedStages (cfg, work, stack) {
+  const found = []
+  stack.forEach((st, i) => {
+    for (const pr of st.prs.filter(p => p.state === 'MERGED')) {
+      const entry = work.repos.find(r => r.repo === pr.repo)
+      const above = stack.slice(i + 1).find(up => !up.landed && up.repos.includes(pr.repo))
+      if (!entry || !above) continue
+      const r = trees(cfg).replaced({ org: entry.org, repo: entry.repo, work: work.branch, head: pr.head, merge: pr.merge, above: above.branch })
+      if (r) found.push({ repo: entry.repo, branch: st.branch, tip: pr.head, above: above.branch, sameTree: r.sameTree })
+    }
+  })
+  return found
 }
 
 // The Direction section of a context doc, sliced out by hand rather than by one clever

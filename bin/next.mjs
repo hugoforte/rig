@@ -45,6 +45,10 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
+//   replaced       one `{ repo, branch, tip, above, sameTree }` per stage that landed as a
+//                  squash while `above`, the stage stacked on it, still carries the commits it
+//                  replaced — `tip` the commit its PR carried, `sameTree` whether the squash is
+//                  the stage as it stood (`worktrees.replaced`)
 //   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
 //   neighbours     one `{ repo, via, direction }` per repo the catalogue says talks to an
 //                  attached one and which is not itself attached — `via` is the attached repo
@@ -53,7 +57,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], drafts = [], neighbours = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], replaced = [], drafts = [], neighbours = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -116,6 +120,16 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       out.push(left.length
         ? offer('reviewing', `every stage is in — ${left.map(r => `${r.repo} is still on ${r.on}`).join(', ')}, which ${one ? 'has' : 'have'} landed — move ${one ? 'it' : 'them'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
         : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+    }
+    // The stage above a squash conflicts with the work branch, and GitHub then runs no checks on
+    // its pull request at all, so nothing else says so (hugoforte/rig#193). The rebase replays
+    // only that stage's own commits, and it is offered only where the squash is the stage as it
+    // stood: anywhere else, replaying onto it is a merge somebody has to look at.
+    for (const r of replaced) {
+      const says = `${r.branch} landed as a squash, and ${r.above} in ${r.repo} still carries the commits it replaced`
+      out.push(r.sameTree
+        ? offer('building', `${says} — replay only its own onto the work branch, then force-push it`, `git rebase --onto origin/${work.branch} ${r.tip} ${r.above}`)
+        : offer('building', `${says}, and the squash is not the stage as it stood — rebase ${r.above} onto the work branch by hand`))
     }
   }
 

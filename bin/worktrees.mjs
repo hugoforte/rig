@@ -187,6 +187,27 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return copies(branch).some(a => copies(other).some(b => isAncestor(mirror, b, a)))
     },
 
+    // Did a stage's pull request land as a commit of its own rather than a merge of the stage's,
+    // while the stage above still carries the commits it replaced? That is a squash, and the
+    // stage above then conflicts with the work branch it is meant to merge into
+    // (hugoforte/rig#193). `head` is the commit the PR carried and `merge` the one it landed as.
+    //
+    // Null when it did not, when the stage above no longer carries `head` — it has been rebased
+    // — or when this mirror cannot tell: either commit missing, or the work branch here not yet
+    // holding the merge, which a fetch brings. Otherwise `sameTree` says whether the merge is
+    // the stage as it stood, which is what makes replaying the stage above onto it safe.
+    replaced ({ org, repo, work, head, merge, above }) {
+      const mirror = mirrorPath(org, repo)
+      if (!fs.existsSync(mirror) || !head || !merge) return null
+      const commit = sha => git(mirror, 'cat-file', '-e', `${sha}^{commit}`).code === 0
+      if (!commit(head) || !commit(merge)) return null
+      if (isAncestor(mirror, head, merge) || !has(mirror, ref(work)) || !isAncestor(mirror, merge, ref(work))) return null
+      const carrier = [local(above), ref(above)].find(r => has(mirror, r))
+      if (!carrier || !isAncestor(mirror, head, carrier)) return null
+      const tree = sha => git(mirror, 'rev-parse', `${sha}^{tree}`).out
+      return { sameTree: tree(head) === tree(merge) }
+    },
+
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which
     // is the only thing the two ever disagreed about, so the message is what comes back and
     // the caller decides how loud it is. The prune runs either way: a remove that failed

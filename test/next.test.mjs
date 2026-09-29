@@ -214,6 +214,36 @@ test('a worktree already on the work branch is not told to move', () => {
   assert.doesNotMatch(says(out), /still on/)
 })
 
+const TIP = 'a'.repeat(40)
+const squashStack = () => [
+  stage('feat/one', { landed: true, started: true, repos: ['a'] }),
+  stage('feat/two', { started: true, repos: ['a'], open: true }),
+]
+
+test('a stage squashed under the one above it is offered the rebase, with the real sha (#193)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: squashStack(),
+    replaced: [{ repo: 'a', branch: 'feat/one', tip: TIP, above: 'feat/two', sameTree: true }],
+  })
+  const o = out.find(x => /landed as a squash/.test(x.says))
+  assert.match(o.says, /feat\/one landed as a squash, and feat\/two in a still carries the commits it replaced/)
+  assert.equal(o.command, `git rebase --onto origin/feat/x ${TIP} feat/two`)
+})
+
+test('a squash that is not the stage as it stood is named, and no command is offered for it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: squashStack(),
+    replaced: [{ repo: 'a', branch: 'feat/one', tip: TIP, above: 'feat/two', sameTree: false }],
+  })
+  const o = out.find(x => /landed as a squash/.test(x.says))
+  assert.match(o.says, /is not the stage as it stood/)
+  assert.equal(o.command, null)
+})
+
 test('a work with no stages behaves exactly as it did before stages existed', () => {
   const withNone = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
   const withEmpty = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], stack: [] })
