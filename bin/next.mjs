@@ -94,14 +94,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer(phase, `uncommitted changes in ${dirty.map(r => r.repo).join(', ')} — commit them where they belong`))
   }
 
-  // A work with stages gets told which one is next and what it delivers, before anything
-  // about the work branch — the stack is what you are actually working through, and the work
-  // branch's own PR is the thing that happens *after* it. A work with no stages skips all of
-  // this and behaves exactly as it did before stages existed, which is the point.
   // Every stage is in and a worktree is still on one of them. It is moved first, so it is not
   // also offered a push or a pull request from the stage it is on (`onLandedStage`).
   const stranded = stack.length && !nextStage(stack) ? repos.filter(r => onLandedStage(stack, r.on)) : []
 
+  // A work with stages gets told which one is next and what it delivers, before anything
+  // about the work branch — the stack is what you are actually working through, and the work
+  // branch's own PR is the thing that happens *after* it. A work with no stages skips all of
+  // this and behaves exactly as it did before stages existed, which is the point.
   if (stack.length) {
     const up = nextStage(stack)
     if (up) {
