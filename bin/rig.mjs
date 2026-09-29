@@ -2974,6 +2974,7 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const text = prText(work, stack)
   const offers = nextFor({
     work,
     repos,
@@ -2982,6 +2983,9 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    // The open PRs that no longer say what `rig pr` would write now: the same comparison
+    // `rig pr --refresh` makes before it edits anything.
+    prStale: repos.filter(r => r.pr?.state === 'OPEN' && !prSaysRecord(r.pr, text)).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
@@ -3086,6 +3090,16 @@ function prBody (work, stack) {
   return lines.join('\n')
 }
 
+// Everything `rig pr` writes into a pull request, rendered from the record as it stands. The
+// one renderer for opening a PR, refreshing it, and asking whether an open one has gone stale,
+// so the three cannot disagree about what the PR should say.
+const prText = (work, stack) => ({ title: work.title || work.id, body: prBody(work, stack) })
+
+// Does an open PR still say what `rig pr` would write now? GitHub may hand a body back with
+// CRLF line ends or without the trailing newline, and neither is a difference worth an edit.
+const sameText = (a, b) => (a ?? '').replace(/\r\n/g, '\n').trim() === b.replace(/\r\n/g, '\n').trim()
+const prSaysRecord = (pr, text) => sameText(pr.title, text.title) && sameText(pr.body, text.body)
+
 // One PR per repo, work branch → base branch. rig has read PR state everywhere since it
 // existed — `list`, `status`, `close`, `dash`, `workstate` — and had never opened one, which
 // made review the phase it was most obviously absent from. The PR is also the one artifact rig
@@ -3102,8 +3116,8 @@ cmds.pr = ({ flags }) => {
   if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
-  const body = prBody(work, stack)
-  const title = work.title || work.id
+  const text = prText(work, stack)
+  if (flags.refresh) return refreshPrs(cfg, work, text)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3120,9 +3134,25 @@ cmds.pr = ({ flags }) => {
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
     let made = null
-    const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, title, body }) })
+    const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
+  }
+}
+
+// `rig pr --refresh`: each repo's open PR rewritten from the record, title and body, with the
+// text `rig pr` would open it with now. The body is the release note, so a PR that went on
+// describing the work as it was when it opened is a release note gone stale. A PR that already
+// says it is left alone, and a repo with no open PR is told so — refreshing never opens one.
+function refreshPrs (cfg, work, text) {
+  for (const entry of work.repos) {
+    const { pr, prError } = repoState(cfg, entry, work.branch)
+    if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
+    if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
+    if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }
+    const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, text))
+    if (failed) { warn(`${entry.repo}: could not refresh PR #${pr.number} (${failed})`); continue }
+    ok(`${entry.repo}: PR #${pr.number} refreshed from the record  ${C.dim(pr.url)}`)
   }
 }
 
@@ -4191,6 +4221,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
+       [--refresh]                 rewrite each open PR's title and body from the record
+                                   as it stands; opens nothing
   rig stage [branch]              the stack, in branch order; with a branch, declare one
   rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
   rig stage <branch> --key <k>    give the stage its own ticket, closed when the slice lands

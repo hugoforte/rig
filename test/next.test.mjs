@@ -543,3 +543,14 @@ test('a missing worktree whose PR closed is not offered the restore it cannot ha
   })
   assert.ok(!commands(out).includes('rig restore w'))
 })
+
+test('an open PR that no longer matches the record is offered a refresh', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pr: { state: 'OPEN' }, pushed: true })], prStale: ['a'] })
+  assert.match(says(out), /a: the open PR no longer says what the record does/)
+  assert.ok(commands(out).includes('rig pr --refresh'))
+})
+
+test('an open PR that matches the record is not offered a refresh', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pr: { state: 'OPEN' }, pushed: true })] })
+  assert.ok(!commands(out).includes('rig pr --refresh'))
+})

@@ -33,12 +33,23 @@ test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
 })
 
 test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
-  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","mergeCommit":{"oid":"def456"},"url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
+  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","mergeCommit":{"oid":"def456"},"url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z","title":"A title","body":"A body"}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
     { number: 12, state: 'MERGED', base: 'main', head: 'abc123', merge: 'def456', url: 'https://github.com/acme/platform/pull/12',
-      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z' })
+      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z', title: 'A title', body: 'A body' })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body', '--limit', '1'])
+})
+
+test("gh adapter: editPr rewrites a PR's title and body by number", () => {
+  const { calls, github } = canned(() => 'https://github.com/acme/platform/pull/12\n')
+  github.editPr('acme', 'platform', 12, { title: 'New title', body: 'New body' })
+  assert.deepEqual(calls[0], ['pr', 'edit', '12', '--repo', 'acme/platform', '--title', 'New title', '--body', 'New body'])
+})
+
+test("gh adapter: editPr fails with gh's own error when gh fails", () => {
+  const { github } = canned(() => ({ code: 1, err: 'GraphQL: Resource not accessible' }))
+  assert.throws(() => github.editPr('acme', 'platform', 12, { title: 't', body: 'b' }), /Resource not accessible/)
 })
 
 test('gh adapter: an open PR has no merge commit', () => {
@@ -186,6 +197,18 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
   const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, commits: ['2026-01-02T00:00:00Z'] }] } } }
   assert.deepEqual(githubInMemory(state).prTimeline('acme', 'platform', 12),
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
+})
+
+test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {
+  const github = githubInMemory({ repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, state: 'OPEN', title: 'Old', body: 'old' }] } } })
+  github.editPr('acme', 'platform', 12, { title: 'New', body: 'new' })
+  const pr = github.prForBranch('acme', 'platform', 'feat/x')
+  assert.deepEqual([pr.title, pr.body], ['New', 'new'])
+})
+
+test('in-memory adapter: editPr refuses a pull request that does not exist', () => {
+  const github = githubInMemory({ repos: { 'acme/platform': { prs: [] } } })
+  assert.throws(() => github.editPr('acme', 'platform', 12, { title: 't', body: 'b' }), /no such pull request/)
 })
 
 test('in-memory adapter: prForBranch finds the PR by branch', () => {

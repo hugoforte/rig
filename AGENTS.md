@@ -235,7 +235,8 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
 touches the branch, which was named from the first title and which the stack is read from, or
-the id, which names the folder and the record.
+the id, which names the folder and the record. An open pull request takes the new title with
+`rig pr --refresh`.
 
 ## More than one data root
 
@@ -444,7 +445,8 @@ walkthrough that stops before the merge makes half the case.
 ## Opening the pull requests
 
 ```bash
-rig pr        # one PR per repo, work branch to the base it was cut from
+rig pr            # one PR per repo, work branch to the base it was cut from
+rig pr --refresh  # rewrite each open PR's title and body from the record as it stands
 ```
 
 The body is assembled from what the record already holds: the title, the tickets, the
@@ -454,6 +456,13 @@ hand-maintained the moment something renders it.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
+
+**The body is the release note, so it is kept true.** A work's scope moves while its PR is open:
+a ticket folded in, the Direction rewritten after a trial run, the title corrected, a stage
+dropped. `rig pr --refresh` rewrites each open PR's title and body with exactly what `rig pr`
+would open it with now, and leaves one that already says it alone. A repo with no open PR is
+told so; a refresh never opens one. `rig next` compares each open PR with that text and offers
+the refresh when they differ, the way it offers `rig plan --refresh`.
 
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.

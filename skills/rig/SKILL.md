@@ -43,6 +43,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | What is open, what can close | `rig list` |
 | Slice the work into reviewable parts | `rig stage` |
 | Put it up for review | `rig pr` |
+| The PR says what the work used to be | `rig pr --refresh` |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified | `rig check [--run]` |
 | Context doc edited by hand | `rig save -m "…"` |
