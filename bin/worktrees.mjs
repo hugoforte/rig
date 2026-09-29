@@ -238,8 +238,8 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    // `branch` is optional and answers one extra question: has this branch reached the
-    // remote? Only `rig next` asks, and only it passes one.
+    // `branch` is optional and answers two extra questions: has this branch reached the
+    // remote, and how much of what is checked out has not? `repoState` passes one.
     state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
@@ -247,6 +247,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       // `refs/remotes/origin/main` makes git set tracking to *main*, so an upstream exists
       // from the moment `rig attach` runs and says nothing about whether anyone pushed.
       s.pushed = branch ? has(dir, ref(branch)) : false
+      // For the same reason `ahead` is not what is unpushed: against *main* it counts every
+      // commit that has not landed, pushed or not (hugoforte/rig#192). This counts the commits
+      // on HEAD that no branch on the remote holds — the distance from `origin/<branch>` once
+      // it is pushed, and everything over the base while it never was. Null when git could
+      // not count.
+      if (branch) {
+        const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
+        s.unpushed = u.code === 0 ? Number(u.out) : null
+      }
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const count = from => git(dir, 'rev-list', '--left-right', '--count', `${from}...HEAD`)
       // The count is the question, so the count is what is asked. `@{u}` fails to resolve for

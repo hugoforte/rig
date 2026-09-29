@@ -10,7 +10,7 @@ import { nextFor } from '../bin/next.mjs'
 const AT = '2026-09-19T10:00:00.000Z'
 
 const work = (over = {}) => ({ id: 'w', branch: 'feat/x', repos: [], ...over })
-const repo = (name, over = {}) => ({ repo: name, merged: false, pr: null, dirty: 0, ahead: 0, pushed: false, missing: false, ...over })
+const repo = (name, over = {}) => ({ repo: name, merged: false, pr: null, dirty: 0, unpushed: 0, pushed: false, missing: false, ...over })
 const attached = (...names) => names.map(n => ({ repo: n }))
 const says = out => out.map(o => o.says).join(' | ')
 const commands = out => out.map(o => o.command).filter(Boolean)
@@ -41,7 +41,7 @@ test('a recorded design gate stops being offered', () => {
 test('uncommitted changes are named before anything that would build on them', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
-    repos: [repo('a', { dirty: 3 }), repo('b', { ahead: 1 })],
+    repos: [repo('a', { dirty: 3 }), repo('b', { unpushed: 1 })],
   })
   assert.match(out[0].says, /uncommitted changes in a/)
 })
@@ -49,10 +49,21 @@ test('uncommitted changes are named before anything that would build on them', (
 test('unpushed commits are offered a push, and not also a pull request', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: 2 })],
+    repos: [repo('a', { unpushed: 2 })],
   })
   assert.match(says(out), /commits that are not pushed/)
   assert.doesNotMatch(says(out), /no PR open/, 'one branch state, one offer')
+})
+
+test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
+  // A work branch's upstream is its base, so `ahead` counts what has not landed on main.
+  // What is not pushed is a different question, and `unpushed` is its answer.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { ahead: 3, unpushed: 0, pushed: true })],
+  })
+  assert.doesNotMatch(says(out), /not pushed/)
+  assert.match(says(out), /a is pushed with no PR open/)
 })
 
 test('a pushed branch with no PR is offered one', () => {
@@ -65,7 +76,7 @@ test('a pushed branch with no PR is offered one', () => {
 })
 
 test('a branch nobody has written on is never nagged about opening a PR', () => {
-  // `ahead` reads 0 both for a pushed branch and for one with nothing on it, which is why
+  // `unpushed` reads 0 both for a pushed branch and for one with nothing on it, which is why
   // this rung asks `pushed` instead. Getting it wrong here is a reproach, and this command
   // does not make them.
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
@@ -74,13 +85,12 @@ test('a branch nobody has written on is never nagged about opening a PR', () => 
 })
 
 test('a distance git could not measure is never read as nothing outstanding', () => {
-  // `ahead: null` is what `worktrees.state()` answers when it could not measure at all, and
-  // that is the *ordinary* state of a branch whose PR was squash-merged (decision 62). Read as
-  // 0 it means "pushed, waiting for a PR", which is a confident answer to a question nobody
-  // could answer.
+  // `unpushed: null` is what `worktrees.state()` answers when git could not count at all.
+  // Read as 0 it means "pushed, waiting for a PR", which is a confident answer to a question
+  // nobody could answer (decision 62).
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: null, pushed: true })],
+    repos: [repo('a', { unpushed: null, pushed: true })],
   })
   assert.doesNotMatch(says(out), /no PR open/)
   assert.doesNotMatch(says(out), /not pushed/)
@@ -89,7 +99,7 @@ test('a distance git could not measure is never read as nothing outstanding', ()
 test('nor as work waiting to be written', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: null, pushed: false })],
+    repos: [repo('a', { unpushed: null, pushed: false })],
   })
   assert.doesNotMatch(says(out), /yours to write/)
 })
@@ -124,7 +134,7 @@ test('and not twice — a plan that exists is not offered again', () => {
 test('a partly merged work says what is still out', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
-    repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } }), repo('b', { ahead: 1 })],
+    repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } }), repo('b', { unpushed: 1 })],
   })
   assert.match(says(out), /1 of 2 merged — still out: b/)
 })
@@ -200,7 +210,7 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
   const shapes = [
     { work: work() },
     { work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true },
-    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, ahead: 1 })] },
+    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
     {
       work: work({ repos: attached('a'), designedAt: AT }),
@@ -218,7 +228,7 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
 test('every offer names the phase it belongs to', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }),
-    repos: [repo('a', { ahead: 1 }), repo('b'), repo('c')],
+    repos: [repo('a', { unpushed: 1 }), repo('b'), repo('c')],
   })
   assert.ok(out.length > 0)
   for (const o of out) assert.match(o.phase, /^(planning|designing|building|reviewing|landing)$/)
@@ -402,7 +412,7 @@ test('a work under review is offered the lesson review', () => {
 })
 
 test('a work still being built is not asked what it taught', () => {
-  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { ahead: 1 })] })
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { unpushed: 1 })] })
   assert.doesNotMatch(says(out), /rig-learn/)
 })
 

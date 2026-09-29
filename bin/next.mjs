@@ -36,7 +36,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 // this module stays pure:
 //
 //   work           the record: repos, gates, tickets
-//   repos          one `{ repo, merged, pr, dirty, ahead, pushed, missing }` per attached
+//   repos          one `{ repo, merged, pr, dirty, unpushed, pushed, missing }` per attached
 //                  repo — what `workState` already decided for `list`, `status` and `close`,
 //                  plus `pushed` from the worktree state; `missing` is a worktree not on
 //                  this machine
@@ -113,27 +113,26 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     }
   }
 
-  // `ahead` is `null`, never 0, when git could not measure the distance at all — which is the
-  // *ordinary* state of a branch whose PR was squash-merged and whose refs are gone (decision
-  // 62). Every filter below therefore compares it explicitly: `!r.ahead` is true for both 0 and
-  // null, and treating "nobody could tell" as "nothing outstanding" is the exact mistake
-  // decision 62 exists to prevent, one command further along.
+  // Asked of `unpushed`, the commits no branch on the remote holds, and never of `ahead`: a
+  // work branch's upstream is its base, so `ahead` counts what has not landed, and a branch
+  // pushed in full was offered `git push` for ever (hugoforte/rig#192).
   //
-  // A repo whose distance is unknown matches none of these and is simply not spoken about. That
-  // is deliberate: this command offers, and there is nothing to offer about a fact nobody has.
-  // `workState` already blocks a close on the same condition, which is where a refusal belongs.
-  const unpushed = repos.filter(r => !r.merged && r.ahead > 0)
+  // `unpushed` is `null`, never 0, when git could not count. Every filter below therefore
+  // compares it explicitly: `!r.unpushed` is true for both 0 and null, and treating "nobody
+  // could tell" as "nothing outstanding" is the exact mistake decision 62 exists to prevent.
+  // A repo git could not count for matches none of these and is simply not spoken about: this
+  // command offers, and there is nothing to offer about a fact nobody has.
+  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0)
   if (unpushed.length) {
     out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.
-  // Asked of `pushed` rather than `ahead`: `ahead` counts what is *un*pushed and reads 0 both
-  // for a branch that has been pushed and for one nobody has written anything on, and nagging
-  // the second to open a pull request for nothing is exactly the reproach this command does
-  // not make.
-  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.ahead === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.ahead === 0 && r.pushed)
+  // Asked of `pushed` as well as `unpushed`: `unpushed` reads 0 both for a branch that has
+  // been pushed and for one nobody has written anything on, and nagging the second to open a
+  // pull request for nothing is exactly the reproach this command does not make.
+  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
+  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed)
   if (awaiting.length) {
     out.push(offer('reviewing', `${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, 'rig pr'))
   }
