@@ -113,10 +113,7 @@ export function stageState (stage, perRepo = []) {
     // pull request that merges into the default branch, and a stage's never does — so a
     // slice's ticket cannot close itself, and rig is the only thing that can.
     tickets: stage.tickets || [],
-    // Withdrawn from the plan: dropped with a reason, or replaced by another stage. Kept with
-    // its date rather than deleted, so a plan that changed does not read as one that stalled.
-    withdrawn: stage.droppedAt ? { at: stage.droppedAt, reason: stage.reason || '' }
-      : stage.replacedAt ? { at: stage.replacedAt, by: stage.replacedBy } : null,
+    withdrawn: withdrawalOf(stage),
     repos: repos.map(r => r.repo),
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
@@ -152,6 +149,15 @@ const groupByRepo = perRepo => {
   }
   return [...by.values()]
 }
+
+// A declared stage withdrawn from the plan (decision 126): `{ at, reason }` when it was dropped,
+// `{ at, by }` when another stage replaced it, and null while it is still planned.
+export const withdrawalOf = stage => (stage.droppedAt ? { at: stage.droppedAt, reason: stage.reason || '' }
+  : stage.replacedAt ? { at: stage.replacedAt, by: stage.replacedBy } : null)
+
+// What became of a withdrawn stage, in a few words. `mark` is how the caller writes a branch
+// name, as for `adriftNote`.
+export const withdrawnLabel = (w, mark = b => b) => (w.by ? `replaced by ${mark(w.by)}` : `dropped: ${w.reason}`)
 
 // The next stage to look at: the first that has neither landed nor been withdrawn. Null when
 // every stage is in or withdrawn, which is what makes the work branch's own PR the thing that
@@ -204,7 +210,7 @@ export function adriftNote (stack, mark = b => b) {
 // plan that says one thing and a stack that says another, with nothing able to tell.
 export function stageTable (stack) {
   const where = st => st.landed ? 'landed'
-    : st.withdrawn ? (st.withdrawn.by ? `replaced by \`${st.withdrawn.by}\`` : `dropped: ${st.withdrawn.reason}`)
+    : st.withdrawn ? withdrawnLabel(st.withdrawn, b => `\`${b}\``)
       : st.open ? 'up for review' : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
   const note = adriftNote(stack, b => `\`${b}\``)

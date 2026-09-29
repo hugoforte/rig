@@ -350,8 +350,8 @@ and so is withdrawing one: `--dropped "why"` records `droppedAt` and the reason,
 deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work started from is what
 a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
 rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
-next stage. A stage that landed cannot be withdrawn, and a withdrawn stage's own ticket is told
-why at `rig close` and left open.
+next stage. Only a stage with no pull request open or merged can be withdrawn, and a withdrawn
+stage's own ticket is told why at `rig close` and left open.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 

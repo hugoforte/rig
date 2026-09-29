@@ -122,7 +122,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       const where = [...on].map(([b, rs]) => `${rs.join(', ')} ${rs.length === 1 ? 'is' : 'are'} still on ${b}, which has landed`).join('; ')
       out.push(stranded.length
         ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
-        : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+        : offer('reviewing', `every stage is ${stack.some(st => st.withdrawn) ? 'in or withdrawn' : 'in'} — the work branch is what is left to land`, 'rig pr'))
     }
     // Decision 113. The rebase is offered only where the squash is the stage as it stood;
     // anywhere else, replaying onto it is a merge somebody has to look at.
