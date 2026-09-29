@@ -679,8 +679,9 @@ function prepareDataRoot () {
         } else if (outcome === 'moved') {
           say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
         }
-        // The upstream the fetch found is the one the commit at the end pushes to.
-        if (!before.upstream) before = co.describe(root)
+        // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
+        // reading the fast-forward decided from, after the fetch, which is all the commit reads.
+        if (!before.upstream) before = state
       }
     }
   }

@@ -89,7 +89,12 @@ function rootFindings (root) {
       if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
       else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
       if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
-      else if (!state.upstream && state.tracks) out.push(warn(`data root tracks ${state.tracks}, which has not been fetched or is gone from the remote — \`rig update\` fetches it`, { counts: false }))
+      // Not fetched yet, never pushed, or gone from the remote: doctor does not fetch, so it
+      // cannot tell which, and names the way out of each.
+      else if (!state.upstream && state.tracks) {
+        const remote = state.tracks.split('/')[0]
+        out.push(warn(`data root tracks ${state.tracks}, which is not here — \`rig update\` fetches it; if the remote does not have it, push (\`git push -u ${remote} ${state.branch}\`) or re-point the branch (\`git branch -u\`)`, { counts: false }))
+      }
       else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
       else if (state.ahead === null) out.push(warn(`data root: git could not measure the distance from ${state.upstream} — \`git -C ${root.path} status\` says why`))
       else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))

@@ -485,25 +485,33 @@ test('a mutating command fetches an upstream ref that is not here yet, rather th
   loseUpstreamRef()
   // Untracked, so it is committed at the end without blocking the fast-forward at the start.
   fs.writeFileSync(path.join(dataRoot, 'work', 't7', 'found.md'), 'After the ref went missing.\n')
-  const r = rig(['save', '--work', 't7', '-m', 'upstream found'])
-  assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
-  assert.match(r.out, /and pushed/, 'the upstream it found is the one it pushes to')
+  try {
+    const r = rig(['save', '--work', 't7', '-m', 'upstream found'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
+    assert.match(r.out, /and pushed/, 'the upstream it found is the one it pushes to')
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
 })
 
 test('rig update fetches an upstream ref that is not here yet, and fast-forwards to it', () => {
   pushFromTheOtherMachine('UPDATED-TO.md')
   loseUpstreamRef()
-  const r = rig(['update'])
-  assert.match(strip(r.out), /data root: fast-forwarded 1 commit\(s\)/)
-  assert.ok(fs.existsSync(path.join(dataRoot, 'UPDATED-TO.md')))
+  try {
+    const r = rig(['update'])
+    assert.match(strip(r.out), /data root: fast-forwarded 1 commit\(s\)/)
+    assert.ok(fs.existsSync(path.join(dataRoot, 'UPDATED-TO.md')))
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
 })
 
 test('doctor names an upstream a data root tracks but has not fetched, rather than calling it local only', () => {
   loseUpstreamRef()
   try {
     const out = strip(rig(['doctor']).out)
-    assert.match(out, /data root tracks origin\/main, which has not been fetched or is gone from the remote — `rig update` fetches it/)
+    assert.match(out, /data root tracks origin\/main, which is not here — `rig update` fetches it; if the remote does not have it, push \(`git push -u origin main`\) or re-point the branch \(`git branch -u`\)/)
     assert.doesNotMatch(out, /push it to a private repo/)
   } finally {
     assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
