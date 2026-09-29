@@ -490,6 +490,39 @@ test('rig update brings every configured root forward, not only the one in hand'
   }
 })
 
+test('rig update still brings every root forward when none is current', (t) => {
+  // Two roots and no pointer: every command that answers about a root's contents dies here,
+  // and `update` is not one of them. Put back afterwards, since the tests below want a root
+  // in hand.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  t.after(() => fs.writeFileSync(localConfig, saved))
+  for (const root of [dataRoot, second]) {
+    const file = path.join(root, 'rig.json')
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), writtenBy: '1.0.0' }, null, 2) + '\n')
+    gitMust(root, 'add', '-A')
+    gitMust(root, 'commit', '-q', '-m', 'back to format 1')
+  }
+  const machine = JSON.parse(saved)
+  delete machine.current
+  delete machine.dataRoot
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  const out = strip(rig(['update']).out)
+  assert.match(out, /data root hugoforte migrated/)
+  assert.match(out, /data root personal migrated/)
+})
+
+test('rig update says a selection it cannot make once, through the doctor checks it ends in', (t) => {
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  t.after(() => fs.writeFileSync(localConfig, saved))
+  const machine = JSON.parse(saved)
+  delete machine.current
+  delete machine.dataRoot
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  const r = rig(['update'])
+  assert.equal(r.code, 1, 'a machine with nothing selected has something to look at')
+  assert.equal(strip(r.out).match(/none is current/g)?.length, 1, strip(r.out))
+})
+
 // ------------------------------------------------------------- doctor, over every root
 
 // What the findings say is asserted over fixtures in test/doctor.test.mjs; what these prove is

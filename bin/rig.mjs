@@ -3607,7 +3607,10 @@ function updateCheckout (label, root) {
 }
 
 cmds.update = ({ flags }) => {
-  const cfg = config()
+  // Not `config()`: with several roots and none current that dies, and nothing here needs a
+  // root in hand. The doctor checks at the end say the refusal, once.
+  const inHand = selection().loc
+  const cfg = load(inHand)
   let problems = 0
   const tool = toolState()
   if (tool.linked) {
@@ -3646,7 +3649,7 @@ cmds.update = ({ flags }) => {
   const base = { toolRoot: toolRoot(), localFile: reg.localFile, roots: reg.roots }
   const targets = names.length
     ? names.map(name => ({ name, loc: withDataRoot(base, reg.roots[name].path) }))
-    : [{ name: null, loc: where() }]
+    : [{ name: null, loc: inHand }]
 
   for (const { name, loc } of targets) {
     // Named only when there is more than one: a single-root installation has never had to
@@ -3886,18 +3889,20 @@ function doctorRootLocations (fallback) {
 
 // Which data root is in hand, or why there is none. Everywhere else an unresolvable selection
 // is fatal, and rightly: a command that carried on would write a work's records into a root
-// nobody chose. `doctor` is the exception, because a selection it cannot make is exactly the
-// class of broken configuration it exists to report, and dying on it is the one way to report
-// nothing at all. So the refusal is caught and carried as a finding.
+// nobody chose. `doctor` and `update` are the exceptions, because neither answers about one
+// root's contents. A selection doctor cannot make is exactly the class of broken configuration
+// it exists to report, and dying on it is the one way to report nothing at all. `update` has
+// every root to bring forward rather than one, and ends in doctor's checks, which say the
+// refusal for it. So the refusal is caught and carried as a finding.
 //
 // The fallback is the tool checkout, which is what `locate` already falls back to on a machine
 // that configures no data root at all: the org half of a root nobody chose must not be guessed
-// at, and everything the snapshot still reads off it — the work root, the mirror root, the
-// secrets — is the machine half's to answer, which reads either way. `freshness` sits in
-// both halves, so the fallback does drop a root's own policy; it costs nothing because
-// `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`. The roots
-// themselves come from the registry (`doctorRootLocations`) wherever it has any.
-function doctorSelection () {
+// at, and everything the two commands still read off it — the work root, the mirror root, the
+// secrets, the freshness cache — is the machine half's to answer, which reads either way.
+// `freshness` sits in both halves, so the fallback does drop a root's own policy; it costs
+// nothing because `doctorFreshness` asks the tool checkout and never reads `cfg.freshness`.
+// The roots themselves come from the registry wherever it has any.
+function selection () {
   try { return { loc: where(), error: null } }
   catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: not doctor's to swallow
@@ -3923,7 +3928,7 @@ function workRootEntries (cfg) {
 function doctorSnapshot () {
   // The one command that gathers its location rather than asking for it, and then carries on
   // whether or not it got one.
-  const { loc, error: selectionError } = doctorSelection()
+  const { loc, error: selectionError } = selection()
   const localFile = loc.localFile
   // Nothing below can be asked of an installation that has no config at all, and `load` is
   // the first thing that would die trying.

@@ -250,7 +250,8 @@ Two consequences worth holding on to:
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
-  next mutating command, mid-work.
+  next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
+  `current` do not stop it; the doctor checks it ends in say that selection, once.
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
