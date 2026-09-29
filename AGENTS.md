@@ -216,13 +216,13 @@ rig save -m "refuted the sync hypothesis" # any later edit made outside rig
 rig save --title "What it turned out to be" # the title was wrong
 ```
 
+Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
+was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
 touches the branch, which was named from the first title and which the stack is read from, or
 the id, which names the folder and the record.
-
-Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
-was just agreed, with the catalogue corrections you made in passing swept up alongside.
 
 ## More than one data root
 

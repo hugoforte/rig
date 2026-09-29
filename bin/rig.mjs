@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -1081,7 +1081,9 @@ function parseArgs (argv) {
     const a = argv[i]
     if (!isFlag(a)) { positional.push(a); continue }
     // `--flag`, `--flag=value`, `--flag value`; `-m value` is `--message value`.
-    const [raw, v] = a.replace(/^-+/, '').split('=')
+    // Split at the first `=` only: a value may carry its own, as a title or a message can.
+    const [raw, ...rest] = a.replace(/^-+/, '').split('=')
+    const v = rest.length ? rest.join('=') : undefined
     const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help\``))
     if (v !== undefined) flags[k] = v
     else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !isFlag(argv[i + 1])) flags[k] = argv[++i]
@@ -1176,7 +1178,7 @@ function syncDocHeader (id, work) {
 function retitleDoc (id, title) {
   const f = contextFile(id)
   if (!exists(f)) return
-  const heading = new RegExp(`^# ${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?: — .*)?$`, 'm')
+  const heading = new RegExp(`^# ${escapeRe(id)}(?: — .*)?$`, 'm')
   const text = readText(f)
   if (!heading.test(text)) return warn(`${f} has no \`# ${id} — …\` heading — the record has the new title, the doc does not`)
   writeText(f, text.replace(heading, () => `# ${id} — ${title}`))
@@ -2314,26 +2316,16 @@ function offerNeighbours (work, name) {
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
 // records the "design agreed" gate, which is what the flag's name always said it did: a
 // decision someone took, on a date nothing else can recover. It used to set a status.
-// `--learned` records the lesson review the same way.
-//
-// `--title` corrects the title, which is prose a person wrote and may need to take back, like
-// the context doc this command already commits. The record and the two headings rendered from
-// it change; the branch and the id do not. The branch was named from the title once, and
-// renaming it would break the stack the stages are read from; the id names a folder and a
-// record across every data root on the machine.
+// `--learned` records the lesson review the same way. `--title` corrects the title in the
+// record and the two headings that show it, and never the branch or the id.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
   if (flags.message === true) die('-m needs a message')
-  if (flags.title === true || (flags.title !== undefined && !String(flags.title).trim())) die('--title needs the title, in quotes')
-  const title = flags.title === undefined ? null : String(flags.title).trim()
+  const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
+  if (title === true || title === '') die('--title needs the title')
   commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
-  if (title) {
-    work.title = title
-    retitleDoc(id, title)
-    ok(`${id}: titled "${title}"`)
-  }
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -2348,6 +2340,12 @@ cmds.save = ({ flags }) => {
     if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
     work.learnedAt = new Date().toISOString()
     ok(`${id}: lessons reviewed`)
+  }
+  // After the gates, so a gate refused leaves the doc as untouched as the record.
+  if (title) {
+    work.title = title
+    retitleDoc(id, title)
+    ok(`${id}: titled "${title}"`)
   }
   saveWork(cfg, work)
 }

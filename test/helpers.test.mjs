@@ -23,6 +23,10 @@ test('parseArgs: values, booleans, and a positional after a boolean flag', () =>
   assert.equal(flags.force, true)
 })
 
+test('parseArgs: a value given with = keeps any = of its own', () => {
+  assert.equal(parseArgs(['--title=E=mc2 is wrong']).flags.title, 'E=mc2 is wrong')
+})
+
 test('parseArgs: a value flag at the end is true, not undefined', () => {
   assert.equal(parseArgs(['--email']).flags.email, true)
 })

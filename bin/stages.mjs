@@ -220,7 +220,7 @@ export const PLAN_MARK = {
 }
 
 const planRegion = () => new RegExp(`${escapeRe(PLAN_MARK.open)}[\\s\\S]*?${escapeRe(PLAN_MARK.close)}`, 'm')
-const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 export const renderPlanRegion = stack => [
   PLAN_MARK.open,
