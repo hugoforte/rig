@@ -119,3 +119,32 @@ test('the stage table in the body is rendered from the stack, never hand-typed',
   assert.match(opened.body, /\| 1 \| `feat\/sliced-one` \| the schema \| billing \| #10 \| landed \|/)
   assert.match(opened.body, /\| 2 \| `feat\/sliced-two` \| the endpoints \| billing \| #11 \| up for review \|/)
 })
+
+test('a worktree left on a stage that landed is told how to get back to the work branch (#200)', () => {
+  // Every stage merged on GitHub and the stage branch was deleted there, and the worktree is
+  // still where the last push left it: on the stage, with the work branch behind the remote's.
+  assert.equal(rig(['new', 'landed', '--title', 'Landed work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'landed']).code, 0)
+  assert.equal(rig(['stage', 'feat/landed-one', '--delivers', 'the schema', '--work', 'landed']).code, 0)
+  const dest = worktree('landed', 'billing')
+  const work = 'feat/landed-work'
+  gitMust(dest, 'push', '-q', 'origin', work)
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/landed-one')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'the schema\n')
+  gitMust(dest, 'commit', '-qam', 'the schema')
+  gitMust(dest, 'push', '-q', 'origin', `feat/landed-one:${work}`)
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch: 'feat/landed-one', number: 30, state: 'MERGED', url: 'https://github.com/acme/billing/pull/30', base: work, openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] })
+  setGithub(state)
+
+  const r = rig(['pr', '--work', 'landed'])
+  assert.equal(r.code, 0, r.out)
+  const commands = [`git switch ${work}`, `git pull --ff-only origin ${work}`]
+  assert.ok(r.out.includes(`billing: the worktree is still on feat/landed-one, a stage that has landed — \`${commands[0]}\`, then \`${commands[1]}\``), r.out)
+  assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === work), 'the PR is opened all the same')
+
+  // And the commands it names do what they say.
+  for (const command of commands) gitMust(dest, ...command.split(' ').slice(1))
+  assert.equal(gitMust(dest, 'branch', '--show-current'), work)
+  assert.match(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), /the schema/)
+})

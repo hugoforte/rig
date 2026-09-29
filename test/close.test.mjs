@@ -149,6 +149,43 @@ test('a branch pushed to after its PR merged is kept, and the close says why', (
   assert.equal(hasBranch(mirror('billing'), 'feat/pushed-after-work'), true)
 })
 
+// What "Update branch" on GitHub does: a merge of main into the PR's branch, made on the
+// remote, so the mirror never sees it. GitHub keeps the PR's head under `refs/pull/<n>/head`.
+const updatedOnGithub = (branch, number) => {
+  const tip = gitMust(bare('billing'), 'rev-parse', branch)
+  const merge = gitMust(bare('billing'), 'commit-tree', `${tip}^{tree}`, '-p', tip, '-p', 'main', '-m', 'Merge main')
+  gitMust(bare('billing'), 'update-ref', `refs/heads/${branch}`, merge)
+  gitMust(bare('billing'), 'update-ref', `refs/pull/${number}/head`, merge)
+  return merge
+}
+
+test('a branch updated on GitHub before it merged is still deleted: the close fetches the PR\'s head (#181)', () => {
+  landedWork('updated', 46)
+  const head = updatedOnGithub('feat/updated-work', 46)
+  const state = github()
+  state.repos['acme/billing'].prs.find(pr => pr.number === 46).head = head
+  setGithub(state)
+  assert.notEqual(git(mirror('billing'), 'cat-file', '-e', `${head}^{commit}`).status, 0, 'the mirror never saw the merge')
+
+  const r = rig(['close', '--work', 'updated'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /deleted branch feat\/updated-work from billing \(mirror and remote\)/)
+  assert.equal(hasBranch(mirror('billing'), 'feat/updated-work'), false)
+})
+
+test('a PR head that cannot be fetched keeps the copy, and the close gives the fetch\'s reason (#181)', () => {
+  landedWork('unfetchable', 47)
+  const state = github()
+  state.repos['acme/billing'].prs.find(pr => pr.number === 47).head = 'f'.repeat(40)
+  setGithub(state)
+
+  const r = rig(['close', '--work', 'unfetchable'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /mirror copy of feat\/unfetchable-work kept — could not fetch PR #47's head: .*refs\/pull\/47\/head/)
+  assert.doesNotMatch(strip(r.out), /commits the merged PR did not/)
+  assert.equal(hasBranch(mirror('billing'), 'feat/unfetchable-work'), true)
+})
+
 test('a stage that landed goes with the work branch', () => {
   assert.equal(rig(['new', 'sliced', '--title', 'sliced work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'sliced']).code, 0)

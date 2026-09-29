@@ -7,7 +7,7 @@
 // The interface, and what each call may do:
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
-//   prForBranch(org, name, branch)      { number, state, base, url, openedAt, mergedAt } newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt } newest PR, or null
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   createIssue(repo, title, body)      the new issue's number
@@ -60,15 +60,16 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // with the PR state for no extra round trip, which is what makes a live base affordable
     // on every `list`, `status` and `close`. `headRefOid` rides along the same way: it is the
     // commit the PR carried, and the only thing that lets `close` tell a branch whose every
-    // commit landed from one somebody pushed to after the merge.
+    // commit landed from one somebody pushed to after the merge. `mergeCommit` is the commit it
+    // landed as, and the only way to tell a stage that was squashed from one that was merged.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,url,createdAt,mergedAt', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
     },
     // The open pull requests that land on a branch — what is stacked on top of it. `rig
     // restore` follows these up from the highest branch a work records, to name the stack
@@ -181,7 +182,7 @@ export function githubInMemory (state, { env } = {}) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
     },
     prsOnto (org, name, base) {
       if (!answers()) return []

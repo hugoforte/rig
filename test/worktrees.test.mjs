@@ -100,6 +100,65 @@ test('pushed asks whether the branch reached the remote, never whether it has an
   assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).pushed, true)
 })
 
+test('unpushed counts what the remote lacks, never what the base lacks (#192)', () => {
+  const dest = workDir('t1', 'billing')
+  const pushed = trees().state({ dir: dest, base: 'main', branch: 'feat/t1' })
+  assert.equal(pushed.ahead, 1, 'still ahead of its base')
+  assert.equal(pushed.unpushed, 0)
+
+  gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'not pushed yet')
+  try {
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).unpushed, 1)
+  } finally {
+    gitMust(dest, 'reset', '-q', '--hard', 'HEAD~1')
+  }
+})
+
+test('state names the branch the worktree is on, which need not be the one asked about (#200)', () => {
+  const dest = workDir('t1', 'billing')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/t1-stage')
+  try {
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1-stage')
+    gitMust(dest, 'checkout', '-q', '--detach')
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, null, 'a detached HEAD is on no branch')
+  } finally {
+    gitMust(dest, 'checkout', '-q', 'feat/t1')
+    gitMust(dest, 'branch', '-q', '-D', 'feat/t1-stage')
+  }
+  // A `GIT_DIR` in the run's env makes `gitfs` hand the question back, and git answers it.
+  assert.equal(trees({ GIT_DIR: dest }).state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
+})
+
+test('a branch never pushed has every commit over its base unpushed', () => {
+  const dest = workDir('t1', 'billing')
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/never', 'origin/main')
+  try {
+    gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'one')
+    gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'two')
+    const s = trees().state({ dir: dest, base: 'main', branch: 'feat/never' })
+    assert.deepEqual([s.pushed, s.ahead, s.unpushed], [false, 2, 2])
+  } finally {
+    gitMust(dest, 'checkout', '-q', 'feat/t1')
+    gitMust(dest, 'branch', '-q', '-D', 'feat/never')
+  }
+})
+
+test('an unpushed count git could not make is a distance nobody could tell, never a zero', () => {
+  // A remote-tracking ref naming a commit the mirror does not have breaks the count and
+  // leaves the distance from the upstream readable, so the two fail apart.
+  const dest = workDir('t1', 'billing')
+  const broken = path.join(mirrorOf('acme', 'billing'), 'refs', 'remotes', 'origin', 'broken')
+  fs.writeFileSync(broken, `${'1'.repeat(40)}\n`)
+  try {
+    const s = trees().state({ dir: dest, base: 'main', branch: 'feat/t1' })
+    assert.equal(s.unpushed, null)
+    assert.match(s.distanceUnknown, /broken/)
+  } finally {
+    fs.rmSync(broken)
+  }
+})
+
 test('state measures against the recorded base when the branch has no upstream', () => {
   const dest = workDir('t1', 'billing')
   gitMust(dest, 'branch', '--unset-upstream')
