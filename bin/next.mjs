@@ -46,10 +46,8 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
-//   replaced       one `{ repo, branch, tip, above, sameTree }` per stage that landed as a
-//                  squash while `above`, the stage stacked on it, still carries the commits it
-//                  replaced — `tip` the commit its PR carried, `sameTree` whether the squash is
-//                  the stage as it stood (`worktrees.replaced`)
+//   replaced       one `{ repo, branch, head, ... }` per merged stage `worktrees.replaced`
+//                  answered for, with what it answered: `head` is the commit its PR carried
 //   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
 //   neighbours     one `{ repo, via, direction }` per repo the catalogue says talks to an
 //                  attached one and which is not itself attached — `via` is the attached repo
@@ -125,15 +123,32 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
         : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
     }
-    // The stage above a squash conflicts with the work branch, and GitHub then runs no checks on
-    // its pull request at all, so nothing else says so (hugoforte/rig#193). The rebase replays
-    // only that stage's own commits, and it is offered only where the squash is the stage as it
-    // stood: anywhere else, replaying onto it is a merge somebody has to look at.
+    // Decision 113. The rebase is offered only where the squash is the stage as it stood;
+    // anywhere else, replaying onto it is a merge somebody has to look at.
     for (const r of replaced) {
-      const says = `${r.branch} landed as a squash, and ${r.above} in ${r.repo} still carries the commits it replaced`
+      if (r.unfetched) {
+        out.push(offer('building', `${r.branch} merged in ${r.repo}, and this machine has not fetched it — fetch, then ask \`rig next\` again`, 'git fetch origin'))
+        continue
+      }
+      const one = r.carriers.length === 1
+      const which = r.carriers.join(', ')
+      const push = r.carriers.map(b => `git push --force-with-lease origin ${b}`)
+      if (r.rebased) {
+        out.push(offer('building', `${which} ${one ? 'is' : 'are'} replayed onto the work branch here and not pushed`, push))
+        continue
+      }
+      const says = `${r.branch} landed as new commits (a squash or a rebase), and ${which} in ${r.repo} still ${one ? 'carries' : 'carry'} the commits it replaced`
+      if (r.behind.length) {
+        out.push(offer('building', `${says} — the copy here of ${r.behind.join(', ')} is behind the remote's, so bring it up to date, then ask \`rig next\` again`))
+        continue
+      }
       out.push(r.sameTree
-        ? offer('building', `${says} — replay only its own onto the work branch, then force-push it`, `git rebase --onto origin/${work.branch} ${r.tip} ${r.above}`)
-        : offer('building', `${says}, and the squash is not the stage as it stood — rebase ${r.above} onto the work branch by hand`))
+        ? offer('building', `${says} — replay only ${one ? 'its' : 'their'} own onto the work branch`, [
+          `git switch ${r.carriers[r.carriers.length - 1]}`,
+          `git rebase ${one ? '' : '--update-refs '}--onto origin/${work.branch} ${r.head}`,
+          ...push,
+        ])
+        : offer('building', `${says}, and the squash is not the stage as it stood — rebase ${one ? 'it' : 'them'} onto the work branch by hand`))
     }
   }
 
@@ -143,7 +158,9 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // "nobody could tell" as "nothing outstanding" is the mistake decision 62 exists to prevent.
   // A repo git could not count for matches none of these and is simply not spoken about: this
   // command offers, and there is nothing to offer about a fact nobody has.
-  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r))
+  // A repo whose stages are replayed here is offered their force-push above; a plain push fails.
+  const replaying = replaced.filter(r => r.rebased).map(r => r.repo)
+  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r) && !replaying.includes(r.repo))
   if (unpushed.length) {
     out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
   }

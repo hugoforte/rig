@@ -2907,22 +2907,26 @@ cmds.next = ({ flags }) => {
   }
 }
 
-// Each stage that landed as a squash while the stage stacked on it in the same repo still
-// carries the commits it replaced, with what `worktrees.replaced` found. The stage above is the
-// next one in the stack that repo carries and that has not landed. Asked only by `rig next`, the
-// one command that already reads the stack and offers what to do about it.
+// What `worktrees.replaced` answers for each merged stage, asked about the stages above it that
+// the same repo carries and has not merged. Only `rig next` asks, the one command that already
+// reads the stack and offers what to do about it.
 function replacedStages (cfg, work, stack) {
   const found = []
   stack.forEach((st, i) => {
     for (const pr of st.prs.filter(p => p.state === 'MERGED')) {
       const entry = work.repos.find(r => r.repo === pr.repo)
-      const above = stack.slice(i + 1).find(up => !up.landed && up.repos.includes(pr.repo))
-      if (!entry || !above) continue
-      const r = trees(cfg).replaced({ org: entry.org, repo: entry.repo, work: work.branch, head: pr.head, merge: pr.merge, above: above.branch })
-      if (r) found.push({ repo: entry.repo, branch: st.branch, tip: pr.head, above: above.branch, sameTree: r.sameTree })
+      const above = stack.slice(i + 1)
+        .filter(up => up.repos.includes(pr.repo) && !up.prs.some(p => p.repo === pr.repo && p.state === 'MERGED'))
+        .map(up => up.branch)
+      if (!entry || !above.length) continue
+      const r = trees(cfg).replaced({ org: entry.org, repo: entry.repo, work: work.branch, head: pr.head, merge: pr.merge, above })
+      if (r) found.push({ repo: entry.repo, branch: st.branch, head: pr.head, ...r })
     }
   })
-  return found
+  // Two squashed stages in a row are both carried by the stage above them, and the higher one's
+  // rebase is the one that replays only that stage's own commits, so the lower one is dropped.
+  const overlap = (a, b) => a.repo === b.repo && (a.carriers || []).some(c => (b.carriers || []).includes(c))
+  return found.filter((f, i) => !found.slice(i + 1).some(g => overlap(f, g)))
 }
 
 // The Direction section of a context doc, sliced out by hand rather than by one clever

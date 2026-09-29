@@ -187,25 +187,41 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return copies(branch).some(a => copies(other).some(b => isAncestor(mirror, b, a)))
     },
 
-    // Did a stage's pull request land as a commit of its own rather than a merge of the stage's,
-    // while the stage above still carries the commits it replaced? That is a squash, and the
-    // stage above then conflicts with the work branch it is meant to merge into
-    // (hugoforte/rig#193). `head` is the commit the PR carried and `merge` the one it landed as.
+    // Did a stage's pull request land as new commits — a squash or a rebase — while stages
+    // stacked above it still carry the ones it replaced (decision 113)? `head` is the commit the
+    // PR carried, `merge` the one it landed as, and `above` the stages above it in this repo, in
+    // stack order.
     //
-    // Null when it did not, when the stage above no longer carries `head` — it has been rebased
-    // — or when this mirror cannot tell: either commit missing, or the work branch here not yet
-    // holding the merge, which a fetch brings. Otherwise `sameTree` says whether the merge is
-    // the stage as it stood, which is what makes replaying the stage above onto it safe.
-    replaced ({ org, repo, work, head, merge, above }) {
+    // `{ unfetched: true }` when this mirror lacks `merge` or its work branch does not hold it
+    // yet, which a fetch answers. Null when the PR merged the stage's own commits, when the work
+    // branch holds them, or when nothing above carries them. Otherwise `carriers` are the stages
+    // above that do, read from the remote's copy first so a stale copy here never counts;
+    // `rebased` says every carrier's copy here has been replayed and only the push is left;
+    // `behind` names the carriers whose copy here the remote's has moved past, which a replay
+    // from here would overwrite; and `sameTree` says the merge is what merging `head` onto the
+    // work branch gave.
+    replaced ({ org, repo, work, head, merge, above = [] }) {
       const mirror = mirrorPath(org, repo)
       if (!fs.existsSync(mirror) || !head || !merge) return null
       const commit = sha => git(mirror, 'cat-file', '-e', `${sha}^{commit}`).code === 0
-      if (!commit(head) || !commit(merge)) return null
-      if (isAncestor(mirror, head, merge) || !has(mirror, ref(work)) || !isAncestor(mirror, merge, ref(work))) return null
-      const carrier = [local(above), ref(above)].find(r => has(mirror, r))
-      if (!carrier || !isAncestor(mirror, head, carrier)) return null
-      const tree = sha => git(mirror, 'rev-parse', `${sha}^{tree}`).out
-      return { sameTree: tree(head) === tree(merge) }
+      if (!commit(head) || !has(mirror, ref(work))) return null
+      if (!commit(merge) || !isAncestor(mirror, merge, ref(work))) return { unfetched: true }
+      if (isAncestor(mirror, head, merge) || isAncestor(mirror, head, ref(work))) return null
+      // Carries a commit of the stage the work branch does not have. Asked through the merge
+      // base, not `head` itself: a stage fixed after the one above was cut from it is still
+      // under that one, at an earlier commit.
+      const carries = r => {
+        const base = git(mirror, 'merge-base', head, r)
+        return base.code === 0 && !isAncestor(mirror, base.out.trim(), ref(work))
+      }
+      const copy = b => [ref(b), local(b)].find(r => has(mirror, r))
+      const carriers = above.filter(b => copy(b) && carries(copy(b)))
+      if (!carriers.length) return null
+      const rebased = carriers.every(b => has(mirror, local(b)) && !carries(local(b)))
+      const behind = carriers.filter(b => has(mirror, local(b)) && has(mirror, ref(b)) && !isAncestor(mirror, ref(b), local(b)))
+      const merged = git(mirror, 'merge-tree', '--write-tree', `${merge}^1`, head)
+      const tree = git(mirror, 'rev-parse', `${merge}^{tree}`).out.trim()
+      return { carriers, rebased, behind, sameTree: merged.code === 0 && merged.out.split('\n')[0].trim() === tree }
     },
 
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which

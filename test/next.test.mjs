@@ -234,34 +234,58 @@ test('a worktree already on the work branch is not told to move', () => {
   assert.doesNotMatch(says(out), /still on/)
 })
 
-const TIP = 'a'.repeat(40)
+const HEAD = 'a'.repeat(40)
 const squashStack = () => [
   stage('feat/one', { landed: true, started: true, repos: ['a'] }),
   stage('feat/two', { started: true, repos: ['a'], open: true }),
+  stage('feat/three', { started: true, repos: ['a'], open: true }),
 ]
+const replacedOffer = (replaced, over = {}) => nextFor({
+  work: work({ repos: attached('a'), designedAt: AT }),
+  repos: [repo('a', over)],
+  stack: squashStack(),
+  replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, ...replaced }],
+}).find(x => /feat\/one/.test(x.says) && !/^stage /.test(x.says))
 
 test('a stage squashed under the one above it is offered the rebase, with the real sha (#193)', () => {
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: [], sameTree: true })
+  assert.match(o.says, /feat\/one landed as new commits \(a squash or a rebase\), and feat\/two in a still carries the commits it replaced/)
+  assert.deepEqual(o.command, ['git switch feat/two', `git rebase --onto origin/feat/x ${HEAD}`, 'git push --force-with-lease origin feat/two'])
+})
+
+test('several stages carrying it are replayed in one rebase from the top, and each is pushed', () => {
+  const o = replacedOffer({ carriers: ['feat/two', 'feat/three'], rebased: false, behind: [], sameTree: true })
+  assert.deepEqual(o.command, ['git switch feat/three', `git rebase --update-refs --onto origin/feat/x ${HEAD}`,
+    'git push --force-with-lease origin feat/two', 'git push --force-with-lease origin feat/three'])
+})
+
+test('once the stages are replayed here, only the push is offered, and not a plain git push', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a')],
+    repos: [repo('a', { unpushed: 1 })],
     stack: squashStack(),
-    replaced: [{ repo: 'a', branch: 'feat/one', tip: TIP, above: 'feat/two', sameTree: true }],
+    replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, carriers: ['feat/two'], rebased: true, behind: ['feat/two'], sameTree: true }],
   })
-  const o = out.find(x => /landed as a squash/.test(x.says))
-  assert.match(o.says, /feat\/one landed as a squash, and feat\/two in a still carries the commits it replaced/)
-  assert.equal(o.command, `git rebase --onto origin/feat/x ${TIP} feat/two`)
+  assert.ok(commands(out).some(c => String(c) === 'git push --force-with-lease origin feat/two'))
+  assert.ok(!commands(out).includes('git push'))
 })
 
 test('a squash that is not the stage as it stood is named, and no command is offered for it', () => {
-  const out = nextFor({
-    work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a')],
-    stack: squashStack(),
-    replaced: [{ repo: 'a', branch: 'feat/one', tip: TIP, above: 'feat/two', sameTree: false }],
-  })
-  const o = out.find(x => /landed as a squash/.test(x.says))
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: [], sameTree: false })
   assert.match(o.says, /is not the stage as it stood/)
   assert.equal(o.command, null)
+})
+
+test('a stage whose copy here is behind the remote\'s is named, and no command is offered for it', () => {
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: ['feat/two'], sameTree: true })
+  assert.match(o.says, /the copy here of feat\/two is behind the remote's/)
+  assert.equal(o.command, null)
+})
+
+test('a merge this machine has not fetched is offered the fetch', () => {
+  const o = replacedOffer({ unfetched: true })
+  assert.match(o.says, /feat\/one merged in a, and this machine has not fetched it/)
+  assert.equal(o.command, 'git fetch origin')
 })
 
 test('a work with no stages behaves exactly as it did before stages existed', () => {

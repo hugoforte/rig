@@ -291,12 +291,18 @@ test('a stage squashed into the work branch is named by rig next, with the rebas
   setGithub(state)
 
   const out = rig(['next', '--work', 'squash']).out
-  assert.match(out, /feat\/squash-one landed as a squash, and feat\/squash-two in billing still carries the commits it replaced/)
-  const command = `git rebase --onto origin/${work} ${tip} feat/squash-two`
-  assert.ok(out.includes(command), out)
+  assert.match(out, /feat\/squash-one landed as new commits \(a squash or a rebase\), and feat\/squash-two in billing still carries the commits it replaced/)
+  const commands = ['git switch feat/squash-two', `git rebase --onto origin/${work} ${tip}`, 'git push --force-with-lease origin feat/squash-two']
+  for (const c of commands) assert.ok(out.includes(c), `${c} in:\n${out}`)
 
-  // The command does what it says: only the stage's own commit is left over the work branch.
-  gitMust(dest, ...command.split(' ').slice(1))
+  // The commands do what they say: after the rebase only the push is offered, and after the
+  // push only the stage's own commit is left over the work branch, and nothing is said.
+  gitMust(dest, ...commands[0].split(' ').slice(1))
+  gitMust(dest, ...commands[1].split(' ').slice(1))
+  const between = rig(['next', '--work', 'squash']).out
+  assert.match(between, /feat\/squash-two is replayed onto the work branch here and not pushed/)
+  assert.doesNotMatch(between, /\n\s+git push\n/, 'not a plain push, which the remote would refuse')
+  gitMust(dest, ...commands[2].split(' ').slice(1))
   assert.equal(gitMust(dest, 'rev-list', '--count', `origin/${work}..feat/squash-two`), '1')
-  assert.doesNotMatch(rig(['next', '--work', 'squash']).out, /landed as a squash/)
+  assert.doesNotMatch(rig(['next', '--work', 'squash']).out, /landed as new commits|replayed onto/)
 })

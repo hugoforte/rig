@@ -300,9 +300,9 @@ keeps one commit per work in the base branch. The merge is what keeps the stack 
 squash replaces a stage's commits, so the stage above stops descending from anything and has
 to be rebased — and a rebase is what breaks the chain rig reads the order from. rig never
 merges anything, so this is a convention it relies on rather than enforces; a stage somebody
-squashes anyway falls back to the order it was declared in. `rig next` names the stage above a
-squash, which still carries the commits the squash replaced, and offers the rebase that replays
-only its own commits when the squash is the stage as it stood.
+squashes anyway falls back to the order it was declared in. `rig next` names the stages above a
+squash, which still carry the commits it replaced, and offers the commands that replay only
+their own commits and force-push them, when the squash is the stage as it stood.
 
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
