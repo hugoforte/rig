@@ -1170,6 +1170,18 @@ function syncDocHeader (id, work) {
     `Tickets: ${ticketsLabel(work)} · Status: ${statusLine(work)}`))
 }
 
+// The context doc's heading, as `rig new` scaffolded it: `# <id> — <title>`. Rewritten only
+// when the title is corrected, and never by every save the way the header line is: a heading
+// someone edited by hand is theirs until they ask for the title to change.
+function retitleDoc (id, title) {
+  const f = contextFile(id)
+  if (!exists(f)) return
+  const heading = new RegExp(`^# ${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?: — .*)?$`, 'm')
+  const text = readText(f)
+  if (!heading.test(text)) return warn(`${f} has no \`# ${id} — …\` heading — the record has the new title, the doc does not`)
+  writeText(f, text.replace(heading, () => `# ${id} — ${title}`))
+}
+
 // Where the work records live on GitHub, for linking issues back to context docs.
 function dataRemoteUrl () {
   const r = git(dataRoot(), 'remote', 'get-url', 'origin')
@@ -2303,12 +2315,25 @@ function offerNeighbours (work, name) {
 // records the "design agreed" gate, which is what the flag's name always said it did: a
 // decision someone took, on a date nothing else can recover. It used to set a status.
 // `--learned` records the lesson review the same way.
+//
+// `--title` corrects the title, which is prose a person wrote and may need to take back, like
+// the context doc this command already commits. The record and the two headings rendered from
+// it change; the branch and the id do not. The branch was named from the title once, and
+// renaming it would break the stack the stages are read from; the id names a folder and a
+// record across every data root on the machine.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
   if (flags.message === true) die('-m needs a message')
-  commitAs(id, flags.message)
+  if (flags.title === true || (flags.title !== undefined && !String(flags.title).trim())) die('--title needs the title, in quotes')
+  const title = flags.title === undefined ? null : String(flags.title).trim()
+  commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
+  if (title) {
+    work.title = title
+    retitleDoc(id, title)
+    ok(`${id}: titled "${title}"`)
+  }
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -4149,6 +4174,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
        [--learned]                 --designed records the "design agreed" gate,
                                    --learned the lesson review (the rig-learn skill)
+       [--title "..."]             correct the work's title: the record, the context doc's
+                                   heading and AGENTS.md — never the branch or the id
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
