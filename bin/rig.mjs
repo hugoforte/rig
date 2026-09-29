@@ -1897,7 +1897,9 @@ cmds.new = ({ flags, positional }) => {
   // The branch prefix is the release check's bump (ADR 0004), so a type it does not know is
   // refused here, when the branch is named, rather than on the pull request.
   const type = flags.type || 'feat'
-  if (!BRANCH_PREFIXES.includes(type)) die(`--type ${type} is not a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}`)
+  if (!BRANCH_PREFIXES.includes(type)) {
+    die(`--type wants a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}${typeof type === 'string' ? ` — not "${type}"` : ''}`)
+  }
   const noTicket = !!flags['no-ticket']
   const dryRun = !!flags['dry-run']
   if (dryRun && !flags.ticket) die('--dry-run only makes sense with --ticket')

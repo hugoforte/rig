@@ -133,7 +133,7 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
 test('new refuses a --type the release check would refuse, and names the ones it knows', () => {
   const r = rig(['new', 'wip-work', '--title', 'Wip', '--type', 'wip', '--no-ticket'])
   assert.equal(r.code, 1)
-  assert.ok(r.out.includes(`--type wip is not a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')}`), r.out)
+  assert.ok(r.out.includes(`--type wants a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')} — not "wip"`), r.out)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'wip-work')), 'no record written')
 })
 

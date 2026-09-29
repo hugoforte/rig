@@ -30,7 +30,8 @@ const BUMPS = ['minor', 'patch', 'none']
 // all: it is already there, on every PR, without anyone adopting a convention for it. The
 // prefixes that ask for nothing are listed rather than assumed: an unrecognised branch still
 // fails, because defaulting it to `none` is how a feature branched `chore/add-retry` ships
-// inside somebody else's patch release with nobody told (ADR 0004).
+// inside somebody else's patch release with nobody told (ADR 0004). `rig new --type` takes only
+// these (`BRANCH_PREFIXES`), so rig never names a branch this check refuses.
 const PREFIX_BUMPS = {
   feat: 'minor',
   fix: 'patch',
@@ -41,8 +42,6 @@ const PREFIX_BUMPS = {
   refactor: 'none',
 }
 
-// The prefixes `rig new --type` may write. One list, so rig never names a branch its own
-// release check will refuse.
 export const BRANCH_PREFIXES = Object.keys(PREFIX_BUMPS)
 
 // Strongest first: a release containing a feature is a minor release, whatever else is in it.
