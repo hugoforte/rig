@@ -129,6 +129,29 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
 })
 
+test('--help prints the command\'s own usage and does nothing else, and so does -h', () => {
+  const head = lastCommit(dataRoot)
+  for (const help of ['--help', '-h']) {
+    const r = rig(['new', 'helped', '--title', 'Helped', '--no-ticket', help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /^ {2}rig new <id> --title/)
+    assert.doesNotMatch(r.out, /rig attach/, 'only new\'s lines, not the whole help')
+  }
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'helped')), 'no record written')
+  assert.equal(lastCommit(dataRoot), head, 'and nothing committed')
+})
+
+test('rig --help and rig -h are rig help', () => {
+  for (const help of ['--help', '-h']) assert.match(rig([help]).out, /cross-repo work harness/)
+})
+
+test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {
+  const r = rig(['new', 'typo', '--titel', 'Typo', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /rig new takes no --titel\n {2}rig new <id> --title/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'typo')), 'no record written')
+})
+
 test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
   let r = rig(['new', 't1', '--title', 'Smoke work', '--type', 'chore', '--no-ticket'], { input: 'the brief' })
   assert.equal(r.code, 0, r.out)

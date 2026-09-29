@@ -130,6 +130,8 @@ rig help
 
 `npm install -g` links the checkout rather than copying it, so the command always runs whatever is in `C:\rig`. That is what lets `rig update` bring it forward later. In Git Bash, Linux or macOS the same three lines work with a forward-slash path of your choosing, and `rig` is on PATH there too.
 
+`rig <command> --help` prints that command's lines of `rig help` and runs nothing. A flag the command does not take is refused with the same lines, before anything is written.
+
 ### Setting up
 
 Ten minutes to a first work with two worktrees on disk. This path keeps everything on your machine and asks nothing about tickets.

@@ -1048,7 +1048,7 @@ const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, 
 const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
-const SHORT_FLAGS = { m: 'message' }
+const SHORT_FLAGS = { m: 'message', h: 'help' }
 const isFlag = a => a.startsWith('--') || /^-[a-z]$/.test(a)
 
 function parseArgs (argv) {
@@ -1888,7 +1888,7 @@ cmds.new = ({ flags, positional }) => {
   const cfg = config()
   const id = positional[0] || die('usage: rig new <work-id> --title "..." [--key K | --ticket [--org o] | --no-ticket] [--repos a,b]')
 
-  const keys = (flags.key || flags.keys || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  const keys = (flags.key || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
   }
@@ -2570,7 +2570,7 @@ const listing = live => listPayload(config(), live)
 cmds.list = ({ flags }) => {
   sayCurrentRoot()
   const cfg = config()
-  const live = flags.prs !== false && !flags.quick
+  const live = !flags.quick
 
   if (flags.json) return say(JSON.stringify(listPayload(cfg, live), null, 2))
 
@@ -4003,10 +4003,10 @@ cmds.doctor = () => {
   return found
 }
 
-cmds.help = () => {
-  say(`${C.bold('rig')} — cross-repo work harness
-
-  rig init                        one-time setup; "rig prompt setup" asks the questions
+// Every command's usage, written once: the lines that start with its name and the indented
+// lines under each. `rig help` prints all of it, `rig <command> --help` prints that command's
+// own lines, and the flags those lines name are the flags the command takes.
+const USAGE = `  rig init                        one-time setup; "rig prompt setup" asks the questions
        --data-repo owner/name      join that private data repo, or create it if absent
        --name <name>               what to call this data root; it becomes the current one
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
@@ -4017,7 +4017,7 @@ cmds.help = () => {
        decision must be explicit); --key PROJ-42 fetches its brief from Jira;
        --ticket creates in the org's tracker (rig.json); --dry-run previews and
        creates nothing; --no-ticket records a declined ticket
-       [--type feat] [--repos a,b] [--setup]
+       [--type feat] [--slug s | --branch b] [--repos a,b] [--setup]
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
@@ -4055,6 +4055,7 @@ cmds.help = () => {
                                   way it runs, and how far behind its entry is
   rig plan [--refresh]            scaffold the rollout & testing plan; --refresh
                                   re-renders its deploy order from the stack
+       [--force]                   write it again over the one that exists
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
        [--learned]                 --designed records the "design agreed" gate,
                                    --learned the lesson review (the rig-learn skill)
@@ -4071,7 +4072,37 @@ cmds.help = () => {
   rig doctor                      environment + consistency checks, over every data root
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
-  rig prompt [name]               print an agent prompt
+  rig prompt [name]               print an agent prompt`
+
+// Flags every command takes, said once in the prose under the usage rather than on each line.
+const COMMON_FLAGS = ['data', 'work', 'help']
+
+// Flags rig passes to itself and a person never types: `rig update`'s one hop into the code
+// that just arrived.
+const INTERNAL_FLAGS = { update: ['restarted'] }
+
+function usageOf (name) {
+  const lines = []
+  let mine = false
+  for (const line of USAGE.split('\n')) {
+    const starts = /^ {2}rig (\S+)/.exec(line)
+    if (starts) mine = starts[1] === name
+    if (mine) lines.push(line)
+  }
+  return lines.join('\n')
+}
+
+// `--flag` in a command's usage, and `-m` read as the long name it stands for.
+const flagsOf = name => new Set([
+  ...COMMON_FLAGS,
+  ...INTERNAL_FLAGS[name] ?? [],
+  ...[...usageOf(name).matchAll(/(?<![\w-])(?:--([a-z][a-z-]*)|-([a-z])\b)/g)].map(([, long, short]) => long ?? SHORT_FLAGS[short]),
+])
+
+cmds.help = () => {
+  say(`${C.bold('rig')} — cross-repo work harness
+
+${USAGE}
 
 Commands that act on "the current work" find it by walking up from the cwd,
 or take --work <id>. Every command that changes a work ends by committing the
@@ -4095,8 +4126,9 @@ how far it is behind its remote, \`rig update\` brings it forward.`)
 // which is what stops the data root being committed — `pendingCommit` is never reached — and
 // leaves it exactly as the failed command found it.
 function invoke (argv) {
-  const [cmdName, ...rest] = argv
-  const cmd = cmds[cmdName || 'help']
+  const [first, ...rest] = argv
+  const cmdName = !first || first === '--help' || first === '-h' ? 'help' : first
+  const cmd = cmds[cmdName]
   // Returned rather than exited on: an in-process run has no process to exit, and a command
   // nobody recognised has nothing after it to run either way.
   if (!cmd) {
@@ -4108,6 +4140,16 @@ function invoke (argv) {
   let prepared = null
   try {
     const args = parseArgs(rest)   // before the network: a typo is not worth a fetch
+    // Asking how a command is used never runs it, and neither does a flag its usage does not
+    // name: `rig pr --help` once opened the pull requests it was asking about.
+    const usage = usageOf(cmdName)
+    if (args.flags.help) {
+      if (usage) say(usage)
+      else cmds.help()
+      return 0
+    }
+    const unknown = Object.keys(args.flags).filter(k => !flagsOf(cmdName).has(k))
+    if (unknown.length) die(`rig ${cmdName} takes no ${unknown.map(k => `--${k}`).join(', ')}${usage ? `\n${usage}` : ''}`)
     // Before the first `where()`: the data root a command names decides every path it reads.
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
     if (typeof args.flags.data === 'string') current.requestedData = args.flags.data
