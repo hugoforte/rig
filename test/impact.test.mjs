@@ -210,6 +210,17 @@ test('a pair made once is not said to keep happening', () => {
   }
 })
 
+test('pairs made twice and once together are not said to keep happening', () => {
+  record('w5', 'payroll', 'ledger')
+  try {
+    const o = out('ledger')
+    assert.match(o, /the catalogue does not say why those pairs were worked on together/)
+    assert.doesNotMatch(o, /keeps? happening/)
+  } finally {
+    fs.rmSync(path.join(dataRoot, 'work', 'w5'), { recursive: true })
+  }
+})
+
 test('a pair the catalogue already explains is shown, and not reported as a gap', () => {
   assert.match(out('billing'), /orders\s+1 work — and talks_to says why/)
 })

@@ -88,8 +88,8 @@ const err = s => current.err(s)
 // property of the run rather than of the process. Line-ending is theirs and not the writer's:
 // `cmds.prompt` and `cmds.catalog` write a file through the same stdout with no line added.
 const say = s => out(`${s}\n`)
-// For the ambient freshness line alone: it is rig talking about itself, not part of any
-// command's answer, so it must not land in a pipe someone is reading the answer out of.
+// For what rig says beside a command's answer rather than as part of it — the freshness line,
+// a note about records it left out — so it never lands in a pipe someone reads the answer from.
 const aside = s => err(`${s}\n`)
 const step = s => out(`${C.cyan('·')} ${s}\n`)
 const warn = s => out(`${C.yellow('!')} ${s}\n`)
@@ -836,25 +836,25 @@ function listWorkIds (dataRootPath = dataRoot()) {
     .map(d => d.name)
 }
 
-// Every work record in a root that parses, and the ids of the ones that do not. For the readers
-// that want the records as *evidence* rather than as the thing they act on — the observed graph
-// behind `rig impact` and the offer `rig attach` makes — and for the ones that list every work:
-// `list`, `dash` and `demo`. One unreadable record must not cost those their answer, and for
-// `attach` it must not cost the command it follows: the offer runs after the worktree is cut and
-// the record saved, and a throw there skipped the commit and left the data root half-written. So
-// a record that will not read is left out and named, never swallowed.
+// Every work record in a root that reads, and for each one that does not, its id and why. For
+// the commands that read many records to answer one question: the observed graph behind
+// `rig impact`, the offer `rig attach` makes, and the works `list`, `dash` and `demo` show. One
+// unreadable record must not cost those their answer, and for `attach` it must not cost the
+// command it follows: the offer runs after the worktree is cut and the record saved, and a throw
+// there would skip the commit and leave the data root half-written. So a record that will not
+// read is left out and named with the error it raised, never swallowed.
 function readRecords (root, read = id => readJson(recordFile(id, root))) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
-    try { works.push(read(id)) } catch { unreadable.push(id) }
+    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${e.message})`) }
   }
   return { works, unreadable }
 }
 
-// On stdout beside the answer it qualifies, or on stderr (`aside`) when stdout is a payload.
-const sayUnreadable = (ids, tell = say) => {
-  if (ids.length) tell(C.dim(`· ${ids.length} work record${ids.length === 1 ? '' : 's'} could not be read and ${ids.length === 1 ? 'was' : 'were'} left out: ${ids.join(', ')}`))
+// Said on stdout, or through `tell` when the caller's stdout is a payload.
+const sayUnreadable = (records, tell = say) => {
+  if (records.length) tell(C.dim(`· ${records.length} work record${records.length === 1 ? '' : 's'} could not be read and ${records.length === 1 ? 'was' : 'were'} left out: ${records.join(', ')}`))
 }
 
 // ---------------------------------------------------------------- catalogue
@@ -2524,9 +2524,9 @@ function repoEntryJson (cfg, entry, branch, live) {
   return out
 }
 
-// Every work, least recently touched first, and the ids of any record that would not read
-// (`readRecords`). ISO-8601 exists so that byte order is
-// chronological order; decorate once rather than recomputing the key inside the comparator.
+// Every work, least recently touched first, and any record that would not read (`readRecords`).
+// ISO-8601 exists so that byte order is chronological order; decorate once rather than
+// recomputing the key inside the comparator.
 const worksByActivity = cfg => {
   const { works, unreadable } = readRecords(dataRoot(), id => loadWork(cfg, id))
   return {
