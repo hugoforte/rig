@@ -25,11 +25,12 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
-import { backToWorkBranch, landedStageOn, nextStage } from './stages.mjs'
+import { backToWorkBranch, nextStage, onLandedStage } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
-// conversation, and only the recording of it is a command.
+// conversation, and only the recording of it is a command — and a list of lines, run in
+// order, when there is more than one.
 const offer = (phase, says, command = null) => ({ phase, says, command })
 
 // Everything `rig next` needs that it cannot work out for itself. Gathered by the caller so
@@ -97,6 +98,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // about the work branch — the stack is what you are actually working through, and the work
   // branch's own PR is the thing that happens *after* it. A work with no stages skips all of
   // this and behaves exactly as it did before stages existed, which is the point.
+  // Every stage is in and a worktree is still on one of them. It is moved first, so it is not
+  // also offered a push or a pull request from the stage it is on (`onLandedStage`).
+  const stranded = stack.length && !nextStage(stack) ? repos.filter(r => onLandedStage(stack, r.on)) : []
+
   if (stack.length) {
     const up = nextStage(stack)
     if (up) {
@@ -109,12 +114,11 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
-      // A worktree still on a stage that landed is on a branch nothing more belongs on, behind
-      // the work branch that stage merged into, so moving it comes first (hugoforte/rig#200).
-      const left = repos.filter(r => !r.missing && landedStageOn(stack, r.on))
-      const one = left.length === 1
-      out.push(left.length
-        ? offer('reviewing', `every stage is in — ${left.map(r => `${r.repo} is still on ${r.on}`).join(', ')}, which ${one ? 'has' : 'have'} landed — move ${one ? 'it' : 'them'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
+      const on = new Map()
+      for (const r of stranded) on.set(r.on, [...(on.get(r.on) || []), r.repo])
+      const where = [...on].map(([b, rs]) => `${rs.join(', ')} ${rs.length === 1 ? 'is' : 'are'} still on ${b}, which has landed`).join('; ')
+      out.push(stranded.length
+        ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
         : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
     }
   }
@@ -125,7 +129,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // "nobody could tell" as "nothing outstanding" is the mistake decision 62 exists to prevent.
   // A repo git could not count for matches none of these and is simply not spoken about: this
   // command offers, and there is nothing to offer about a fact nobody has.
-  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0)
+  const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r))
   if (unpushed.length) {
     out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
   }
@@ -135,7 +139,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // been pushed and for one nobody has written anything on, and nagging the second to open a
   // pull request for nothing is exactly the reproach this command does not make.
   const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed)
+  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
     out.push(offer('reviewing', `${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, 'rig pr'))
   }
