@@ -201,7 +201,27 @@ test('every stage in, with a worktree still on a stage that landed, names the sw
   })
   const o = out.find(x => /every stage is in/.test(x.says))
   assert.match(o.says, /a is still on feat\/one, which has landed — move it to the work branch, then `rig pr`/)
-  assert.equal(o.command, 'git switch feat/x && git pull --ff-only origin feat/x')
+  assert.deepEqual(o.command, ['git switch feat/x', 'git pull --ff-only origin feat/x'])
+})
+
+test('a worktree on a landed stage is offered the move, and not also a push or a pull request', () => {
+  // Pushed, with no PR on the work branch: the state the move is offered in. Offering `rig pr`
+  // or `git push` beside it would be acting from the stage the worktree is leaving.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one', pushed: true, unpushed: 1 })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  assert.deepEqual(commands(out), [['git switch feat/x', 'git pull --ff-only origin feat/x']])
+})
+
+test('several repos on one landed stage are named together', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one' }), repo('b', { on: 'feat/one' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a', 'b'] })],
+  })
+  assert.match(says(out), /every stage is in — a, b are still on feat\/one, which has landed — move each to the work branch/)
 })
 
 test('a worktree already on the work branch is not told to move', () => {

@@ -277,8 +277,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    // `branch` is optional and answers two extra questions: has this branch reached the
-    // remote, and how much of what is checked out has not? `repoState` passes one.
+    // `branch` is optional and answers three extra questions: has this branch reached the
+    // remote, how much of what is checked out has not, and which branch is checked out?
+    // `repoState` passes one.
     state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
@@ -323,9 +324,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
         s.unpushed = u.code === 0 ? Number(u.out) : null
         if (u.code !== 0) s.distanceUnknown ??= (u.err || u.out).split('\n')[0].trim() || `git could not count what ${dir} has not pushed`
-        // The branch actually checked out, null on a detached HEAD. It is not always `branch`:
-        // a worktree is left on the last stage it worked on after that stage merged
-        // (hugoforte/rig#200).
+        // Null on a detached HEAD, and not always `branch` (`onLandedStage` in stages.mjs).
         s.on = checkedOut(dir)
       }
       return s

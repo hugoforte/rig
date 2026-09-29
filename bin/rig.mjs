@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, landedStageOn, backToWorkBranch } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -2903,7 +2903,7 @@ cmds.next = ({ flags }) => {
   say('')
   for (const o of offers) {
     say(`  ${C.cyan('→')} ${o.says}`)
-    if (o.command) say(`    ${C.dim(o.command)}`)
+    for (const line of [].concat(o.command || [])) say(`    ${C.dim(line)}`)
   }
 }
 
@@ -3004,8 +3004,8 @@ cmds.pr = ({ flags }) => {
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
     // Said beside the PR rather than instead of it: the PR is opened from the remote's work
-    // branch, which is right, and the worktree is what is behind (hugoforte/rig#200).
-    if (landedStageOn(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — \`${backToWorkBranch(work)}\``)
+    // branch, which is right, and the worktree is what is behind.
+    if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
     if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }

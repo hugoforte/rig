@@ -139,12 +139,12 @@ test('a worktree left on a stage that landed is told how to get back to the work
 
   const r = rig(['pr', '--work', 'landed'])
   assert.equal(r.code, 0, r.out)
-  const command = `git switch ${work} && git pull --ff-only origin ${work}`
-  assert.ok(r.out.includes(`billing: the worktree is still on feat/landed-one, a stage that has landed — \`${command}\``), r.out)
+  const commands = [`git switch ${work}`, `git pull --ff-only origin ${work}`]
+  assert.ok(r.out.includes(`billing: the worktree is still on feat/landed-one, a stage that has landed — \`${commands[0]}\`, then \`${commands[1]}\``), r.out)
   assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === work), 'the PR is opened all the same')
 
-  // And the command it names does what it says.
-  for (const step of command.split(' && ')) gitMust(dest, ...step.split(' ').slice(1))
+  // And the commands it names do what they say.
+  for (const command of commands) gitMust(dest, ...command.split(' ').slice(1))
   assert.equal(gitMust(dest, 'branch', '--show-current'), work)
   assert.match(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), /the schema/)
 })

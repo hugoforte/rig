@@ -428,9 +428,9 @@ repo that already has an open PR is reported, not duplicated.
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
 
-When every stage is in, a worktree is often still on the last stage, whose branch GitHub has
-deleted. `rig next` and `rig pr` name it, with the command that moves it to the work branch.
-Neither runs it: rig does not move a branch behind you.
+A worktree is often still on the last stage when every stage is in, and that stage's branch is
+gone from GitHub. `rig pr` names a worktree on a landed stage, and `rig next` does once every
+stage is in, each with the commands that move it to the work branch. Neither runs them.
 
 ## Closing
 
@@ -443,9 +443,9 @@ rig close --abandoned     # stopped, not finished: the did-it-land checks are dr
 `rig close` removes the worktrees and keeps `context.md`. When every PR merged, it also deletes
 the work's branches — the work branch and each stage that landed — from the mirror and the
 remote, but only a copy holding nothing its PR did not merge; a branch pushed to after the
-merge is kept and named. A PR updated on GitHub carries a commit the mirror never fetched, so
-the close fetches the PR's head first; if that fails, the copy is kept with the reason. A close
-forced past a blocker, or abandoned, deletes no branch. Nothing else is ever auto-deleted.
+merge is kept and named. When the mirror lacks the commit a PR merged, the close fetches it
+first; if that fails, the copy is kept with the reason. A close forced past a blocker, or
+abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot

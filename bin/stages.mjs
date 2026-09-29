@@ -152,15 +152,16 @@ const groupByRepo = perRepo => {
 // is what makes the work branch's own PR the thing that is available next.
 export const nextStage = stack => stack.find(s => !s.landed) || null
 
-// The stage that has landed and is still checked out on `branch`, or null. A worktree stays on
-// the last stage it worked on after GitHub merges that stage and deletes its branch, while the
-// work branch it merged into moved on without it (hugoforte/rig#200).
-export const landedStageOn = (stack, branch) => stack.find(s => s.landed && s.branch === branch) || null
+// Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
+// GitHub merges that stage and deletes its branch, while the work branch it merged into moves on
+// without it (hugoforte/rig#200).
+export const onLandedStage = (stack, branch) => stack.some(s => s.landed && s.branch === branch)
 
-// The command that puts such a worktree back on the work branch, brought up to what merged into
-// it on the remote. `git pull` names the branch because a work branch's upstream is its base.
-// Named and never run: rig does not move a branch behind you.
-export const backToWorkBranch = work => `git switch ${work.branch} && git pull --ff-only origin ${work.branch}`
+// The commands that put such a worktree back on the work branch, brought up to what merged into
+// it on the remote. Two lines, run in order, because Windows PowerShell does not take `&&`.
+// `git pull` names the branch because a work branch's upstream is its base. Named and never run,
+// like `attach --setup` and `check --run`.
+export const backToWorkBranch = work => [`git switch ${work.branch}`, `git pull --ff-only origin ${work.branch}`]
 
 // The one line of honesty under an order that is partly a guess, or null when nothing
 // contradicts it. `mark` is how the caller writes a branch name — backticked for markdown,
