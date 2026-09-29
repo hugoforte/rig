@@ -230,13 +230,16 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**,
+`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
+(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
 then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
 root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
-first time it saw that repo — names the root that repo belongs to. So `rig new <id> --repos
-Payments` lands in Payments' root, a command run in a checkout of a catalogued repo answers
-for that repo's root, and `current` decides only for what neither can place — `new` with no
-repos, `list`, `catalog`, `dash` — which say so when it did.
+first time it saw that repo — names the root that repo belongs to. A checkout's repo is
+matched by org as well as name, because same-named repos in different orgs are normal. So
+`rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
+catalogued repo answers for that repo's root, a command run in a data root's own checkout
+answers for that root, and `current` decides only for what none of them can place — `new`
+with no repos, `list`, `catalog`, `dash` — which say so when it did.
 
 **A work lives in one data root.** One `work.json`, one `context.md`, and two roots with
 different readers, so it cannot span them: `rig new --repos a,b` refuses when a and b are
@@ -250,7 +253,12 @@ Two consequences worth holding on to:
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
-  next mutating command, mid-work.
+  next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
+  `current` do not stop it; the doctor checks it ends in say that selection, once.
+- **A work folder's `.rig/data` is written only where the record is**: rig writes it when the
+  root in hand is the one root holding the work's record. `rig doctor` names a folder with
+  none when more than one root is configured, one whose marker names a root that does not
+  hold the record, and a record held by two roots.
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
@@ -361,8 +369,10 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. How the check is
-measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
+before they read it, so a second machine never works from stale records. A data root whose
+branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
+another machine has since pushed to, is fetched too, rather than read as local only. How the
+check is measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
 ## The rollout plan
 
