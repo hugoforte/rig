@@ -426,6 +426,10 @@ repo that already has an open PR is reported, not duplicated.
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
 
+When every stage is in, a worktree is often still on the last stage, whose branch GitHub has
+deleted. `rig next` and `rig pr` name it, with the command that moves it to the work branch.
+Neither runs it: rig does not move a branch behind you.
+
 ## Closing
 
 ```bash

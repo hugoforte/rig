@@ -114,6 +114,17 @@ test('unpushed counts what the remote lacks, never what the base lacks (#192)', 
   gitMust(dest, 'reset', '-q', '--hard', 'HEAD~1')
 })
 
+test('state names the branch the worktree is on, which need not be the one asked about (#200)', () => {
+  const dest = workDir('t1', 'billing')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/t1-stage')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1-stage')
+  gitMust(dest, 'checkout', '-q', '--detach')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, null, 'a detached HEAD is on no branch')
+  gitMust(dest, 'checkout', '-q', 'feat/t1')
+  gitMust(dest, 'branch', '-q', '-D', 'feat/t1-stage')
+})
+
 test('a branch never pushed has every commit over its base unpushed', () => {
   const dest = workDir('t1', 'billing')
   assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/never' }).unpushed, 0,

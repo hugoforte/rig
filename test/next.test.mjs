@@ -195,6 +195,27 @@ test('every stage in makes the work branch the thing that is left', () => {
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
 })
 
+test('every stage in, with a worktree still on a stage that landed, names the switch to the work branch (#200)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one' }), repo('b', { on: 'feat/x' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  const o = out.find(x => /every stage is in/.test(x.says))
+  assert.match(o.says, /a is still on feat\/one, which has landed — move it to the work branch, then `rig pr`/)
+  assert.equal(o.command, 'git switch feat/x && git pull --ff-only origin feat/x')
+})
+
+test('a worktree already on the work branch is not told to move', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/x' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  assert.ok(commands(out).includes('rig pr'))
+  assert.doesNotMatch(says(out), /still on/)
+})
+
 test('a work with no stages behaves exactly as it did before stages existed', () => {
   const withNone = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
   const withEmpty = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], stack: [] })

@@ -25,7 +25,7 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
-import { nextStage } from './stages.mjs'
+import { backToWorkBranch, landedStageOn, nextStage } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
@@ -36,10 +36,10 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 // this module stays pure:
 //
 //   work           the record: repos, gates, tickets
-//   repos          one `{ repo, merged, pr, dirty, unpushed, pushed, missing }` per attached
-//                  repo — what `workState` already decided for `list`, `status` and `close`,
-//                  plus `pushed` from the worktree state; `missing` is a worktree not on
-//                  this machine
+//   repos          one `{ repo, merged, pr, dirty, unpushed, pushed, on, missing }` per
+//                  attached repo — what `workState` already decided for `list`, `status` and
+//                  `close`, plus `pushed` and `on`, the branch checked out, from the worktree
+//                  state; `missing` is a worktree not on this machine
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
@@ -109,7 +109,13 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
-      out.push(offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+      // A worktree still on a stage that landed is on a branch nothing more belongs on, behind
+      // the work branch that stage merged into, so moving it comes first (hugoforte/rig#200).
+      const left = repos.filter(r => !r.missing && landedStageOn(stack, r.on))
+      const one = left.length === 1
+      out.push(left.length
+        ? offer('reviewing', `every stage is in — ${left.map(r => `${r.repo} is still on ${r.on}`).join(', ')}, which ${one ? 'has' : 'have'} landed — move ${one ? 'it' : 'them'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
+        : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
     }
   }
 

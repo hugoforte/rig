@@ -17,7 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
-import { discover, refSha, symref } from './gitfs.mjs'
+import { discover, headBranch, refSha, symref } from './gitfs.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -81,6 +81,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (has(mirror, ref(b))) return b
     }
     throw new RigError(`cannot determine the remote HEAD of ${org}/${repo} (${mirror})`)
+  }
+
+  // Which branch a worktree has checked out, read from its HEAD where `gitfs` places it and
+  // asked of git where it does not.
+  const checkedOut = dir => {
+    const place = discover(dir, env())
+    if (place?.gitDir) return headBranch(place.gitDir)
+    const r = git(dir, 'symbolic-ref', '-q', 'HEAD')
+    return r.code === 0 && r.out.startsWith('refs/heads/') ? r.out.slice('refs/heads/'.length) : null
   }
 
   const onRemote = (mirror, branch) => has(mirror, ref(branch))
@@ -255,6 +264,10 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (branch) {
         const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
         s.unpushed = u.code === 0 ? Number(u.out) : null
+        // The branch actually checked out, null on a detached HEAD. It is not always `branch`:
+        // a worktree is left on the last stage it worked on after that stage merged
+        // (hugoforte/rig#200).
+        s.on = checkedOut(dir)
       }
       s.dirty = git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
       const count = from => git(dir, 'rev-list', '--left-right', '--count', `${from}...HEAD`)
