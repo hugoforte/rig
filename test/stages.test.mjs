@@ -337,6 +337,26 @@ test('a replaced stage names the stage that replaced it', () => {
   assert.match(t, /\| 1 \| `feat\/one` \| — \| — \| — \| replaced by `feat\/two` \|/)
 })
 
+// The cells of a table row, split where markdown splits them: on a `|` nothing escaped.
+const cells = row => row.split(/(?<!\\)\|/).slice(1, -1).map(c => c.trim())
+const rowOf = (table, branch) => table.split('\n').find(l => l.includes(branch))
+
+test('a pipe in what a stage delivers stays in its cell, escaped', () => {
+  const t = stageTable(stackOf(work({ stages: [stage('feat/one', 'read | write')] }), []))
+  assert.deepEqual(cells(rowOf(t, 'feat/one')), ['1', '`feat/one`', 'read \\| write', '—', '—', 'not started'])
+})
+
+test('a pipe in a dropped stage\'s reason stays in the state cell', () => {
+  const t = stageTable(stackOf(work({ stages: [dropped('feat/one', 'A | B')] }), []))
+  assert.deepEqual(cells(rowOf(t, 'feat/one')), ['1', '`feat/one`', '—', '—', '—', 'dropped: A \\| B'])
+})
+
+test('a pipe in a branch name, which git allows, stays in its cell too', () => {
+  const t = stageTable(stackOf(work({ stages: [stage('feat/a|b', 'x'), replaced('feat/c', 'feat/a|b')] }), []))
+  assert.deepEqual(cells(rowOf(t, '| 1 |')), ['1', '`feat/a\\|b`', 'x', '—', '—', 'not started'])
+  assert.deepEqual(cells(rowOf(t, '| 2 |')), ['2', '`feat/c`', '—', '—', '—', 'replaced by `feat/a\\|b`'])
+})
+
 test('a withdrawn stage is never the next one', () => {
   const w = work({ stages: [dropped('feat/one', 'not needed'), replaced('feat/two', 'feat/three'), stage('feat/three')] })
   assert.equal(nextStage(stackOf(w, [])).branch, 'feat/three')

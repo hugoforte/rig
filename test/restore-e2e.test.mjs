@@ -17,6 +17,7 @@ const ID = 'e2e-rs'
 const WORK_BRANCH = 'feat/e2e-restore-work'
 const SLICE = 'feat/e2e-rs-slice'
 const EXTRA = 'feat/e2e-rs-extra'
+const DROPPED = 'feat/e2e-rs-dropped'
 const [PUSHED, STAGED, CLOSED] = ['e2e-rs-pushed', 'e2e-rs-staged', 'e2e-rs-closed']
 
 const publish = ({ tmp, remotesDir, gitMust }, repo) => {
@@ -136,6 +137,28 @@ scenario('a work is restored on a second machine from its record alone', {
     assert.doesNotMatch(r.out, /nothing to do/)
     assert.equal(headOf(m, STAGED), SLICE)
     assert.ok(fs.readFileSync(recordFile(m)).equals(m.recorded), 'attachedAt and the rest are untouched')
+  }),
+
+  step('a withdrawn stage is never the top, and once put back in the plan it is', m => {
+    assert.equal(m.rig(['stage', DROPPED, '--delivers', 'a slice on top', '--work', ID]).code, 0)
+    m.gitMust(worktree(m, STAGED), 'checkout', '-q', '-b', DROPPED)
+    commit(m, STAGED, 'a slice on top')
+    m.gitMust(worktree(m, STAGED), 'push', '-q', 'origin', DROPPED)
+    const drop = m.rig(['stage', DROPPED, '--dropped', 'not wanted', '--work', ID])
+    assert.equal(drop.code, 0, drop.out)
+
+    fs.rmSync(worktree(m, STAGED), { recursive: true, force: true, maxRetries: 5 })
+    assert.equal(m.rig(['restore', ID]).code, 0)
+    assert.equal(headOf(m, STAGED), SLICE, 'the dropped stage is carried, and still not the top')
+
+    assert.equal(m.rig(['stage', DROPPED, '--planned', '--work', ID]).code, 0)
+    fs.rmSync(worktree(m, STAGED), { recursive: true, force: true, maxRetries: 5 })
+    assert.equal(m.rig(['restore', ID]).code, 0)
+    assert.equal(headOf(m, STAGED), DROPPED)
+
+    // Dropped again, so the steps below read the stack they were written for.
+    m.gitMust(worktree(m, STAGED), 'checkout', '-q', SLICE)
+    assert.equal(m.rig(['stage', DROPPED, '--dropped', 'not wanted', '--work', ID]).code, 0)
   }),
 
   step('--tip checks out the top of the stack the record does not know', m => {
