@@ -122,12 +122,19 @@ export function billingInstall (prefix) {
     state.repos[spec] = { prs: [], ...state.repos[spec], visibility }
     setGithub(state)
   }
+  // `fn`, run with a repo's visibility set, and the visibility it had put back afterwards.
+  const withVisibility = (spec, visibility, fn) => {
+    const was = github().repos[spec]?.visibility
+    setVisibility(spec, visibility)
+    try { return fn() } finally { setVisibility(spec, was) }
+  }
 
   return {
     ...m,
     bare,
     publish,
     setVisibility,
+    withVisibility,
     github,
     setGithub,
     squashMergeAndDeleteBranch,

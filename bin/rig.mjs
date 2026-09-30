@@ -1188,7 +1188,10 @@ function retitleDoc (id, title) {
 function dataRemoteUrl () {
   const r = git(dataRoot(), 'remote', 'get-url', 'origin')
   if (r.code !== 0 || !r.out) return null
-  return r.out.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/')
+  // Every way git spells a GitHub remote comes out as the page's URL: scp-style, `ssh://`, and
+  // https with credentials in it, which must never reach a link.
+  return r.out.replace(/\/+$/, '').replace(/\.git$/, '')
+    .replace(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/[^/@]+@github\.com\/)/, 'https://github.com/')
 }
 
 // A file of a work's record on the data root's remote, or null when it has none.
@@ -1216,31 +1219,34 @@ function visibilityOf (spec) {
   return current.visibilities.get(key)
 }
 
-// A data root with no remote is private: nobody but this machine can read it. A remote GitHub
-// does not host, or will not say for, is not known to be anything.
+// A data root with no remote is private: nobody but this machine can read it. One GitHub does
+// not host answers `elsewhere`, since nothing says who can read it.
 function dataRootVisibility () {
   const remote = dataRemoteUrl()
   if (!remote) return 'private'
   const spec = /^https:\/\/github\.com\/([^/]+\/[^/]+)$/.exec(remote)?.[1]
-  return spec ? visibilityOf(spec) : null
+  return spec ? visibilityOf(spec) : 'elsewhere'
 }
 
 // May text written into `spec`'s repo link the context doc? Only when that repo is no more
 // visible than the data root (hugoforte/rig#202): the link names the private repo and the work's
 // path in it, and GitHub keeps a body's edit history, so a link published cannot be taken back.
-// Null when either side cannot be told, which callers treat as no.
+// A data root hosted elsewhere is never linked. Null when GitHub would not say for either side,
+// which callers treat as no.
 function mayLink (spec) {
   const [here, root] = [visibilityOf(spec), dataRootVisibility()]
+  if (root === 'elsewhere') return false
   return here && root ? REACH.indexOf(here) <= REACH.indexOf(root) : null
 }
 
-// `mayLink` for text about to be written. A lookup that failed leaves the link out, and says so
-// once per repo: a link left out costs a click.
-function linkAllowed (spec) {
+// `mayLink` for text about to be written, saying once per repo when GitHub would not answer: the
+// link is left out then, because a link left out costs a click.
+function linkOrSay (spec) {
   const may = mayLink(spec)
-  if (may === null && !current.linkLeftOut.has(spec)) {
-    current.linkLeftOut.add(spec)
-    say(C.dim(`context-doc link left out: GitHub would not say whether ${spec} is more visible than the data root`))
+  const key = spec.toLowerCase()
+  if (may === null && !current.linkLeftOut.has(key)) {
+    current.linkLeftOut.add(key)
+    say(C.dim(`· context-doc link left out: GitHub would not say whether ${spec} is more visible than the data root`))
   }
   return may === true
 }
@@ -1357,8 +1363,8 @@ function resolveJiraFields (jiraClient, t, overrides) {
 // A ticket body: the prose, then where the design lives, then what opened it. One shape
 // for both trackers — the context reference is `contextDocRef`'s and nobody invents a
 // second format (hugoforte/rig#54). `link` is false where the ticket is more visible than
-// the data root (`mayLink`).
-const ticketBody = (work, prose, { link = true } = {}) => [
+// the data root (`mayLink`); a Jira ticket always has it.
+const ticketBody = (work, prose, { link }) => [
   prose, ...(link ? ['', `The design lives in the work record: ${contextDocRef(work.id)}`] : []),
   '', `Opened by \`rig new ${work.id} --ticket\`.`,
 ].join('\n')
@@ -1376,8 +1382,8 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
     if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
     const firstParagraph = brief.split(/\n\s*\n/)[0] || summary
-    const body = ticketBody(work, firstParagraph, { link: linkAllowed(t.repo) })
     if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${firstParagraph}`); return null }
+    const body = ticketBody(work, firstParagraph, { link: linkOrSay(t.repo) })
     step(`creating GitHub issue in ${t.repo}`)
     const n = github().createIssue(t.repo, summary, body)
     ok(`ticket ${t.repo}#${n}`)
@@ -1392,7 +1398,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
     // has to stand on its own (hugoforte/rig#54). No truncation — Jira's own description
     // limit is 32,767 characters, which a piped brief does not reach, and silently cutting
     // the brief is the bug being fixed here; twg's error surfaces loudly if one ever does.
-    const description = ticketBody(work, brief.trim() || summary)
+    const description = ticketBody(work, brief.trim() || summary, { link: true })
     if (dryRun) {
       say(`would create a ${t.type} in ${t.project}:`)
       say(`  summary      ${summary}`)
@@ -1457,7 +1463,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   ].join('\n')
   for (const key of githubKeys) {
     const [repo, n] = key.split('#')
-    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody(linkAllowed(repo))))
+    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
     if (abandoned) { step(`commented on ${key} (left open: abandoned)`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
@@ -1516,7 +1522,7 @@ function stageWriteBack (work, stages, { abandoned }) {
       }
       if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
       const [repo, n] = key.split('#')
-      const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkAllowed(repo))))
+      const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
       if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
       if (!landed) { step(`commented on ${key} (left open: stage ${st.branch} did not land)`); continue }
       const notClosed = trackerFailure(() => github().closeIssue(repo, n))
@@ -3220,7 +3226,7 @@ cmds.pr = ({ flags }) => {
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
     const spec = repoSpec(entry)
-    const text = prText(work, stack, { spec, link: linkAllowed(spec) })
+    const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
@@ -3244,7 +3250,7 @@ function refreshPrs (work, stack) {
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
     if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
     const spec = repoSpec(entry)
-    const text = prText(work, stack, { spec, link: linkAllowed(spec) })
+    const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }
     const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, text))
     if (failed) { warn(`${entry.repo}: could not refresh PR #${pr.number} (${failed})`); continue }

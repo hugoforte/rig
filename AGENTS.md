@@ -469,7 +469,8 @@ hand-maintained the moment something renders it.
 reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
 visible than the data root** — public above internal above private, and a data root with no
 remote counts as private — because it names the private repo, and GitHub keeps a body's edit
-history. A visibility GitHub would not say leaves the link out, with one dim line saying so.
+history. A visibility GitHub would not say leaves the link out, with one dim line saying so, and
+a data root hosted anywhere but GitHub is never linked.
 The same rule holds for `rig close`'s comments on GitHub tickets and for the issue `rig new
 --ticket` opens; Jira comments keep the link. In a work of **one** repo, each of the work's own
 GitHub tickets in that repo gets a `Fixes` line, since merging that PR is the work landing; every

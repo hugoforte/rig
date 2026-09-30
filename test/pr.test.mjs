@@ -11,7 +11,7 @@ import path from 'node:path'
 import { billingInstall, slicedWork } from './billing-install.mjs'
 
 const m = billingInstall('rig-pr-')
-const { dataRoot, rig, gitMust, github, setGithub, setVisibility, publish, worktree, cleanup } = m
+const { dataRoot, rig, gitMust, github, setGithub, setVisibility, withVisibility, publish, worktree, cleanup } = m
 
 after(cleanup)
 
@@ -252,59 +252,91 @@ const pushedWork = (id, title, ...extra) => {
 }
 const bodyOf = branch => github().repos['acme/billing'].prs.find(pr => pr.branch === branch).body
 
+// The data root's remote, for the length of `fn`. Only `rig pr` and `rig next` run inside it,
+// and neither fetches or pushes the data root, so the URL is never dialled.
+const withDataRemote = (url, fn) => {
+  gitMust(dataRoot, 'remote', 'add', 'origin', url)
+  try { return fn() } finally { gitMust(dataRoot, 'remote', 'remove', 'origin') }
+}
+const refresh = id => {
+  const r = rig(['pr', '--refresh', '--work', id])
+  assert.equal(r.code, 0, r.out)
+  return r
+}
+const LINK = /\nContext doc: /
+const LEFT_OUT = /context-doc link left out: GitHub would not say whether acme\/billing is more visible than the data root/g
+
 test('a PR on a public repo never carries the link to a private data root (#202)', () => {
   // This data root has no remote, which counts as private: nothing more visible may name it.
   pushedWork('public-pr', 'Public PR')
-  setVisibility('acme/billing', 'public')
-  try {
+  withVisibility('acme/billing', 'public', () => {
     const r = rig(['pr', '--work', 'public-pr'])
     assert.equal(r.code, 0, r.out)
     assert.doesNotMatch(bodyOf('feat/public-pr'), /Context doc|context\.md/)
-  } finally {
-    setVisibility('acme/billing', 'private')
-  }
+  })
 })
 
-test('a data root as public as the repo is linked all the same (#202)', () => {
-  gitMust(dataRoot, 'remote', 'add', 'origin', 'https://github.com/acme/rig-data.git')
-  setVisibility('acme/rig-data', 'public')
-  setVisibility('acme/billing', 'public')
-  try {
-    assert.equal(rig(['pr', '--refresh', '--work', 'public-pr']).code, 0)
-    assert.match(bodyOf('feat/public-pr'), /\nContext doc: https:\/\/github\.com\/acme\/rig-data\/blob\/main\/work\/public-pr\/context\.md$/)
-  } finally {
-    gitMust(dataRoot, 'remote', 'remove', 'origin')
-    setVisibility('acme/billing', 'private')
-  }
+test('a data root GitHub does not host is never linked, since nothing says who reads it (#202)', () => {
+  withDataRemote('https://gitlab.example/acme/rig-data.git', () => {
+    const r = refresh('public-pr')
+    assert.doesNotMatch(bodyOf('feat/public-pr'), LINK)
+    assert.doesNotMatch(r.out, LEFT_OUT, 'a fixed answer, not a lookup that failed')
+  })
+})
+
+test('a data root as public as the repo is linked all the same, however its remote is spelled (#202)', () => {
+  withDataRemote('ssh://git@github.com/acme/rig-data.git', () =>
+    withVisibility('acme/rig-data', 'public', () => withVisibility('acme/billing', 'public', () => {
+      refresh('public-pr')
+      assert.match(bodyOf('feat/public-pr'), /\nContext doc: https:\/\/github\.com\/acme\/rig-data\/blob\/main\/work\/public-pr\/context\.md$/)
+    })))
 })
 
 test('a visibility GitHub will not say is no evidence an open PR is stale (#202)', () => {
   // The open PR carries the public data root's link, which the record, with no remote now,
   // would not write; but a lookup that failed cannot say which of the two is right.
-  setVisibility('acme/billing', undefined)
-  try {
+  withVisibility('acme/billing', undefined, () => {
     assert.doesNotMatch(rig(['next', '--work', 'public-pr']).out, /rig pr --refresh/)
-  } finally {
-    setVisibility('acme/billing', 'private')
-  }
+  })
 })
 
 test('and a PR written without knowing it leaves the link out, saying so once (#202)', () => {
-  setVisibility('acme/billing', undefined)
-  try {
-    const r = rig(['pr', '--refresh', '--work', 'public-pr'])
-    assert.equal(r.code, 0, r.out)
-    assert.doesNotMatch(bodyOf('feat/public-pr'), /Context doc/)
-    assert.equal(r.out.match(/context-doc link left out: GitHub would not say whether acme\/billing is more visible than the data root/g)?.length, 1, r.out)
-  } finally {
-    setVisibility('acme/billing', 'private')
-  }
+  withVisibility('acme/billing', undefined, () => {
+    const r = refresh('public-pr')
+    assert.doesNotMatch(bodyOf('feat/public-pr'), LINK)
+    assert.equal(r.out.match(LEFT_OUT)?.length, 1, r.out)
+  })
+})
+
+test('an internal repo is linked from a public data root, and not from a private one (#202)', () => {
+  withDataRemote('https://github.com/acme/rig-data.git', () => withVisibility('acme/billing', 'internal', () => {
+    withVisibility('acme/rig-data', 'public', () => refresh('public-pr'))
+    assert.match(bodyOf('feat/public-pr'), LINK)
+    withVisibility('acme/rig-data', 'private', () => refresh('public-pr'))
+    assert.doesNotMatch(bodyOf('feat/public-pr'), LINK)
+  }))
+})
+
+test('a data root GitHub will not say for leaves the link out as well, and says so (#202)', () => {
+  withDataRemote('https://github.com/acme/rig-data.git', () => {
+    withVisibility('acme/rig-data', 'private', () => refresh('public-pr'))
+    assert.match(bodyOf('feat/public-pr'), LINK)
+    const r = withVisibility('acme/rig-data', undefined, () => refresh('public-pr'))
+    assert.doesNotMatch(bodyOf('feat/public-pr'), LINK)
+    assert.match(r.out, LEFT_OUT)
+  })
 })
 
 test('a single-repo work\'s PR closes its own tickets, and only names one in another repo (#202)', () => {
   pushedWork('fixing', 'Fixing work', ['ticket', 'acme/billing#40'], ['ticket', 'acme/other#41'])
   assert.equal(rig(['pr', '--work', 'fixing']).code, 0)
   assert.match(bodyOf('feat/fixing-work'), /^Fixing work\n\nFixes acme\/billing#40\nTickets: acme\/other#41\n/)
+})
+
+test('a stage\'s own key is left to rig close, since the stage merges where no keyword fires (#202)', () => {
+  pushedWork('stage-key', 'Stage key', ['stage', 'feat/stage-key-one', '--delivers', 'the part', '--key', 'acme/billing#44'])
+  assert.equal(rig(['pr', '--work', 'stage-key']).code, 0)
+  assert.doesNotMatch(bodyOf('feat/stage-key'), /Fixes/)
 })
 
 test('a work ticket whose slice was withdrawn is named, never closed by the merge (#202)', () => {

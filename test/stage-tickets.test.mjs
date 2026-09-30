@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedPr, setVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -52,16 +52,11 @@ test('a public repo\'s tickets are told what landed without the private data roo
   seedPr({ branch: 'feat/in-public-one', number: 62, state: 'MERGED', base: 'feat/in-public', url: 'https://github.com/acme/billing/pull/62', mergedAt: '2026-09-19T10:00:00Z' })
   seedPr({ branch: 'feat/in-public', number: 63, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/63', mergedAt: '2026-09-19T11:00:00Z' })
 
-  setVisibility('acme/billing', 'public')
-  try {
-    const c = rig(['close', '--work', 'in-public'])
-    assert.equal(c.code, 0, c.out)
-    for (const n of [60, 61]) {
-      assert.equal(issueNumbered(n).state, 'CLOSED')
-      assert.doesNotMatch(issueNumbered(n).comments.join('\n'), /Context doc|context\.md/)
-    }
-  } finally {
-    setVisibility('acme/billing', 'private')
+  const c = withVisibility('acme/billing', 'public', () => rig(['close', '--work', 'in-public']))
+  assert.equal(c.code, 0, c.out)
+  for (const n of [60, 61]) {
+    assert.equal(issueNumbered(n).state, 'CLOSED')
+    assert.doesNotMatch(issueNumbered(n).comments.join('\n'), /Context doc|context\.md/)
   }
 })
 
