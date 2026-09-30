@@ -254,6 +254,7 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
     repos: {
       'acme/platform': {
         language: 'TypeScript',
+        visibility: 'private',
         issues: [{ number: 3, title: 'Existing', body: '', state: 'OPEN', comments: [] }],
       },
     },
@@ -282,6 +283,24 @@ test('close on a work with no repos comments on the GitHub ticket and leaves it 
   assert.equal(issue.state, 'OPEN')
   assert.equal(issue.comments.length, 1)
   assert.match(issue.comments[0], /No repos were attached/)
+})
+
+test('a GitHub issue opened in a public repo never links the private data root (#202)', () => {
+  const setPlatform = visibility => {
+    const state = github()
+    state.repos['acme/platform'].visibility = visibility
+    setGithub(state)
+  }
+  setPlatform('public')
+  try {
+    const r = rig(['new', 't4p', '--title', 'Public ticketed work', '--ticket', '--org', 'acme'], { input: 'the brief' })
+    assert.equal(r.code, 0, r.out)
+    const issue = github().repos['acme/platform'].issues.at(-1)
+    assert.equal(issue.title, 'Public ticketed work')
+    assert.doesNotMatch(issue.body, /design lives|context\.md/)
+  } finally {
+    setPlatform('private')
+  }
 })
 
 test('rig.json can carry full per-org Jira ticket config; --dry-run previews without creating', () => {

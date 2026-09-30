@@ -339,7 +339,9 @@ their own commits and force-push them, when the squash is the stage as it stood.
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
 keyword never fires for it and a slice's ticket cannot close itself. `rig close` closes it when
-the slice landed, and comments and leaves it open when it did not. Everything else is derived — whether
+the slice landed, and comments and leaves it open when it did not. A ticket that is also the
+work's, or that two slices carry, gets one comment, and closes only when every role it holds
+would close it. Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
@@ -466,6 +468,28 @@ The body is assembled from what the record already holds: the title, the tickets
 **Direction** section of the context doc lifted verbatim, and the stage table rendered from the
 stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
+
+**What it says in public.** The Direction is lifted into a body anyone who can read the repo
+reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
+visible than the data root** — public above internal above private, and a data root with no
+remote counts as private — because it names the private repo, and GitHub keeps a body's edit
+history. A visibility GitHub would not say leaves the link out, with one dim line saying so, and
+a data root hosted anywhere but GitHub is never linked.
+The same rule holds for `rig close`'s comments on GitHub tickets and for the issue `rig new
+--ticket` opens; Jira comments keep the link. In a work of **one** repo, each of the work's own
+GitHub tickets in that repo gets a `Fixes` line, since merging that PR is the work landing; every
+other ticket is named on the `Tickets:` line and closed by `rig close`.
+
+**It says which release the PR asks for.** On a repo that releases the way rig does, by a bump
+each PR names (it carries a `release:` label), `rig pr` prints the bump beside the PR it opens
+or finds open, with the reason: the branch prefix, or the `release:` label that overrides it.
+`rig next` says the same beside its offer to open the PR, while a label can still change it. A
+repo with no `release:` label is told nothing, because there the prefix is not how it releases.
+
+**It says whether the base moved.** Before opening each repo's PR, `rig pr` fetches that repo
+and says how many commits the base has that the work branch lacks, and, if a merge of the two
+would conflict, in which files, with the command to merge the base in. Then it opens the PR
+anyway: a report, never a stop.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.

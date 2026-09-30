@@ -479,3 +479,12 @@ test('a clone that needed credentials says so, and how to give git some', () => 
   assert.throws(() => t.cut({ org: 'acme', repo: 'private', branch: 'feat/p2', dest: workDir('p2', 'private') }),
     e => e instanceof RigError && /could not mirror acme\/private: git needed credentials .* and rig never waits at a prompt — sign git in \(`gh auth setup-git`\) and run this again/.test(e.message))
 })
+
+test('standing answers nothing for a base the mirror does not have, rather than a clean merge (#208)', () => {
+  publish('acme', 'standing')
+  const dest = workDir('standing', 'standing')
+  trees().cut({ org: 'acme', repo: 'standing', branch: 'feat/standing', dest })
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  assert.deepEqual(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'main' }), { behind: 0, conflicts: [] })
+  assert.equal(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'gone' }), null)
+})
