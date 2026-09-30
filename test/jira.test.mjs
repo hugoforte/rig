@@ -118,6 +118,11 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
     '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
 })
 
+test('twg adapter: createIssue reads the new key from twg 1.3\'s apiVersion 2 answer', () => {
+  const { twg } = canned(() => JSON.stringify({ apiVersion: 'v2', command: 'jira.workitem.create', data: { success: true, issue: { id: '58746', key: 'PROJ-9' } } }))
+  assert.equal(twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: {} }), 'PROJ-9')
+})
+
 test('twg adapter: createIssue sends a list field value as JSON', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { components: ['11023'] } })

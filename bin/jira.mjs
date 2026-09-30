@@ -112,7 +112,8 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       args.push('-o', 'json', '-y')
       const out = must(args)
       const body = parseJson(out, 'twg jira workitem create')
-      const key = body.data?.key || body.key
+      // twg 1.3 answers `{ apiVersion: 'v2', data: { issue: { key } } }`; earlier ones `{ data: { key } }`.
+      const key = body.data?.issue?.key || body.data?.key || body.key
       if (!key) fail(`could not read the new issue's key from twg's JSON:\n${out}`)
       return key
     },

@@ -62,9 +62,8 @@ own create-screen metadata, system fields included, and shapes the value for Jir
 component name or id becomes `{ id }`. It reads each value as JSON first, so a lone id sent
 bare arrives as a number and is never shaped. `bin/jira.mjs` therefore sends a list as JSON
 (`components=["10001"]`), so that no REST passthrough or second create path should be
-needed (DESIGN.md decision 147). That rests on twg's own source, read rather than run: it is
-proved only by a live create into a project that requires Components, which has not been
-made yet.
+needed (DESIGN.md decision 147). One live create on 2026-09-30, into a project that requires
+Components, proved it: the ticket arrived with its component and under its parent.
 
 A Jira description is the **whole** brief plus the context-doc link, where a GitHub issue
 body is the brief's first paragraph plus the same link. Not an inconsistency: the GitHub
