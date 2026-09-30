@@ -1,8 +1,8 @@
 // The Jira module is the seam between rig and `twg`, mirroring bin/github.mjs: one
 // interface, two adapters. `twgViaCli`'s `exec` is injected so its parsers run without
 // twg; `twgInMemory` holds canned issues for tests. See docs/adr/0001-jira-via-twg.md
-// for why twg, and for the caveat that the JSON shapes below are inferred from
-// `twg --help`, not a live call, and may need adjustment on first real use.
+// for why twg. Each parser has a test of twg 1.3's apiVersion 2 answer, cut down from a
+// real call with its keys, names and ids replaced.
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -29,7 +29,7 @@ test('twg adapter: present is false when twg cannot be spawned, true otherwise',
 test('twg adapter: getIssue reads summary and description from the issue fields', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-42', fields: { summary: 'A bug', description: 'Steps to reproduce' } } }))
   assert.deepEqual(twg.getIssue('KTLO-42'), { title: 'A bug', body: 'Steps to reproduce' })
-  assert.deepEqual(calls[0], ['jira', 'workitem', 'KTLO-42', '-o', 'json', '--fields', 'summary,description'])
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'get', 'KTLO-42', '-o', 'json', '--output-summary', 'none', '--fields', 'summary,description'])
 })
 
 test('twg adapter: getIssue fails with twg\'s own error when twg fails', () => {
@@ -42,12 +42,36 @@ test('twg adapter: getIssue fails loudly on a JSON shape it cannot read', () => 
   assert.throws(() => twg.getIssue('KTLO-1'), /could not read summary\/description/)
 })
 
-// The shape a real `twg jira workitem KEY -o json` returns, which the guessed shapes above
+// The shape twg 1.1's `twg jira workitem KEY -o json` returned, which the guessed shapes above
 // did not cover: `data` is an array of workitems, and `description` is ADF, not a string.
 // See hugoforte/rig#22 — the fetch failed outright on the first ticket that had one.
 test('twg adapter: getIssue reads a workitem returned as an array under data', () => {
   const { twg } = canned(() => JSON.stringify({ data: [{ key: 'KTLO-1455', summary: 'Import Payabli tokens', description: 'Plain enough' }] }))
   assert.deepEqual(twg.getIssue('KTLO-1455'), { title: 'Import Payabli tokens', body: 'Plain enough' })
+})
+
+// A real twg 1.3.3 `jira workitem get` answer, cut down: an array under `data`, with the
+// fields on each item and an ADF description.
+test('twg adapter: getIssue reads twg 1.3\'s apiVersion 2 answer', () => {
+  const { twg } = canned(() => JSON.stringify({
+    apiVersion: 'v2',
+    command: 'jira.workitem.get',
+    request: { issueIdOrKey: 'PROJ-9', site: 'example.atlassian.net', fields: ['summary', 'description'] },
+    data: [{
+      expand: 'renderedFields,names,schema',
+      id: '10009',
+      self: 'https://example.atlassian.net/rest/api/3/issue/10009',
+      key: 'PROJ-9',
+      summary: 'A bug',
+      description: { type: 'doc', version: 1, content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'What happens' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'It breaks.' }] },
+      ] },
+      url: 'https://example.atlassian.net/browse/PROJ-9',
+    }],
+    meta: { resourceClass: 'entity', sourceMode: 'native', resourceType: 'jira.workitem', backend: 'rest' },
+  }))
+  assert.deepEqual(twg.getIssue('PROJ-9'), { title: 'A bug', body: 'What happens\n\nIt breaks.' })
 })
 
 test('twg adapter: getIssue flattens an ADF description to plain text', () => {
@@ -115,7 +139,7 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
   assert.equal(key, 'KTLO-43')
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
     '--summary', 'New work', '--description', 'The brief', '--description-format', 'markdown',
-    '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
+    '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
 test('twg adapter: createIssue reads the new key from twg 1.3\'s apiVersion 2 answer', () => {
@@ -128,7 +152,7 @@ test('twg adapter: createIssue sends a list field value as JSON', () => {
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { components: ['11023'] } })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
-    '--field', 'components=["11023"]', '-o', 'json', '-y'])
+    '--field', 'components=["11023"]', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
 test('twg adapter: createIssue sends a string field value as it is', () => {
@@ -136,7 +160,7 @@ test('twg adapter: createIssue sends a string field value as it is', () => {
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { priority: 'High' } })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
-    '--field', 'priority=High', '-o', 'json', '-y'])
+    '--field', 'priority=High', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
 test('twg adapter: createIssue sends an object field value as JSON', () => {
@@ -144,27 +168,40 @@ test('twg adapter: createIssue sends an object field value as JSON', () => {
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { customfield_x: { value: 'A' } } })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
-    '--field', 'customfield_x={"value":"A"}', '-o', 'json', '-y'])
+    '--field', 'customfield_x={"value":"A"}', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
   twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
-    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '-o', 'json', '-y'])
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
 test('twg adapter: createIssue files the issue under its parent with twg\'s own --parent', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', parent: 'PROJ-7', fields: {} })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
-    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '--parent', 'PROJ-7', '-o', 'json', '-y'])
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '--parent', 'PROJ-7', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
-test('twg adapter: createIssue fails loudly when it cannot read the new key', () => {
+// Decision 150: after exit 0 the ticket exists, so the message names how to recover.
+test('twg adapter: createIssue says the ticket may have been created when its answer has no key', () => {
   const { twg } = canned(() => '{"data":{}}')
-  assert.throws(() => twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} }),
-    /could not read the new issue's key/)
+  assert.throws(() => twg.createIssue({ project: 'PROJ', type: 'Task', summary: 'Refunds double-charge', description: 'D', fields: {} }),
+    /may have been created\. Search PROJ for "Refunds double-charge" before retrying, then record it on this work with `rig ticket <KEY> --work <id>`/)
+})
+
+test('twg adapter: createIssue says the ticket may have been created when its answer is not JSON', () => {
+  const { twg } = canned(() => 'output_files:\n  stdout: "stdout.json"')
+  assert.throws(() => twg.createIssue({ project: 'PROJ', type: 'Task', summary: 'S', description: 'D', fields: {} }),
+    /may have been created\. Search PROJ for "S" before retrying/)
+})
+
+test('twg adapter: createIssue keeps twg\'s own error when the create fails', () => {
+  const { twg } = canned(() => ({ code: 1, err: 'HTTP 400: Components is required' }))
+  assert.throws(() => twg.createIssue({ project: 'PROJ', type: 'Task', summary: 'S', description: 'D', fields: {} }),
+    err => /Components is required/.test(err.message) && !/may have been created/.test(err.message))
 })
 
 // --body-format for the same reason as the description's: the close comment is a markdown
@@ -191,7 +228,31 @@ test('twg adapter: fieldMetadata lists each field\'s id, name and allowed values
     { id: 'customfield_10058', name: 'Story Points', allowedValues: [] },
     { id: 'customfield_10755', name: 'Components', allowedValues: [{ id: '10755', name: 'Payments' }] },
   ])
-  assert.deepEqual(calls[0], ['jira', 'workitem', 'field', 'create-metadata', '--space', 'KTLO', '--type', 'Task', '-o', 'json'])
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'field', 'create-metadata', '--space', 'KTLO', '--type', 'Task', '-o', 'json', '--output-summary', 'none'])
+})
+
+// A real twg 1.3.3 `field create-metadata` answer, cut down. An option field's allowed
+// values carry `value`, not `name`, and rig passes them through as they are.
+test('twg adapter: fieldMetadata reads twg 1.3\'s apiVersion 2 answer', () => {
+  const option = { self: 'https://example.atlassian.net/rest/api/3/customFieldOption/10001', value: 'Yes', id: '10001' }
+  const { twg } = canned(() => JSON.stringify({
+    apiVersion: 'v2',
+    command: 'jira.workitem.field.create-metadata',
+    request: { site: 'example.atlassian.net', space: 'PROJ', type: 'Story' },
+    data: { fields: [
+      { id: 'customfield_10058', key: 'customfield_10058', name: 'Story Points', required: false,
+        schema: { type: 'number', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float', customId: 10058 },
+        operations: ['set'], acceptedInput: 'number', example: '3' },
+      { id: 'customfield_10021', key: 'customfield_10021', name: 'Flagged', required: false,
+        schema: { type: 'array', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multicheckboxes', customId: 10021 },
+        operations: ['add', 'set', 'remove'], allowedValues: [option] },
+    ] },
+    meta: { resourceClass: 'collection', sourceMode: 'native', resourceType: 'jira.field', backend: 'rest' },
+  }))
+  assert.deepEqual(twg.fieldMetadata('PROJ', 'Story'), [
+    { id: 'customfield_10058', name: 'Story Points', allowedValues: [] },
+    { id: 'customfield_10021', name: 'Flagged', allowedValues: [option] },
+  ])
 })
 
 test('twg adapter: fieldMetadata fails loudly on a JSON shape it cannot read', () => {
@@ -215,15 +276,45 @@ test('twg adapter: projectComponents fails loudly on a JSON shape it cannot read
   assert.throws(() => twg.projectComponents('KTLO'), /could not read components/)
 })
 
-test('twg adapter: activeSprintId finds the sprint in state "active"', () => {
-  const { calls, twg } = canned(() => JSON.stringify({ data: { sprints: [{ id: 5, state: 'closed' }, { id: 7, state: 'active' }] } }))
-  assert.equal(twg.activeSprintId(123), 7)
-  assert.deepEqual(calls[0], ['jira', 'sprint', 'snapshot', '--board-id', '123', '-o', 'json'])
+// A real twg 1.3.3 `sprint snapshot` answer, cut down: one `sprint`, which is twg's pick
+// when a board has several active (its id is `activeSprints.selectedId`), and no list.
+// A board with no active sprint was never observed; its answer here is inferred.
+const snapshot = (sprint, total) => JSON.stringify({
+  apiVersion: 'v2',
+  command: 'jira.sprint.snapshot',
+  request: { boardId: '123', site: 'example.atlassian.net' },
+  data: {
+    boardId: '123',
+    ...(sprint ? { sprint } : {}),
+    activeSprints: { returned: total, total, ...(sprint ? { selectedId: sprint.id } : {}) },
+    totals: { issueCount: 4, unassignedCount: 1, staleCount: 0, linkedIssueCount: 0, blockedIssueCount: 0 },
+  },
 })
 
-test('twg adapter: activeSprintId is null when no sprint is active', () => {
-  const { twg } = canned(() => JSON.stringify({ data: { sprints: [{ id: 5, state: 'closed' }] } }))
-  assert.equal(twg.activeSprintId(123), null)
+test('twg adapter: activeSprintId reads the active sprint from twg 1.3\'s apiVersion 2 answer', () => {
+  const { calls, twg } = canned(() => snapshot({ id: 7, state: 'active', name: 'Sprint 7', startDate: '2026-09-21T00:00:00.000Z', endDate: '2026-10-02T00:00:00.000Z' }, 2))
+  assert.equal(twg.activeSprintId(123), 7)
+  assert.deepEqual(calls[0], ['jira', 'sprint', 'snapshot', '--board-id', '123', '-o', 'json', '--output-summary', 'none'])
+})
+
+test('twg adapter: activeSprintId is null when twg reports no active sprint', () => {
+  assert.equal(canned(() => snapshot(null, 0)).twg.activeSprintId(123), null)
+})
+
+test('twg adapter: activeSprintId is null when twg counts no active sprint beside a sprint that is not active', () => {
+  assert.equal(canned(() => snapshot({ id: 8, state: 'future' }, 0)).twg.activeSprintId(123), null)
+})
+
+// The guessed `data.sprints` list read as "no active sprint" on a board that had one. A
+// shape rig cannot read now says so rather than answering null.
+test('twg adapter: activeSprintId fails loudly on a shape it cannot read', () => {
+  assert.throws(() => canned(() => JSON.stringify({ data: { sprints: [{ id: 7, state: 'active' }] } })).twg.activeSprintId(123),
+    /could not read the active sprint/)
+})
+
+test('twg adapter: activeSprintId fails loudly on a sprint that is not active', () => {
+  assert.throws(() => canned(() => snapshot({ id: 7, state: 'closed' }, 1)).twg.activeSprintId(123),
+    /could not read the active sprint/)
 })
 
 const world = () => ({
