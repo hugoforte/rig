@@ -188,11 +188,11 @@ test('a body GitHub hands back with CRLF line ends and a trailing newline still 
   assert.match(r.out, /billing: PR #\d+ is already up to date/)
 })
 
-test('list --json leaves out the PR title and body the refresh compares', () => {
+test('list --json leaves out the PR title, body and labels that pr reads', () => {
   const listed = JSON.parse(rig(['list', '--json']).out)
   const repo = listed.works.find(w => w.id === 'reviewed-2').repos[0]
   assert.ok(repo.pr.number, 'the PR itself is listed')
-  assert.deepEqual([repo.pr.title, repo.pr.body], [undefined, undefined])
+  assert.deepEqual([repo.pr.title, repo.pr.body, repo.pr.labels], [undefined, undefined, undefined])
 })
 
 test('a stage GitHub will not answer for stops the refresh, rather than writing "PR state unknown" into the PR', () => {
@@ -361,4 +361,46 @@ test('in a work of two repos no one PR closes a ticket, because its merge is not
   const body = bodyOf('feat/two-repos')
   assert.match(body, /\nTickets: acme\/billing#42\n/)
   assert.doesNotMatch(body, /Fixes/)
+})
+
+// A repo's labels on GitHub, and a PR's: the two things that say which release a PR asks for.
+const labelRepo = labels => {
+  const state = github()
+  state.repos['acme/billing'].labels = labels
+  setGithub(state)
+}
+const labelPr = (branch, labels) => {
+  const state = github()
+  state.repos['acme/billing'].prs.find(pr => pr.branch === branch).labels = labels
+  setGithub(state)
+}
+const RELEASES = ['bug', 'release:minor', 'release:patch', 'release:none']
+
+test('on a repo that releases by release: labels, rig pr says which release the PR asks for (#228)', () => {
+  labelRepo(RELEASES)
+  pushedWork('bumped', 'Bumped')
+  const r = rig(['pr', '--work', 'bumped'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: this PR asks for a minor release \(the branch prefix `feat\/`\)/)
+})
+
+test('and says it again of the PR it finds open, where a label outranks the prefix (#228)', () => {
+  labelPr('feat/bumped', ['release:patch'])
+  const r = rig(['pr', '--work', 'bumped'])
+  assert.match(r.out, /already open/)
+  assert.match(r.out, /billing: this PR asks for a patch release \(the `release:patch` label\)/)
+})
+
+test('a repo with no release: labels is told nothing about a release, since it releases some other way (#228)', () => {
+  labelRepo(['bug'])
+  try {
+    assert.doesNotMatch(rig(['pr', '--work', 'bumped']).out, /asks for/)
+  } finally {
+    labelRepo(RELEASES)
+  }
+})
+
+test('rig next says which release beside its offer to open the PR (#228)', () => {
+  pushedWork('bump-next', 'Bump next')
+  assert.match(rig(['next', '--work', 'bump-next']).out, /billing is pushed with no PR open — billing's PR asks for a minor release \(the branch prefix `feat\/`\)/)
 })

@@ -193,6 +193,16 @@ test('every stage in makes the work branch the thing that is left', () => {
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
 })
 
+test('every stage in says which release the work PR will ask for, while a label can still change it (#228)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+    bumps: [{ repo: 'a', asked: 'asks for a minor release (the branch prefix `feat/`)' }],
+  })
+  assert.match(says(out), /the work branch is what is left to land — a's PR asks for a minor release \(the branch prefix `feat\/`\)/)
+})
+
 test('every stage in, with a worktree still on a stage that landed, names the switch to the work branch (#200)', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),

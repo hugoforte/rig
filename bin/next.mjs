@@ -53,13 +53,19 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   neighbours     one `{ repo, via, direction }` per repo the catalogue says talks to an
 //                  attached one and which is not itself attached — `via` is the attached repo
 //                  it was reached from, `direction` its stated direction or null
+//   bumps          one `{ repo, asked }` per repo a `rig pr` would open a PR on, where
+//                  `asked` says which release that PR asks for and why; absent where the repo
+//                  does not release by bump
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
+  // Which release each PR `rig pr` would open asks for, said beside the offer to open it, while
+  // a label can still change it (hugoforte/rig#228).
+  const withBumps = says => [says, ...bumps.map(b => `${b.repo}'s PR ${b.asked}`)].join(' — ')
 
   // Terminal first: a stopped work has no next step, and saying so is a real answer.
   if (phase === 'closed' || phase === 'abandoned') return out
@@ -122,7 +128,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       const where = [...on].map(([b, rs]) => `${rs.join(', ')} ${rs.length === 1 ? 'is' : 'are'} still on ${b}, which has landed`).join('; ')
       out.push(stranded.length
         ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
-        : offer('reviewing', `every stage is ${stack.some(st => st.withdrawn) ? 'in or withdrawn' : 'in'} — the work branch is what is left to land`, 'rig pr'))
+        : offer('reviewing', withBumps(`every stage is ${stack.some(st => st.withdrawn) ? 'in or withdrawn' : 'in'} — the work branch is what is left to land`), 'rig pr'))
     }
     // Decision 113. The rebase is offered only where the squash is the stage as it stood;
     // anywhere else, replaying onto it is a merge somebody has to look at.
@@ -173,7 +179,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
   const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
-    out.push(offer('reviewing', `${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, 'rig pr'))
+    out.push(offer('reviewing', withBumps(`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`), 'rig pr'))
   }
 
   // Three repos is where deploy order stops being obvious and starts being a thing that

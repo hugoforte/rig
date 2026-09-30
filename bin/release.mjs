@@ -96,6 +96,11 @@ export function bumpFor ({ branch, labels = [] }) {
   }
 }
 
+// Does a repo with these labels release the way this file decides? A repo that carries any
+// `release:` label does: nothing else puts one there. Anywhere else a branch prefix means
+// nothing to the release, and a bump read from it would be false.
+export const releasesByBump = labels => labels.some(l => String(l).startsWith(LABEL))
+
 // The version a PR lands as, or null when the latest tag is ahead of the major this code
 // derives. That state is not a bump to compute over: the major only ever grows, so a higher
 // tag was cut from something this branch does not contain, and a next version over the top of
