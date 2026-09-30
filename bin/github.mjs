@@ -13,8 +13,9 @@
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
-//   stacks(org, name)                   [{ number, open, base, prs }] every GitHub stack, or null
-//   stackTool()                         'ok' | 'missing' | 'old': is `gh stack link` there
+//   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack, or null
+//   stackTool()                         'ok' | 'missing' | 'old': is `gh stack link` there; never
+//                                       throws for a non-zero exit, which is 'missing'
 //   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
@@ -45,7 +46,7 @@ const PR_TIMELINE_JQ = [
   ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
 ].join('')
 
-const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number]}'
+const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
 const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
 
@@ -151,7 +152,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       if (r.code !== 0) return null
       return r.out.split('\n').filter(l => l.trim()).map(l => {
         const s = parseJson(l, 'gh api stacks')
-        return { number: s.number, open: s.open, base: s.base, prs: s.prs }
+        return { number: s.number, open: s.open, base: s.base, prs: s.prs, openPrs: s.openPrs }
       })
     },
     // Is the gh-stack extension here, and new enough to `link`? Read off its help, because an
@@ -295,13 +296,16 @@ export function githubInMemory (state, { env } = {}) {
       if (!answers()) return null
       const found = lookup(`${org}/${name}`)
       if (!found || found.repo.stacks === null) return null
-      return (found.repo.stacks || []).map(s => ({ ...s, prs: [...s.prs] }))
+      const open = n => (found.repo.prs || []).some(p => p.number === n && p.state === 'OPEN')
+      return (found.repo.stacks || []).map(s => ({ ...s, prs: [...s.prs], openPrs: s.prs.filter(open) }))
     },
     stackTool: () => state.ghStack || 'ok',
     // As `gh stack link` does: a stack holding any of the PRs grows by the rest, and otherwise
     // a new one is made. Stack numbers share the PRs' sequence, as they do on GitHub.
+    // `linkFails` is gh stack's error, for a link that fails.
     linkStack (org, name, { base, urls }) {
       write()
+      if (state.linkFails) fail(state.linkFails)
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
       const numbers = urls.map(u => Number(/\/pull\/(\d+)$/.exec(u)?.[1] || fail(`${u}: not a pull request URL (in-memory GitHub)`)))
       found.repo.stacks = found.repo.stacks || []

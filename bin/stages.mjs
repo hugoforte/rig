@@ -204,25 +204,39 @@ export function adriftNote (stack, mark = b => b) {
 // Where one repo's open stage pull requests stand as a GitHub stack (hugoforte/rig#224), given
 // `stacks`, every stack GitHub has for the repo. Null where the repo has fewer than two, and
 // there is nothing to stack. Otherwise `{ prs, stack, problem }`: `prs` bottom to top, `stack`
-// the open stack on the work branch that holds any of them, and `problem` why linking them as
-// they stand would move something. Only a chain is linked, the lowest PR based on the work
-// branch and each next on the branch below, because `gh stack link` retargets anything else;
-// and only onto a stack that holds a bottom run of them, in order, since the rest go on top.
-// `linked` says the stack already holds them all.
+// the open stack that holds any of them, and `problem` why linking them as they stand would
+// move something. Only a chain is linked, the lowest PR based on the work branch and each next
+// on the branch below, because `gh stack link` retargets anything else. And only onto a stack
+// on the work branch whose open PRs are a bottom run of the chain, in order, since the rest go
+// on top of whatever it holds. `linked` says the stack already holds them all. A stack's
+// `openPrs` are the numbers of its PRs still open, whoever's they are.
 export function stackState (stack, repo, workBranch, stacks) {
   const prs = stack.filter(st => !st.withdrawn)
     .flatMap(st => st.prs.filter(pr => pr.repo === repo && pr.state === OPEN).map(pr => ({ ...pr, branch: st.branch })))
   if (prs.length < 2) return null
   const numbers = prs.map(pr => pr.number)
+  const found = stacks.find(s => s.open && s.prs.some(n => numbers.includes(n))) || null
+  const held = found ? found.prs.filter(n => numbers.includes(n)) : []
+  const others = found ? found.openPrs.filter(n => !numbers.includes(n)) : []
+  const problem = chainProblem(prs, workBranch) || (!found ? null
+    : found.base !== workBranch ? `GitHub stack #${found.number} is on ${found.base}, not ${workBranch}`
+    : others.length ? `GitHub stack #${found.number} also holds ${others.map(n => `#${n}`).join(', ')}, which is not a stage PR of this chain`
+    : held.some((n, i) => n !== numbers[i]) ? `GitHub stack #${found.number} holds them in another order`
+    : null)
+  return { prs, stack: found, problem, linked: !problem && !!found && held.length === numbers.length }
+}
+
+// Why `prs` are not a chain on the work branch, or null. Only a PR sitting on the work branch
+// itself, beside the stage below rather than on it, is offered the retarget that would chain
+// it. A PR on any other branch is named and left: when that branch is a stage with no open PR,
+// retargeting past it would fold that stage's commits into this one.
+function chainProblem (prs, workBranch) {
   const below = i => (i ? prs[i - 1].branch : workBranch)
   const off = prs.findIndex((pr, at) => pr.base !== below(at))
-  const found = stacks.find(s => s.open && s.base === workBranch && s.prs.some(n => numbers.includes(n))) || null
-  const held = found ? found.prs.filter(n => numbers.includes(n)) : []
-  const problem = off >= 0
-    ? `#${prs[off].number} (${prs[off].branch}) is based on ${prs[off].base}, not ${below(off)} — \`gh pr edit ${prs[off].number} --base ${below(off)}\` if it belongs on it`
-    : held.some((n, i) => n !== numbers[i]) ? `GitHub stack #${found.number} holds them in another order`
-      : null
-  return { prs, stack: found, problem, linked: !problem && held.length === numbers.length }
+  if (off < 0) return null
+  const pr = prs[off]
+  const says = `#${pr.number} (${pr.branch}) is based on ${pr.base}, not ${below(off)}`
+  return pr.base === workBranch ? `${says} — \`gh pr edit ${pr.number} --base ${below(off)}\` if it belongs on it` : says
 }
 
 // The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the

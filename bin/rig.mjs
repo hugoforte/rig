@@ -3587,17 +3587,27 @@ function linkStages (cfg, work, branch, flags) {
     if (s.problem) { warn(`${entry.repo}: not linked — ${s.problem}`); continue }
     const numbers = s.prs.map(pr => `#${pr.number}`).join(', ')
     if (s.linked) { step(`${entry.repo}: already GitHub stack #${s.stack.number}`); sayStackMerge(s.stack.number); continue }
+    // Asked once, at the first repo that needs it, and said once; every later repo is still
+    // reported, and none of them can be linked either.
     if (!tool) {
       const failed = trackerFailure(() => { tool = github().stackTool() })
-      if (failed) return warn(`could not ask gh about gh stack (${failed})`)
+      if (failed) tool = 'unasked'
+      if (failed) warn(`could not ask gh about gh stack (${failed})`)
+      else if (tool === 'missing') warn('gh stack is not installed — `gh extension install github/gh-stack`; the base branches already carry the stack')
+      else if (tool === 'old') warn('gh stack has no `link` — `gh extension upgrade gh-stack`; the base branches already carry the stack')
     }
-    if (tool === 'missing') return warn('gh stack is not installed — `gh extension install github/gh-stack`; the base branches already carry the stack')
-    if (tool === 'old') return warn('gh stack has no `link` — `gh extension upgrade gh-stack`; the base branches already carry the stack')
+    if (tool !== 'ok') { step(`${entry.repo}: ${numbers} not linked`); continue }
     const failed = trackerFailure(() => github().linkStack(entry.org, entry.repo, { base: work.branch, urls: s.prs.map(pr => pr.url) }))
     if (failed) { warn(`${entry.repo}: could not link ${numbers} (${failed})`); continue }
-    const made = stageStack(stack, entry, work.branch).stack
-    ok(`${entry.repo}: ${numbers} are GitHub stack${made ? ` #${made.number}` : ''}`)
-    sayStackMerge(made ? made.number : '<n>')
+    // Read back rather than trusted: `gh stack link` can succeed and leave a PR out.
+    const made = stageStack(stack, entry, work.branch)
+    if (made.linked) {
+      ok(`${entry.repo}: ${numbers} are GitHub stack #${made.stack.number}`)
+      sayStackMerge(made.stack.number)
+    } else if (made.unknown) {
+      ok(`${entry.repo}: ${numbers} linked; GitHub would not list its stacks to say which`)
+      sayStackMerge('<n>')
+    } else warn(`${entry.repo}: gh stack link ran, and ${numbers} are still not one stack${made.problem ? ` — ${made.problem}` : ''}`)
   }
 }
 

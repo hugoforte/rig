@@ -85,6 +85,24 @@ test('--link takes no branch, in either order', () => {
   }
 })
 
+test('--link registers the stages as they are, and takes no other flag', () => {
+  const r = rig(['stage', '--link', '--delivers', 'x', '--work', 'linked'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /--link registers the stages as they are, and takes nothing else \(--delivers\)/)
+})
+
+test('a link gh stack refuses is warned with its reason, and the command still succeeds', () => {
+  stagedWork('refused', ['one', 'two'], 111)
+  const state = github()
+  state.linkFails = 'failed to look up PR #111'
+  setGithub(state)
+  const r = rig(['stage', '--link', '--work', 'refused'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /billing: could not link #111, #112 \(failed to look up PR #111\)/)
+  delete state.linkFails
+  setGithub(state)
+})
+
 test('a missing gh stack is said with how to install it, and the command still succeeds', () => {
   stagedWork('no-tool', ['one', 'two'], 91)
   const state = github()

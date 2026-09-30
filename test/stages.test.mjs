@@ -395,17 +395,34 @@ test('a stage PR not on the branch below is the problem, with the retarget that 
   assert.equal(s.problem, '#2 (feat/two) is based on feat/work, not feat/one — `gh pr edit 2 --base feat/one` if it belongs on it')
 })
 
-test('an open stack on the work branch holding them all is linked; a closed one or one on another base is not', () => {
-  assert.equal(stackState(chain, 'a', 'feat/work', [{ number: 5, open: true, base: 'feat/work', prs: [1, 2] }]).linked, true)
-  assert.equal(stackState(chain, 'a', 'feat/work', [{ number: 5, open: false, base: 'feat/work', prs: [1, 2] }]).linked, false)
-  assert.equal(stackState(chain, 'a', 'feat/work', [{ number: 5, open: true, base: 'main', prs: [1, 2] }]).linked, false)
+const onGithub = (prs, over = {}) => ({ number: 5, open: true, base: 'feat/work', prs, openPrs: prs, ...over })
+
+test('an open stack on the work branch holding them all is linked, and a closed one is not', () => {
+  assert.equal(stackState(chain, 'a', 'feat/work', [onGithub([1, 2])]).linked, true)
+  assert.equal(stackState(chain, 'a', 'feat/work', [onGithub([1, 2], { open: false })]).linked, false)
+})
+
+test('a stack holding them on another base is a problem, not one to link over', () => {
+  const s = stackState(chain, 'a', 'feat/work', [onGithub([1, 2], { base: 'main' })])
+  assert.deepEqual({ problem: s.problem, linked: s.linked }, { problem: 'GitHub stack #5 is on main, not feat/work', linked: false })
+})
+
+test('a stack that also holds an open PR outside the chain is a problem, since what is linked goes on top of it', () => {
+  assert.equal(stackState(chain, 'a', 'feat/work', [onGithub([1, 2, 7], { openPrs: [1, 7] })]).problem,
+    'GitHub stack #5 also holds #7, which is not a stage PR of this chain')
+  assert.equal(stackState(chain, 'a', 'feat/work', [onGithub([9, 1], { openPrs: [1] })]).problem, null, 'a merged PR at the bottom is no problem')
+})
+
+test('a PR on a stage below that has no open PR is named, and offered no retarget past it', () => {
+  const gap = prStack(['feat/one', 1, 'OPEN', 'feat/work'], ['feat/two', 2, 'CLOSED', 'feat/one'], ['feat/three', 3, 'OPEN', 'feat/two'])
+  assert.equal(stackState(gap, 'a', 'feat/work', []).problem, '#3 (feat/three) is based on feat/two, not feat/one')
 })
 
 test('a stack holding the bottom of the chain is one to grow, and one holding them out of order is a problem', () => {
-  const growable = stackState(chain, 'a', 'feat/work', [{ number: 5, open: true, base: 'feat/work', prs: [1] }])
+  const growable = stackState(chain, 'a', 'feat/work', [onGithub([1])])
   assert.deepEqual({ number: growable.stack.number, problem: growable.problem, linked: growable.linked }, { number: 5, problem: null, linked: false })
   const [one, three] = prStack(['feat/one', 1, 'OPEN', 'feat/work'], ['feat/three', 3, 'OPEN', 'feat/two'])
   const inserted = [one, chain[1], three]
-  assert.equal(stackState(inserted, 'a', 'feat/work', [{ number: 5, open: true, base: 'feat/work', prs: [1, 3] }]).problem,
+  assert.equal(stackState(inserted, 'a', 'feat/work', [onGithub([1, 3])]).problem,
     'GitHub stack #5 holds them in another order')
 })

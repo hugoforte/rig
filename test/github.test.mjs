@@ -333,12 +333,13 @@ test('in-memory adapter: createRepo makes the repo exist; clone needs it to exis
 // ---------------------------------------------------------------- stacks (hugoforte/rig#224)
 
 test('gh adapter: stacks reads every stack a repo has from the REST answer, one per line', () => {
-  const { calls, github } = canned(() => '{"base":"feat/work","number":7,"open":true,"prs":[3,4]}\n{"base":"main","number":2,"open":false,"prs":[1]}\n')
+  const { calls, github } = canned(() => '{"base":"feat/work","number":7,"open":true,"prs":[3,4],"openPrs":[4]}\n{"base":"main","number":2,"open":false,"prs":[1],"openPrs":[]}\n')
   assert.deepEqual(github.stacks('acme', 'platform'), [
-    { number: 7, open: true, base: 'feat/work', prs: [3, 4] },
-    { number: 2, open: false, base: 'main', prs: [1] },
+    { number: 7, open: true, base: 'feat/work', prs: [3, 4], openPrs: [4] },
+    { number: 2, open: false, base: 'main', prs: [1], openPrs: [] },
   ])
-  assert.deepEqual(calls[0], ['api', 'repos/acme/platform/stacks', '--paginate', '--jq', '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number]}'])
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform/stacks', '--paginate', '--jq',
+    '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'])
 })
 
 test('gh adapter: a repo with no stacks has none, and one GitHub would not list them for is unknown', () => {
@@ -374,7 +375,7 @@ test('in-memory adapter: linkStack makes a stack of the PRs, grows the one that 
   github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4)] })
   github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4), url(5)] })
   const [stack] = github.stacks('acme', 'Platform')
-  assert.deepEqual({ ...stack, number: 0 }, { number: 0, open: true, base: 'feat/work', prs: [3, 4, 5] })
+  assert.deepEqual({ ...stack, number: 0 }, { number: 0, open: true, base: 'feat/work', prs: [3, 4, 5], openPrs: [] })
   assert.equal(github.stacks('acme', 'Platform').length, 1)
 })
 

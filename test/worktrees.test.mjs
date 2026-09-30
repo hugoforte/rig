@@ -492,6 +492,14 @@ test('a copy that differs from the rewritten head only in whitespace is kept, th
   assert.match(gitMust(mirrorOf('acme', 'reindented'), 'cherry', head, 'refs/heads/feat/stage'), /^- /, 'git reads the two as one patch')
 })
 
+test('a comparison git could not make keeps the rewritten copy, with git\'s reason (#257)', () => {
+  const head = mergedInThenRewritten('uncompared')
+  const failing = (cmd, args) => args.includes('--cherry-pick') ? { code: 128, out: '', err: 'fatal: bad revision' } : run(cmd, args)
+  const t = worktrees({ mirrorRoot, remotes: remotesInDirectory(remotesDir), run: failing })
+  const { local } = t.dropMerged({ org: 'acme', repo: 'uncompared', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — git could not compare it with PR #9\'s head: fatal: bad revision')
+})
+
 // ---------------------------------------------------------------- credentials
 
 // The module built over `run`, keeping every call's options, because the guard rides on each
