@@ -6,8 +6,8 @@
 // checkout in checkouts-read, fetching and fast-forwarding in checkouts-forward, committing
 // and pushing in checkouts-push, and the data root's lock in checkouts-lock. The first three
 // were one file, the slowest in the suite on its own at about 39 s on a Windows runner, and
-// `node --test` parallelises by file: apart, no file of the family is above 20 s, which is what lets CI deal the suite across runners in parts of
-// a similar size (hugoforte/rig#155). Every checkout a test reads is made by that test or
+// `node --test` parallelises by file: apart, no file of the family is above 20 s, which is
+// what lets CI deal the suite across runners in parts of a similar size (hugoforte/rig#155). Every checkout a test reads is made by that test or
 // here, so no test depends on another having run first.
 //
 // These helpers are this family's and not every scenario's, which is why they are not in

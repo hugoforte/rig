@@ -240,10 +240,10 @@ command holds a lock on it (`rig.lock`, in the data root's git dir, never commit
 fast-forwards at the start and while it commits and pushes at the end — never for the rest of
 the command. A second command that finds it held waits up to 30 seconds, then says which
 command and work hold it: at the start it stops before doing anything, so run it again; at the
-end its change waits in the tree for the next command, or `rig save` once the other finishes. A lock left by a session that was
-killed is taken over, and rig says whose it was. Read-only commands never wait. The lock does
-not change the sweep: the second of two queued commits still carries whatever hand edits are
-in the tree (DESIGN.md decisions 160–162).
+end what it wrote waits in the tree for the next command, or `rig save` once the other
+finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
+Read-only commands never wait. The lock does not change the sweep: the second of two queued
+commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
 
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
