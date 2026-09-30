@@ -3300,9 +3300,10 @@ function sayStanding (cfg, entry, branch, base) {
   t.fetch({ org: entry.org, repo: entry.repo })
   const standing = t.standing({ org: entry.org, repo: entry.repo, branch, base })
   if (!standing) return
-  const { behind, conflicts } = standing
+  const { behind, conflicts, error } = standing
   if (behind) step(`${entry.repo}: base moved — ${base} has ${behind} commit${behind === 1 ? '' : 's'} this branch does not`)
-  if (conflicts.length) warn(`${entry.repo}: ${branch} conflicts with ${base} in ${conflicts.join(', ')} — \`git merge origin/${base}\` in the worktree, then push`)
+  if (error) warn(`${entry.repo}: could not test-merge ${branch} with ${base}: ${error}`)
+  else if (conflicts.length) warn(`${entry.repo}: ${branch} conflicts with ${base} in ${conflicts.join(', ')} — \`git merge origin/${base}\` in the worktree, then push`)
 }
 
 // `rig pr --refresh`: each repo's open PR rewritten with `prText`. One that already says it is

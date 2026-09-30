@@ -466,6 +466,20 @@ test('a PR already open is not asked about the base again, since GitHub shows it
   assert.doesNotMatch(r.out, /fetching|base moved/)
 })
 
+test('a merge git refuses to try is said, never read as a clean one (#208)', () => {
+  assert.equal(rig(['new', 'orphaned', '--title', 'Orphaned', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'orphaned']).code, 0)
+  const dest = worktree('orphaned', 'billing')
+  // A branch that shares no history with main: git will not merge unrelated histories.
+  const orphan = gitMust(dest, 'commit-tree', 'HEAD^{tree}', '-m', 'unrelated')
+  gitMust(dest, 'reset', '-q', '--hard', orphan)
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  const r = rig(['pr', '--work', 'orphaned'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: could not test-merge feat\/orphaned with main: .*unrelated histories/)
+  assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === 'feat/orphaned'), 'reported, never refused')
+})
+
 test('a branch the base has not moved past is told nothing about it (#208)', () => {
   pushedWork('level', 'Level')
   const r = rig(['pr', '--work', 'level'])

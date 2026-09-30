@@ -172,8 +172,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
     // files a merge of the two would conflict in, found without touching any worktree
     // (`merge-tree --write-tree`, git 2.38). Null when git cannot count, such as for a ref the
-    // mirror lacks, and no conflicts when it cannot merge, as for unrelated histories. Call
-    // `fetch` first, or the base is the one this mirror last saw.
+    // mirror lacks. When git will not try the merge, as for unrelated histories, `conflicts` is
+    // null and `error` says why, since no answer is not the same as a clean one. Call `fetch`
+    // first, or the base is the one this mirror last saw.
     standing ({ org, repo, branch, base }) {
       const mirror = mirrorPath(org, repo)
       const counted = git(mirror, 'rev-list', '--count', `${ref(branch)}..${ref(base)}`)
@@ -181,8 +182,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       // Exit 1 is a merge that conflicts; the tree it wrote comes first, then one file a line,
       // unquoted so a name with a non-ASCII character reads as itself.
       const merged = git(mirror, '-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only', '--no-messages', ref(base), ref(branch))
+      const behind = Number(counted.out)
+      if (merged.code !== 0 && merged.code !== 1) {
+        return { behind, conflicts: null, error: (merged.err || merged.out).split('\n')[0] || `git merge-tree exited ${merged.code}` }
+      }
       const conflicts = merged.code === 1 ? merged.out.split('\n').slice(1).map(f => f.trim()).filter(Boolean) : []
-      return { behind: Number(counted.out), conflicts }
+      return { behind, conflicts }
     },
 
     // Check out a branch that already exists, and never make one: `cut` above, less its last
