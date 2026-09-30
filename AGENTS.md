@@ -482,8 +482,7 @@ other ticket is named on the `Tickets:` line and closed by `rig close`.
 each PR names (it carries a `release:` label), `rig pr` prints the bump beside the PR it opens
 or finds open, with the reason: the branch prefix, or the `release:` label that overrides it.
 `rig next` says the same beside its offer to open the PR, while a label can still change it. A
-repo with no `release:` label, or whose labels GitHub would not list, is told nothing, because
-there the prefix is not how it releases.
+repo with no `release:` label is told nothing, because there the prefix is not how it releases.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.

@@ -402,5 +402,10 @@ test('a repo with no release: labels is told nothing about a release, since it r
 
 test('rig next says which release beside its offer to open the PR (#228)', () => {
   pushedWork('bump-next', 'Bump next')
-  assert.match(rig(['next', '--work', 'bump-next']).out, /billing is pushed with no PR open — billing's PR asks for a minor release \(the branch prefix `feat\/`\)/)
+  assert.match(rig(['next', '--work', 'bump-next']).out, /billing is pushed with no PR open — its PR would ask for a minor release \(the branch prefix `feat\/`\)/)
+})
+
+test('a PR labelled release:none is said to ask for no release (#228)', () => {
+  labelPr('feat/bumped', ['release:none'])
+  assert.match(rig(['pr', '--work', 'bumped']).out, /billing: this PR asks for no release \(the `release:none` label\)/)
 })
