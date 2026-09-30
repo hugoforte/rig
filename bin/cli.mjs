@@ -12,18 +12,19 @@ export function jsonCliHelpers (ErrorClass) {
   return { fail, firstLine, parseJson }
 }
 
-// `run`/`must` for one binary. `exec(args)` is spawnSync-shaped and injected so tests
-// can can the CLI. A binary that cannot be spawned at all fails through `fail`, once, for
-// every caller; `must` reports the whole of stderr, since a streamed subprocess (`gh repo
-// clone` relaying git) puts its cause on a later line, not the first.
+// `run`/`must` for one binary. `exec(args, opts)` is spawnSync-shaped and injected so tests
+// can can the CLI; `opts.env` is additions to the run's environment, as it is for git. A binary
+// that cannot be spawned at all fails through `fail`, once, for every caller; `must` reports the
+// whole of stderr, since a streamed subprocess (`gh repo clone` relaying git) puts its cause on a
+// later line, not the first.
 export function cliRunner (binary, exec, fail) {
-  const run = args => {
-    const r = exec(args)
+  const run = (args, opts) => {
+    const r = exec(args, opts)
     if (r.error) fail(`${binary} not found on PATH (${r.error.message})`)
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
   }
-  const must = args => {
-    const r = run(args)
+  const must = (args, opts) => {
+    const r = run(args, opts)
     if (r.code !== 0) fail(`${binary} ${args.slice(0, 2).join(' ')}: ${r.err || r.out}`)
     return r.out
   }

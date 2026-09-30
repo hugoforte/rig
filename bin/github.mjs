@@ -27,6 +27,7 @@
 import { spawnSync } from 'node:child_process'
 import { TrackerError } from './errors.mjs'
 import { jsonCliHelpers, cliRunner } from './cli.mjs'
+import { NO_PROMPT_ENV } from './remote-env.mjs'
 
 export class GithubError extends TrackerError {}
 const { fail, firstLine, parseJson } = jsonCliHelpers(GithubError)
@@ -39,7 +40,7 @@ const PR_TIMELINE_JQ = [
   ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
 ].join('')
 
-const spawnGh = args => spawnSync('gh', args, { encoding: 'utf8' })
+const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
 
 export function githubViaGh ({ exec = spawnGh } = {}) {
   const { run: gh, must } = cliRunner('gh', exec, fail)
@@ -144,10 +145,11 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       return gh(['repo', 'view', spec, '--json', 'name']).code === 0
     },
     clone (spec, target) {
-      must(['repo', 'clone', spec, target])
+      // Both go through git, which may never stop to ask for credentials (decision 138).
+      must(['repo', 'clone', spec, target], { env: NO_PROMPT_ENV })
     },
     createRepo (spec, { source, description }) {
-      must(['repo', 'create', spec, '--private', '--source', source, '--push', '--description', description])
+      must(['repo', 'create', spec, '--private', '--source', source, '--push', '--description', description], { env: NO_PROMPT_ENV })
     },
   }
 }

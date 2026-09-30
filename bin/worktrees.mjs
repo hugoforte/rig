@@ -18,6 +18,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
+import { NO_PROMPT_ENV } from './remote-env.mjs'
+
+// A clone that needed credentials is the one failure with a fix to name. Git's own words for it
+// say only that a prompt was skipped, not that nothing will ever answer one.
+const NEEDS_CREDENTIALS = /terminal prompts disabled|could not read (Username|Password)/i
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -30,6 +35,8 @@ export const remotesInDirectory = dir => ({ url: (org, repo) => path.join(dir, o
 // to silence, because a caller that wants nothing said should not have to pass a sink.
 export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {}, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
+  // A call to the remote, which may never stop to ask for credentials (decision 138).
+  const toRemote = (dir, ...args) => run('git', ['-C', dir, ...args], { env: NO_PROMPT_ENV })
   const must = (cmd, args) => {
     const r = run(cmd, args)
     if (r.code !== 0) throw new RigError(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
@@ -58,15 +65,22 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     if (!fs.existsSync(mirror)) {
       step(`mirroring ${org}/${repo} (first use)`)
       fs.mkdirSync(path.dirname(mirror), { recursive: true })
-      must('git', ['clone', '--bare', remotes.url(org, repo), mirror])
+      const url = remotes.url(org, repo)
+      const clone = run('git', ['clone', '--bare', url, mirror], { env: NO_PROMPT_ENV })
+      if (clone.code !== 0) {
+        const detail = clone.err || clone.out
+        throw new RigError(NEEDS_CREDENTIALS.test(detail)
+          ? `could not mirror ${org}/${repo}: git needed credentials for ${url}, and rig never waits at a prompt — sign git in (\`gh auth setup-git\`) and run this again\n${detail}`
+          : `git clone --bare ${url} ${mirror}\n${detail}`)
+      }
       // A --bare clone has no fetch refspec; give it one so remote branches land
       // in refs/remotes/origin/* and never collide with our work branches.
       must('git', ['-C', mirror, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'])
     }
     step(`fetching ${org}/${repo}`)
-    const f = git(mirror, 'fetch', '--prune', 'origin')
+    const f = toRemote(mirror, 'fetch', '--prune', 'origin')
     if (f.code !== 0) warn(`fetch failed for ${org}/${repo}: ${f.err.split('\n')[0]}`)
-    git(mirror, 'remote', 'set-head', 'origin', '-a')
+    toRemote(mirror, 'remote', 'set-head', 'origin', '-a')
     return mirror
   }
 
@@ -258,18 +272,18 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (!fs.existsSync(mirror)) return out
       if (kept(mirror, branch)) {
         const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
-          : git(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+          : toRemote(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
         out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
           : !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
-      const ls = git(mirror, 'ls-remote', '--heads', 'origin', local(branch))
+      const ls = toRemote(mirror, 'ls-remote', '--heads', 'origin', local(branch))
       if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
       else if (ls.out.trim()) {
         const tip = ls.out.trim().split(/\s+/)[0]
         const push = tip !== head ? null
-          : git(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
+          : toRemote(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
         out.remote = !push ? 'kept — it has moved since the PR merged'
           : push.code === 0 ? 'deleted'
           : `kept — the push was refused: ${(push.err || push.out).split('\n')[0]}`

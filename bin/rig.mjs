@@ -10,6 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
+import { NO_PROMPT_ENV } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
@@ -134,8 +135,8 @@ const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === R
 // having to read it first.
 //
 // `opts.env` is additions to the run's environment rather than a replacement, because that is
-// what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
-// there, and a replacement would drop everything an isolated run depends on.
+// what its callers mean by it — `NO_PROMPT_ENV` goes on top of what is already there, and a
+// replacement would drop everything an isolated run depends on.
 function exec (cmd, args, { env: extra, ...opts } = {}) {
   const options = { ...spawnDefaults(current.command), cwd: current.cwd, env: extra ? { ...env(), ...extra } : env(), ...opts }
   const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args, options)
@@ -469,8 +470,8 @@ function adapterResolver (envVar, viaCli, inMemory) {
       if (resolved) return resolved
       const file = env()[envVar]
       if (!file) {
-        const spawnCli = args =>
-          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: env() })
+        const spawnCli = (args, { env: extra } = {}) =>
+          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: { ...env(), ...extra } })
         return (resolved = viaCli({ exec: spawnCli }))
       }
       fake = { file, state: exists(file) ? readJson(file) : {} }
@@ -1697,7 +1698,7 @@ function joinOrCreateDataRepo (spec, named) {
       die(`${target} is a checkout of ${origin}, not ${spec}`)
     }
     say(`using the existing checkout at ${target}`)
-    if (ensureFirstCommit(target, name) && origin) must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'])
+    if (ensureFirstCommit(target, name) && origin) must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
     return target
   }
 
@@ -1712,7 +1713,7 @@ function joinOrCreateDataRepo (spec, named) {
     github().clone(spec, target)
     // A repo with no commits clones fine and is useless; give it its first commit.
     if (ensureFirstCommit(target, name)) {
-      must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'])
+      must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
       ok(`${spec} was empty — pushed its first commit`)
     }
     return target
