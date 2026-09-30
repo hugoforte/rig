@@ -6,7 +6,8 @@
 //
 // The interface, and what each call may do:
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
-//   repo(org, name)                     { name, language } with GitHub's canonical name, or null
+//   repo(org, name)                     { name, language, visibility } with GitHub's canonical name, or null;
+//                                       visibility is 'public', 'internal' or 'private', or null when not said
 //   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body } newest PR, or null
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
@@ -51,10 +52,10 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       return r.status === 0 ? 'ok' : 'unauthenticated'
     },
     repo (org, name) {
-      const r = gh(['api', `repos/${org}/${name}`, '--jq', '{name,language}'])
+      const r = gh(['api', `repos/${org}/${name}`, '--jq', '{name,language,visibility}'])
       if (r.code !== 0 || !r.out) return null
-      const { name: canonical, language } = parseJson(r.out, 'gh api')
-      return { name: canonical, language: language || '' }
+      const { name: canonical, language, visibility } = parseJson(r.out, 'gh api')
+      return { name: canonical, language: language || '', visibility: visibility || null }
     },
     // `baseRefName` is the base the PR lands on *now* — repoint a PR at another branch and
     // it changes, where the base a work recorded at `rig attach` never does. It rides along
@@ -153,7 +154,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 }
 
 // Canned GitHub for tests. `state` is mutated in place so the harness can persist and
-// inspect it: { auth, repos: { 'owner/name': { language, prs, issues, source } } }.
+// inspect it: { auth, repos: { 'owner/name': { language, visibility, prs, issues, source } } }.
 // `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' makes
 // lookups answer null or false, as gh's non-zero exit does, and writes fail.
 // `env` is the run's, for the one call below that spawns anything: a clone made under the
@@ -181,7 +182,7 @@ export function githubInMemory (state, { env } = {}) {
     repo (org, name) {
       if (!answers()) return null
       const found = lookup(`${org}/${name}`)
-      return found ? { name: found.key.split('/')[1], language: found.repo.language || '' } : null
+      return found ? { name: found.key.split('/')[1], language: found.repo.language || '', visibility: found.repo.visibility || null } : null
     },
     prForBranch (org, name, branch) {
       if (!answers()) return null

@@ -465,6 +465,16 @@ The body is assembled from what the record already holds: the title, the tickets
 stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
 
+**What it says in public.** The Direction is lifted into a body anyone who can read the repo
+reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
+visible than the data root** — public above internal above private, and a data root with no
+remote counts as private — because it names the private repo, and GitHub keeps a body's edit
+history. A visibility GitHub would not say leaves the link out, with one dim line saying so.
+The same rule holds for `rig close`'s comments on GitHub tickets and for the issue `rig new
+--ticket` opens; Jira comments keep the link. In a work of **one** repo, each of the work's own
+GitHub tickets in that repo gets a `Fixes` line, since merging that PR is the work landing; every
+other ticket is named on the `Tickets:` line and closed by `rig close`.
+
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
 

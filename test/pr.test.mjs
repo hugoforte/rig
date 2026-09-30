@@ -11,7 +11,7 @@ import path from 'node:path'
 import { billingInstall, slicedWork } from './billing-install.mjs'
 
 const m = billingInstall('rig-pr-')
-const { dataRoot, rig, gitMust, github, setGithub, worktree, cleanup } = m
+const { dataRoot, rig, gitMust, github, setGithub, setVisibility, publish, worktree, cleanup } = m
 
 after(cleanup)
 
@@ -168,7 +168,7 @@ test('pr --refresh rewrites an open PR from the record as it stands now', () => 
   assert.match(r.out, /billing: PR #\d+ refreshed from the record/)
   const pr = github().repos['acme/billing'].prs.find(p => p.branch === 'feat/second')
   assert.equal(pr.title, 'Second, as it turned out')
-  assert.match(pr.body, /^Second, as it turned out\n\nTickets: acme\/billing#12\n\n## Direction\n\nBecause a trial run showed the cheaper path\.\n/)
+  assert.match(pr.body, /^Second, as it turned out\n\nFixes acme\/billing#12\n\n## Direction\n\nBecause a trial run showed the cheaper path\.\n/)
 })
 
 test('pr --refresh again finds nothing to change, and edits nothing', () => {
@@ -237,4 +237,96 @@ test('rig next offers the refresh while an open PR says something the record no 
   assert.match(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
   assert.equal(rig(['pr', '--refresh', '--work', 'reviewed-2']).code, 0)
   assert.doesNotMatch(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
+})
+
+// A work with one repo, one commit pushed and whatever `extra` commands it names, so the PR
+// `rig pr` opens for it says only what the test is about.
+const pushedWork = (id, title, ...extra) => {
+  assert.equal(rig(['new', id, '--title', title, '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  for (const args of extra) assert.equal(rig([...args, '--work', id]).code, 0)
+  const dest = worktree(id, 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), `${id}\n`)
+  gitMust(dest, 'commit', '-qam', id)
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+}
+const bodyOf = branch => github().repos['acme/billing'].prs.find(pr => pr.branch === branch).body
+
+test('a PR on a public repo never carries the link to a private data root (#202)', () => {
+  // This data root has no remote, which counts as private: nothing more visible may name it.
+  pushedWork('public-pr', 'Public PR')
+  setVisibility('acme/billing', 'public')
+  try {
+    const r = rig(['pr', '--work', 'public-pr'])
+    assert.equal(r.code, 0, r.out)
+    assert.doesNotMatch(bodyOf('feat/public-pr'), /Context doc|context\.md/)
+  } finally {
+    setVisibility('acme/billing', 'private')
+  }
+})
+
+test('a data root as public as the repo is linked all the same (#202)', () => {
+  gitMust(dataRoot, 'remote', 'add', 'origin', 'https://github.com/acme/rig-data.git')
+  setVisibility('acme/rig-data', 'public')
+  setVisibility('acme/billing', 'public')
+  try {
+    assert.equal(rig(['pr', '--refresh', '--work', 'public-pr']).code, 0)
+    assert.match(bodyOf('feat/public-pr'), /\nContext doc: https:\/\/github\.com\/acme\/rig-data\/blob\/main\/work\/public-pr\/context\.md$/)
+  } finally {
+    gitMust(dataRoot, 'remote', 'remove', 'origin')
+    setVisibility('acme/billing', 'private')
+  }
+})
+
+test('a visibility GitHub will not say is no evidence an open PR is stale (#202)', () => {
+  // The open PR carries the public data root's link, which the record, with no remote now,
+  // would not write; but a lookup that failed cannot say which of the two is right.
+  setVisibility('acme/billing', undefined)
+  try {
+    assert.doesNotMatch(rig(['next', '--work', 'public-pr']).out, /rig pr --refresh/)
+  } finally {
+    setVisibility('acme/billing', 'private')
+  }
+})
+
+test('and a PR written without knowing it leaves the link out, saying so once (#202)', () => {
+  setVisibility('acme/billing', undefined)
+  try {
+    const r = rig(['pr', '--refresh', '--work', 'public-pr'])
+    assert.equal(r.code, 0, r.out)
+    assert.doesNotMatch(bodyOf('feat/public-pr'), /Context doc/)
+    assert.equal(r.out.match(/context-doc link left out: GitHub would not say whether acme\/billing is more visible than the data root/g)?.length, 1, r.out)
+  } finally {
+    setVisibility('acme/billing', 'private')
+  }
+})
+
+test('a single-repo work\'s PR closes its own tickets, and only names one in another repo (#202)', () => {
+  pushedWork('fixing', 'Fixing work', ['ticket', 'acme/billing#40'], ['ticket', 'acme/other#41'])
+  assert.equal(rig(['pr', '--work', 'fixing']).code, 0)
+  assert.match(bodyOf('feat/fixing-work'), /^Fixing work\n\nFixes acme\/billing#40\nTickets: acme\/other#41\n/)
+})
+
+test('a work ticket whose slice was withdrawn is named, never closed by the merge (#202)', () => {
+  pushedWork('withdrawn-fix', 'Withdrawn fix', ['ticket', 'acme/billing#43'],
+    ['stage', 'feat/withdrawn-fix-one', '--delivers', 'the part', '--key', 'acme/billing#43'],
+    ['stage', 'feat/withdrawn-fix-one', '--dropped', 'not needed'])
+  assert.equal(rig(['pr', '--work', 'withdrawn-fix']).code, 0)
+  const body = bodyOf('feat/withdrawn-fix')
+  assert.match(body, /\nTickets: acme\/billing#43\n/)
+  assert.doesNotMatch(body, /Fixes/)
+})
+
+test('in a work of two repos no one PR closes a ticket, because its merge is not the landing (#202)', () => {
+  publish('orders')
+  setVisibility('acme/orders', 'private')
+  pushedWork('two-repo', 'Two repos', ['ticket', 'acme/billing#42'], ['attach', 'orders'])
+  const dest = worktree('two-repo', 'orders')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'orders\n')
+  gitMust(dest, 'commit', '-qam', 'orders')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  assert.equal(rig(['pr', '--work', 'two-repo']).code, 0)
+  const body = bodyOf('feat/two-repos')
+  assert.match(body, /\nTickets: acme\/billing#42\n/)
+  assert.doesNotMatch(body, /Fixes/)
 })

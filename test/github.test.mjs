@@ -106,9 +106,15 @@ test('gh adapter: prForBranch fails as a GithubError, not a TypeError, when gh p
   assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), /gh pr list.*not a list/)
 })
 
-test('gh adapter: repo returns GitHub\'s canonical name and language', () => {
+test('gh adapter: repo returns GitHub\'s canonical name, language and visibility', () => {
+  const { calls, github } = canned(() => '{"name":"Platform","language":"TypeScript","visibility":"public"}')
+  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript', visibility: 'public' })
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform', '--jq', '{name,language,visibility}'])
+})
+
+test('gh adapter: a repo GitHub names no visibility for reads as unknown, not as private', () => {
   const { github } = canned(() => '{"name":"Platform","language":"TypeScript"}')
-  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
+  assert.equal(github.repo('acme', 'platform').visibility, null)
 })
 
 test('gh adapter: repo is null when GitHub has no such repo', () => {
@@ -171,8 +177,14 @@ const world = () => ({
 
 test('in-memory adapter: repo matches case-insensitively and returns the canonical name', () => {
   const github = githubInMemory(world())
-  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
+  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript', visibility: null })
   assert.equal(github.repo('acme', 'nope'), null)
+})
+
+test('in-memory adapter: repo answers the visibility a fixture gives it', () => {
+  const state = world()
+  state.repos['acme/Platform'].visibility = 'private'
+  assert.equal(githubInMemory(state).repo('acme', 'platform').visibility, 'private')
 })
 
 test('in-memory adapter: prTimeline answers the earliest commit, first look and approval', () => {
