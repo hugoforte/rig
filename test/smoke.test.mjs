@@ -1151,6 +1151,7 @@ test('backfill --work on a record that will not read says so in a sentence, not 
 
 test('doctor reports a record that will not read as a problem, and still checks everything else', () => withBrokenRecord(() => {
   const r = rig(['doctor'])
+  assert.equal(r.code, 1, r.out)
   assert.match(r.out, /broken: work record .*work\.json could not be read \(/)
   assert.match(r.out, /disk on /, 'the checks after the works still ran')
 }))
