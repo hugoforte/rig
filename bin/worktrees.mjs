@@ -108,6 +108,31 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   const kept = (mirror, branch) => has(mirror, local(branch))
   const isAncestor = (mirror, a, b) => git(mirror, 'merge-base', '--is-ancestor', a, b).code === 0
 
+  // A merge that adds nothing of its own: its tree is what merging its two parents gives.
+  const cleanMerge = (mirror, sha) => {
+    const parents = git(mirror, 'rev-list', '--parents', '-n', '1', sha).out.trim().split(/\s+/).slice(1)
+    if (parents.length !== 2) return false
+    const merged = git(mirror, 'merge-tree', '--write-tree', ...parents)
+    return merged.code === 0 && merged.out.split('\n')[0].trim() === git(mirror, 'rev-parse', `${sha}^{tree}`).out.trim()
+  }
+
+  // What on `tip` did not land in `head`, asked by patch rather than by sha, since GitHub
+  // re-makes a stacked PR's commits when it retargets it (hugoforte/rig#257). `git cherry`
+  // marks each commit `head` cannot reach `-` when one with the same patch-id is on the head's
+  // side, and skips merges, so a merge is judged on its own: one that adds nothing is passed
+  // over, and one with content of its own, a conflict resolved by hand, has not landed. Null
+  // when everything did; otherwise the oldest commit that did not, named.
+  const notLanded = (mirror, tip, head, number) => {
+    const cherry = git(mirror, 'cherry', head, tip)
+    if (cherry.code !== 0) return `git could not compare it with PR #${number}'s head: ${(cherry.err || cherry.out).split('\n')[0]}`
+    const marks = new Map(cherry.out.split('\n').filter(Boolean).map(l => [l.slice(2).trim(), l[0]]))
+    const unlanded = git(mirror, 'rev-list', '--reverse', '--topo-order', tip, `^${head}`).out.split('\n').filter(Boolean)
+      .filter(sha => marks.has(sha) ? marks.get(sha) === '+' : !cleanMerge(mirror, sha))
+    if (!unlanded.length) return null
+    const named = git(mirror, 'log', '-1', '--format=%h "%s"', unlanded[0]).out.trim()
+    return `${named} is not in what PR #${number} merged${unlanded.length > 1 ? ` (and ${unlanded.length - 1} more)` : ''}`
+  }
+
   // The mirror may already hold a copy of the branch: every worktree ever cut on it left one
   // behind in `refs/heads`, because a worktree shares the mirror's ref store and removing the
   // worktree keeps the branch (hugoforte/rig#149). A copy the remote has caught up with is
@@ -282,6 +307,10 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // GitHub keeps after the branch is deleted (hugoforte/rig#181). A fetch that fails keeps the
     // copy and says why.
     //
+    // A copy that is not behind `head` may still hold nothing else: GitHub re-makes a stacked
+    // PR's commits when it retargets it, so the same patches landed under other shas, and
+    // `notLanded` asks by patch before the copy is kept.
+    //
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
     // thing to say, not a reason to fail.
@@ -292,8 +321,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (kept(mirror, branch)) {
         const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
           : toRemote(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+        const unlanded = fetch?.code || isAncestor(mirror, local(branch), head) ? null : notLanded(mirror, local(branch), head, number)
         out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
-          : !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
+          : unlanded ? `kept — ${unlanded}`
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
