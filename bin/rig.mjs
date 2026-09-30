@@ -1430,9 +1430,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
-  // A ticket a slice also holds is told once, by `stageWriteBack`, because the slice is the more
-  // specific news (hugoforte/rig#229); that comment carries the work's PRs too, and closes the
-  // ticket only when the work landed as well.
+  // A ticket a slice also holds is left to `stageWriteBack`, which says why.
   const sliceKeys = new Set(stages.flatMap(st => st.tickets || []))
   const githubKeys = keys.filter(k => isGithubKey(k) && !sliceKeys.has(k))
   const jiraKeys = keys.filter(k => isJiraKey(k) && !sliceKeys.has(k))
@@ -1509,19 +1507,28 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
 // it open is what the comment says.
 function stageWriteBack (work, stages, { abandoned, landing = null }) {
   const slicesOf = new Map()
-  for (const st of stages) for (const key of st.tickets || []) slicesOf.set(key, [...(slicesOf.get(key) || []), st])
-  const ran = `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}.`
+  for (const st of stages) {
+    for (const key of st.tickets || []) {
+      if (!slicesOf.has(key)) slicesOf.set(key, [])
+      slicesOf.get(key).push(st)
+    }
+  }
+  // A forced close says so here as it does on the work's tickets (decision 77).
+  const forced = work.forcedAt && !abandoned
+  const ran = `\`rig close${abandoned ? ' --abandoned' : forced ? ' --force' : ''}\` ran on ${work.id}.${forced ? ' The blockers were overridden deliberately.' : ''}`
   for (const [key, slices] of slicesOf) {
     const asWork = landing && (work.tickets || []).includes(key)
-    const stuck = slices.find(st => abandoned || !st.landed)
-    const closes = !stuck && (!asWork || landing.done)
+    const stuck = slices.find(st => !st.landed)
+    const closes = !abandoned && !stuck && (!asWork || landing.done)
     const names = slices.map(st => st.branch).join(', ')
-    const which = slices.length > 1 && stuck ? `The slice \`${stuck.branch}\`` : 'This slice'
-    const landedIn = `The slice${slices.length > 1 ? 's' : ''} this was opened for landed in \`${work.branch}\``
-    const outcome = closes ? `${landedIn}, and \`rig close\` ran on ${work.id}.`
-      : stuck?.withdrawn ? `${ran} ${which} was ${withdrawnLabel(stuck.withdrawn, b => `\`${b}\``)}. The issue stays open.`
-        : stuck ? `${ran} ${which} did not land, so the issue stays open.`
-          : `${ran} ${landedIn}, but the work has not: ${landing.reason} The issue stays open.`
+    const slice = slices.length > 1 ? `The slice \`${stuck?.branch}\`` : 'This slice'
+    const landed = `The slice${slices.length > 1 ? 's' : ''} this was opened for landed in \`${work.branch}\``
+    let outcome
+    if (closes) outcome = `${landed}, and ${ran}`
+    else if (stuck?.withdrawn) outcome = `${ran} ${slice} was ${withdrawnLabel(stuck.withdrawn, b => `\`${b}\``)}. The issue stays open.`
+    else if (stuck) outcome = `${ran} ${slice} did not land, so the issue stays open.`
+    else if (abandoned) outcome = `${ran} The work was stopped without finishing, so the issue stays open.`
+    else outcome = `${ran} ${landed}, but the work has not: ${landing.reason} The issue stays open.`
     const prs = [...new Set([...slices.flatMap(st => st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)), ...(asWork ? landing.prs : [])])]
     const body = link => [
       outcome,
@@ -1540,7 +1547,7 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
     const [repo, n] = key.split('#')
     const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
-    if (!closes) { step(`commented on ${key} (left open: ${stuck ? `stage ${stuck.branch} did not land` : landing.reason})`); continue }
+    if (!closes) { step(`commented on ${key} (left open: ${stuck ? `stage ${stuck.branch} did not land` : abandoned ? 'abandoned' : landing.reason})`); continue }
     const notClosed = trackerFailure(() => github().closeIssue(repo, n))
     if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
     else step(`closed ${key} (stage ${names} landed)`)

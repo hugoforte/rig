@@ -178,8 +178,8 @@ test('a dropped slice tells its ticket why, and leaves it open', () => {
 })
 
 // A work rigged with `--key` for its ticket, and a stage declared with the same key: the shape
-// `rig new --key` then `rig stage --key` makes for a work that is one slice of one ticket.
-// The stage lands; the work branch's own PR is left for the caller.
+// `rig new --key` then `rig stage --key` makes for a work that is one slice of one ticket. The
+// stage lands, and the work branch's own PR is seeded as `workPr` says.
 const bothRoles = ({ id, issue, stagePr, workPr }) => {
   assert.equal(rig(['new', id, '--title', id, '--type', 'feat', '--key', `acme/billing#${issue}`]).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
@@ -192,12 +192,12 @@ const bothRoles = ({ id, issue, stagePr, workPr }) => {
   gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the slice', `feat/${id}-one`)
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
   seedPr({ branch: `feat/${id}-one`, number: stagePr, state: 'MERGED', base: `feat/${id}`, url: `https://github.com/acme/billing/pull/${stagePr}`, mergedAt: '2026-09-19T10:00:00Z' })
-  return { workPr: pr => seedPr({ branch: `feat/${id}`, number: workPr, base: 'main', url: `https://github.com/acme/billing/pull/${workPr}`, ...pr }) }
+  seedPr({ branch: `feat/${id}`, base: 'main', url: `https://github.com/acme/billing/pull/${workPr.number}`, ...workPr })
 }
+const MERGED = { state: 'MERGED', mergedAt: '2026-09-19T11:00:00Z' }
 
 test('a ticket that is the work\'s and a slice\'s is told once, with both PRs, and closed once (#229)', () => {
-  bothRoles({ id: 'both-roles', issue: 70, stagePr: 71, workPr: 72 })
-    .workPr({ state: 'MERGED', mergedAt: '2026-09-19T11:00:00Z' })
+  bothRoles({ id: 'both-roles', issue: 70, stagePr: 71, workPr: { number: 72, ...MERGED } })
   const c = rig(['close', '--work', 'both-roles'])
   assert.equal(c.code, 0, c.out)
   assert.equal(c.out.match(/acme\/billing#70/g)?.length, 1, c.out)
@@ -209,27 +209,38 @@ test('a ticket that is the work\'s and a slice\'s is told once, with both PRs, a
 })
 
 test('a ticket in both roles stays open while the work has not landed, though its slice did (#229)', () => {
-  bothRoles({ id: 'half-landed', issue: 73, stagePr: 74, workPr: 75 })
-    .workPr({ state: 'OPEN', mergedAt: null })
+  bothRoles({ id: 'half-landed', issue: 73, stagePr: 74, workPr: { number: 75, state: 'OPEN', mergedAt: null } })
   assert.equal(rig(['close', '--work', 'half-landed']).code, 1, 'it refuses first')
   const c = rig(['close', '--force', '--work', 'half-landed'])
   assert.equal(c.code, 0, c.out)
+  assert.equal(c.out.match(/acme\/billing#73/g)?.length, 1, c.out)
   assert.equal(issueNumbered(73).state, 'OPEN')
   assert.equal(issueNumbered(73).comments.length, 1)
-  assert.match(issueNumbered(73).comments[0], /landed in `feat\/half-landed`, but the work has not: Not every PR is merged — billing \(PR #75 open\)\. The issue stays open\./)
+  assert.match(issueNumbered(73).comments[0], /^`rig close --force` ran on half-landed\. The blockers were overridden deliberately\. The slice this was opened for landed in `feat\/half-landed`, but the work has not: Not every PR is merged — billing \(PR #75 open\)\. The issue stays open\./)
 })
 
-test('a ticket two slices hold is told once, naming both (#229)', () => {
-  assert.equal(rig(['new', 'two-slices', '--title', 'Two slices', '--type', 'feat', '--no-ticket']).code, 0)
-  assert.equal(rig(['attach', 'billing', '--work', 'two-slices']).code, 0)
-  seedIssue(76, 'two slices')
-  for (const b of ['one', 'two']) {
-    assert.equal(rig(['stage', `feat/two-slices-${b}`, '--delivers', `slice ${b}`, '--key', 'acme/billing#76', '--work', 'two-slices']).code, 0)
-  }
-  assert.equal(rig(['stage', 'feat/two-slices-two', '--dropped', 'not needed', '--work', 'two-slices']).code, 0)
-  const c = rig(['close', '--abandoned', '--work', 'two-slices'])
+test('a ticket two slices hold is told once, naming both, and stays open for the one that did not land (#229)', () => {
+  bothRoles({ id: 'two-slices', issue: 76, stagePr: 77, workPr: { number: 78, ...MERGED } })
+  assert.equal(rig(['stage', 'feat/two-slices-two', '--delivers', 'the rest', '--key', 'acme/billing#76', '--work', 'two-slices']).code, 0)
+  const c = rig(['close', '--work', 'two-slices'])
   assert.equal(c.code, 0, c.out)
   assert.equal(issueNumbered(76).state, 'OPEN')
   assert.equal(issueNumbered(76).comments.length, 1)
-  assert.match(issueNumbered(76).comments[0], /Stage: `feat\/two-slices-one` — slice one\nStage: `feat\/two-slices-two` — slice two/)
+  const [comment] = issueNumbered(76).comments
+  assert.match(comment, /The slice `feat\/two-slices-two` did not land, so the issue stays open\./)
+  assert.match(comment, /\n\nStage: `feat\/two-slices-one` — the slice\nStage: `feat\/two-slices-two` — the rest\n/)
+})
+
+test('a withdrawn slice is what a ticket two slices hold is told stays open for (#229)', () => {
+  assert.equal(rig(['new', 'withdrawn-two', '--title', 'Withdrawn two', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'withdrawn-two']).code, 0)
+  seedIssue(79, 'withdrawn two')
+  for (const b of ['one', 'two']) {
+    assert.equal(rig(['stage', `feat/withdrawn-two-${b}`, '--delivers', `slice ${b}`, '--key', 'acme/billing#79', '--work', 'withdrawn-two']).code, 0)
+  }
+  assert.equal(rig(['stage', 'feat/withdrawn-two-one', '--dropped', 'not needed', '--work', 'withdrawn-two']).code, 0)
+  const c = rig(['close', '--abandoned', '--work', 'withdrawn-two'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(issueNumbered(79).comments.length, 1)
+  assert.match(issueNumbered(79).comments[0], /The slice `feat\/withdrawn-two-one` was dropped: not needed\. The issue stays open\./)
 })
