@@ -108,29 +108,30 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
   const kept = (mirror, branch) => has(mirror, local(branch))
   const isAncestor = (mirror, a, b) => git(mirror, 'merge-base', '--is-ancestor', a, b).code === 0
 
-  // A merge that adds nothing of its own: its tree is what merging its two parents gives.
-  const cleanMerge = (mirror, sha) => {
-    const parents = git(mirror, 'rev-list', '--parents', '-n', '1', sha).out.trim().split(/\s+/).slice(1)
-    if (parents.length !== 2) return false
-    const merged = git(mirror, 'merge-tree', '--write-tree', ...parents)
-    return merged.code === 0 && merged.out.split('\n')[0].trim() === git(mirror, 'rev-parse', `${sha}^{tree}`).out.trim()
-  }
-
-  // What on `tip` did not land in `head`, asked by patch rather than by sha, since GitHub
-  // re-makes a stacked PR's commits when it retargets it (hugoforte/rig#257). `git cherry`
-  // marks each commit `head` cannot reach `-` when one with the same patch-id is on the head's
-  // side, and skips merges, so a merge is judged on its own: one that adds nothing is passed
-  // over, and one with content of its own, a conflict resolved by hand, has not landed. Null
-  // when everything did; otherwise the oldest commit that did not, named.
-  const notLanded = (mirror, tip, head, number) => {
-    const cherry = git(mirror, 'cherry', head, tip)
-    if (cherry.code !== 0) return `git could not compare it with PR #${number}'s head: ${(cherry.err || cherry.out).split('\n')[0]}`
-    const marks = new Map(cherry.out.split('\n').filter(Boolean).map(l => [l.slice(2).trim(), l[0]]))
-    const unlanded = git(mirror, 'rev-list', '--reverse', '--topo-order', tip, `^${head}`).out.split('\n').filter(Boolean)
-      .filter(sha => marks.has(sha) ? marks.get(sha) === '+' : !cleanMerge(mirror, sha))
-    if (!unlanded.length) return null
-    const named = git(mirror, 'log', '-1', '--format=%h "%s"', unlanded[0]).out.trim()
-    return `${named} is not in what PR #${number} merged${unlanded.length > 1 ? ` (and ${unlanded.length - 1} more)` : ''}`
+  // Why the copy at `tip` holds something `head` does not, or null when it holds nothing else.
+  // A copy at `head` or behind it holds nothing else. One that is not may still have landed:
+  // GitHub re-makes a stacked PR's commits when it retargets it (hugoforte/rig#257), so the
+  // same patches are in `head` under other shas. Two questions, and both must answer "landed".
+  // By patch: `--cherry-pick` drops each commit whose patch-id is on the head's side, and what
+  // is left, merges aside, is named, the oldest first. By content: a patch-id ignores
+  // whitespace, and a merge has none, so merging the copy into `head` must give `head`'s tree —
+  // an amend that only re-indented, or a merge that settled a conflict by hand, fails there.
+  // A git call that fails keeps the copy, since no answer is not "landed".
+  const unlandedReason = (mirror, tip, head, number) => {
+    if (isAncestor(mirror, tip, head)) return null
+    const failed = r => `git could not compare it with PR #${number}'s head: ${(r.err || r.out).split('\n')[0]}`
+    const left = git(mirror, 'rev-list', '--reverse', '--topo-order', '--no-merges', '--right-only', '--cherry-pick', `${head}...${tip}`)
+    if (left.code !== 0) return failed(left)
+    const unlanded = left.out.split('\n').filter(Boolean)
+    if (unlanded.length) {
+      const named = git(mirror, 'log', '-1', '--format=%h "%s"', unlanded[0]).out.trim()
+      return `${named} is not in what PR #${number} merged${unlanded.length > 1 ? ` (and ${unlanded.length - 1} more)` : ''}`
+    }
+    const tree = git(mirror, 'rev-parse', `${head}^{tree}`)
+    if (tree.code !== 0) return failed(tree)
+    const merged = git(mirror, 'merge-tree', '--write-tree', head, tip)
+    return merged.code === 0 && merged.out.split('\n')[0].trim() === tree.out.trim() ? null
+      : `merging it into PR #${number}'s head would change what that PR merged`
   }
 
   // The mirror may already hold a copy of the branch: every worktree ever cut on it left one
@@ -298,18 +299,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // Delete a branch whose pull request merged, from the mirror and from the remote. `head` is
     // the commit the PR carried, and it is the whole of the safety: a copy is deleted only when
     // everything on it is in that commit, so nothing that exists nowhere else can go. The mirror's
-    // copy must be `head` or behind it; the remote's must be `head` exactly, and the push leases
-    // on it, so a commit pushed after the merge keeps the branch rather than being lost with it.
+    // copy must have landed in `head`, by sha or by patch and content (`unlandedReason`); the remote's must be
+    // `head` exactly, and the push leases on it, so a commit pushed after the merge keeps the
+    // branch rather than being lost with it.
     //
     // The mirror may never have seen `head`: a PR updated on GitHub — "Update branch" — carries
     // a commit no fetch brought here, and asking whether the copy is behind a commit git does not
     // have answers no. So that commit is fetched first, from `refs/pull/<number>/head`, which
     // GitHub keeps after the branch is deleted (hugoforte/rig#181). A fetch that fails keeps the
     // copy and says why.
-    //
-    // A copy that is not behind `head` may still hold nothing else: GitHub re-makes a stacked
-    // PR's commits when it retargets it, so the same patches landed under other shas, and
-    // `notLanded` asks by patch before the copy is kept.
     //
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
@@ -321,9 +319,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (kept(mirror, branch)) {
         const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
           : toRemote(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
-        const unlanded = fetch?.code || isAncestor(mirror, local(branch), head) ? null : notLanded(mirror, local(branch), head, number)
-        out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
-          : unlanded ? `kept — ${unlanded}`
+        const reason = fetch && fetch.code !== 0 ? `could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
+          : unlandedReason(mirror, local(branch), head, number)
+        out.local = reason ? `kept — ${reason}`
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }

@@ -525,9 +525,9 @@ the work's branches — the work branch and each stage that landed — from the 
 remote, but only a copy holding nothing its PR did not merge; a branch pushed to after the
 merge is kept and named. When the mirror lacks the commit a PR merged, the close fetches it
 first; if that fails, the copy is kept with the reason. A stage GitHub rewrote while merging
-its stack one PR at a time holds the same patches under new SHAs, so a copy the PR's head does
-not contain is compared by patch: it goes when every commit landed, and is kept, naming the
-first that did not, when one did not. A close forced past a blocker, or
+its stack one PR at a time holds the same patches under new shas, so a copy the PR's head does
+not contain is compared by patch and by content: it goes when everything on it landed, and is
+kept otherwise, naming the first commit that did not. A close forced past a blocker, or
 abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a

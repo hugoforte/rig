@@ -215,7 +215,6 @@ test('a stage that landed goes with the work branch', () => {
 const mergeOnGithub = (into, from) => {
   const merge = gitMust(bare('billing'), 'commit-tree', `${from}^{tree}`, '-p', into, '-p', from, '-m', `Merge ${from}`)
   gitMust(bare('billing'), 'update-ref', `refs/heads/${into}`, merge)
-  return merge
 }
 const rewriteOnGithub = (branch, onto, number) => {
   let tip = gitMust(bare('billing'), 'rev-parse', onto)
@@ -262,11 +261,11 @@ const stackMergedBottomUp = (id, first, { extra = null } = {}) => {
   pr(work, first + 2, workHead)
   assert.notEqual(git(mirror('billing'), 'merge-base', '--is-ancestor', `refs/heads/${two}`, twoHead).status, 0,
     'the copy here is not behind the head GitHub made')
-  return { two }
+  return two
 }
 
 test('a stage GitHub rewrote while merging the stack is deleted from the mirror and the remote (#257)', () => {
-  const { two } = stackMergedBottomUp('rewritten', 60)
+  const two = stackMergedBottomUp('rewritten', 60)
   const r = rig(['close', '--work', 'rewritten'])
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(strip(r.out), /copy of \S+ kept/)
@@ -275,7 +274,7 @@ test('a stage GitHub rewrote while merging the stack is deleted from the mirror 
 })
 
 test('a rewritten stage whose copy holds a commit the PR never carried is kept, and the close names the commit (#257)', () => {
-  const { two } = stackMergedBottomUp('rewritten-extra', 63, { extra: 'rewritten-extra: an afterthought' })
+  const two = stackMergedBottomUp('rewritten-extra', 63, { extra: 'rewritten-extra: an afterthought' })
   const r = rig(['close', '--work', 'rewritten-extra'])
   assert.equal(r.code, 0, r.out)
   const sha = gitMust(mirror('billing'), 'rev-parse', '--short', `refs/heads/${two}`)
