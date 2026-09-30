@@ -48,7 +48,7 @@ test('rig stage --link makes them one stack on the work branch, bottom to top, a
   assert.match(strip(r.out), new RegExp(`gh stack merge ${stack.number} --merge`))
 })
 
-test('and rig next stops offering it once they are', () => {
+test('rig next stops offering --link once the stage PRs are one stack', () => {
   assert.equal(offersLink('linked'), false)
 })
 
@@ -75,6 +75,14 @@ test('stages side by side on the work branch are named and not linked, since lin
   assert.match(strip(r.out), /billing: not linked — #82 \(feat\/forked-right\) is based on feat\/forked-work, not feat\/forked-left/)
   assert.equal(stacks().some(s => s.prs.includes(81)), false)
   assert.equal(offersLink('forked'), false, 'nothing to offer that the command would refuse')
+})
+
+test('--link takes no branch, in either order', () => {
+  for (const args of [['--link', 'feat/linked-one'], ['feat/linked-one', '--link']]) {
+    const r = rig(['stage', ...args, '--work', 'linked'])
+    assert.equal(r.code, 1, r.out)
+    assert.match(strip(r.out), /--link registers every stage at once, and takes no branch/)
+  }
 })
 
 test('a missing gh stack is said with how to install it, and the command still succeeds', () => {

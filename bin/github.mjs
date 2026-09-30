@@ -47,7 +47,7 @@ const PR_TIMELINE_JQ = [
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number]}'
 
-const spawnGh =(args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
+const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
 
 export function githubViaGh ({ exec = spawnGh } = {}) {
   const { run: gh, must } = cliRunner('gh', exec, fail)
