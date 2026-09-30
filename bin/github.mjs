@@ -13,6 +13,9 @@
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
+//   stacks(org, name)                   [{ number, open, base, prs }] every GitHub stack, or null
+//   stackTool()                         'ok' | 'missing' | 'old': is `gh stack link` there
+//   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
@@ -20,7 +23,7 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, prTimeline, labels, repoExists) answer
+// but exits non-zero, the lookups (repo, prForBranch, prTimeline, labels, stacks, repoExists) answer
 // null or false — "not found" and "gh could not answer" look the same to them — and every
 // other call throws GithubError carrying gh's stderr.
 //
@@ -41,6 +44,8 @@ const PR_TIMELINE_JQ = [
   ', firstReviewAt: ([.reviews[] | select(.submittedAt != null) | .submittedAt] | min)',
   ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
 ].join('')
+
+const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number]}'
 
 const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
 
@@ -137,6 +142,31 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // rewriting its title and body.
     editPr (org, name, number, { title, body }) {
       must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, '--title', title, '--body', body])
+    },
+    // Every GitHub stack a repo has, open or merged, by the endpoint the gh-stack extension
+    // itself reads. GitHub's REST reference does not list it, so an answer it will not give is
+    // unknown, never "no stacks".
+    stacks (org, name) {
+      const r = gh(['api', `repos/${org}/${name}/stacks`, '--paginate', '--jq', STACKS_JQ])
+      if (r.code !== 0) return null
+      return r.out.split('\n').filter(l => l.trim()).map(l => {
+        const s = parseJson(l, 'gh api stacks')
+        return { number: s.number, open: s.open, base: s.base, prs: s.prs }
+      })
+    },
+    // Is the gh-stack extension here, and new enough to `link`? Read off its help, because an
+    // unknown `gh stack` subcommand prints that help and exits 0.
+    stackTool () {
+      const r = gh(['stack', '--help'])
+      if (r.code !== 0) return 'missing'
+      return /^\s+link\s/m.test(r.out) ? 'ok' : 'old'
+    },
+    // `gh stack link`, which registers pull requests that already exist as one stack and owns
+    // no branch. Given URLs, never branch names: a branch name is pushed, and opened as a pull
+    // request when it has none. `--base` always, since it defaults to the default branch. The
+    // repo is named by `GH_REPO`, so nothing depends on where rig was run.
+    linkStack (org, name, { base, urls }) {
+      must(['stack', 'link', '--base', base, ...urls], { env: { GH_REPO: `${org}/${name}` } })
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -260,6 +290,28 @@ export function githubInMemory (state, { env } = {}) {
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       if (!pr) fail(`${org}/${name}#${number}: no such pull request (in-memory GitHub)`)
       Object.assign(pr, { title, body })
+    },
+    stacks (org, name) {
+      if (!answers()) return null
+      const found = lookup(`${org}/${name}`)
+      if (!found || found.repo.stacks === null) return null
+      return (found.repo.stacks || []).map(s => ({ ...s, prs: [...s.prs] }))
+    },
+    stackTool: () => state.ghStack || 'ok',
+    // As `gh stack link` does: a stack holding any of the PRs grows by the rest, and otherwise
+    // a new one is made. Stack numbers share the PRs' sequence, as they do on GitHub.
+    linkStack (org, name, { base, urls }) {
+      write()
+      const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      const numbers = urls.map(u => Number(/\/pull\/(\d+)$/.exec(u)?.[1] || fail(`${u}: not a pull request URL (in-memory GitHub)`)))
+      found.repo.stacks = found.repo.stacks || []
+      let stack = found.repo.stacks.find(s => s.open && s.prs.some(n => numbers.includes(n)))
+      if (!stack) {
+        const number = Math.max(0, ...(found.repo.prs || []).map(p => p.number), ...found.repo.stacks.map(s => s.number)) + 1
+        stack = { number, open: true, base, prs: [] }
+        found.repo.stacks.push(stack)
+      }
+      for (const n of numbers) if (!stack.prs.includes(n)) stack.prs.push(n)
     },
     createIssue (spec, title, body) {
       write()

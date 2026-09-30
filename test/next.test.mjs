@@ -579,3 +579,9 @@ test('an open PR that no longer matches the record is offered a refresh', () => 
   assert.match(says(out), /a: the open PR no longer says what the record does/)
   assert.ok(commands(out).includes('rig pr --refresh'))
 })
+
+test('open stage PRs that are not a GitHub stack are offered rig stage --link', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], unstacked: ['a'] })
+  assert.match(says(out), /a: the open stage PRs are not a GitHub stack/)
+  assert.ok(commands(out).includes('rig stage --link'))
+})

@@ -329,3 +329,57 @@ test('in-memory adapter: createRepo makes the repo exist; clone needs it to exis
   assert.equal(github.repoExists('acme/rig-data'), true)
   assert.throws(() => github.clone('acme/nope', '/tmp/y'), /acme\/nope/)
 })
+
+// ---------------------------------------------------------------- stacks (hugoforte/rig#224)
+
+test('gh adapter: stacks reads every stack a repo has from the REST answer, one per line', () => {
+  const { calls, github } = canned(() => '{"base":"feat/work","number":7,"open":true,"prs":[3,4]}\n{"base":"main","number":2,"open":false,"prs":[1]}\n')
+  assert.deepEqual(github.stacks('acme', 'platform'), [
+    { number: 7, open: true, base: 'feat/work', prs: [3, 4] },
+    { number: 2, open: false, base: 'main', prs: [1] },
+  ])
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform/stacks', '--paginate', '--jq', '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number]}'])
+})
+
+test('gh adapter: a repo with no stacks has none, and one GitHub would not list them for is unknown', () => {
+  assert.deepEqual(canned(() => '').github.stacks('acme', 'platform'), [])
+  assert.equal(canned(() => ({ code: 1, err: 'HTTP 404: Not Found' })).github.stacks('acme', 'platform'), null)
+})
+
+test('gh adapter: linkStack links pull requests by URL onto the base, for the repo it names', () => {
+  const calls = []
+  const github = githubViaGh({ exec: (args, opts) => { calls.push({ args, env: opts?.env }); return { status: 0, stdout: '', stderr: '' } } })
+  const urls = ['https://github.com/acme/platform/pull/3', 'https://github.com/acme/platform/pull/4']
+  github.linkStack('acme', 'platform', { base: 'feat/work', urls })
+  assert.deepEqual(calls, [{ args: ['stack', 'link', '--base', 'feat/work', ...urls], env: { GH_REPO: 'acme/platform' } }])
+})
+
+test('gh adapter: linkStack fails with gh stack\'s own error', () => {
+  const { github } = canned(() => ({ code: 4, err: 'failed to look up PR #3' }))
+  assert.throws(() => github.linkStack('acme', 'platform', { base: 'feat/work', urls: [] }), e => e instanceof GithubError && /failed to look up PR #3/.test(e.message))
+})
+
+test('gh adapter: stackTool tells a missing gh stack from one too old to link', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'unknown command "stack" for "gh"' })).github.stackTool(), 'missing')
+  assert.equal(canned(() => 'Stack management:\n  add  Add a branch\n  init Initialize\n').github.stackTool(), 'old')
+  const { calls, github } = canned(() => 'Remote operations:\n  link        Link PRs into a stack on GitHub\n  merge       Merge a stack\n')
+  assert.equal(github.stackTool(), 'ok')
+  assert.deepEqual(calls[0], ['stack', '--help'])
+})
+
+test('in-memory adapter: linkStack makes a stack of the PRs, grows the one that holds any of them, and stacks answers it', () => {
+  const state = world()
+  const github = githubInMemory(state)
+  const url = n => `https://github.com/acme/Platform/pull/${n}`
+  github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4)] })
+  github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4), url(5)] })
+  const [stack] = github.stacks('acme', 'Platform')
+  assert.deepEqual({ ...stack, number: 0 }, { number: 0, open: true, base: 'feat/work', prs: [3, 4, 5] })
+  assert.equal(github.stacks('acme', 'Platform').length, 1)
+})
+
+test('in-memory adapter: stackTool answers what the state says gh stack is', () => {
+  assert.equal(githubInMemory(world()).stackTool(), 'ok')
+  assert.equal(githubInMemory({ ...world(), ghStack: 'missing' }).stackTool(), 'missing')
+  assert.equal(githubInMemory({ ...world(), ghStack: 'old' }).stackTool(), 'old')
+})

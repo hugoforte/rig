@@ -313,6 +313,7 @@ rig stage feat/schema --key owner/repo#7           # give the slice its own tick
 rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
 rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
 rig stage feat/schema --planned                    # put a withdrawn stage back in the plan
+rig stage --link                                   # register the open stage PRs as a GitHub stack
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -338,6 +339,16 @@ merges anything, so this is a convention it relies on rather than enforces; a st
 squashes anyway falls back to the order it was declared in. `rig next` names the stages above a
 squash, which still carry the commits it replaced, and offers the commands that replay only
 their own commits and force-push them, when the squash is the stage as it stood.
+
+**A GitHub stack.** GitHub shows stacked PRs as unrelated until they are registered as a stack.
+`rig stage --link` registers, in each repo, the open stage PRs that form a chain on the work
+branch, with `gh stack link`, by PR URL and `--base <work branch>`, so it never creates or pushes
+a branch. Run again after a stage is added, it grows the same stack; `rig next` offers it while
+the open stage PRs are not one. Without the `gh stack` extension, or with one too old to `link`,
+it says so and carries on: the base branches already carry the stack. A stack records no merge
+method, so the one said where it is made is the convention: merge it with a merge commit, all at
+once (`gh stack merge <n> --merge`, which rewrites no head) or bottom-up. `rig close` never
+unstacks: GitHub keeps a merged stack as a closed record after its branches go.
 
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing

@@ -129,7 +129,7 @@ export function stageState (stage, perRepo = []) {
     open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
-    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
+    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
   }
 }
 
@@ -199,6 +199,30 @@ export function adriftNote (stack, mark = b => b) {
   const lost = stack.filter(st => st.adrift)
   if (!lost.length) return null
   return `Outside the stack, so shown in declaration order: ${lost.map(st => mark(st.branch)).join(', ')}`
+}
+
+// Where one repo's open stage pull requests stand as a GitHub stack (hugoforte/rig#224), given
+// `stacks`, every stack GitHub has for the repo. Null where the repo has fewer than two, and
+// there is nothing to stack. Otherwise `{ prs, stack, problem }`: `prs` bottom to top, `stack`
+// the open stack on the work branch that holds any of them, and `problem` why linking them as
+// they stand would move something. Only a chain is linked, the lowest PR based on the work
+// branch and each next on the branch below, because `gh stack link` retargets anything else;
+// and only onto a stack that holds a bottom run of them, in order, since the rest go on top.
+// `linked` says the stack already holds them all.
+export function stackState (stack, repo, workBranch, stacks) {
+  const prs = stack.filter(st => !st.withdrawn)
+    .flatMap(st => st.prs.filter(pr => pr.repo === repo && pr.state === OPEN).map(pr => ({ ...pr, branch: st.branch })))
+  if (prs.length < 2) return null
+  const numbers = prs.map(pr => pr.number)
+  const below = i => (i ? prs[i - 1].branch : workBranch)
+  const off = prs.findIndex((pr, at) => pr.base !== below(at))
+  const found = stacks.find(s => s.open && s.base === workBranch && s.prs.some(n => numbers.includes(n))) || null
+  const held = found ? found.prs.filter(n => numbers.includes(n)) : []
+  const problem = off >= 0
+    ? `#${prs[off].number} (${prs[off].branch}) is based on ${prs[off].base}, not ${below(off)} — \`gh pr edit ${prs[off].number} --base ${below(off)}\` if it belongs on it`
+    : held.some((n, i) => n !== numbers[i]) ? `GitHub stack #${found.number} holds them in another order`
+      : null
+  return { prs, stack: found, problem, linked: !problem && held.length === numbers.length }
 }
 
 // The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the
