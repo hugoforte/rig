@@ -7,7 +7,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
-import { twgViaCli, twgInMemory } from './jira.mjs'
+import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
@@ -1355,7 +1355,8 @@ function resolveJiraField (jiraClient, t, cache, key, value) {
 // Resolves an org's Jira create defaults (rig.json `tracker.<org>.fields`, `--field`
 // overrides applied on top) to `{ assignee, fields }`: `fields` maps field ids —
 // `customfield_*`, or a system field's own Jira name — to the values `twg jira workitem
-// create --field` wants.
+// create --field` wants. A single-value field takes a scalar in rig.json: a one-item list
+// reaches twg as a list (DESIGN.md decision 147).
 function resolveJiraFields (jiraClient, t, overrides) {
   const configured = mergeFieldOverrides(t.fields, overrides)
   configured.sprint = resolveActiveSprint(jiraClient, t, configured.sprint)
@@ -1387,13 +1388,14 @@ const ticketBody = (work, prose, { link }) => [
 // context doc is the design (DESIGN.md §7.1) — a thin body, the brief's first paragraph,
 // with a link back to it.
 // Jira: `docs/adr/0001-jira-via-twg.md` (supersedes DESIGN.md decisions 29, 33).
-function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fieldOverrides = [] } = {}) {
+function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fieldOverrides = [], parent } = {}) {
   const t = trackerFor(cfg, orgFlag)
   const summary = work.title || work.id
 
   if (t.kind === 'github') {
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
     if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
+    if (parent) warn('--parent is ignored for a GitHub tracker (a GitHub issue has no epic)')
     const firstParagraph = brief.split(/\n\s*\n/)[0] || summary
     if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${firstParagraph}`); return null }
     const body = ticketBody(work, firstParagraph, { link: linkOrSay(t.repo) })
@@ -1416,7 +1418,8 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
       say(`would create a ${t.type} in ${t.project}:`)
       say(`  summary      ${summary}`)
       say(`  assignee     ${assignee || '_none_'}`)
-      for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${JSON.stringify(value)}`)
+      if (parent) say(`  parent       ${parent}`)
+      for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${fieldValue(value)}`)
       // Last, and verbatim: it is many lines, and what is printed is exactly the markdown
       // the real create sends — an indent that a reader can strip, not a summary of it.
       say('  description  (markdown, as sent):')
@@ -1424,7 +1427,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
       return null
     }
     step(`creating Jira ${t.type} in ${t.project}`)
-    const key = jira().createIssue({ project: t.project, type: t.type, summary, description, assignee, fields })
+    const key = jira().createIssue({ project: t.project, type: t.type, summary, description, assignee, parent, fields })
     ok(`ticket ${key}`)
     return key
   }
@@ -2045,6 +2048,25 @@ cmds.new = ({ flags, positional }) => {
   if (dryRun && !flags.ticket) die('--dry-run only makes sense with --ticket')
   if (keys.length && noTicket) die('--key and --no-ticket are alternatives; pass one')
   if (flags.ticket && noTicket) die('--ticket and --no-ticket are alternatives; pass one')
+  // Checked here, before the record exists, so a typo never leaves a half-made work behind.
+  const parent = flags.parent
+  if (parent !== undefined) {
+    if (!flags.ticket) die('--parent only makes sense with --ticket')
+    if (typeof parent !== 'string' || !isJiraKey(parent)) {
+      die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? ` — not "${parent}"` : ''}`)
+    }
+  }
+  const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  // A parent is this one ticket's, never a field, however Jira or rig.json spells it
+  // (DESIGN.md decision 146).
+  const isParent = name => name.trim().toLowerCase() === 'parent'
+  if (fieldOverrides.some(o => isParent(o.split('=')[0]))) die('--field parent is not a field rig sets — pass --parent <key> instead')
+  if (flags.ticket) {
+    const t = trackerFor(cfg, flags.org)
+    if (Object.keys(t.fields || {}).some(isParent)) {
+      die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
+    }
+  }
   // The ticket decision must be explicit whenever it could matter (DESIGN direction:
   // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
   if (!keys.length && !flags.ticket && !noTicket && anyTrackerConfigured(cfg)) {
@@ -2052,13 +2074,12 @@ cmds.new = ({ flags, positional }) => {
   }
 
   const brief = readStdin()
-  const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // Read the real record, if one already exists, so `--dry-run` doesn't preview a ticket
   // the real run would just warn-and-skip (an id that already has one).
   const existing = exists(recordFile(id)) ? readJson(recordFile(id)) : null
   if (dryRun) {
     if (existing?.tickets?.length) { warn(`${id} already has a ticket (${existing.tickets.join(', ')}) — nothing to preview`); return }
-    createTicket(cfg, { id, title: flags.title || existing?.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides })
+    createTicket(cfg, { id, title: flags.title || existing?.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides, parent })
     return
   }
 
@@ -2122,9 +2143,9 @@ cmds.new = ({ flags, positional }) => {
   saveWork(cfg, work)
 
   if (flags.ticket && work.tickets.length) {
-    warn(`--ticket ignored: the work already has ${work.tickets.join(', ')}`)
+    warn(`--ticket${parent ? ' and --parent' : ''} ignored: the work already has ${work.tickets.join(', ')}`)
   } else if (flags.ticket) {
-    const created = createTicket(cfg, work, brief || fetched?.body || '', flags.org, { fields: fieldOverrides })
+    const created = createTicket(cfg, work, brief || fetched?.body || '', flags.org, { fields: fieldOverrides, parent })
     if (created) {
       work.tickets.push(created)
       saveWork(cfg, work)
@@ -4464,11 +4485,12 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
        [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY] -> rig.json (the data root)
   rig new <id> --title "..."      create a work (reads a brief on stdin)
-       --key K | --ticket [--org o] [--field k=v,...] [--dry-run] | --no-ticket
+       --key K | --ticket [--org o] [--field k=v,...] [--parent KEY] [--dry-run] | --no-ticket
        one of the three is required whenever a tracker is configured (the ticket
        decision must be explicit); --key PROJ-42 fetches its brief from Jira;
-       --ticket creates in the org's tracker (rig.json); --dry-run previews and
-       creates nothing; --no-ticket records a declined ticket
+       --ticket creates in the org's tracker (rig.json); --parent PROJ-7 files a
+       Jira ticket under that epic; --dry-run previews and creates nothing;
+       --no-ticket records a declined ticket
        [--type feat] [--slug s | --branch b] [--repos a,b] [--setup]
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one

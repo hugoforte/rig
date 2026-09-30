@@ -118,11 +118,47 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
     '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
 })
 
+test('twg adapter: createIssue reads the new key from twg 1.3\'s apiVersion 2 answer', () => {
+  const { twg } = canned(() => JSON.stringify({ apiVersion: 'v2', command: 'jira.workitem.create', data: { success: true, issue: { id: '58746', key: 'PROJ-9' } } }))
+  assert.equal(twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: {} }), 'PROJ-9')
+})
+
+test('twg adapter: createIssue sends a list field value as JSON', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { components: ['11023'] } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'components=["11023"]', '-o', 'json', '-y'])
+})
+
+test('twg adapter: createIssue sends a string field value as it is', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { priority: 'High' } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'priority=High', '-o', 'json', '-y'])
+})
+
+test('twg adapter: createIssue sends an object field value as JSON', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { customfield_x: { value: 'A' } } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'customfield_x={"value":"A"}', '-o', 'json', '-y'])
+})
+
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
   twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} })
   assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'KTLO', '--type', 'Task',
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '-o', 'json', '-y'])
+})
+
+test('twg adapter: createIssue files the issue under its parent with twg\'s own --parent', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', parent: 'PROJ-7', fields: {} })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '--parent', 'PROJ-7', '-o', 'json', '-y'])
 })
 
 test('twg adapter: createIssue fails loudly when it cannot read the new key', () => {
@@ -279,6 +315,15 @@ test('resolveJiraFields: a name in neither create-metadata nor the system set st
     /no field named "compnoents" for KTLO\/Story/)
 })
 
+test('resolveJiraFields output reaches twg as --field arguments twg can shape', () => {
+  const { fields } = resolveJiraFields(twgInMemory(customFieldsOnly()),
+    ktlo({ story_points: 3, components: ['InfoManagerWeb'], priority: 'High' }), [])
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-2' } }))
+  twg.createIssue({ project: 'KTLO', type: 'Story', summary: 'S', description: 'D', fields })
+  assert.deepEqual(calls[0].filter((a, i) => calls[0][i - 1] === '--field'),
+    ['customfield_10058=3', 'components=["11023"]', 'priority=High'])
+})
+
 test('resolveJiraFields: create-metadata wins over the system set when both know the name', () => {
   // world()'s KTLO/Task does carry a Components field, with allowed values of its own that
   // the project's component list (InfoManagerWeb) knows nothing about.
@@ -347,4 +392,86 @@ test('a Jira ticket created by rig new --ticket carries the whole brief and the 
   assert.ok(issue.body.startsWith(brief), 'the brief goes in whole, verbatim, first')
   assert.match(issue.body, /The design lives in the work record: \S*refunds\S*context\.md/)
   assert.equal(preview, issue.body, '--dry-run previews exactly what the create sends')
+})
+
+// ------------------------------------------------- a ticket filed under an epic
+//
+// Same installation, after the two above: acme is Jira-tracked into PROJ.
+
+test('rig new --ticket --parent files the new Jira ticket under that key', () => {
+  const r = install.rig(['new', 'child', '--title', 'Under an epic', '--ticket', '--org', 'acme', '--parent', 'PROJ-9'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  const [key] = readJson(path.join(install.dataRoot, 'work', 'child', 'work.json')).tickets
+  assert.equal(readJson(install.twgStateFile).issues[key].parent, 'PROJ-9')
+})
+
+test('rig new --ticket --dry-run previews the parent the create would send', () => {
+  const r = install.rig(['new', 'child-preview', '--title', 'Under an epic', '--ticket', '--org', 'acme', '--parent', 'PROJ-9', '--dry-run'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.stdout, /^ {2}parent {7}PROJ-9$/m)
+})
+
+test('rig new --parent without --ticket is refused before anything is written', () => {
+  const r = install.rig(['new', 'child-keyed', '--title', 'No create', '--key', 'PROJ-3', '--parent', 'PROJ-9'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--parent only makes sense with --ticket/)
+  assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-keyed')), 'no record written')
+})
+
+test('rig new --parent that is not a Jira key is refused before anything is written', () => {
+  const r = install.rig(['new', 'child-bad', '--title', 'Bad parent', '--ticket', '--org', 'acme', '--parent', 'owner/repo#9'],
+    { input: brief })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--parent wants a Jira key like PROJ-123 — not "owner\/repo#9"/)
+  assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-bad')), 'no record written')
+})
+
+test('rig new --field parent= is refused before anything is written, naming --parent', () => {
+  const r = install.rig(['new', 'child-field', '--title', 'Parent as a field', '--ticket', '--org', 'acme', '--field', 'parent=PROJ-9'],
+    { input: brief })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--field parent is not a field rig sets — pass --parent <key> instead/)
+  assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-field')), 'no record written')
+})
+
+test('rig new --field parent is refused before anything is written, however it is spelled', () => {
+  for (const [id, field] of [['child-label', 'Parent=PROJ-9'], ['child-spaced', 'parent =PROJ-9']]) {
+    const r = install.rig(['new', id, '--title', 'Parent as a field', '--ticket', '--org', 'acme', '--field', field],
+      { input: brief })
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /--field parent is not a field rig sets — pass --parent <key> instead/)
+    assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', id)), `no record written for --field ${field}`)
+  }
+})
+
+test('rig new --ticket with a parent in rig.json\'s fields is refused before anything is written', () => {
+  const rigJson = path.join(install.dataRoot, 'rig.json')
+  const original = fs.readFileSync(rigJson, 'utf8')
+  const cfg = JSON.parse(original)
+  cfg.tracker.acme.fields = { parent: 'PROJ-9' }
+  fs.writeFileSync(rigJson, JSON.stringify(cfg, null, 2))
+  try {
+    const r = install.rig(['new', 'child-config', '--title', 'Parent in config', '--ticket', '--org', 'acme'], { input: brief })
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /"parent" in acme's rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new/)
+    assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-config')), 'no record written')
+  } finally {
+    fs.writeFileSync(rigJson, original)
+  }
+})
+
+test('rig new --ticket --dry-run previews each field as twg is sent it', () => {
+  const r = install.rig(['new', 'child-priority', '--title', 'A priority', '--ticket', '--org', 'acme', '--field', 'priority=High', '--dry-run'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.stdout, /^ {2}priority {5}High$/m, 'a string goes as it is, so it is previewed without quotes')
+})
+
+test('rig new --parent on a work that already has a ticket says --parent is ignored too', () => {
+  const r = install.rig(['new', 'child-keyed-ticket', '--title', 'Keyed', '--key', 'PROJ-3', '--ticket', '--org', 'acme', '--parent', 'PROJ-9'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /--ticket and --parent ignored: the work already has PROJ-3/)
 })

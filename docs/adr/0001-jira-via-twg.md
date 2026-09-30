@@ -37,7 +37,9 @@ alternative Jira client.
 rig does three things with Jira, matching what it already does for GitHub:
 
 - **Create** (`rig new --ticket` on a Jira-tracked org): `twg jira workitem create`,
-  with per-org defaults from `rig.json` resolved first (below).
+  with per-org defaults from `rig.json` resolved first (below). `--parent PROJ-7` files it
+  under an epic through twg's own `--parent`, never as a resolved field (DESIGN.md
+  decisions 145–146).
 - **Fetch** (`rig new --key KTLO-42`): `twg jira workitem get` supplies the summary and
   description, so the agent no longer has to fetch and pipe the brief itself for a
   Jira-tracked org. Piped stdin and `--title` still win when given.
@@ -52,9 +54,16 @@ markdown`). twg's own default for both is HTML, which would collapse a brief's b
 into one run-on paragraph and eat anything angle-bracketed, so the format is fixed in
 `bin/jira.mjs` rather than being a parameter: rig writes markdown and nothing else, and no
 ADF is ever built here. That the create carries the format is also why a Jira ticket gets
-its full description in **one** call — the create-thin-then-`update --description-format
-markdown` two-step in hugoforte/rig#53 is about Components, which twg's create silently
-drops, not about the description (hugoforte/rig#54).
+its full description in **one** call (hugoforte/rig#54).
+
+System fields go on the same call. An earlier twg's create dropped them, which is what
+hugoforte/rig#53 was opened for; twg 1.3's create resolves each `--field` against Jira's
+own create-screen metadata, system fields included, and shapes the value for Jira — a
+component name or id becomes `{ id }`. It reads each value as JSON first, so a lone id sent
+bare arrives as a number and is never shaped. `bin/jira.mjs` therefore sends a list as JSON
+(`components=["10001"]`), so that no REST passthrough or second create path should be
+needed (DESIGN.md decision 147). One live create on 2026-09-30, into a project that requires
+Components, proved it: the ticket arrived with its component and under its parent.
 
 A Jira description is the **whole** brief plus the context-doc link, where a GitHub issue
 body is the brief's first paragraph plus the same link. Not an inconsistency: the GitHub
@@ -72,7 +81,8 @@ same way a catalogue entry gets corrected by hand. Field ids (`customfield_10058
 Story Points, say) are **discovered** through `twg jira workitem field
 create-metadata`, never pasted into `rig.json` or this codebase from a one-off
 inspection — the KTLO ids the `rig-workflow-gates` context doc records are a fixture
-for that org's data root, not a shortcut for this one.
+for that org's data root, not a shortcut for this one. A single-value field takes a scalar
+there, and a list only where Jira wants several: a one-item list reaches twg as a list.
 
 That holds for **custom** fields. `field create-metadata` turned out to return custom
 fields only (hugoforte/rig#45), so Jira's **system** fields — `components`, `labels`,
