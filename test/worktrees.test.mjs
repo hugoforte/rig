@@ -459,6 +459,18 @@ test('no git call a mirror makes to its remote can stop to ask for credentials',
   assert.deepEqual(remote.map(c => ({ call: c.args.join(' '), env: c.env })), remote.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
 })
 
+test('a checkout, which Git LFS may take to the remote, never stops to ask for credentials either', () => {
+  publish('acme', 'lfs')
+  const dest = workDir('l1', 'lfs')
+  const { t, calls } = recorded()
+  t.cut({ org: 'acme', repo: 'lfs', branch: 'feat/l1', dest })
+  assert.equal(t.cutHere({ dir: dest, branch: 'feat/l1-stage', base: 'feat/l1' }), null)
+
+  const checkouts = calls.filter(c => (c.args.includes('worktree') && c.args.includes('add')) || c.args.includes('checkout'))
+  assert.equal(checkouts.length, 2, 'the worktree add and the checkout were both made')
+  assert.deepEqual(checkouts.map(c => ({ call: c.args.join(' '), env: c.env })), checkouts.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
+})
+
 test('a clone that needed credentials says so, and how to give git some', () => {
   const refused = (cmd, args, opts) => args.includes('clone')
     ? { code: 128, out: '', err: "Cloning into bare repository 'x'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled" }

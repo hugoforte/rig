@@ -35,10 +35,11 @@ export const remotesInDirectory = dir => ({ url: (org, repo) => path.join(dir, o
 // to silence, because a caller that wants nothing said should not have to pass a sink.
 export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {}, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
-  // A call to the remote, which may never stop to ask for credentials (decision 138).
+  // A call that may reach the remote, which may never stop to ask for credentials (decision 138):
+  // a checkout is one, because Git LFS fetches what it checks out.
   const toRemote = (dir, ...args) => run('git', ['-C', dir, ...args], { env: NO_PROMPT_ENV })
-  const must = (cmd, args) => {
-    const r = run(cmd, args)
+  const must = (cmd, args, opts) => {
+    const r = run(cmd, args, opts)
     if (r.code !== 0) throw new RigError(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
     return r.out
   }
@@ -126,12 +127,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         `  if the remote is right, remove any worktree that has it checked out, then: git -C ${mirror} branch -D ${branch}`)
     }
     if (behind) {
-      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)])
+      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)], { env: NO_PROMPT_ENV })
       return
     }
     step(`keeping the mirror's copy of ${branch}, which is ahead of the remote`)
     must('git', ['-C', mirror, 'branch', `--set-upstream-to=origin/${branch}`, branch])
-    must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+    must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
   }
 
   // A branch that already exists somewhere this machine can see, checked out into `dest`:
@@ -149,7 +150,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     }
     if (kept(mirror, branch)) {
       warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
-      must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+      must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
       return 'mirror'
     }
     return null
@@ -171,7 +172,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (from === 'remote') warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
       if (from) return { base }
       step(`worktree ${repo} → ${branch} (base ${base})`)
-      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)])
+      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)], { env: NO_PROMPT_ENV })
       return { base }
     },
 
@@ -369,7 +370,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // its own stage is the ordinary way round. git decides whether that is possible, and its
     // refusal is what comes back.
     cutHere ({ dir, branch, base }) {
-      const r = git(dir, 'checkout', '-b', branch, base)
+      const r = toRemote(dir, 'checkout', '-b', branch, base)
       return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
     },
 
