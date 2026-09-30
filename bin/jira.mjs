@@ -94,17 +94,19 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     // `--description-format markdown` because twg's default is HTML: without it a brief's
     // blank lines collapse into one run-on paragraph and anything angle-bracketed is eaten
     // as a tag (hugoforte/rig#54). It is fixed, not a parameter — rig writes markdown and
-    // nothing else. Carrying the format here is also why the create needs no follow-up
-    // `update --description-format markdown`: the two-step in hugoforte/rig#53 exists for
-    // Components, which twg's create silently drops, not for the description.
+    // nothing else.
     // `parent` goes by twg's own `--parent`, which sends `fields.parent = { key }`; as a
     // `--field` it would reach Jira as a bare string (hugoforte/rig#220).
+    // twg reads a `--field` value as JSON when it parses, so a list goes as JSON to arrive as
+    // a list; as `components=11023` it would arrive as one bare number (DESIGN.md decision 147).
     createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
         '--summary', summary, '--description', description, '--description-format', 'markdown']
       if (assignee) args.push('--assignee', assignee)
       if (parent) args.push('--parent', parent)
-      for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${value}`)
+      for (const [id, value] of Object.entries(fields)) {
+        args.push('--field', `${id}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+      }
       args.push('-o', 'json', '-y')
       const out = must(args)
       const body = parseJson(out, 'twg jira workitem create')

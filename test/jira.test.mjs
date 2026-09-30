@@ -118,6 +118,22 @@ test('twg adapter: createIssue passes summary, description and fields, and reads
     '--assignee', 'me', '--field', 'customfield_10020=7', '-o', 'json', '-y'])
 })
 
+test('twg adapter: createIssue sends a list field value as JSON', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { components: ['11023'] } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'components=["11023"]', '-o', 'json', '-y'])
+})
+
+test('twg adapter: createIssue sends a string field value as it is', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { priority: 'High' } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'priority=High', '-o', 'json', '-y'])
+})
+
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
   twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} })
