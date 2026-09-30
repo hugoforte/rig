@@ -23,7 +23,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -4652,6 +4652,7 @@ how far it is behind its remote, \`rig update\` brings it forward.`)
 function linkedCopyNeeds () {
   const localFile = registry(toolRoot(), env()).localFile
   if (exists(localFile) || !toolState().linked) return null
+  if (env()[LOCAL_CONFIG_ENV]) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the installed rig's rig.local.json`
   return `this is a work's copy of rig, in a linked worktree, and it has no machine config of its own (no ${localFile}) — set RIG_LOCAL_CONFIG to the installed rig's rig.local.json`
 }
 // The commands that run without one: the two that only print, `init`, which is how an

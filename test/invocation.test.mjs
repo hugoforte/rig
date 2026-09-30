@@ -233,3 +233,10 @@ test('and its doctor says the same, rather than sending it to rig prompt setup',
   assert.match(r.out, NEEDS)
   assert.doesNotMatch(r.out, /rig prompt setup/)
 })
+
+test('a work\'s own rig pointed at a machine file that is not there says so, rather than to set the variable', () => {
+  const missing = path.join(installed.tmp, 'rig.local.jsn')
+  const r = drive({ ...installed, install: linked, env: { ...installed.env, RIG_LOCAL_CONFIG: missing } }, ['list'])
+  assert.equal(r.code, 1, r.out + r.err)
+  assert.match(r.err, /RIG_LOCAL_CONFIG names .*rig\.local\.jsn, which does not exist/)
+})
