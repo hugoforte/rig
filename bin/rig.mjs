@@ -778,10 +778,10 @@ const rootsHolding = (id, roots = where().roots) => Object.entries(roots)
 // before stages, before `tickets` or before the phase still reads (decision 155).
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isList = v => v === undefined || Array.isArray(v)
-function recordShapeProblem (w, id) {
+function recordShapeProblem (w) {
   if (!isObject(w)) return 'it is not an object'
   // The commands that read many records name and find each work by the `id` inside it.
-  if (w.id !== id) return `its \`id\` is not "${id}"`
+  if (typeof w.id !== 'string' || !w.id) return 'it has no `id`'
   for (const field of ['repos', 'stages', 'tickets', 'jiraKeys']) {
     if (!isList(w[field])) return `\`${field}\` is not a list`
   }
@@ -804,7 +804,7 @@ function readRecord (id, root = dataRoot()) {
   const unreadable = cause => new RigError(`work record for "${id}" at ${file} could not be read (${cause.message})`, { cause })
   let w
   try { w = readJson(file) } catch (e) { throw unreadable(e) }
-  const shape = recordShapeProblem(w, id)
+  const shape = recordShapeProblem(w)
   if (shape) throw unreadable(new Error(shape))
   return w
 }
