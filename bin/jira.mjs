@@ -2,15 +2,10 @@
 // client (docs/adr/0001-jira-via-twg.md supersedes DESIGN.md decisions 29 and 33): its
 // site and auth come from twg's own config, and rig calls nothing else.
 //
-// ASSUMPTION, still standing for createIssue, fieldMetadata and activeSprintId: their JSON
-// shapes are inferred from `twg --help` and the "Teamwork Graph" GraphQL shape hinted at by
-// its `--agent-fields` example (`data.items.key`), not from a live response. Each parser
-// fails loudly with the raw output when its guess is wrong, so a bad shape surfaces on first
-// use rather than silently misreading a ticket.
-//
-// getIssue has had that first use, and the guess was wrong twice over (hugoforte/rig#22):
-// `data` comes back as an array of workitems, and `description` as an ADF node tree rather
-// than a string. It now reads either shape and flattens ADF; the rest await the same test.
+// Every answer parsed here has been checked against a real twg 1.3.3 answer (apiVersion v2),
+// and each has a test of that shape (hugoforte/rig#260). A parser that meets a shape it
+// cannot read fails with the raw output rather than guessing. For a write that is not
+// enough on its own, since the write has happened by then; createIssue says so.
 //
 // The interface:
 //   present()                                    is `twg` on PATH? never throws
@@ -39,8 +34,13 @@ export const fieldValue = value => typeof value === 'string' ? value : JSON.stri
 
 const spawnTwg = args => spawnSync('twg', args, { encoding: 'utf8' })
 
-// Where a workitem's fields sit in twg's JSON. A real `jira workitem KEY -o json` returns
-// `data` as an array of workitems carrying their fields directly; the `data.fields`/`fields`
+// Plain JSON on stdout, whoever runs rig. With an agent's variables in the environment
+// (CLAUDECODE, AI_AGENT, …) twg 1.3 answers some `-o json` commands, `workitem get` among
+// them, with a YAML summary and writes the JSON to a temp file (DESIGN.md decision 149).
+const JSON_OUT = ['-o', 'json', '--output-summary', 'none']
+
+// Where a workitem's fields sit in twg's JSON. `jira workitem get` returns `data` as an array
+// of workitems carrying their fields directly, in twg 1.3 as in 1.1; the `data.fields`/`fields`
 // shapes this module originally guessed at are kept, since nothing has ruled them out. Null
 // when no shape has either field — the one case worth failing on, because a workitem with a
 // summary and no description is ordinary, not broken (hugoforte/rig#22).
@@ -92,7 +92,8 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       return !exec(['--version']).error
     },
     getIssue (key) {
-      const out = must(['jira', 'workitem', key, '-o', 'json', '--fields', 'summary,description'])
+      // `get`: twg 1.3 dropped the bare `jira workitem <KEY>` (DESIGN.md decision 148).
+      const out = must(['jira', 'workitem', 'get', key, ...JSON_OUT, '--fields', 'summary,description'])
       const fields = workitemFields(parseJson(out, 'twg jira workitem'))
       if (!fields) fail(`could not read summary/description from twg's JSON:\n${out}`)
       return { title: tidy(adfToText(fields.summary)), body: tidy(adfToText(fields.description)) }
@@ -109,19 +110,26 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       if (assignee) args.push('--assignee', assignee)
       if (parent) args.push('--parent', parent)
       for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${fieldValue(value)}`)
-      args.push('-o', 'json', '-y')
+      args.push(...JSON_OUT, '-y')
       const out = must(args)
-      const body = parseJson(out, 'twg jira workitem create')
-      // twg 1.3 answers `{ apiVersion: 'v2', data: { issue: { key } } }`; earlier ones `{ data: { key } }`.
-      const key = body.data?.issue?.key || body.data?.key || body.key
-      if (!key) fail(`could not read the new issue's key from twg's JSON:\n${out}`)
+      // twg exited 0, so the ticket exists whether or not its answer can be read, and a retry
+      // makes a duplicate (DESIGN.md decision 150). twg 1.3 answers
+      // `{ apiVersion: 'v2', data: { issue: { key } } }`; earlier ones `{ data: { key } }`.
+      let body = null
+      try { body = JSON.parse(out) } catch {}
+      const key = body?.data?.issue?.key || body?.data?.key || body?.key
+      if (!key) {
+        fail(`twg reports the create succeeded, but rig could not read the new key from its answer. ` +
+          `The ticket may have been created: search ${project} for "${summary}" before retrying, ` +
+          `and record it on this work with \`rig ticket <KEY>\`.\ntwg's answer:\n${out}`)
+      }
       return key
     },
     commentIssue (key, body) {
       must(['jira', 'workitem', 'comment', 'create', '--issue-id', key, '--body', body, '--body-format', 'markdown'])
     },
     fieldMetadata (project, type) {
-      const out = must(['jira', 'workitem', 'field', 'create-metadata', '--space', project, '--type', type, '-o', 'json'])
+      const out = must(['jira', 'workitem', 'field', 'create-metadata', '--space', project, '--type', type, ...JSON_OUT])
       const body = parseJson(out, 'twg jira workitem field create-metadata')
       const fields = body.data?.fields || body.fields
       if (!Array.isArray(fields)) fail(`could not read fields from twg's JSON:\n${out}`)
@@ -138,11 +146,16 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       if (!Array.isArray(items)) fail(`could not read components from twg's JSON:\n${out}`)
       return items.map(c => ({ id: String(c.id), name: c.name }))
     },
+    // twg 1.3 answers one `data.sprint`: twg's pick when several are active, whose id is also
+    // `activeSprints.selectedId`. No `sprint`, or a total of 0, is a board with none active.
+    // Anything else is a shape rig does not know, and "no active sprint" would be a guess
+    // about it (DESIGN.md decision 148).
     activeSprintId (boardId) {
-      const out = must(['jira', 'sprint', 'snapshot', '--board-id', String(boardId), '-o', 'json'])
-      const body = parseJson(out, 'twg jira sprint snapshot')
-      const sprints = body.data?.sprints || body.sprints || []
-      return sprints.find(s => s.state === 'active')?.id ?? null
+      const out = must(['jira', 'sprint', 'snapshot', '--board-id', String(boardId), ...JSON_OUT])
+      const data = parseJson(out, 'twg jira sprint snapshot').data
+      if (data?.sprint?.state === 'active' && data.sprint.id != null) return data.sprint.id
+      if (data && (!data.sprint || data.activeSprints?.total === 0)) return null
+      fail(`could not read the active sprint from twg's JSON:\n${out}`)
     },
   }
 }
