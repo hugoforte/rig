@@ -125,8 +125,6 @@ test('twg adapter: createIssue omits --assignee and --field when there are none'
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '-o', 'json', '-y'])
 })
 
-// twg's create has a `--parent` of its own, which it sends as `fields.parent = { key }`
-// (hugoforte/rig#220); a `--field parent=` would reach Jira as a bare string.
 test('twg adapter: createIssue files the issue under its parent with twg\'s own --parent', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
   twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', parent: 'PROJ-7', fields: {} })
@@ -227,12 +225,6 @@ test('in-memory adapter: createIssue numbers a new key under the project and rec
   assert.deepEqual(state.issues['KTLO-2'], { title: 'New', body: 'D', assignee: 'me', fields: { customfield_10058: 3 }, comments: [] })
 })
 
-test('in-memory adapter: createIssue records the parent it was given', () => {
-  const state = world()
-  twgInMemory(state).createIssue({ project: 'KTLO', type: 'Story', summary: 'New', description: 'D', parent: 'KTLO-1', fields: {} })
-  assert.equal(state.issues['KTLO-2'].parent, 'KTLO-1')
-})
-
 test('in-memory adapter: fieldMetadata, projectComponents and activeSprintId read the canned tables', () => {
   const twg = twgInMemory(world())
   assert.equal(twg.fieldMetadata('KTLO', 'Task')[0].name, 'Story Points')
@@ -294,9 +286,9 @@ test('resolveJiraFields: a name in neither create-metadata nor the system set st
     /no field named "compnoents" for KTLO\/Story/)
 })
 
-test('resolveJiraFields: a parent among the fields dies, naming --parent', () => {
-  assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({}), ['parent=KTLO-7']),
-    /"parent" is not a field rig sets — pass --parent KTLO-7 to rig new/)
+test('resolveJiraFields: a parent in rig.json\'s fields dies, naming --parent', () => {
+  assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ parent: 'KTLO-7' }), []),
+    /"parent" in [^ ]*'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new/)
 })
 
 test('resolveJiraFields: create-metadata wins over the system set when both know the name', () => {
@@ -399,6 +391,14 @@ test('rig new --parent that is not a Jira key is refused before anything is writ
   const r = install.rig(['new', 'child-bad', '--title', 'Bad parent', '--ticket', '--org', 'acme', '--parent', 'owner/repo#9'],
     { input: brief })
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /--parent wants a Jira key like PROJ-123, not "owner\/repo#9"/)
+  assert.match(r.out, /--parent wants a Jira key like PROJ-123 — not "owner\/repo#9"/)
   assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-bad')), 'no record written')
+})
+
+test('rig new --field parent= is refused before anything is written, naming --parent', () => {
+  const r = install.rig(['new', 'child-field', '--title', 'Parent as a field', '--ticket', '--org', 'acme', '--field', 'parent=PROJ-9'],
+    { input: brief })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--field parent is not a field rig sets — pass --parent <key> instead/)
+  assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-field')), 'no record written')
 })

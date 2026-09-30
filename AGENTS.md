@@ -63,8 +63,7 @@ resolved to real ids via `rig.json`'s per-org config) and exits without creating
 ```
 
 A Jira ticket that belongs under an epic says so with `--parent PROJ-7`, on the preview and the
-create alike. It is this ticket's alone, so it is a flag rather than a `rig.json` field, and
-`--field parent=` is refused with a pointer to it.
+create alike (DESIGN.md decisions 145–146).
 
 No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the decision —
 `Tickets: none (declined)`, not a silent empty list. On `rig close`, every ticket gets a

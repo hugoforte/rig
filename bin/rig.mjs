@@ -1300,9 +1300,8 @@ function resolveJiraFields (jiraClient, t, overrides) {
   for (const [key, value] of Object.entries(configured)) {
     if (value === null || value === undefined) continue
     if (key === 'assignee') { assignee = value; continue }
-    // A parent is this one ticket's, never an org default, and twg sends it by a flag of its
-    // own: `rig new --parent` (DESIGN.md decision 146).
-    if (key === 'parent') die(`"parent" is not a field rig sets — pass --parent ${value} to rig new`)
+    // A parent is this one ticket's, never an org default (DESIGN.md decision 146).
+    if (key === 'parent') die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
     if (/^customfield_/.test(key)) { fields[key] = value; continue }
     const { id, value: resolved } = resolveJiraField(jiraClient, t, cache, key, value)
     fields[id] = resolved
@@ -1330,7 +1329,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
   if (t.kind === 'github') {
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
     if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
-    if (parent) warn('--parent is ignored for a GitHub tracker (it files a Jira ticket under an epic)')
+    if (parent) warn('--parent is ignored for a GitHub tracker (a GitHub issue has no epic)')
     const firstParagraph = brief.split(/\n\s*\n/)[0] || summary
     const body = ticketBody(work, firstParagraph)
     if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${firstParagraph}`); return null }
@@ -1954,10 +1953,14 @@ cmds.new = ({ flags, positional }) => {
   if (flags.ticket && noTicket) die('--ticket and --no-ticket are alternatives; pass one')
   // Checked here, before the record exists, so a typo never leaves a half-made work behind.
   const parent = flags.parent
-  if (parent !== undefined && !flags.ticket) die('--parent only makes sense with --ticket')
-  if (parent !== undefined && !(typeof parent === 'string' && isJiraKey(parent))) {
-    die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? `, not "${parent}"` : ''}`)
+  if (parent !== undefined) {
+    if (!flags.ticket) die('--parent only makes sense with --ticket')
+    if (typeof parent !== 'string' || !isJiraKey(parent)) {
+      die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? ` — not "${parent}"` : ''}`)
+    }
   }
+  const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  if (fieldOverrides.some(o => o.split('=')[0] === 'parent')) die('--field parent is not a field rig sets — pass --parent <key> instead')
   // The ticket decision must be explicit whenever it could matter (DESIGN direction:
   // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
   if (!keys.length && !flags.ticket && !noTicket && anyTrackerConfigured(cfg)) {
@@ -1965,7 +1968,6 @@ cmds.new = ({ flags, positional }) => {
   }
 
   const brief = readStdin()
-  const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // Read the real record, if one already exists, so `--dry-run` doesn't preview a ticket
   // the real run would just warn-and-skip (an id that already has one).
   const existing = exists(recordFile(id)) ? readJson(recordFile(id)) : null
