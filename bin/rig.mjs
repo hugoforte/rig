@@ -1300,8 +1300,6 @@ function resolveJiraFields (jiraClient, t, overrides) {
   for (const [key, value] of Object.entries(configured)) {
     if (value === null || value === undefined) continue
     if (key === 'assignee') { assignee = value; continue }
-    // A parent is this one ticket's, never an org default (DESIGN.md decision 146).
-    if (key === 'parent') die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
     if (/^customfield_/.test(key)) { fields[key] = value; continue }
     const { id, value: resolved } = resolveJiraField(jiraClient, t, cache, key, value)
     fields[id] = resolved
@@ -1960,7 +1958,16 @@ cmds.new = ({ flags, positional }) => {
     }
   }
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
-  if (fieldOverrides.some(o => o.split('=')[0] === 'parent')) die('--field parent is not a field rig sets — pass --parent <key> instead')
+  // A parent is this one ticket's, never a field, however Jira or rig.json spells it
+  // (DESIGN.md decision 146).
+  const isParent = name => name.trim().toLowerCase() === 'parent'
+  if (fieldOverrides.some(o => isParent(o.split('=')[0]))) die('--field parent is not a field rig sets — pass --parent <key> instead')
+  if (flags.ticket) {
+    const t = trackerFor(cfg, flags.org)
+    if (Object.keys(t.fields || {}).some(isParent)) {
+      die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
+    }
+  }
   // The ticket decision must be explicit whenever it could matter (DESIGN direction:
   // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
   if (!keys.length && !flags.ticket && !noTicket && anyTrackerConfigured(cfg)) {
@@ -2036,7 +2043,7 @@ cmds.new = ({ flags, positional }) => {
   saveWork(cfg, work)
 
   if (flags.ticket && work.tickets.length) {
-    warn(`--ticket ignored: the work already has ${work.tickets.join(', ')}`)
+    warn(`--ticket${parent ? ' and --parent' : ''} ignored: the work already has ${work.tickets.join(', ')}`)
   } else if (flags.ticket) {
     const created = createTicket(cfg, work, brief || fetched?.body || '', flags.org, { fields: fieldOverrides, parent })
     if (created) {

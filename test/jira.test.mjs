@@ -302,11 +302,6 @@ test('resolveJiraFields: a name in neither create-metadata nor the system set st
     /no field named "compnoents" for KTLO\/Story/)
 })
 
-test('resolveJiraFields: a parent in rig.json\'s fields dies, naming --parent', () => {
-  assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ parent: 'KTLO-7' }), []),
-    /"parent" in [^ ]*'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new/)
-})
-
 test('resolveJiraFields: create-metadata wins over the system set when both know the name', () => {
   // world()'s KTLO/Task does carry a Components field, with allowed values of its own that
   // the project's component list (InfoManagerWeb) knows nothing about.
@@ -417,4 +412,37 @@ test('rig new --field parent= is refused before anything is written, naming --pa
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /--field parent is not a field rig sets — pass --parent <key> instead/)
   assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-field')), 'no record written')
+})
+
+test('rig new --field parent is refused before anything is written, however it is spelled', () => {
+  for (const [id, field] of [['child-label', 'Parent=PROJ-9'], ['child-spaced', 'parent =PROJ-9']]) {
+    const r = install.rig(['new', id, '--title', 'Parent as a field', '--ticket', '--org', 'acme', '--field', field],
+      { input: brief })
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /--field parent is not a field rig sets — pass --parent <key> instead/)
+    assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', id)), `no record written for --field ${field}`)
+  }
+})
+
+test('rig new --ticket with a parent in rig.json\'s fields is refused before anything is written', () => {
+  const rigJson = path.join(install.dataRoot, 'rig.json')
+  const original = fs.readFileSync(rigJson, 'utf8')
+  const cfg = JSON.parse(original)
+  cfg.tracker.acme.fields = { parent: 'PROJ-9' }
+  fs.writeFileSync(rigJson, JSON.stringify(cfg, null, 2))
+  try {
+    const r = install.rig(['new', 'child-config', '--title', 'Parent in config', '--ticket', '--org', 'acme'], { input: brief })
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /"parent" in acme's rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new/)
+    assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'child-config')), 'no record written')
+  } finally {
+    fs.writeFileSync(rigJson, original)
+  }
+})
+
+test('rig new --parent on a work that already has a ticket says --parent is ignored too', () => {
+  const r = install.rig(['new', 'child-keyed-ticket', '--title', 'Keyed', '--key', 'PROJ-3', '--ticket', '--org', 'acme', '--parent', 'PROJ-9'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /--ticket and --parent ignored: the work already has PROJ-3/)
 })
