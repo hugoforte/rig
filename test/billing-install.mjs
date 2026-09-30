@@ -1,9 +1,11 @@
 // One installation with `acme/billing` published and `rig init` run, and every move the tests
-// that drive `close`, `abandon`, `next`, `stage`, `pr` and `plan` make against it.
+// that drive `close`, `abandon`, `next`, `stage`, `pr`, `plan` and the record corrections make
+// against it.
 //
-// Six files test them, each with an installation of its own built from here: close, abandon
-// and next in test/close.test.mjs, stage across stages-e2e, stage-cut and stage-tickets, and pr
-// and plan in files of their own. `node --test` runs files in parallel and the tests within a
+// Seven files test them, each with an installation of its own built from here: close, abandon
+// and next in test/close.test.mjs, stage across stages-e2e, stage-cut and stage-tickets, pr and
+// plan in files of their own, and the corrections to a work's record in
+// test/record-corrections.test.mjs. `node --test` runs files in parallel and the tests within a
 // file in order, so subjects in one file wait on each other. Apart, each file costs an
 // installation of extra work, and buys subjects that run without the others and a suite CI
 // can divide by file into parts of a similar size. A full run gains less than that suggests:

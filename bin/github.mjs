@@ -7,9 +7,10 @@
 // The interface, and what each call may do:
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language } with GitHub's canonical name, or null
-//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt } newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body } newest PR, or null
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
+//   editPr(org, name, number, { title, body })
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
@@ -62,14 +63,16 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // commit the PR carried, and the only thing that lets `close` tell a branch whose every
     // commit landed from one somebody pushed to after the merge. `mergeCommit` is the commit it
     // landed as, and the only way to tell a stage that was squashed from one that was merged.
+    // `title` and `body` are what `rig next` and `rig pr --refresh` compare with what `rig pr`
+    // would write now.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null } : null
     },
     // The open pull requests that land on a branch — what is stacked on top of it. `rig
     // restore` follows these up from the highest branch a work records, to name the stack
@@ -111,15 +114,19 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const t = parseJson(r.out, 'gh pr view')
       return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
     },
-    // The one write rig makes to a pull request, and it makes it once: `rig pr` checks for
-    // an existing one first (idempotence is the caller's, because "already open" is a thing
-    // to report rather than an error to raise).
+    // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
+    // the caller's, because "already open" is a thing to report rather than an error to raise).
     createPr (org, name, { branch, base, title, body }) {
       const out = must(['pr', 'create', '--repo', `${org}/${name}`,
         '--head', branch, '--base', base, '--title', title, '--body', body])
       const url = /(https:\/\/\S*\/pull\/\d+)\s*$/.exec(out)?.[1]
       if (!url) fail(`could not read the pull request URL from gh output:\n${out}`)
       return { number: Number(/\/pull\/(\d+)$/.exec(url)[1]), url }
+    },
+    // The one write rig makes to a pull request that is already open: `rig pr --refresh`
+    // rewriting its title and body.
+    editPr (org, name, number, { title, body }) {
+      must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, '--title', title, '--body', body])
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -182,7 +189,7 @@ export function githubInMemory (state, { env } = {}) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null } : null
     },
     prsOnto (org, name, base) {
       if (!answers()) return []
@@ -230,6 +237,12 @@ export function githubInMemory (state, { env } = {}) {
         state: 'OPEN', openedAt: new Date().toISOString(), mergedAt: null, commits: [],
       })
       return { number, url }
+    },
+    editPr (org, name, number, { title, body }) {
+      write()
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      if (!pr) fail(`${org}/${name}#${number}: no such pull request (in-memory GitHub)`)
+      Object.assign(pr, { title, body })
     },
     createIssue (spec, title, body) {
       write()

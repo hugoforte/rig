@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -1081,7 +1081,9 @@ function parseArgs (argv) {
     const a = argv[i]
     if (!isFlag(a)) { positional.push(a); continue }
     // `--flag`, `--flag=value`, `--flag value`; `-m value` is `--message value`.
-    const [raw, v] = a.replace(/^-+/, '').split('=')
+    // Split at the first `=` only: a value may carry its own, as a title or a message can.
+    const [raw, ...rest] = a.replace(/^-+/, '').split('=')
+    const v = rest.length ? rest.join('=') : undefined
     const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help\``))
     if (v !== undefined) flags[k] = v
     else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !isFlag(argv[i + 1])) flags[k] = argv[++i]
@@ -1168,6 +1170,18 @@ function syncDocHeader (id, work) {
   if (!exists(f)) return
   writeText(f, readText(f).replace(/^Tickets: .*? · Status: .*$/m,
     `Tickets: ${ticketsLabel(work)} · Status: ${statusLine(work)}`))
+}
+
+// The context doc's heading, as `rig new` scaffolded it: `# <id> — <title>`. Rewritten only
+// when the title is corrected, and never by every save the way the header line is: a heading
+// someone edited by hand is theirs until they ask for the title to change.
+function retitleDoc (id, title) {
+  const f = contextFile(id)
+  if (!exists(f)) return
+  const heading = new RegExp(`^# ${escapeRe(id)}(?: — .*)?$`, 'm')
+  const text = readText(f)
+  if (!heading.test(text)) return warn(`${f} has no \`# ${id} — …\` heading — the record has the new title, the doc does not`)
+  writeText(f, text.replace(heading, () => `# ${id} — ${title}`))
 }
 
 // Where the work records live on GitHub, for linking issues back to context docs.
@@ -1432,10 +1446,12 @@ function stageWriteBack (work, stages, { abandoned }) {
     if (!keys.length) continue
     const landed = !abandoned && st.landed
     const prs = st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)
+    const ran = `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}.`
+    const outcome = landed ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
+      : st.withdrawn ? `${ran} This slice was ${withdrawnLabel(st.withdrawn, b => `\`${b}\``)}. The issue stays open.`
+        : `${ran} This slice did not land, so the issue stays open.`
     const body = [
-      landed
-        ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
-        : `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}. This slice did not land, so the issue stays open.`,
+      outcome,
       '', `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`,
       ...(prs.length ? ['', ...prs] : []),
       '', `Context doc: ${contextDocRef(work.id)}`,
@@ -2135,7 +2151,8 @@ function topBranch (cfg, work, entry) {
     trackerFailure(() => { pr = github().prForBranch(org, repo, b) })
     return pr?.state === 'MERGED'
   }
-  const top = stageOrder(work, [chain]).map(s => s.branch).filter(b => carried.has(b)).reverse().find(b => !landed(b))
+  const top = stageOrder(work, [chain]).filter(s => !withdrawalOf(s)).map(s => s.branch)
+    .filter(b => carried.has(b)).reverse().find(b => !landed(b))
   if (!top || t.contains({ org, repo, branch: work.branch, other: top })) return work.branch
   return top
 }
@@ -2247,12 +2264,44 @@ cmds.restore = ({ flags, positional }) => {
   ok(`${work.id}: restored ${restored.length} of ${missing.length} — cd ${workDir(cfg, work.id)}`)
 }
 
+// `from` becomes `to` in the record, in its place, or goes when there is no `to`. Wherever it
+// is held: the work's own tickets and every stage's, because an issue that moved has a new
+// number whichever list named it. Never the tracker: rig speaks to one only at `rig close`,
+// and a ticket the record stops naming is told nothing.
+function correctTicket (cfg, work, from, to) {
+  const held = [...new Set([work.tickets, ...work.stages.map(s => s.tickets || [])].flat())]
+  if (!held.includes(from)) die(`${from} is not recorded on ${work.id} — it has ${held.join(', ') || 'no tickets'}`)
+  const hadIt = work.tickets.includes(from)
+  const corrected = list => [...new Set(list.flatMap(k => (k !== from ? [k] : to ? [to] : [])))]
+  work.tickets = corrected(work.tickets)
+  for (const st of work.stages.filter(s => s.tickets)) {
+    st.tickets = corrected(st.tickets)
+    // A stage left with none goes back to the shape it was declared in without one.
+    if (!st.tickets.length) delete st.tickets
+  }
+  const done = to ? `${to} replaces ${from}` : `removed ${from}`
+  commitAs(work.id, done)
+  saveWork(cfg, work)
+  ok(`${work.id}: ${done} — the tracker was not told`)
+  if (hadIt && !work.tickets.length) say(C.dim(`  ${work.id} has no ticket now — \`rig ticket <key>\` records one`))
+}
+
 cmds.ticket = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
-  const key = positional[0] || die('usage: rig ticket <PROJ-123 | owner/repo#n>')
+  if (flags.remove !== undefined) {
+    if (flags.remove === true) die('--remove needs the key to take off the record')
+    if (positional.length || flags.replaces !== undefined) die('--remove takes the one key it removes, and nothing else')
+    return correctTicket(cfg, work, flags.remove)
+  }
+  const key = positional[0] || die(`rig ticket wants a key\n${usageOf('ticket')}`)
   if (!isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
+  if (flags.replaces !== undefined) {
+    if (flags.replaces === true) die('--replaces needs the key it replaces')
+    if (flags.replaces === key) die(`${key} cannot replace itself`)
+    return correctTicket(cfg, work, flags.replaces, key)
+  }
   if (work.tickets.includes(key)) return say(`${key} already recorded — nothing to do`)
   work.tickets.push(key)
   delete work.ticketsDeclined   // a real ticket supersedes an earlier --no-ticket
@@ -2302,13 +2351,17 @@ function offerNeighbours (work, name) {
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
 // records the "design agreed" gate, which is what the flag's name always said it did: a
 // decision someone took, on a date nothing else can recover. It used to set a status.
-// `--learned` records the lesson review the same way.
+// `--learned` records the lesson review the same way. `--title` corrects the title in the
+// record and the two headings that show it, and never the branch or the id.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
   if (flags.message === true) die('-m needs a message')
-  commitAs(id, flags.message)
+  const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
+  if (title === true || title === '') die('--title needs the title')
+  if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
+  commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -2323,6 +2376,12 @@ cmds.save = ({ flags }) => {
     if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
     work.learnedAt = new Date().toISOString()
     ok(`${id}: lessons reviewed`)
+  }
+  // After the gates, so a gate refused leaves the doc as untouched as the record.
+  if (title) {
+    work.title = title
+    retitleDoc(id, title)
+    ok(`${id}: titled "${title}"`)
   }
   saveWork(cfg, work)
 }
@@ -2476,7 +2535,7 @@ const workJson = (cfg, work, live) => ({
   ticketsDeclined: !!work.ticketsDeclined,
   type: work.type || '',
   branch: work.branch,
-  stages: (work.stages || []).map(st => ({ branch: st.branch, delivers: st.delivers || '' })),
+  stages: (work.stages || []).map(st => ({ branch: st.branch, delivers: st.delivers || '', withdrawn: withdrawalOf(st) })),
   createdAt: work.createdAt || null,
   designedAt: work.designedAt || null,
   learnedAt: work.learnedAt || null,
@@ -2533,7 +2592,11 @@ function repoEntryJson (cfg, entry, branch, live) {
   Object.assign(out, { missing: s.missing, dirty: s.dirty, ahead: s.ahead, behind: s.behind, unpushed: s.unpushed })
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
-  else out.pr = s.pr
+  else if (s.pr) {
+    // Its title and body are for `rig pr --refresh` to compare, not for a listing.
+    const { title: _title, body: _body, ...pr } = s.pr
+    out.pr = pr
+  } else out.pr = null
   const timing = prTiming(entry, s.pr)
   out.firstCommitAt = timing.firstCommitAt ?? null
   // One refusal, two things left unknown: where the work started, and whether it was ever
@@ -2919,6 +2982,7 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const text = prText(work, stack)
   const offers = nextFor({
     work,
     repos,
@@ -2927,6 +2991,10 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
+    // The comparison `rig pr --refresh` makes, and never while a stage's PR is unknown, which
+    // is when the refresh would refuse.
+    prStale: stack.some(st => st.prUnknown) ? []
+      : repos.filter(r => r.pr?.state === 'OPEN' && !prSaysRecord(r.pr, text)).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
@@ -3031,6 +3099,16 @@ function prBody (work, stack) {
   return lines.join('\n')
 }
 
+// Everything `rig pr` writes into a pull request, rendered from the record as it stands. The
+// one renderer for opening a PR, refreshing it, and asking whether an open one has gone stale,
+// so the three cannot disagree about what the PR should say.
+const prText = (work, stack) => ({ title: work.title || work.id, body: prBody(work, stack) })
+
+// Does an open PR still say what `rig pr` would write now? GitHub may hand a body back with
+// CRLF line ends or without the trailing newline, and neither is a difference worth an edit.
+const sameText = (a, b) => (a ?? '').replace(/\r\n/g, '\n').trim() === b.replace(/\r\n/g, '\n').trim()
+const prSaysRecord = (pr, text) => sameText(pr.title, text.title) && sameText(pr.body, text.body)
+
 // One PR per repo, work branch → base branch. rig has read PR state everywhere since it
 // existed — `list`, `status`, `close`, `dash`, `workstate` — and had never opened one, which
 // made review the phase it was most obviously absent from. The PR is also the one artifact rig
@@ -3047,8 +3125,8 @@ cmds.pr = ({ flags }) => {
   if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
-  const body = prBody(work, stack)
-  const title = work.title || work.id
+  const text = prText(work, stack)
+  if (flags.refresh) return refreshPrs(work, stack, text)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3065,9 +3143,31 @@ cmds.pr = ({ flags }) => {
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
     let made = null
-    const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, title, body }) })
+    const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
+  }
+}
+
+// `rig pr --refresh`: each repo's open PR rewritten with `prText`. One that already says it is
+// left alone, and a refresh never opens one. A stage GitHub would not answer for renders as
+// "PR state unknown", so nothing is refreshed until it does, rather than writing that over a
+// table that was right.
+function refreshPrs (work, stack, text) {
+  const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
+  if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
+  // A lookup gh refused answers null, which would read as "no open PR" here and as "no PR yet"
+  // in the stage table.
+  const auth = github().auth()
+  if (auth !== 'ok') return warn(`GitHub would not say whether a PR is open (gh is ${auth}) — nothing refreshed`)
+  for (const entry of work.repos) {
+    const { pr, prError } = prAndBase(entry, work.branch)
+    if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
+    if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
+    if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }
+    const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, text))
+    if (failed) { warn(`${entry.repo}: could not refresh PR #${pr.number} (${failed})`); continue }
+    ok(`${entry.repo}: PR #${pr.number} refreshed from the record  ${C.dim(pr.url)}`)
   }
 }
 
@@ -3137,6 +3237,8 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (flags.dropped !== undefined || flags['replaced-by'] !== undefined) return withdrawStage(cfg, work, branch, flags)
+
   if (branch) {
     // Declaring and cutting are two acts on two days: a stage is normally declared before
     // anyone makes its branch, which is why recording the branch at declaration time could
@@ -3150,6 +3252,8 @@ cmds.stage = ({ flags, positional }) => {
       if (problem) die(problem)
       if (flags.delivers === true) die('--delivers needs a line saying what this stage delivers')
       work.stages.push({ branch, delivers: flags.delivers || '', ...(key ? { tickets: [key] } : {}) })
+    } else if (flags.cut && withdrawalOf(declared)) {
+      die(`${branch} was withdrawn from the plan (${withdrawnLabel(withdrawalOf(declared))}) — there is nothing to cut`)
     } else if (!flags.cut && !key) {
       die(`${branch} is already a stage of this work`)
     } else if (key) {
@@ -3181,11 +3285,13 @@ cmds.stage = ({ flags, positional }) => {
   say('')
   const upNext = nextStage(stack)
   for (const [i, st] of stack.entries()) {
-    const mark = st.landed ? C.green('✓') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
+    const mark = st.landed ? C.green('✓') : st.withdrawn ? C.dim('✕') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
     say(`  ${mark} ${i + 1}. ${C.bold(st.branch)}${st === upNext ? C.dim('  ← next') : ''}`)
     if (st.delivers) say(`       ${st.delivers}`)
     if (st.tickets.length) say(`       ${C.dim(st.tickets.join(', '))}`)
-    say(`       ${C.dim(st.started ? st.repos.join(', ') : 'not cut in any repo yet')}`)
+    if (st.withdrawn) say(`       ${C.dim(`${withdrawnLabel(st.withdrawn)} (${st.withdrawn.at.slice(0, 10)})`)}`)
+    if (st.started) say(`       ${C.dim(st.repos.join(', '))}`)
+    else if (!st.withdrawn) say(`       ${C.dim('not cut in any repo yet')}`)
     for (const pr of st.prs) {
       say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
     }
@@ -3202,6 +3308,52 @@ cmds.stage = ({ flags, positional }) => {
     say('')
     say(`  ${C.yellow(adrift)}`)
   }
+}
+
+// `--dropped` and `--replaced-by`: a declared stage withdrawn from the plan (decision 126). Only
+// a stage with no pull request open or merged, so a withdrawn stage never has work in review or
+// in the work branch that the record then says is gone.
+function withdrawStage (cfg, work, branch, flags) {
+  const { dropped, 'replaced-by': by } = flags
+  if (!branch) die('--dropped and --replaced-by name the stage: `rig stage <branch> --dropped "why"`')
+  if (dropped !== undefined && by !== undefined) die('--dropped and --replaced-by are alternatives; pass one')
+  if (flags.cut || flags.key !== undefined || flags.delivers !== undefined) die('--dropped and --replaced-by withdraw a stage, and take nothing else')
+  if (dropped === true || (dropped !== undefined && !dropped.trim())) die('--dropped needs the reason')
+  if (dropped !== undefined && /[\r\n]/.test(dropped)) die('--dropped takes the reason in one line — it goes in a table row')
+  if (by === true) die('--replaced-by needs the branch of the stage that replaced it')
+  const declared = work.stages.find(s => s.branch === branch) || die(`${branch} is not a stage of ${work.id}`)
+  if (by === branch) die(`${branch} cannot replace itself`)
+  if (by !== undefined) {
+    const replacement = work.stages.find(s => s.branch === by)
+    if (!replacement) die(`${by} is not a stage of ${work.id} — declare it first: \`rig stage ${by} --delivers "..."\``)
+    if (withdrawalOf(replacement)) die(`${by} was withdrawn itself (${withdrawnLabel(withdrawalOf(replacement))}) — name the stage that did the work`)
+  }
+  const replaced = work.stages.filter(s => s.replacedBy === branch && s.replacedAt).map(s => s.branch)
+  if (replaced.length) die(`${replaced.join(', ')} was replaced by ${branch} — withdraw that first, or the record says the work went nowhere`)
+  const rows = branchRows(cfg, work)
+  const st = stackOf(work, rows).find(s => s.branch === branch)
+  const merged = st.prs.filter(pr => pr.state === 'MERGED')
+  const open = st.prs.filter(pr => pr.state === 'OPEN')
+  if (merged.length) die(`${branch} has landed in ${merged.map(pr => pr.repo).join(', ')} — it is in ${work.branch}, so it cannot be withdrawn`)
+  if (open.length) die(`${branch} has ${open.map(pr => `PR #${pr.number} open in ${pr.repo}`).join(', ')} — close it first, then withdraw the stage`)
+  if (st.prUnknown) die(`GitHub would not say whether ${branch} has a PR in ${st.prUnknown.join(', ')} — nothing recorded`)
+  // A lookup gh refused answers null too, so "no PR" is only believed from a gh that is signed in.
+  const auth = st.started && !st.prs.length ? github().auth() : 'ok'
+  if (auth !== 'ok') die(`GitHub would not say whether ${branch} has a PR (gh is ${auth}) — nothing recorded`)
+  // A stage cut on this one carries its commits, so they would land with it while the record
+  // said they were gone.
+  const live = new Set(work.stages.filter(s => !withdrawalOf(s)).map(s => s.branch))
+  const above = rows.filter(r => r.base === branch && live.has(r.branch))
+  if (above.length) die(`${above.map(r => `${r.branch} is cut on it in ${r.repo}`).join(', ')} — rebase that off ${branch} first`)
+  const reason = dropped?.trim()
+  // A second withdrawal replaces the first: the date that matters is the current decision's.
+  for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]
+  const at = new Date().toISOString()
+  Object.assign(declared, by !== undefined ? { replacedAt: at, replacedBy: by } : { droppedAt: at, reason })
+  const done = by !== undefined ? `${branch} replaced by ${by}` : `${branch} dropped`
+  commitAs(work.id, done)
+  saveWork(cfg, work)
+  ok(`${work.id}: stage ${C.bold(branch)} ${withdrawnLabel(withdrawalOf(declared))}`)
 }
 
 // `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
@@ -3223,7 +3375,7 @@ function cutStageHere (cfg, work, branch) {
     die(`--cut makes the branch in one repo: run it inside one of ${work.id}'s worktrees (${names})`)
   }
   const carried = stackOf(work, branchRows(cfg, work))
-    .filter(st => st.branch !== branch && st.repos.includes(entry.repo))
+    .filter(st => st.branch !== branch && st.repos.includes(entry.repo) && !st.withdrawn)
   const base = carried.length ? carried[carried.length - 1].branch : work.branch
   const failed = trees(cfg).cutHere({ dir: entry.path, branch, base })
   if (failed) die(`${entry.repo}: could not cut ${branch} on ${base} — ${failed}`)
@@ -4111,6 +4263,10 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
+       --replaces <old>            put it in place of a key the record holds, on the work
+                                   or a stage; the tracker is not told
+  rig ticket --remove <key>       take a key off the record, wherever it is held; the
+                                  tracker is not told
   rig attach <repo> [--setup]     add a repo to the current work
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
@@ -4132,10 +4288,14 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig status                      live detail for the current work
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
+       [--refresh]                 rewrite each open PR's title and body from the record
+                                   as it stands; opens nothing
   rig stage [branch]              the stack, in branch order; with a branch, declare one
   rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
   rig stage <branch> --key <k>    give the stage its own ticket, closed when the slice lands
        --delivers "..."            the one line of prose a stage carries
+       --dropped "why"             withdraw it from the plan: kept, dated, never deleted
+       --replaced-by <stage>       withdraw it as done under another declared stage
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
@@ -4149,6 +4309,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
        [--learned]                 --designed records the "design agreed" gate,
                                    --learned the lesson review (the rig-learn skill)
+       [--title "..."]             correct the work's title: the record, the context doc's
+                                   heading and AGENTS.md — never the branch or the id
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land

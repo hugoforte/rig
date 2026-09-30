@@ -42,11 +42,15 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Where has this work got to | `rig status` |
 | What is open, what can close | `rig list` |
 | Slice the work into reviewable parts | `rig stage` |
+| A planned stage was dropped, or done under another | `rig stage <branch> --dropped "why"`, `rig stage <branch> --replaced-by <stage>` |
 | Put it up for review | `rig pr` |
+| The PR says what the work used to be | `rig pr --refresh` |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified | `rig check [--run]` |
 | Context doc edited by hand | `rig save -m "…"` |
 | Design agreed with the user | `rig save -m "design agreed" --designed` |
+| The work's title turned out wrong | `rig save --title "…"` |
+| A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close` |

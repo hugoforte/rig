@@ -543,3 +543,18 @@ test('a missing worktree whose PR closed is not offered the restore it cannot ha
   })
   assert.ok(!commands(out).includes('rig restore w'))
 })
+
+test('a stack whose other stages were withdrawn says so, rather than calling every stage in', () => {
+  const stack = [
+    { branch: 'feat/one', landed: true, withdrawn: null, prs: [], repos: ['a'] },
+    { branch: 'feat/two', landed: false, withdrawn: { at: AT, reason: 'not needed' }, prs: [], repos: [] },
+  ]
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], stack })
+  assert.match(says(out), /every stage is in or withdrawn — the work branch is what is left to land/)
+})
+
+test('an open PR that no longer matches the record is offered a refresh', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pr: { state: 'OPEN' }, pushed: true })], prStale: ['a'] })
+  assert.match(says(out), /a: the open PR no longer says what the record does/)
+  assert.ok(commands(out).includes('rig pr --refresh'))
+})

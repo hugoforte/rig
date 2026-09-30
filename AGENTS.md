@@ -67,6 +67,19 @@ No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the de
 comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets
 never auto-transition — that stays with you (`docs/adr/0001-jira-via-twg.md`).
 
+A key the record holds can turn out wrong: an issue transferred to another repo, or deleted and
+opened again, has a new number. Correct it in the record rather than by hand:
+
+```bash
+rig ticket owner/other#12 --replaces owner/repo#7   # in the old key's place, on the work or a stage
+rig ticket --remove owner/repo#7                    # off the record, wherever it is held
+```
+
+Both rewrite `work.json`, the context doc's `Tickets:` line and the generated `AGENTS.md`, and
+neither tells the tracker anything: a ticket next hears from rig at `rig close`. `--remove` says
+the record was wrong about a ticket. It is not the answer for a ticket this work only delivers
+part of, which the record is right to name; DESIGN.md decision 124 says why.
+
 Then run the repo interview and attach what it selects:
 
 ```bash
@@ -213,10 +226,17 @@ you, not by rig, so when the Direction section is agreed, run:
 ```bash
 rig save -m "design agreed" --designed   # records the design gate, commits, pushes
 rig save -m "refuted the sync hypothesis" # any later edit made outside rig
+rig save --title "What it turned out to be" # the title was wrong
 ```
 
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
+**The title is prose, and correctable the same way.** `rig save --title` rewrites it in
+`work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
+touches the branch, which was named from the first title and which the stack is read from, or
+the id, which names the folder and the record. An open pull request takes the new title with
+`rig pr --refresh`.
 
 ## More than one data root
 
@@ -287,6 +307,8 @@ rig stage                                          # the stack, in the order the
 rig stage feat/schema --delivers "the write path"  # declare one
 rig stage feat/schema --cut                        # and make the branch, here, on this repo's stack
 rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
+rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
+rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -321,6 +343,15 @@ it has started (does the branch exist), whether it is up for review (is there a 
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
 branches already answer, and the two disagree the moment anything is rebased.
+
+**A plan that changed is not a plan that stalled.** Declaring a stage is a decision rig records,
+and so is withdrawing one: `--dropped "why"` records `droppedAt` and the reason, and
+`--replaced-by <stage>` records `replacedAt` and the declared stage that did the work. Neither
+deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work started from is what
+a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
+rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
+next stage. Only a stage with no pull request open or merged can be withdrawn, and a withdrawn
+stage's own ticket is told why at `rig close` and left open.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
@@ -425,7 +456,8 @@ walkthrough that stops before the merge makes half the case.
 ## Opening the pull requests
 
 ```bash
-rig pr        # one PR per repo, work branch to the base it was cut from
+rig pr            # one PR per repo, work branch to the base it was cut from
+rig pr --refresh  # rewrite each open PR's title and body from the record as it stands
 ```
 
 The body is assembled from what the record already holds: the title, the tickets, the
@@ -435,6 +467,14 @@ hand-maintained the moment something renders it.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
+
+**The PR is kept true.** A work's scope moves while its PR is open: a ticket folded in, the
+Direction rewritten after a trial run, the title corrected, a stage dropped. `rig pr --refresh`
+rewrites each open PR's title and body with exactly what `rig pr` would open it with now, and
+leaves one that already says it alone. A repo with no open PR is told so; a refresh never opens
+one. `rig next` compares each open PR with that text and offers the refresh when they differ,
+the way it offers `rig plan --refresh`. The whole title and body are rig's, so an edit made on
+GitHub is lost to the next refresh: put what should last in the context doc.
 
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
