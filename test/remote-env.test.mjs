@@ -46,6 +46,18 @@ test('and without the variables the same askpass would have answered', () => {
   assert.equal(fs.existsSync(marker), true)
 })
 
+test('ssh, started by git for a remote, is told never to start an askpass of its own', () => {
+  // A stand-in for ssh that writes down what it was told and refuses, as ssh would without a key.
+  const told = path.join(tmp, 'ssh-told')
+  const ssh = path.join(tmp, 'ssh.sh')
+  fs.writeFileSync(ssh, `#!/bin/sh\necho "$SSH_ASKPASS_REQUIRE" > '${told.replace(/\\/g, '/')}'\nexit 1\n`, { mode: 0o755 })
+  spawnSync('git', ['ls-remote', 'ssh://git@example.invalid/acme/repo.git'], {
+    encoding: 'utf8',
+    env: { ...process.env, ...NO_PROMPT_ENV, GIT_SSH_COMMAND: `sh '${ssh.replace(/\\/g, '/')}'` },
+  })
+  assert.equal(fs.readFileSync(told, 'utf8').trim(), 'never')
+})
+
 test('an ssh key ssh could not use without asking is named, with how to give it one', () => {
   assert.match(signIn('git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.'),
     /rig never waits at a prompt: load the key into an agent with `ssh-add`/)
