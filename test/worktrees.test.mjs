@@ -428,6 +428,78 @@ test('contains asks the remote\'s copy too, when the one the mirror kept is wher
   assert.equal(trees().contains({ org: 'acme', repo: 'restored', branch: 'feat/kept', other: 'feat/landed' }), true)
 })
 
+// ------------------------------------------------- a merged branch GitHub rewrote
+
+// A stage's copy here that merged the base in, and the head GitHub merged: the stage's own
+// commit re-made on the base, the way a retargeted stack PR is (hugoforte/rig#257). `byHand`
+// puts content of its own into the merge, as resolving a conflict does.
+const mergedInThenRewritten = (repo, { byHand = false } = {}) => {
+  const seed = publish('acme', repo)
+  const dest = workDir('rewritten', repo)
+  trees().cut({ org: 'acme', repo, branch: 'feat/stage', dest })
+  fs.writeFileSync(path.join(dest, 'stage.txt'), 'the stage\n')
+  gitMust(dest, 'add', '-A')
+  gitMust(dest, 'commit', '-q', '-m', 'the stage')
+  fs.writeFileSync(path.join(seed, 'base.txt'), 'the base moves\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the base moves')
+  gitMust(seed, 'push', '-q', 'origin', 'main')
+  gitMust(dest, 'fetch', '-q', 'origin')
+  gitMust(dest, 'merge', '-q', '--no-ff', '--no-commit', 'origin/main')
+  if (byHand) {
+    fs.appendFileSync(path.join(dest, 'stage.txt'), 'settled in the merge\n')
+    gitMust(dest, 'add', '-A')
+  }
+  gitMust(dest, 'commit', '-q', '-m', 'Merge main')
+  gitMust(seed, 'checkout', '-q', '-b', 'rewritten')
+  fs.writeFileSync(path.join(seed, 'stage.txt'), 'the stage\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'push', '-q', 'origin', 'rewritten:refs/pull/9/head')
+  assert.equal(trees().remove({ org: 'acme', repo, dir: dest }), null)
+  return gitMust(seed, 'rev-parse', 'HEAD')
+}
+
+test('a merge on a rewritten copy that adds nothing of its own does not keep it (#257)', () => {
+  const head = mergedInThenRewritten('clean-merge')
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'clean-merge', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'deleted')
+})
+
+test('a merge that settled something by hand keeps the rewritten copy (#257)', () => {
+  const head = mergedInThenRewritten('hand-merge', { byHand: true })
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'hand-merge', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — merging it into PR #9\'s head would change what that PR merged')
+})
+
+test('a copy that differs from the rewritten head only in whitespace is kept, though its patch-id matches (#257)', () => {
+  const seed = publish('acme', 'reindented')
+  const dest = workDir('reindented', 'reindented')
+  trees().cut({ org: 'acme', repo: 'reindented', branch: 'feat/stage', dest })
+  fs.writeFileSync(path.join(dest, 'stage.txt'), '    the stage\n')
+  gitMust(dest, 'add', '-A')
+  gitMust(dest, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'checkout', '-q', '-b', 'rewritten')
+  fs.writeFileSync(path.join(seed, 'stage.txt'), 'the stage\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'push', '-q', 'origin', 'rewritten:refs/pull/9/head')
+  assert.equal(trees().remove({ org: 'acme', repo: 'reindented', dir: dest }), null)
+  const head = gitMust(seed, 'rev-parse', 'HEAD')
+
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'reindented', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — merging it into PR #9\'s head would change what that PR merged')
+  assert.match(gitMust(mirrorOf('acme', 'reindented'), 'cherry', head, 'refs/heads/feat/stage'), /^- /, 'git reads the two as one patch')
+})
+
+test('a comparison git could not make keeps the rewritten copy, with git\'s reason (#257)', () => {
+  const head = mergedInThenRewritten('uncompared')
+  const failing = (cmd, args) => args.includes('--cherry-pick') ? { code: 128, out: '', err: 'fatal: bad revision' } : run(cmd, args)
+  const t = worktrees({ mirrorRoot, remotes: remotesInDirectory(remotesDir), run: failing })
+  const { local } = t.dropMerged({ org: 'acme', repo: 'uncompared', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — git could not compare it with PR #9\'s head: fatal: bad revision')
+})
+
 // ---------------------------------------------------------------- credentials
 
 // The module built over `run`, keeping every call's options, because the guard rides on each

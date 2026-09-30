@@ -55,11 +55,13 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //                  it was reached from, `direction` its stated direction or null
 //   bumps          one `{ repo, release }` per repo with no PR, where `release` is which release
 //                  its PR would ask for and why; absent where the repo does not release by bump
+//   unstacked      the repos whose open stage PRs, two or more and a chain, GitHub does not
+//                  show as one stack; empty where GitHub would not list its stacks
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -206,6 +208,12 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // `rig pr` would write now.
   if (prStale.length) {
     out.push(offer('reviewing', `${prStale.join(', ')}: the open PR no longer says what the record does`, 'rig pr --refresh'))
+  }
+
+  // Stage pull requests GitHub shows as unrelated, which a stack would show together and let
+  // merge together (decision 152).
+  if (unstacked.length) {
+    out.push(offer('reviewing', `${unstacked.join(', ')}: the open stage PRs are not a GitHub stack`, 'rig stage --link'))
   }
 
   const merged = repos.filter(r => r.merged)
