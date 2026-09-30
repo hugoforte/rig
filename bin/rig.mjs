@@ -10,7 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
-import { NO_PROMPT_ENV } from './remote-env.mjs'
+import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
@@ -666,7 +666,7 @@ function prepareDataRoot () {
       const fetched = co.fetch(root)
       if (!fetched.ok) {
         stampDataFetchFailure()
-        say(C.dim(`· data root: could not fetch (${fetched.error}) — working from what is here`))
+        say(C.dim(`· data root: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
       } else {
         clearDataFetchFailure()
         const { outcome, state, error } = co.fastForward(root)
@@ -1595,14 +1595,14 @@ function commitDataRoot (message, loc = where(), known = null) {
   if (!staged && !state.ahead) { say(C.dim('· data root: nothing to commit, nothing to push')); return }
 
   const sent = co.pushRebasing(root)
-  if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error}) — nothing pushed`); return }
+  if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error})${signIn(sent.error)} — nothing pushed`); return }
   // Someone's rebase, and not rig's to finish or to throw away.
   if (sent.outcome === 'underway') { warn(`data root: ${committed}, but a rebase is already in progress in ${root} — finish or abort it, then \`rig save\`; nothing pushed`); return }
   if (sent.outcome === 'refused') { warn(`data root: ${committed}, but the rebase onto origin would not start (${sent.error}) — nothing pushed, nothing changed`); return }
   if (sent.outcome === 'conflict-stuck') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`); return }
   if (sent.outcome === 'conflict') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`); return }
   // `sent.hash` is HEAD as the rebase left it, which is not what was committed above.
-  if (sent.outcome === 'push-failed') { warn(`data root: ${committed} as ${sent.hash}, but the push failed (${sent.error}) — push it by hand`); return }
+  if (sent.outcome === 'push-failed') { warn(`data root: ${committed} as ${sent.hash}, but the push failed (${sent.error})${signIn(sent.error)} — push it by hand`); return }
   ok(`data root: ${staged ? `committed ${sent.hash}` : `pushed ${sent.hash}, committed earlier`} and pushed`)
 }
 
@@ -1704,7 +1704,7 @@ function joinOrCreateDataRepo (spec, named) {
       die(`${target} is a checkout of ${origin}, not ${spec}`)
     }
     say(`using the existing checkout at ${target}`)
-    if (ensureFirstCommit(target, name) && origin) must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
+    if (ensureFirstCommit(target, name) && origin) pushFirstCommit(target)
     return target
   }
 
@@ -1719,7 +1719,7 @@ function joinOrCreateDataRepo (spec, named) {
     github().clone(spec, target)
     // A repo with no commits clones fine and is useless; give it its first commit.
     if (ensureFirstCommit(target, name)) {
-      must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
+      pushFirstCommit(target)
       ok(`${spec} was empty — pushed its first commit`)
     }
     return target
@@ -1737,6 +1737,13 @@ function joinOrCreateDataRepo (spec, named) {
   }
   ok(`created ${spec} and pushed its first commit`)
   return target
+}
+
+// A data root's first commit, pushed; a push refused for want of credentials names the fix.
+function pushFirstCommit (target) {
+  const r = exec('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
+  const detail = r.err || r.out
+  if (r.code !== 0) die(`could not push the first commit of ${target}${signIn(detail)}\n${detail}`)
 }
 
 cmds.init = ({ flags }) => {
@@ -3830,7 +3837,7 @@ function updateCheckout (label, root) {
     return { status: 'failed', clean }
   }
   const fetched = co.fetch(root)
-  if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error}) — not updated`); return { status: 'failed', clean } }
+  if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — not updated`); return { status: 'failed', clean } }
   // Every outcome, named. The three that look impossible here — this checkout was read a
   // few lines ago — are reachable all the same: a fetch that prunes a renamed default
   // branch takes the upstream with it, and a catch-all would report that as a

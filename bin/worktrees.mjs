@@ -18,11 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
-import { NO_PROMPT_ENV } from './remote-env.mjs'
-
-// A clone that needed credentials is the one failure with a fix to name. Git's own words for it
-// say only that a prompt was skipped, not that nothing will ever answer one.
-const NEEDS_CREDENTIALS = /terminal prompts disabled|could not read (Username|Password)/i
+import { NO_PROMPT_ENV, NEEDS_CREDENTIALS } from './remote-env.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 

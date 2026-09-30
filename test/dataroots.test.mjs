@@ -372,6 +372,22 @@ test('joining an empty data repo pushes its first commit without ever asking for
   assert.deepEqual(fs.readFileSync(seen, 'utf8').trim().split(/\r?\n/), ['0 never', '0 never'])
 })
 
+test('a first push refused for want of credentials names the command that signs git in', () => {
+  // The remote refuses in Git Credential Manager's words for a sign-in it may not ask for.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const bare = path.join(tmp, 'signed-out.git')
+  gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', bare)
+  fs.writeFileSync(path.join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "fatal: Cannot prompt because user interactivity has been disabled." >&2\nexit 1\n', { mode: 0o755 })
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'ok', repos: { ...state.repos, 'acme/signed-out': { language: '', prs: [], issues: [], source: bare } } }))
+
+  const r = rig(['init', '--data-repo', 'acme/signed-out', '--name', 'signed-out', '--orgs', 'acme'])
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /git needed credentials, and rig never waits at a prompt: sign git in with `gh auth setup-git`/)
+})
+
 test('rig use lists every root and marks the current one', () => {
   const r = rig(['use'])
   assert.equal(r.code, 0)
