@@ -115,11 +115,8 @@ prompt while rig itself stays single-shot (DESIGN.md decision 13).
   answered "no active sprint" on a board that had one. Every parser (`getIssue`,
   `createIssue`, `fieldMetadata`, `activeSprintId`, `projectComponents`) has now been
   checked against a real twg 1.3.3 answer, `createIssue` through a real create and the
-  rest through read-only calls, and each has a canned test of that shape. What changed on
-  the way: the fetch is `twg jira workitem get` (twg 1.3 dropped the bare `workitem <KEY>`,
-  so `--key` had stopped fetching); the active sprint is twg's one `data.sprint`; and a
-  create whose answer cannot be read says the ticket may have been created and to search
-  before retrying (DESIGN.md decisions 148 and 150).
+  rest through read-only calls, and each has a canned test of that shape. What that
+  changed is DESIGN.md decisions 148–150.
 - **twg answers some commands differently under an agent.** With `CLAUDECODE`,
   `AI_AGENT` or a similar variable set, twg 1.3 replaces the JSON of some `-o json`
   commands (`workitem get` among them) with a YAML summary on stdout and writes the JSON

@@ -185,18 +185,17 @@ test('twg adapter: createIssue files the issue under its parent with twg\'s own 
     '--summary', 'S', '--description', 'D', '--description-format', 'markdown', '--parent', 'PROJ-7', '-o', 'json', '--output-summary', 'none', '-y'])
 })
 
-// twg exited 0, so the create has happened: failing loudly is not enough, because the
-// natural retry makes a duplicate. The message says so and names how to recover.
+// Decision 150: after exit 0 the ticket exists, so the message names how to recover.
 test('twg adapter: createIssue says the ticket may have been created when its answer has no key', () => {
   const { twg } = canned(() => '{"data":{}}')
   assert.throws(() => twg.createIssue({ project: 'PROJ', type: 'Task', summary: 'Refunds double-charge', description: 'D', fields: {} }),
-    /may have been created: search PROJ for "Refunds double-charge" before retrying.*rig ticket/s)
+    /may have been created\. Search PROJ for "Refunds double-charge" before retrying, then record it on this work with `rig ticket <KEY> --work <id>`/)
 })
 
 test('twg adapter: createIssue says the ticket may have been created when its answer is not JSON', () => {
   const { twg } = canned(() => 'output_files:\n  stdout: "stdout.json"')
   assert.throws(() => twg.createIssue({ project: 'PROJ', type: 'Task', summary: 'S', description: 'D', fields: {} }),
-    /may have been created: search PROJ for "S" before retrying/)
+    /may have been created\. Search PROJ for "S" before retrying/)
 })
 
 test('twg adapter: createIssue keeps twg\'s own error when the create fails', () => {
@@ -299,14 +298,16 @@ test('twg adapter: activeSprintId reads the active sprint from twg 1.3\'s apiVer
 
 test('twg adapter: activeSprintId is null when twg reports no active sprint', () => {
   assert.equal(canned(() => snapshot(null, 0)).twg.activeSprintId(123), null)
-  assert.equal(canned(() => JSON.stringify({ apiVersion: 'v2', data: { boardId: '123' } })).twg.activeSprintId(123), null)
 })
 
 // The guessed `data.sprints` list read as "no active sprint" on a board that had one. A
 // shape rig cannot read now says so rather than answering null.
 test('twg adapter: activeSprintId fails loudly on a shape it cannot read', () => {
-  assert.throws(() => canned(() => JSON.stringify({ sprints: [{ id: 7, state: 'active' }] })).twg.activeSprintId(123),
+  assert.throws(() => canned(() => JSON.stringify({ data: { sprints: [{ id: 7, state: 'active' }] } })).twg.activeSprintId(123),
     /could not read the active sprint/)
+})
+
+test('twg adapter: activeSprintId fails loudly on a sprint that is not active', () => {
   assert.throws(() => canned(() => snapshot({ id: 7, state: 'closed' }, 1)).twg.activeSprintId(123),
     /could not read the active sprint/)
 })

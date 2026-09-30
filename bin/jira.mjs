@@ -4,8 +4,7 @@
 //
 // Every answer parsed here has been checked against a real twg 1.3.3 answer (apiVersion v2),
 // and each has a test of that shape (hugoforte/rig#260). A parser that meets a shape it
-// cannot read fails with the raw output rather than guessing. For a write that is not
-// enough on its own, since the write has happened by then; createIssue says so.
+// cannot read fails with the raw output rather than guessing.
 //
 // The interface:
 //   present()                                    is `twg` on PATH? never throws
@@ -92,7 +91,6 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       return !exec(['--version']).error
     },
     getIssue (key) {
-      // `get`: twg 1.3 dropped the bare `jira workitem <KEY>` (DESIGN.md decision 148).
       const out = must(['jira', 'workitem', 'get', key, ...JSON_OUT, '--fields', 'summary,description'])
       const fields = workitemFields(parseJson(out, 'twg jira workitem'))
       if (!fields) fail(`could not read summary/description from twg's JSON:\n${out}`)
@@ -119,9 +117,9 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       try { body = JSON.parse(out) } catch {}
       const key = body?.data?.issue?.key || body?.data?.key || body?.key
       if (!key) {
-        fail(`twg reports the create succeeded, but rig could not read the new key from its answer. ` +
-          `The ticket may have been created: search ${project} for "${summary}" before retrying, ` +
-          `and record it on this work with \`rig ticket <KEY>\`.\ntwg's answer:\n${out}`)
+        fail(`twg exited 0 but rig could not read the new key from its answer, so the ticket may have been created. ` +
+          `Search ${project} for "${summary}" before retrying, ` +
+          `then record it on this work with \`rig ticket <KEY> --work <id>\`.\ntwg's answer:\n${out}`)
       }
       return key
     },
@@ -147,14 +145,14 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
       return items.map(c => ({ id: String(c.id), name: c.name }))
     },
     // twg 1.3 answers one `data.sprint`: twg's pick when several are active, whose id is also
-    // `activeSprints.selectedId`. No `sprint`, or a total of 0, is a board with none active.
-    // Anything else is a shape rig does not know, and "no active sprint" would be a guess
-    // about it (DESIGN.md decision 148).
+    // `activeSprints.selectedId`. A snapshot (it carries `activeSprints`) with no `sprint`, or
+    // a total of 0, is a board with none active. Anything else is a shape rig does not know,
+    // and "no active sprint" would be a guess about it (DESIGN.md decision 148).
     activeSprintId (boardId) {
       const out = must(['jira', 'sprint', 'snapshot', '--board-id', String(boardId), ...JSON_OUT])
-      const data = parseJson(out, 'twg jira sprint snapshot').data
+      const data = parseJson(out, 'twg jira sprint snapshot')?.data
       if (data?.sprint?.state === 'active' && data.sprint.id != null) return data.sprint.id
-      if (data && (!data.sprint || data.activeSprints?.total === 0)) return null
+      if (data?.activeSprints && (!data.sprint || data.activeSprints.total === 0)) return null
       fail(`could not read the active sprint from twg's JSON:\n${out}`)
     },
   }
