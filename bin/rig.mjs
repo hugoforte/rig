@@ -358,7 +358,8 @@ function headSha (dir, place = discover(dir, env())) {
   const head = git(dir, 'rev-parse', 'HEAD')
   return head.code === 0 ? head.out : null
 }
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
+// A byte-order mark is how PowerShell 5.1 saves UTF-8, and a file saved that way is not damaged.
+const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''))
 const writeJson = (p, v) => writeText(p, JSON.stringify(v, null, 2) + '\n')
 const readText = p => fs.readFileSync(p, 'utf8')
 // Writes only when the content differs: the record, its doc header and its folder are
@@ -780,7 +781,11 @@ function loadWork (cfg, id, root = dataRoot()) {
     const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
-  const w = readJson(recordFile(id, root))
+  // A record that will not parse is a sentence naming it, not a stack trace (decision 137).
+  let w
+  try { w = readJson(recordFile(id, root)) } catch (e) {
+    throw new RigError(`work record for "${id}" at ${recordFile(id, root)} could not be read (${e.message})`, { cause: e })
+  }
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
   w.repos = w.repos || []
@@ -864,12 +869,13 @@ function listWorkIds (dataRootPath = dataRoot()) {
 // unreadable record must not cost those their answer, and for `attach` it must not cost the
 // command it follows: the offer runs after the worktree is cut and the record saved, and a throw
 // there would skip the commit and leave the data root half-written. So a record that will not
-// read is left out and named with the error it raised, never swallowed.
+// read is left out and named with the error it raised (its cause, when `loadWork` has wrapped it
+// in a sentence that already names the record), never swallowed.
 function readRecords (root, read = id => readJson(recordFile(id, root))) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
-    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${e.message})`) }
+    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${(e.cause ?? e).message})`) }
   }
   return { works, unreadable }
 }
@@ -3590,12 +3596,15 @@ function dropMergedBranches (cfg, work, states, stack) {
 // rate limit is transient and a record saying "unknown forever" is worse than a retry.
 cmds.backfill = ({ flags }) => {
   const cfg = config()
-  const ids = flags.work ? [flags.work] : listWorkIds()
+  // One record that will not read costs the scan nothing but itself, as it does `list`; named
+  // with `--work`, it is the whole question, and dies saying so.
+  const { works, unreadable } = flags.work ? { works: [loadWork(cfg, flags.work)], unreadable: [] }
+    : readRecords(dataRoot(), id => loadWork(cfg, id))
   let filled = 0
   let touchedWorks = 0
   const unresolved = []
-  for (const id of ids) {
-    const work = loadWork(cfg, id)
+  for (const work of works) {
+    const id = work.id
     // Only a closed work is finished. A branch that is still open can carry a second PR
     // (`bin/github.mjs` answers with the newest), and a record is what stops rig looking —
     // so recording the first merge of a work still in progress would freeze the wrong one.
@@ -3629,6 +3638,7 @@ cmds.backfill = ({ flags }) => {
   } else {
     say('nothing to backfill — every merged PR already has a stored record')
   }
+  sayUnreadable(unreadable)
   if (unresolved.length) {
     warn(`GitHub would not answer for ${unresolved.length}, left unstored (retry later):`)
     for (const u of unresolved) say(`    ${C.red('•')} ${u}`)
@@ -4002,7 +4012,11 @@ function doctorStamp (written) {
 // root's, and the work folder is the machine's, which is the whole shape of a shared work
 // root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
 function doctorWork (cfg, id, root, roots) {
-  const work = loadWork(cfg, id, root)
+  let work
+  try { work = loadWork(cfg, id, root) } catch (e) {
+    if (e instanceof RigError) return { id, unreadable: e.message }
+    throw e
+  }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
   if (out.closed) return out
   const wd = workDir(cfg, id)
