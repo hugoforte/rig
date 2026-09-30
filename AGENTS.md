@@ -338,7 +338,9 @@ their own commits and force-push them, when the squash is the stage as it stood.
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
 keyword never fires for it and a slice's ticket cannot close itself. `rig close` closes it when
-the slice landed, and comments and leaves it open when it did not. Everything else is derived — whether
+the slice landed, and comments and leaves it open when it did not. A ticket that is also the
+work's, or that two slices carry, gets one comment, and closes only when every role it holds
+would close it. Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the

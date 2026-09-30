@@ -1430,11 +1430,13 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
-  const githubKeys = keys.filter(isGithubKey)
-  const jiraKeys = keys.filter(isJiraKey)
+  // A ticket a slice also holds is left to `stageWriteBack`, which says why.
+  const sliceKeys = new Set(stages.flatMap(st => st.tickets || []))
+  const githubKeys = keys.filter(k => isGithubKey(k) && !sliceKeys.has(k))
+  const jiraKeys = keys.filter(k => isJiraKey(k) && !sliceKeys.has(k))
   // A work that declined a ticket can still have slices that carry one, so the stages are
   // written back either way.
-  if (!githubKeys.length && !jiraKeys.length) return stageWriteBack(work, stages, { abandoned })
+  if (!keys.length) return stageWriteBack(work, stages, { abandoned })
 
   // The same stack `close` refused on, so the comment that explains a forced close can name
   // the slice that never landed. Without it `workState` reached a second, kinder verdict here
@@ -1486,7 +1488,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
     else step(`commented on ${key}`)
   }
 
-  stageWriteBack(work, stages, { abandoned })
+  stageWriteBack(work, stages, { abandoned, landing: { done: merged, reason, prs } })
 }
 
 // A stage's own tickets, told what became of the slice they were opened for.
@@ -1496,39 +1498,59 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
 // not a new rule about when rig speaks. A slice that landed closes its ticket; one that did
 // not is commented on and left open, because whether the slice is still wanted is not rig's
 // answer any more than an abandoned work's is.
-function stageWriteBack (work, stages, { abandoned }) {
+//
+// **One comment per ticket, whatever roles it holds** (hugoforte/rig#229). A key two slices
+// carry is told about both, and a key that is also one of the work's tickets is told here
+// rather than by `ticketWriteBack` as well, with the work's PRs beside the slice's. It closes
+// only when every role would close it: each slice landed, and, for a work ticket, the work did
+// too (`landing`, the verdict `ticketWriteBack` reached). Otherwise the first thing that kept
+// it open is what the comment says.
+function stageWriteBack (work, stages, { abandoned, landing = null }) {
+  const slicesOf = new Map()
   for (const st of stages) {
-    const keys = st.tickets || []
-    if (!keys.length) continue
-    const landed = !abandoned && st.landed
-    const prs = st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)
-    const ran = `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}.`
-    const outcome = landed ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
-      : st.withdrawn ? `${ran} This slice was ${withdrawnLabel(st.withdrawn, b => `\`${b}\``)}. The issue stays open.`
-        : `${ran} This slice did not land, so the issue stays open.`
+    for (const key of st.tickets || []) {
+      if (!slicesOf.has(key)) slicesOf.set(key, [])
+      slicesOf.get(key).push(st)
+    }
+  }
+  // A forced close says so here as it does on the work's tickets (decision 77).
+  const forced = work.forcedAt && !abandoned
+  const ran = `\`rig close${abandoned ? ' --abandoned' : forced ? ' --force' : ''}\` ran on ${work.id}.${forced ? ' The blockers were overridden deliberately.' : ''}`
+  for (const [key, slices] of slicesOf) {
+    const asWork = landing && (work.tickets || []).includes(key)
+    const stuck = slices.find(st => !st.landed)
+    const closes = !abandoned && !stuck && (!asWork || landing.done)
+    const names = slices.map(st => st.branch).join(', ')
+    const slice = slices.length > 1 ? `The slice \`${stuck?.branch}\`` : 'This slice'
+    const landed = `The slice${slices.length > 1 ? 's' : ''} this was opened for landed in \`${work.branch}\``
+    let outcome
+    if (closes) outcome = `${landed}, and ${ran}`
+    else if (stuck?.withdrawn) outcome = `${ran} ${slice} was ${withdrawnLabel(stuck.withdrawn, b => `\`${b}\``)}. The issue stays open.`
+    else if (stuck) outcome = `${ran} ${slice} did not land, so the issue stays open.`
+    else if (abandoned) outcome = `${ran} The work was stopped without finishing, so the issue stays open.`
+    else outcome = `${ran} ${landed}, but the work has not: ${landing.reason} The issue stays open.`
+    const prs = [...new Set([...slices.flatMap(st => st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)), ...(asWork ? landing.prs : [])])]
     const body = link => [
       outcome,
-      '', `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`,
+      '', ...slices.map(st => `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`),
       ...(prs.length ? ['', ...prs] : []),
       ...contextDocLines(work.id, link),
     ].join('\n')
 
-    for (const key of keys) {
-      if (isJiraKey(key)) {
-        const notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
-        if (notCommented) warn(`${key}: could not comment (${notCommented})`)
-        else step(`commented on ${key} (stage ${st.branch})`)
-        continue
-      }
-      if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
-      const [repo, n] = key.split('#')
-      const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
-      if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
-      if (!landed) { step(`commented on ${key} (left open: stage ${st.branch} did not land)`); continue }
-      const notClosed = trackerFailure(() => github().closeIssue(repo, n))
-      if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
-      else step(`closed ${key} (stage ${st.branch} landed)`)
+    if (isJiraKey(key)) {
+      const notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
+      if (notCommented) warn(`${key}: could not comment (${notCommented})`)
+      else step(`commented on ${key} (stage ${names})`)
+      continue
     }
+    if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
+    const [repo, n] = key.split('#')
+    const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
+    if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
+    if (!closes) { step(`commented on ${key} (left open: ${stuck ? `stage ${stuck.branch} did not land` : abandoned ? 'abandoned' : landing.reason})`); continue }
+    const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+    if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
+    else step(`closed ${key} (stage ${names} landed)`)
   }
 }
 
