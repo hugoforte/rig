@@ -292,6 +292,18 @@ test('a data root as public as the repo is linked all the same, however its remo
     })))
 })
 
+test('a data root remote with credentials in it, or spelled scp-style, links cleanly (#202)', () => {
+  for (const remote of ['https://x-access-token:SECRET@github.com/acme/rig-data.git', 'git@github.com:acme/rig-data.git']) {
+    withDataRemote(remote, () =>
+      withVisibility('acme/rig-data', 'public', () => withVisibility('acme/billing', 'public', () => {
+        refresh('public-pr')
+        const body = bodyOf('feat/public-pr')
+        assert.match(body, /\nContext doc: https:\/\/github\.com\/acme\/rig-data\/blob\/main\/work\/public-pr\/context\.md$/, remote)
+        assert.doesNotMatch(body, /@|SECRET/, remote)
+      })))
+  }
+})
+
 test('a visibility GitHub will not say is no evidence an open PR is stale (#202)', () => {
   // The open PR carries the public data root's link, which the record, with no remote now,
   // would not write; but a lookup that failed cannot say which of the two is right.

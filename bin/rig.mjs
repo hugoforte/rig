@@ -1187,12 +1187,15 @@ function retitleDoc (id, title) {
 // Where the work records live on GitHub, for linking issues back to context docs.
 function dataRemoteUrl () {
   const r = git(dataRoot(), 'remote', 'get-url', 'origin')
-  if (r.code !== 0 || !r.out) return null
-  // Every way git spells a GitHub remote comes out as the page's URL: scp-style, `ssh://`, and
-  // https with credentials in it, which must never reach a link.
-  return r.out.replace(/\/+$/, '').replace(/\.git$/, '')
-    .replace(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/[^/@]+@github\.com\/)/, 'https://github.com/')
+  return r.code !== 0 || !r.out ? null : webUrlOf(r.out)
 }
+
+// A remote URL as a page to link to. Credentials in an http(s) URL come out whatever the host,
+// since the link goes into Jira and GitHub bodies alike; every way git spells a GitHub remote
+// (scp-style, `ssh://`, https) comes out as the page's URL.
+const webUrlOf = remote => remote.replace(/\/+$/, '').replace(/\.git$/, '')
+  .replace(/^(https?:\/\/)[^/@]+@/, '$1')
+  .replace(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)/, 'https://github.com/')
 
 // A file of a work's record on the data root's remote, or null when it has none.
 const recordUrl = (id, file) => {
@@ -4661,7 +4664,7 @@ export function run (argv, io = {}) {
 // surface (decision 55), which is neither pure nor cheap, since it reads every record and may
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
