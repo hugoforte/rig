@@ -32,13 +32,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
 import { sameDir } from './roots.mjs'
-
-// A fetch may never stop to ask for credentials, and the guard belongs on the operation
-// rather than on one helper in `rig.mjs`: the freshness refresh is detached with no
-// terminal to answer on, so a fetch that prompts is a stuck process for every command that
-// armed one. Asserted by a test, like the spawn options — the only symptom of dropping it
-// is a hang, on a machine whose remote happens to want credentials.
-export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0' }
+import { NO_PROMPT_ENV } from './remote-env.mjs'
 
 // One shape, whichever question was asked. A field nobody asked for is null rather than
 // absent, so a caller reading one that was never measured gets "nobody could tell" — which
@@ -307,7 +301,7 @@ export function checkouts ({ run, env = () => process.env }) {
   // makes it current. Never dies and never prompts: an unreachable remote is an ordinary
   // Tuesday, and whether working from what is already here is enough is the caller's call.
   function fetch (dir) {
-    const r = run('git', ['-C', dir, 'fetch', '-q'], { env: FETCH_ENV })
+    const r = run('git', ['-C', dir, 'fetch', '-q'], { env: NO_PROMPT_ENV })
     return r.code === 0 ? { ok: true } : { ok: false, error: firstLine(r.err) || 'no detail from git' }
   }
 
@@ -433,7 +427,7 @@ export function checkouts ({ run, env = () => process.env }) {
       return { outcome: abort.code === 0 ? 'conflict' : 'conflict-stuck', hash: null, error: firstLine(rebase.err) }
     }
     const hash = shortHead(dir)
-    const push = git(dir, 'push', '-q')
+    const push = run('git', ['-C', dir, 'push', '-q'], { env: NO_PROMPT_ENV })
     if (push.code !== 0) return { outcome: 'push-failed', hash, error: firstLine(push.err) }
     return { outcome: 'pushed', hash }
   }

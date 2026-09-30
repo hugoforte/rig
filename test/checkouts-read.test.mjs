@@ -8,7 +8,8 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { checkouts, unreadable, FETCH_ENV } from '../bin/checkouts.mjs'
+import { checkouts, unreadable } from '../bin/checkouts.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 import { checkoutsFixture } from './checkouts-fixture.mjs'
 
 const f = checkoutsFixture('rig-checkouts-read-')
@@ -177,8 +178,8 @@ test('a fetch may never stop to ask for credentials', () => {
   let asked = null
   c((cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } })
     .fetch('anywhere')
-  assert.equal(FETCH_ENV.GIT_TERMINAL_PROMPT, '0')
-  assert.equal(asked.opts.env.GIT_TERMINAL_PROMPT, '0')
+  assert.deepEqual(asked.opts.env, NO_PROMPT_ENV)
+  assert.deepEqual(NO_PROMPT_ENV, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' })
   assert.equal(asked.args.includes('fetch'), true)
 })
 
