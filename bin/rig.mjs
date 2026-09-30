@@ -14,7 +14,7 @@ import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
-import { releaseMark, BRANCH_PREFIXES } from './release.mjs'
+import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
 import { workState } from './workstate.mjs'
@@ -2672,8 +2672,9 @@ function repoEntryJson (cfg, entry, branch, live) {
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else if (s.pr) {
-    // Its title and body are for `rig pr --refresh` to compare, not for a listing.
-    const { title: _title, body: _body, ...pr } = s.pr
+    // Its title and body are for `rig pr --refresh` to compare, and its labels for `rig pr` to
+    // read a bump from, not for a listing.
+    const { title: _title, body: _body, labels: _labels, ...pr } = s.pr
     out.pr = pr
   } else out.pr = null
   const timing = prTiming(entry, s.pr)
@@ -3080,6 +3081,11 @@ cmds.next = ({ flags }) => {
         return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link }))
       }).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
+    // Asked of a repo with no PR, which is the only kind the offer it goes beside can name.
+    bumps: work.closedAt ? [] : repos.flatMap((r, i) => {
+      const release = !r.pr && !r.merged && r.pushed ? releaseAsked(work.repos[i], work.branch) : null
+      return release ? [{ repo: r.repo, release }] : []
+    }),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
@@ -3210,6 +3216,19 @@ const repoSpec = entry => `${entry.org}/${entry.repo}`
 // gone stale, so the three cannot disagree about what the PR should say.
 const prText = (work, stack, { spec, link }) => ({ title: work.title || work.id, body: prBody(work, stack, { spec, link }) })
 
+// Which release a work PR asks for, and why — "a minor release (the branch prefix `feat/`)" —
+// as the `version` check's own `bumpFor` reads it (decision 130). Null on a repo that does not
+// release by bump (`releasesByBump`) or whose labels GitHub would not list, where the line
+// could be false, and for a branch that names no bump.
+function releaseAsked (entry, branch, prLabels = []) {
+  let labels = null
+  trackerFailure(() => { labels = github().labels(entry.org, entry.repo) })
+  if (!labels || !releasesByBump(labels)) return null
+  const { bump, reason } = bumpFor({ branch, labels: prLabels })
+  if (!bump) return null
+  return `${bump === 'none' ? 'no release' : `a ${bump} release`} (${reason})`
+}
+
 // Does an open PR still say what `rig pr` would write now? GitHub may hand a body back with
 // CRLF line ends or without the trailing newline, and neither is a difference worth an edit.
 const sameText = (a, b) => (a ?? '').replace(/\r\n/g, '\n').trim() === b.replace(/\r\n/g, '\n').trim()
@@ -3239,7 +3258,16 @@ cmds.pr = ({ flags }) => {
     // branch, which is right, and the worktree is what is behind.
     if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
-    if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
+    const sayRelease = labels => {
+      const release = releaseAsked(entry, work.branch, labels)
+      if (release) step(`${entry.repo}: this PR asks for ${release}`)
+    }
+    if (state.pr && state.pr.state === 'OPEN') {
+      step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`)
+      // Worth saying of a PR already open too: a label can still change it before it merges.
+      sayRelease(state.pr.labels)
+      continue
+    }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
     if (!state.pushed) { warn(`${entry.repo}: ${work.branch} is not on the remote yet — push it first`); continue }
 
@@ -3253,6 +3281,7 @@ cmds.pr = ({ flags }) => {
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
+    sayRelease([])
   }
 }
 
