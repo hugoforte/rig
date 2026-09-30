@@ -208,6 +208,80 @@ test('a stage that landed goes with the work branch', () => {
   assert.equal(hasBranch(bare('billing'), 'feat/sliced-one'), false)
 })
 
+// What GitHub does to a stack merged one pull request at a time (hugoforte/rig#257): the stage
+// below merges into the work branch with a merge commit, and the one above is retargeted there
+// and has its own commits re-made on that merge — same patches, new shas — before it merges in
+// turn. The mirror still holds the branch as it was pushed.
+const mergeOnGithub = (into, from) => {
+  const merge = gitMust(bare('billing'), 'commit-tree', `${from}^{tree}`, '-p', into, '-p', from, '-m', `Merge ${from}`)
+  gitMust(bare('billing'), 'update-ref', `refs/heads/${into}`, merge)
+}
+const rewriteOnGithub = (branch, onto, number) => {
+  let tip = gitMust(bare('billing'), 'rev-parse', onto)
+  for (const sha of gitMust(bare('billing'), 'rev-list', '--reverse', `${onto}..${branch}`).split('\n')) {
+    const message = gitMust(bare('billing'), 'log', '-1', '--format=%B', sha)
+    tip = gitMust(bare('billing'), 'commit-tree', `${sha}^{tree}`, '-p', tip, '-m', message)
+  }
+  gitMust(bare('billing'), 'update-ref', `refs/heads/${branch}`, tip)
+  gitMust(bare('billing'), 'update-ref', `refs/pull/${number}/head`, tip)
+  return tip
+}
+
+// Two stages, pushed, then merged the way GitHub merges a stack bottom-up. `extra` is a commit
+// made on the second stage's copy here after it was pushed, which its pull request never saw.
+const stackMergedBottomUp = (id, first, { extra = null } = {}) => {
+  const work = `feat/${id}-work`
+  const [one, two] = [`feat/${id}-one`, `feat/${id}-two`]
+  assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  for (const stage of [one, two]) assert.equal(rig(['stage', stage, '--delivers', stage, '--work', id]).code, 0)
+  const dest = worktree(id, 'billing')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  cutStage({ work: id, repo: 'billing', branch: one, from: work, back: work, message: `${id}: the schema` })
+  cutStage({ work: id, repo: 'billing', branch: two, from: one, back: work, message: `${id}: the endpoints` })
+  gitMust(dest, 'push', '-q', 'origin', one, two)
+  if (extra) {
+    gitMust(dest, 'checkout', '-q', two)
+    commitWork(dest, extra)
+    gitMust(dest, 'checkout', '-q', work)
+  }
+
+  const oneHead = gitMust(bare('billing'), 'rev-parse', one)
+  mergeOnGithub(work, one)
+  const twoHead = rewriteOnGithub(two, work, first + 1)
+  mergeOnGithub(work, two)
+  const pr = (branch, number, head) => seedPr({
+    branch, number, state: 'MERGED', head,
+    url: `https://github.com/acme/billing/pull/${number}`, mergedAt: '2026-09-30T00:00:00Z',
+  })
+  pr(one, first, oneHead)
+  pr(two, first + 1, twoHead)
+  const workHead = gitMust(bare('billing'), 'rev-parse', work)
+  gitMust(bare('billing'), 'update-ref', `refs/pull/${first + 2}/head`, workHead)
+  pr(work, first + 2, workHead)
+  assert.notEqual(git(mirror('billing'), 'merge-base', '--is-ancestor', `refs/heads/${two}`, twoHead).status, 0,
+    'the copy here is not behind the head GitHub made')
+  return two
+}
+
+test('a stage GitHub rewrote while merging the stack is deleted from the mirror and the remote (#257)', () => {
+  const two = stackMergedBottomUp('rewritten', 60)
+  const r = rig(['close', '--work', 'rewritten'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(strip(r.out), /copy of \S+ kept/)
+  assert.match(r.out, /deleted branch feat\/rewritten-two from billing \(mirror and remote\)/)
+  assert.equal(hasBranch(mirror('billing'), two), false)
+})
+
+test('a rewritten stage whose copy holds a commit the PR never carried is kept, and the close names the commit (#257)', () => {
+  const two = stackMergedBottomUp('rewritten-extra', 63, { extra: 'rewritten-extra: an afterthought' })
+  const r = rig(['close', '--work', 'rewritten-extra'])
+  assert.equal(r.code, 0, r.out)
+  const sha = gitMust(mirror('billing'), 'rev-parse', '--short', `refs/heads/${two}`)
+  assert.match(strip(r.out), new RegExp(`mirror copy of feat/rewritten-extra-two kept — ${sha} "rewritten-extra: an afterthought" is not in what PR #64 merged`))
+  assert.equal(hasBranch(mirror('billing'), two), true)
+})
+
 test('an abandoned work keeps its branches, merged PR or not', () => {
   landedWork('left-standing', 42)
   const r = rig(['close', '--work', 'left-standing', '--abandoned'])
