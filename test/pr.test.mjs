@@ -203,6 +203,15 @@ test('a stage GitHub will not answer for stops the refresh, rather than writing 
   assert.match(r.out, /would not say what became of feat\/sliced-one, feat\/sliced-two — nothing refreshed/)
 })
 
+test('an unauthenticated gh is not reported as having no open PR, and nothing is refreshed', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
+  setGithub(state)
+  assert.match(r.out, /GitHub would not say whether a PR is open \(gh is unauthenticated\) — nothing refreshed/)
+  assert.doesNotMatch(r.out, /no open PR/)
+})
+
 test('dropping a stage changes the stage table, so the open PR is offered a refresh that says so', () => {
   assert.equal(rig(['stage', 'feat/sliced-three', '--delivers', 'the UI', '--work', 'sliced']).code, 0)
   assert.equal(rig(['pr', '--refresh', '--work', 'sliced']).code, 0)

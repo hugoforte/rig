@@ -49,6 +49,13 @@ test('save --title with no title is refused and changes nothing', () => {
   assert.equal(record('retitled').title, 'Slow on Windows')
 })
 
+test('a title over two lines is refused, since it is a heading and a PR title', () => {
+  const r = rig(['save', '--title', 'Line one\nLine two', '--work', 'retitled'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--title takes the title in one line/)
+  assert.equal(record('retitled').title, 'Slow on Windows')
+})
+
 test('a heading edited by hand is left alone by a save that does not ask for a title', () => {
   const file = path.join(dataRoot, 'work', 'retitled', 'context.md')
   fs.writeFileSync(file, doc('retitled').replace('# retitled — Slow on Windows', '# retitled — Slow on Windows (by hand)'))
@@ -119,6 +126,21 @@ test('a key the record does not hold is refused, and what it does hold is named'
   const r = rig(['ticket', '--remove', 'acme/billing#99', '--work', 'moved'])
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /acme\/billing#99 is not recorded on moved — it has acme\/ledger#9/)
+})
+
+test('a correction asked for badly is refused, and changes nothing', () => {
+  const before = record('moved').tickets
+  for (const [args, says] of [
+    [['--remove'], /--remove needs the key/],
+    [['acme/ledger#12', '--remove', 'acme/ledger#9'], /--remove takes the one key it removes, and nothing else/],
+    [['acme/ledger#12', '--replaces'], /--replaces needs the key it replaces/],
+    [['acme/ledger#9', '--replaces', 'acme/ledger#9'], /acme\/ledger#9 cannot replace itself/],
+  ]) {
+    const r = rig(['ticket', ...args, '--work', 'moved'])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, says)
+  }
+  assert.deepEqual(record('moved').tickets, before)
 })
 
 test('replacing a key with one the record already holds leaves it there once', () => {

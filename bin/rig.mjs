@@ -2360,6 +2360,7 @@ cmds.save = ({ flags }) => {
   if (flags.message === true) die('-m needs a message')
   const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
   if (title === true || title === '') die('--title needs the title')
+  if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
   commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
@@ -3155,6 +3156,10 @@ cmds.pr = ({ flags }) => {
 function refreshPrs (work, stack, text) {
   const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
   if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
+  // A lookup gh refused answers null, which would read as "no open PR" here and as "no PR yet"
+  // in the stage table.
+  const auth = github().auth()
+  if (auth !== 'ok') return warn(`GitHub would not say whether a PR is open (gh is ${auth}) — nothing refreshed`)
   for (const entry of work.repos) {
     const { pr, prError } = prAndBase(entry, work.branch)
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
@@ -3323,12 +3328,23 @@ function withdrawStage (cfg, work, branch, flags) {
     if (!replacement) die(`${by} is not a stage of ${work.id} — declare it first: \`rig stage ${by} --delivers "..."\``)
     if (withdrawalOf(replacement)) die(`${by} was withdrawn itself (${withdrawnLabel(withdrawalOf(replacement))}) — name the stage that did the work`)
   }
-  const st = stackOf(work, branchRows(cfg, work)).find(s => s.branch === branch)
+  const replaced = work.stages.filter(s => s.replacedBy === branch && s.replacedAt).map(s => s.branch)
+  if (replaced.length) die(`${replaced.join(', ')} was replaced by ${branch} — withdraw that first, or the record says the work went nowhere`)
+  const rows = branchRows(cfg, work)
+  const st = stackOf(work, rows).find(s => s.branch === branch)
   const merged = st.prs.filter(pr => pr.state === 'MERGED')
   const open = st.prs.filter(pr => pr.state === 'OPEN')
   if (merged.length) die(`${branch} has landed in ${merged.map(pr => pr.repo).join(', ')} — it is in ${work.branch}, so it cannot be withdrawn`)
   if (open.length) die(`${branch} has ${open.map(pr => `PR #${pr.number} open in ${pr.repo}`).join(', ')} — close it first, then withdraw the stage`)
   if (st.prUnknown) die(`GitHub would not say whether ${branch} has a PR in ${st.prUnknown.join(', ')} — nothing recorded`)
+  // A lookup gh refused answers null too, so "no PR" is only believed from a gh that is signed in.
+  const auth = st.started && !st.prs.length ? github().auth() : 'ok'
+  if (auth !== 'ok') die(`GitHub would not say whether ${branch} has a PR (gh is ${auth}) — nothing recorded`)
+  // A stage cut on this one carries its commits, so they would land with it while the record
+  // said they were gone.
+  const live = new Set(work.stages.filter(s => !withdrawalOf(s)).map(s => s.branch))
+  const above = rows.filter(r => r.base === branch && live.has(r.branch))
+  if (above.length) die(`${above.map(r => `${r.branch} is cut on it in ${r.repo}`).join(', ')} — rebase that off ${branch} first`)
   const reason = dropped?.trim()
   // A second withdrawal replaces the first: the date that matters is the current decision's.
   for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]

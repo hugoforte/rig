@@ -393,3 +393,49 @@ test('a new stage is never cut on top of a withdrawn one', () => {
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /cut feat\/replanned-after on feat\/replanned-spare/)
 })
+
+test('a withdrawn stage is never cut', () => {
+  const r = rig(['stage', 'feat/replanned-gathering', '--cut', '--work', 'replanned'], { cwd: worktree('replanned', 'billing') })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-gathering was withdrawn from the plan \(dropped: worth about 15%\) — there is nothing to cut/)
+})
+
+test('a withdrawal that also asks for anything else is refused, and records nothing', () => {
+  const before = JSON.stringify(record('replanned').stages)
+  for (const [args, says] of [
+    [['--dropped', 'why', '--replaced-by', 'feat/replanned-entry'], /alternatives; pass one/],
+    [['--dropped', 'why', '--key', 'acme/billing#9'], /take nothing else/],
+    [['--replaced-by'], /--replaced-by needs the branch/],
+    [['--replaced-by', 'feat/replanned-interface'], /cannot replace itself/],
+  ]) {
+    const r = rig(['stage', 'feat/replanned-interface', ...args, '--work', 'replanned'])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, says)
+  }
+  assert.equal(JSON.stringify(record('replanned').stages), before)
+})
+
+test('a stage another was replaced by cannot be withdrawn, or the record would say the work went nowhere', () => {
+  const r = rig(['stage', 'feat/replanned-interface', '--dropped', 'gone', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-entry was replaced by feat\/replanned-interface/)
+})
+
+test('a stage with another cut on top of it cannot be withdrawn, since that one carries its commits', () => {
+  assert.equal(rig(['stage', 'feat/replanned-under', '--delivers', 'the lower half', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-over', '--delivers', 'the upper half', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-under', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'the lower half' })
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-over', from: 'feat/replanned-under', back: 'feat/replanned-work', message: 'the upper half' })
+  const r = rig(['stage', 'feat/replanned-under', '--dropped', 'not needed', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-over is cut on it in billing/)
+})
+
+test('a cut stage is not withdrawn while gh cannot say whether it has a PR', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['stage', 'feat/replanned-review', '--dropped', 'changed my mind', '--work', 'replanned'])
+  setGithub(state)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /GitHub would not say whether feat\/replanned-review has a PR \(gh is unauthenticated\) — nothing recorded/)
+})

@@ -76,9 +76,9 @@ rig ticket --remove owner/repo#7                    # off the record, wherever i
 ```
 
 Both rewrite `work.json`, the context doc's `Tickets:` line and the generated `AGENTS.md`, and
-neither tells the tracker anything: rig speaks to a tracker only at `rig close`. `--remove` says the record was wrong about
-a ticket. It is not the answer for a ticket this work only delivers part of, which the record is
-right to name; DESIGN.md decision 124 says why.
+neither tells the tracker anything: a ticket next hears from rig at `rig close`. `--remove` says
+the record was wrong about a ticket. It is not the answer for a ticket this work only delivers
+part of, which the record is right to name; DESIGN.md decision 124 says why.
 
 Then run the repo interview and attach what it selects:
 
