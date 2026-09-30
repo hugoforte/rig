@@ -8,7 +8,8 @@
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language, visibility } with GitHub's canonical name, or null;
 //                                       visibility is 'public', 'internal' or 'private', or null when not said
-//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body } newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels } newest PR, or null
+//   labels(org, name)                   every label's name, or null when gh cannot list them
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
@@ -19,7 +20,7 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, prTimeline, repoExists) answer
+// but exits non-zero, the lookups (repo, prForBranch, prTimeline, labels, repoExists) answer
 // null or false — "not found" and "gh could not answer" look the same to them — and every
 // other call throws GithubError carrying gh's stderr.
 //
@@ -68,12 +69,19 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // would write now.
     prForBranch (org, name, branch) {
       const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels', '--limit', '1'])
       if (r.code !== 0 || !r.out) return null
       const prs = parseJson(r.out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: (pr.labels || []).map(l => l.name) } : null
+    },
+    // Every label a repo has, by name. `rig pr` asks whether any is a `release:` label, which is
+    // what says the repo releases the way rig does.
+    labels (org, name) {
+      const r = gh(['api', `repos/${org}/${name}/labels`, '--paginate', '--jq', '.[].name'])
+      if (r.code !== 0) return null
+      return r.out.split('\n').map(l => l.trim()).filter(Boolean)
     },
     // The open pull requests that land on a branch — what is stacked on top of it. `rig
     // restore` follows these up from the highest branch a work records, to name the stack
@@ -190,7 +198,12 @@ export function githubInMemory (state, { env } = {}) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: pr.labels || [] } : null
+    },
+    labels (org, name) {
+      if (!answers()) return null
+      const found = lookup(`${org}/${name}`)
+      return found ? found.repo.labels || [] : null
     },
     prsOnto (org, name, base) {
       if (!answers()) return []
