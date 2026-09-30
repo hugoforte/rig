@@ -351,6 +351,11 @@ test('a pipe in a dropped stage\'s reason stays in the state cell', () => {
   assert.deepEqual(cells(rowOf(t, 'feat/one')), ['1', '`feat/one`', '—', '—', '—', 'dropped: A \\| B'])
 })
 
+test('a line break a record already holds stays in its row, as a space', () => {
+  const t = stageTable(stackOf(work({ stages: [stage('feat/one', 'read\r\nand\nwrite')] }), []))
+  assert.deepEqual(cells(rowOf(t, '| 1 |')), ['1', '`feat/one`', 'read and write', '—', '—', 'not started'])
+})
+
 test('a pipe in a branch name, which git allows, stays in its cell too', () => {
   const t = stageTable(stackOf(work({ stages: [stage('feat/a|b', 'x'), replaced('feat/c', 'feat/a|b')] }), []))
   assert.deepEqual(cells(rowOf(t, '| 1 |')), ['1', '`feat/a\\|b`', 'x', '—', '—', 'not started'])

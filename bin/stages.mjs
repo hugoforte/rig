@@ -212,13 +212,14 @@ export function adriftNote (stack, mark = b => b) {
 // Every cell that carries text from the record goes through `cell`, because a `|` in one splits
 // the row (decision 139): what a stage delivers is prose, a dropped stage's reason is too, and git
 // allows a `|` in a branch name. GFM reads `\|` as a pipe inside a code span as well, so one
-// escape covers all of them.
+// escape covers all of them. A line break ends the row whatever is escaped, and the input refuses
+// one, so one a record already holds — written before that, or by hand — becomes a space.
 export function stageTable (stack) {
   const where = st => st.landed ? 'landed'
     : st.withdrawn ? withdrawnLabel(st.withdrawn, b => `\`${b}\``)
       : st.open ? 'up for review' : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
-  const cell = s => s.replaceAll('|', '\\|')
+  const cell = s => s.replaceAll('|', '\\|').replace(/\r?\n/g, ' ')
   const note = adriftNote(stack, b => `\`${b}\``)
   return [
     '| Order | Stage | Delivers | Repos | PR | State |',
