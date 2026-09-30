@@ -507,7 +507,7 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
 
   // Created exclusively, which is atomic on NTFS and POSIX alike. `EPERM` and `EBUSY` are
   // Windows saying a file of that name is being deleted: taken, for now. Answers true, false
-  // for taken, or git's-style words for anything else.
+  // for taken, or Node's error message for anything else.
   function create (file, body) {
     let fd
     try { fd = fs.openSync(file, 'wx') } catch (e) {
@@ -532,7 +532,7 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
   // The lock is advisory. git's own `index.lock` is under it, and so are `pushRebasing`'s
   // outcomes, so a lock that fails leaves rig as it was without one — never worse.
   function lock (dir, holder) {
-    const m = machine() ?? REAL_MACHINE
+    const m = machine()
     const gitDir = gitDirOf(dir)
     if (!gitDir) return { outcome: 'failed', error: `${dir} is not a git checkout` }
     const file = path.join(gitDir, 'rig.lock')
@@ -543,13 +543,18 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
       const made = create(file, { pid: process.pid, host: m.hostname, ...holder, since: new Date(m.now()).toISOString(), nonce })
       if (made === true) return { outcome: stale ? 'taken-over' : 'taken', lock: { file, nonce }, stale }
       if (made !== false) return { outcome: 'failed', error: made }
+      // Unread is usually a holder letting go between the two calls, and the next pass takes
+      // it. It is waited on all the same, because a lock that stays unmakeable and unreadable —
+      // a directory in its place, a git dir this user may not write — would otherwise be a
+      // loop that never sleeps and never ends.
       const seen = readLock(file)
-      if (!seen) continue
-      const why = staleness(seen, m)
+      const why = seen && staleness(seen, m)
       if (why && removeIfUnchanged(file, seen.raw)) { stale = { why, holder: seen.holder }; continue }
       if (m.now() - start >= LOCK_WAIT_MS) {
+        if (!seen) return { outcome: 'failed', error: `${file} could be neither made nor read` }
         const since = seen.holder ? Date.parse(seen.holder.since) : seen.mtimeMs
-        return { outcome: 'busy', file, holder: seen.holder, heldFor: m.now() - since }
+        // Never negative: a holder on another host may be writing a clock that runs ahead.
+        return { outcome: 'busy', file, holder: seen.holder, heldFor: Math.max(0, m.now() - since) }
       }
       m.sleep(LOCK_POLL_MS)
     }

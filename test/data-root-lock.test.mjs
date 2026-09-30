@@ -78,8 +78,22 @@ test('a lock left by a command that is no longer running is taken over, and rig 
   const r = rig(['save', '--work', 't1', '-m', 'over'], { machine: m })
   assert.equal(r.code, 0, r.out)
   assert.equal(m.sleeps, 0)
-  assert.match(r.out, /took over the lock `rig close` for other-work \(pid 4242\) left, which is no longer running/)
+  assert.match(r.out, /took over the lock held by `rig close` for other-work \(pid 4242\), which is no longer running/)
   assert.equal(lastCommit(dataRoot), 'rig save t1: over')
+})
+
+test('a lock that cannot be taken is said, and the commit goes ahead without it', () => {
+  // A directory in the lock's place: it can be neither made nor read, and the lock is advisory.
+  fs.mkdirSync(lockFile)
+  note('unlocked')
+  try {
+    const r = rig(['save', '--work', 't1', '-m', 'unlocked'], { machine: machine() })
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /could not take its lock \(.*rig\.lock could be neither made nor read\) — going on without it/)
+    assert.equal(lastCommit(dataRoot), 'rig save t1: unlocked')
+  } finally {
+    fs.rmSync(lockFile, { recursive: true, force: true })
+  }
 })
 
 test('read-only commands never wait on a held lock', () => {
@@ -118,6 +132,8 @@ test('a mutating command refuses before it runs when the fast-forward cannot get
 })
 
 test('rig update leaves a data root it cannot lock alone, and says who holds it', () => {
+  // Clean first: uncommitted changes stop an update before it would take the lock.
+  assert.equal(rig(['save', '--work', 't1', '-m', 'before the update']).code, 0)
   plant({ command: 'rig save', work: 't9', section: 'commit and push' })
   try {
     const r = rig(['update'], { machine: machine() })

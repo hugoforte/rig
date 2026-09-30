@@ -135,6 +135,18 @@ test('letting go removes only a lock this process holds', () => {
   assert.equal(JSON.parse(fs.readFileSync(lockFile(local), 'utf8')).nonce, 'taker')
 })
 
+test('a lock that can be neither made nor read is waited on like any other, then fails', () => {
+  // A directory in the lock's place: `EEXIST` to make, `EISDIR` to read. Windows answers a
+  // lock it will not let this user write with `EPERM`, which the loop reads the same way.
+  const { local } = cloned('unmakeable')
+  fs.mkdirSync(lockFile(local))
+  const m = machine({ onSleep: n => { if (n > LOCK_WAIT_MS / LOCK_POLL_MS) throw new Error('waited past the limit') } })
+  const r = c(m).lock(local, holder())
+  assert.equal(r.outcome, 'failed')
+  assert.equal(m.sleeps, LOCK_WAIT_MS / LOCK_POLL_MS)
+  assert.match(r.error, /rig\.lock/)
+})
+
 test('a directory that is no checkout cannot be locked, and says so rather than waiting', () => {
   const m = machine()
   const r = c(m).lock(f.plain, holder())

@@ -9,7 +9,7 @@ import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
-import { checkouts, unreadable } from './checkouts.mjs'
+import { checkouts, unreadable, REAL_MACHINE, LOCK_STALE_MS } from './checkouts.mjs'
 import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
@@ -1651,12 +1651,13 @@ function regenerate (cfg, work) {
 
 // ------------------------------------------------------ data root commits
 
-// The work a command is about, for the lock's holder: `--work`, `rig new`'s id, or the work
-// folder it runs in. Null for a command about no work, which still locks — `demo`, `init`.
+// The work a command is about, for the lock's holder: the id `rig new` and `rig restore` are
+// given, `--work`, or the work folder it runs in. Null for a command about no work, which
+// still locks — `demo`, `init`.
 function workInHand () {
   const { flags = {}, positional = [] } = current.args ?? {}
+  if (['new', 'restore'].includes(current.command) && positional[0]) return positional[0]
   if (typeof flags.work === 'string') return flags.work
-  if (current.command === 'new' && positional[0]) return positional[0]
   try { return findWorkId() } catch (e) {
     if (e instanceof RigError) return null
     throw e
@@ -1671,17 +1672,22 @@ function lockDataRoot (root, section) {
   const r = co.lock(root, { command: `rig ${current.command}`, work: workInHand(), section })
   if (r.outcome === 'failed') warn(`data root: could not take its lock (${r.error}) — going on without it`)
   if (r.outcome === 'taken-over') {
-    const why = { gone: 'which is no longer running', old: 'held for more than 5 minutes', unreadable: 'which could not be read' }[r.stale.why]
-    say(C.dim(`· data root: took over the lock ${lockHolder(r.stale.holder)} left, ${why}`))
+    const why = {
+      gone: 'which is no longer running',
+      old: `after more than ${LOCK_STALE_MS / 60_000} minutes`,
+      unreadable: 'which could not be read',
+    }[r.stale.why]
+    say(C.dim(`· data root: took over the lock held by ${lockHolder(r.stale.holder)}, ${why}`))
   }
   return r
 }
 
 const lockHolder = h => h ? `\`${h.command}\`${h.work ? ` for ${h.work}` : ''} (pid ${h.pid})` : 'another rig'
 
-// The first half of a busy lock's refusal; each section says what happens next.
-const lockBusy = r =>
-  `data root busy — ${lockHolder(r.holder)} has held it for ${Math.round(r.heldFor / 1000)} s${r.holder?.section ? ` to ${r.holder.section} it` : ''}`
+// The first half of a busy lock's refusal, about `subject` — `data root`, or `rig update`'s
+// label for one of several; each section says what happens next.
+const lockBusy = (r, subject = 'data root') =>
+  `${subject} busy — ${lockHolder(r.holder)} has held it for ${Math.round(r.heldFor / 1000)} s${r.holder?.section ? ` to ${r.holder.section} it` : ''}`
 const lockEscape = r => `If no rig is running, delete ${r.file}.`
 
 // Every mutating command ends here — see `main`, which runs it once the command has
@@ -4077,6 +4083,19 @@ function updateCheckout (label, root) {
     warn(`${label}: ${state.modified} uncommitted change(s) — not updated${how(label, root)}`)
     return { status: 'failed', clean }
   }
+  // A data root's fetch and fast-forward are locked as a mutating command's are, and a busy
+  // lock is that root not updated, the way every other reason here is. The tool checkout is
+  // yours and nothing of rig's commits into it, so it takes no lock.
+  const held = label.startsWith('data root') ? lockDataRoot(root, 'fast-forward') : null
+  if (held?.outcome === 'busy') {
+    warn(`${lockBusy(held, label)}; not updated. ${lockEscape(held)}`)
+    return { status: 'failed', clean }
+  }
+  try { return fetchAndForward(label, root, clean) } finally { co.unlock(held?.lock) }
+}
+
+// The half of `updateCheckout` that moves the checkout, once nothing stands in its way.
+function fetchAndForward (label, root, clean) {
   const fetched = co.fetch(root)
   if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — not updated`); return { status: 'failed', clean } }
   // Every outcome, named. The three that look impossible here — this checkout was read a
@@ -4170,13 +4189,7 @@ cmds.update = ({ flags }) => {
     if (!loc.split) { warn(`${label} is inside the tool checkout — not set up; run \`rig prompt setup\``); problems++ }
     else if (!exists(root)) { warn(`${label} ${root} is missing — check ${name ? `dataRoots.${name}` : 'dataRoot'} in ${reg.localFile}`); problems++ }
     else {
-      // Its fast-forward is locked like a mutating command's, and a busy lock is this root not
-      // updated, the way every other reason is. A directory with no `.git` of its own has no
-      // git dir to lock, and `updateCheckout` says what it is instead.
-      const held = exists(path.join(root, '.git')) ? lockDataRoot(root, 'fast-forward') : null
-      let data = { status: 'failed', clean: false }
-      if (held?.outcome === 'busy') warn(`${label} ${lockBusy(held).replace(/^data root /, '')}; not updated. ${lockEscape(held)}`)
-      else try { data = updateCheckout(label, root) } finally { co.unlock(held?.lock) }
+      const data = updateCheckout(label, root)
       if (data.status === 'failed') problems++
       // Clean and current, the two halves of "safe to migrate in".
       ready = data.clean && data.status !== 'failed'
@@ -4741,8 +4754,8 @@ function invocationOf ({
   out = s => process.stdout.write(s),
   err = s => process.stderr.write(s),
   chdir = () => {},
-  // What the data root's lock asks of the machine; null is the real one (`checkouts.mjs`).
-  machine = null,
+  // What the data root's lock asks of the machine: the time, a sleep, whether a pid runs.
+  machine = REAL_MACHINE,
 } = {}) {
   return {
     toolRoot,
