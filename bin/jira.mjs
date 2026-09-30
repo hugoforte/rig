@@ -94,17 +94,22 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     // `--description-format markdown` because twg's default is HTML: without it a brief's
     // blank lines collapse into one run-on paragraph and anything angle-bracketed is eaten
     // as a tag (hugoforte/rig#54). It is fixed, not a parameter — rig writes markdown and
-    // nothing else. Carrying the format here is also why the create needs no follow-up
-    // `update --description-format markdown`: the two-step in hugoforte/rig#53 exists for
-    // Components, which twg's create silently drops, not for the description.
+    // nothing else, so the create needs no follow-up `update --description-format markdown`.
     // `parent` goes by twg's own `--parent`, which sends `fields.parent = { key }`; as a
     // `--field` it would reach Jira as a bare string (hugoforte/rig#220).
+    // A `--field` value is read by twg as JSON when it parses as JSON, and twg then shapes it
+    // for Jira against the create screen's metadata, system fields included — a component
+    // name or id becomes `{ id }` — but only a list it can read as a list. So anything but a
+    // string goes as JSON: `components=["11023"]`, where a template string made
+    // `components=11023`, one bare number (hugoforte/rig#53).
     createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
         '--summary', summary, '--description', description, '--description-format', 'markdown']
       if (assignee) args.push('--assignee', assignee)
       if (parent) args.push('--parent', parent)
-      for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${value}`)
+      for (const [id, value] of Object.entries(fields)) {
+        args.push('--field', `${id}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+      }
       args.push('-o', 'json', '-y')
       const out = must(args)
       const body = parseJson(out, 'twg jira workitem create')
