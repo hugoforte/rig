@@ -440,6 +440,13 @@ test('rig new --ticket with a parent in rig.json\'s fields is refused before any
   }
 })
 
+test('rig new --ticket --dry-run previews each field as twg is sent it', () => {
+  const r = install.rig(['new', 'child-priority', '--title', 'A priority', '--ticket', '--org', 'acme', '--field', 'priority=High', '--dry-run'],
+    { input: brief })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.stdout, /^ {2}priority {5}High$/m, 'a string goes as it is, so it is previewed without quotes')
+})
+
 test('rig new --parent on a work that already has a ticket says --parent is ignored too', () => {
   const r = install.rig(['new', 'child-keyed-ticket', '--title', 'Keyed', '--key', 'PROJ-3', '--ticket', '--org', 'acme', '--parent', 'PROJ-9'],
     { input: brief })

@@ -7,7 +7,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
-import { twgViaCli, twgInMemory } from './jira.mjs'
+import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
@@ -1351,7 +1351,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
       say(`  summary      ${summary}`)
       say(`  assignee     ${assignee || '_none_'}`)
       if (parent) say(`  parent       ${parent}`)
-      for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${JSON.stringify(value)}`)
+      for (const [id, value] of Object.entries(fields)) say(`  ${id.padEnd(12)} ${fieldValue(value)}`)
       // Last, and verbatim: it is many lines, and what is printed is exactly the markdown
       // the real create sends — an indent that a reader can strip, not a summary of it.
       say('  description  (markdown, as sent):')

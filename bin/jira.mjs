@@ -31,6 +31,12 @@ import { jsonCliHelpers, cliRunner } from './cli.mjs'
 export class JiraError extends TrackerError {}
 const { fail, parseJson } = jsonCliHelpers(JiraError)
 
+// A field value as `--field id=<value>` carries it, and as `rig new --dry-run` previews it:
+// one renderer, so the preview is what twg is sent. twg reads a value as JSON when it
+// parses, so a list goes as JSON to arrive as a list — as `components=10001` it would arrive
+// as one bare number — and a string goes as it is (DESIGN.md decision 147).
+export const fieldValue = value => typeof value === 'string' ? value : JSON.stringify(value)
+
 const spawnTwg = args => spawnSync('twg', args, { encoding: 'utf8' })
 
 // Where a workitem's fields sit in twg's JSON. A real `jira workitem KEY -o json` returns
@@ -97,16 +103,12 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     // nothing else.
     // `parent` goes by twg's own `--parent`, which sends `fields.parent = { key }`; as a
     // `--field` it would reach Jira as a bare string (hugoforte/rig#220).
-    // twg reads a `--field` value as JSON when it parses, so a list goes as JSON to arrive as
-    // a list; as `components=11023` it would arrive as one bare number (DESIGN.md decision 147).
     createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
         '--summary', summary, '--description', description, '--description-format', 'markdown']
       if (assignee) args.push('--assignee', assignee)
       if (parent) args.push('--parent', parent)
-      for (const [id, value] of Object.entries(fields)) {
-        args.push('--field', `${id}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
-      }
+      for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${fieldValue(value)}`)
       args.push('-o', 'json', '-y')
       const out = must(args)
       const body = parseJson(out, 'twg jira workitem create')
