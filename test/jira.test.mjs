@@ -134,6 +134,14 @@ test('twg adapter: createIssue sends a string field value as it is', () => {
     '--field', 'priority=High', '-o', 'json', '-y'])
 })
 
+test('twg adapter: createIssue sends an object field value as JSON', () => {
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'PROJ-8' } }))
+  twg.createIssue({ project: 'PROJ', type: 'Story', summary: 'S', description: 'D', fields: { customfield_x: { value: 'A' } } })
+  assert.deepEqual(calls[0], ['jira', 'workitem', 'create', '--space', 'PROJ', '--type', 'Story',
+    '--summary', 'S', '--description', 'D', '--description-format', 'markdown',
+    '--field', 'customfield_x={"value":"A"}', '-o', 'json', '-y'])
+})
+
 test('twg adapter: createIssue omits --assignee and --field when there are none', () => {
   const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-44' } }))
   twg.createIssue({ project: 'KTLO', type: 'Task', summary: 'S', description: 'D', fields: {} })
@@ -300,6 +308,15 @@ test('resolveJiraFields: system fields other than components pass through under 
 test('resolveJiraFields: a name in neither create-metadata nor the system set still dies', () => {
   assert.throws(() => resolveJiraFields(twgInMemory(customFieldsOnly()), ktlo({ compnoents: ['InfoManagerWeb'] }), []),
     /no field named "compnoents" for KTLO\/Story/)
+})
+
+test('resolveJiraFields output reaches twg as --field arguments twg can shape', () => {
+  const { fields } = resolveJiraFields(twgInMemory(customFieldsOnly()),
+    ktlo({ story_points: 3, components: ['InfoManagerWeb'], priority: 'High' }), [])
+  const { calls, twg } = canned(() => JSON.stringify({ data: { key: 'KTLO-2' } }))
+  twg.createIssue({ project: 'KTLO', type: 'Story', summary: 'S', description: 'D', fields })
+  assert.deepEqual(calls[0].filter((a, i) => calls[0][i - 1] === '--field'),
+    ['customfield_10058=3', 'components=["11023"]', 'priority=High'])
 })
 
 test('resolveJiraFields: create-metadata wins over the system set when both know the name', () => {
