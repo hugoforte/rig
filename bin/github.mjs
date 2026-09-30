@@ -162,7 +162,8 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 }
 
 // Canned GitHub for tests. `state` is mutated in place so the harness can persist and
-// inspect it: { auth, repos: { 'owner/name': { language, visibility, prs, issues, source } } }.
+// inspect it: { auth, repos: { 'owner/name': { language, visibility, labels, prs, issues, source } } }.
+// A repo with no `visibility` or no `labels` is one GitHub would not say them for.
 // `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' makes
 // lookups answer null or false, as gh's non-zero exit does, and writes fail.
 // `env` is the run's, for the one call below that spawns anything: a clone made under the
@@ -203,7 +204,7 @@ export function githubInMemory (state, { env } = {}) {
     labels (org, name) {
       if (!answers()) return null
       const found = lookup(`${org}/${name}`)
-      return found ? found.repo.labels || [] : null
+      return found?.repo.labels ?? null
     },
     prsOnto (org, name, base) {
       if (!answers()) return []

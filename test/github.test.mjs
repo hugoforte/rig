@@ -247,7 +247,7 @@ test('in-memory adapter: labels answers what a fixture gives a repo and its PRs'
   const github = githubInMemory(state)
   assert.deepEqual(github.labels('acme', 'platform'), ['release:patch'])
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x').labels, ['release:minor'])
-  assert.deepEqual(githubInMemory(world()).labels('acme', 'platform'), [])
+  assert.equal(githubInMemory(world()).labels('acme', 'platform'), null, 'a fixture that gives none is one GitHub would not list')
 })
 
 test('in-memory adapter: prForBranch carries the base a seeded PR lands on', () => {

@@ -431,6 +431,19 @@ test('a repo with no release: labels is told nothing about a release, since it r
   }
 })
 
+test('labels GitHub will not list say nothing about a release, in rig pr or rig next (#228)', () => {
+  labelRepo(undefined)
+  try {
+    assert.doesNotMatch(rig(['pr', '--work', 'bumped']).out, /asks for/)
+    pushedWork('unlisted', 'Unlisted')
+    const next = rig(['next', '--work', 'unlisted']).out
+    assert.match(next, /pushed with no PR open/)
+    assert.doesNotMatch(next, /would ask for/)
+  } finally {
+    labelRepo(RELEASES)
+  }
+})
+
 test('rig next says which release beside its offer to open the PR (#228)', () => {
   pushedWork('bump-next', 'Bump next')
   assert.match(rig(['next', '--work', 'bump-next']).out, /billing is pushed with no PR open — its PR would ask for a minor release \(the branch prefix `feat\/`\)/)

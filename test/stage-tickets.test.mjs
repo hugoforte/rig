@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -180,12 +180,15 @@ test('a dropped slice tells its ticket why, and leaves it open', () => {
 // A work rigged with `--key` for its ticket, and a stage declared with the same key: the shape
 // `rig new --key` then `rig stage --key` makes for a work that is one slice of one ticket. The
 // stage lands, and the work branch's own PR is seeded as `workPr` says.
-const bothRoles = ({ id, issue, stagePr, workPr }) => {
-  assert.equal(rig(['new', id, '--title', id, '--type', 'feat', '--key', `acme/billing#${issue}`]).code, 0)
+// `jira` names a Jira key to hold both roles instead of the GitHub issue.
+const bothRoles = ({ id, issue, stagePr, workPr, jira }) => {
+  const key = jira || `acme/billing#${issue}`
+  assert.equal(rig(['new', id, '--title', id, '--branch', `feat/${id}`, '--key', key]).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
-  seedIssue(issue, id)
+  if (jira) seedJiraIssue(jira, id)
+  else seedIssue(issue, id)
   const dest = worktree(id, 'billing')
-  const r = rig(['stage', `feat/${id}-one`, '--delivers', 'the slice', '--key', `acme/billing#${issue}`, '--cut', '--work', id], { cwd: dest })
+  const r = rig(['stage', `feat/${id}-one`, '--delivers', 'the slice', '--key', key, '--cut', '--work', id], { cwd: dest })
   assert.equal(r.code, 0, r.out)
   commitWork(dest, 'the slice')
   gitMust(dest, 'checkout', '-q', `feat/${id}`)
@@ -243,4 +246,14 @@ test('a withdrawn slice is what a ticket two slices hold is told stays open for 
   assert.equal(c.code, 0, c.out)
   assert.equal(issueNumbered(79).comments.length, 1)
   assert.match(issueNumbered(79).comments[0], /The slice `feat\/withdrawn-two-one` was dropped: not needed\. The issue stays open\./)
+})
+
+test('a Jira ticket that is the work\'s and a slice\'s is told once too, and never moved (#229)', () => {
+  bothRoles({ id: 'jira-both', jira: 'PROJ-80', stagePr: 81, workPr: { number: 82, ...MERGED } })
+  const c = rig(['close', '--work', 'jira-both'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(c.out.match(/PROJ-80/g)?.length, 1, c.out)
+  const { comments } = jiraIssue('PROJ-80')
+  assert.equal(comments.length, 1)
+  assert.match(comments[0], /^The slice this was opened for landed[\s\S]*pull\/82\n[\s\S]*rig does not transition Jira tickets/)
 })

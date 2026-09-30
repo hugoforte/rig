@@ -41,6 +41,8 @@ export function billingInstall (prefix) {
     // a PR or a ticket comment depends on it (hugoforte/rig#202), and a repo whose visibility
     // GitHub never said would have every body leave the link out.
     github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', visibility: 'private', prs: [] } } },
+    // An in-memory Jira with nothing in it, for the ticket keys that are Jira's.
+    twg: { present: true, issues: {} },
   })
   const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, gitMust } = m
 
@@ -59,6 +61,12 @@ export function billingInstall (prefix) {
   }
 
   const github = () => readJson(githubStateFile)
+  const jiraIssue = key => readJson(m.twgStateFile).issues[key]
+  const seedJiraIssue = (key, title) => {
+    const state = readJson(m.twgStateFile)
+    state.issues[key] = { title, body: '', comments: [] }
+    fs.writeFileSync(m.twgStateFile, JSON.stringify(state))
+  }
   const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 
   // What GitHub does when a PR lands on a repo that requires linear history: the branch's
@@ -133,6 +141,8 @@ export function billingInstall (prefix) {
     ...m,
     bare,
     publish,
+    jiraIssue,
+    seedJiraIssue,
     setVisibility,
     withVisibility,
     github,
