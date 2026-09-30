@@ -61,7 +61,7 @@ test('rig save whose data root stays busy leaves its change in the tree and name
   try {
     const r = rig(['save', '--work', 't1', '-m', 'blocked'], { machine: machine() })
     assert.equal(r.code, 0, r.out)
-    assert.match(r.out, /data root busy — `rig close` for other-work \(pid \d+\) has held it for 30 s to commit and push it; your change waits in the tree/)
+    assert.match(r.out, /data root busy — `rig close` for other-work \(pid \d+\) has held it for 30 s to commit and push it; anything this command wrote waits in the tree/)
     assert.match(r.out, /rig\.lock/, 'names the file to delete if nothing is running')
     assert.equal(lastCommit(dataRoot), before)
     assert.notEqual(dirty(), '')
@@ -111,12 +111,31 @@ test('read-only commands never wait on a held lock', () => {
 })
 
 // From here the data root has a remote, so the fast-forward at the start is a section too.
-
-test('a mutating command refuses before it runs when the fast-forward cannot get the lock', () => {
+// Each test asks for it, so any one of them can be run on its own.
+const withRemote = () => {
   const remote = path.join(tmp, 'rig-data-remote.git')
+  if (fs.existsSync(remote)) return
   gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', remote)
   gitMust(dataRoot, 'remote', 'add', 'origin', remote)
   gitMust(dataRoot, 'push', '-q', '-u', 'origin', 'main')
+}
+
+test('a command lets go of the lock after its fast-forward and its commit, and so does rig update', () => {
+  withRemote()
+  note('let go')
+  // Any wait at all would be this run waiting on its own lock.
+  const m = machine({ onSleep: () => { throw new Error('waited on a lock nobody else holds') } })
+  const r = rig(['save', '--work', 't1', '-m', 'let go'], { machine: m })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /and pushed/)
+  assert.ok(!fs.existsSync(lockFile))
+  rig(['update'], { machine: m })
+  assert.equal(m.sleeps, 0)
+  assert.ok(!fs.existsSync(lockFile))
+})
+
+test('a mutating command refuses before it runs when the fast-forward cannot get the lock', () => {
+  withRemote()
   plant({ command: 'rig attach', section: 'fast-forward' })
   note('never started')
   const before = lastCommit(dataRoot)
@@ -132,6 +151,7 @@ test('a mutating command refuses before it runs when the fast-forward cannot get
 })
 
 test('rig update leaves a data root it cannot lock alone, and says who holds it', () => {
+  withRemote()
   // Clean first: uncommitted changes stop an update before it would take the lock.
   assert.equal(rig(['save', '--work', 't1', '-m', 'before the update']).code, 0)
   plant({ command: 'rig save', work: 't9', section: 'commit and push' })

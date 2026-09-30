@@ -1652,16 +1652,14 @@ function regenerate (cfg, work) {
 // ------------------------------------------------------ data root commits
 
 // The work a command is about, for the lock's holder: the id `rig new` and `rig restore` are
-// given, `--work`, or the work folder it runs in. Null for a command about no work, which
-// still locks — `demo`, `init`.
+// given, `--work`, or the work folder it runs in. Null for a command about no work — `demo`,
+// or `init`, which locks only its commit — and for a run whose folder has gone from under it:
+// the holder's work is a label, and no answer to it is worth failing a command for.
 function workInHand () {
   const { flags = {}, positional = [] } = current.args ?? {}
   if (['new', 'restore'].includes(current.command) && positional[0]) return positional[0]
   if (typeof flags.work === 'string') return flags.work
-  try { return findWorkId() } catch (e) {
-    if (e instanceof RigError) return null
-    throw e
-  }
+  try { return findWorkId() } catch { return null }
 }
 
 // The data root's lock, for one of the two sections that move its git state (decisions
@@ -1717,7 +1715,7 @@ function commitDataRoot (message, loc = where(), known = null) {
   // the command's work is done and its records are written, and they wait in the tree.
   const held = lockDataRoot(root, 'commit and push')
   if (held.outcome === 'busy') {
-    warn(`${lockBusy(held)}; your change waits in the tree for the next command, or \`rig save\` once it finishes. ${lockEscape(held)}`)
+    warn(`${lockBusy(held)}; anything this command wrote waits in the tree for the next command, or \`rig save\` once it finishes. ${lockEscape(held)}`)
     return
   }
   try { commitHeld(root, message, state) } finally { co.unlock(held.lock) }

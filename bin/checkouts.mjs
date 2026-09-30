@@ -88,8 +88,10 @@ export const LOCK_UNREADABLE_MS = 5_000
 
 // What the lock asks of the machine, handed in so a test can be the machine instead: the time,
 // a sleep that blocks this thread (rig is synchronous throughout), whether a process is
-// running, and the name that says whose pids a lock's pid can be checked against. `EPERM` is
-// a process that exists and is not ours to signal, which is still a holder.
+// running, and the name that says whose pids a lock's pid can be checked against. The name
+// carries the platform as well as the host, because WSL answers to the Windows host's name with
+// pids of its own. `EPERM` is a process that exists and is not ours to signal, which is still a
+// holder.
 const synchronousSleep = new Int32Array(new SharedArrayBuffer(4))
 export const REAL_MACHINE = Object.freeze({
   now: () => Date.now(),
@@ -97,7 +99,7 @@ export const REAL_MACHINE = Object.freeze({
   alive: pid => {
     try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
   },
-  hostname: os.hostname(),
+  hostname: `${os.hostname()}/${process.platform}`,
 })
 
 export function checkouts ({ run, env = () => process.env, machine = () => REAL_MACHINE }) {
