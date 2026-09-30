@@ -10,8 +10,8 @@
 // the temp dir, so nothing this suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
-// new before close). node:test runs a file's tests serially by default; running a
-// single one with --test-name-pattern is not supported.
+// new before close). node:test runs a file's tests serially by default; a test selected on
+// its own with --test-name-pattern fails at once, since it would have no installation.
 //
 // GitHub and Jira are the in-memory adapters (test/harness.mjs says how). Tests seed them
 // and read them back; the real `gh`/`twg` are never spawned. That state is shared too: a
@@ -22,7 +22,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
 import { BRANCH_PREFIXES } from '../bin/release.mjs'
 import { makeInstall, readJson, strip } from './harness.mjs'
@@ -34,7 +34,7 @@ const VERSION = FORMAT_STAMP
 
 const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
-  githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
+  githubStateFile, twgStateFile, rig: rigIn, git: gitIn, cleanup,
 } = makeInstall({
   // Nothing here is about the process rig runs in, so the runs happen in this one.
   inProcess: true,
@@ -57,6 +57,15 @@ const lastCommit = dir => gitIn(dir, 'log', '-1', '--format=%s').stdout.trim()
 const dirty = dir => gitIn(dir, 'status', '--porcelain').stdout.trim()
 
 after(cleanup)
+
+// Until the init test has built the installation, only `doctor` and an init that names its work
+// root may run: anything else falls through to this machine's defaults, and a test selected on
+// its own would write into its real work root (hugoforte/rig#217).
+const ALONE = 'the smoke tests share one installation, built by the init test; run the file whole'
+const rig = (args, opts) => {
+  if (!fs.existsSync(localConfig) && args[0] !== 'doctor' && !args.includes('--work-root')) throw new Error(ALONE)
+  return rigIn(args, opts)
+}
 
 test('importing the tool runs nothing', () => {
   const url = pathToFileURL(path.join(tool, 'bin', 'rig.mjs')).href
@@ -100,6 +109,15 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.equal(local.current, DEFAULT_ROOT_NAME)
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
+})
+
+test('a smoke test run on its own fails at once, rather than running without the installation', () => {
+  // Without NODE_TEST_CONTEXT the child prints its own report, rather than streaming it to this runner.
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const r = spawnSync(process.execPath, ['--test', '--test-name-pattern', '^rig --help and rig -h are rig help$', fileURLToPath(import.meta.url)], { encoding: 'utf8', env })
+  assert.notEqual(r.status, 0, r.stdout)
+  assert.match(r.stdout, new RegExp(ALONE))
 })
 
 test('a tool copy with no repository pays no git for the freshness check', () => {
