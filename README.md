@@ -327,7 +327,7 @@ rig demo --data employer --no-open --out C:	mp
 ig.html
 ```
 
-**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
+**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which commits and pushes the work's branches and then writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
 
 ### Staying up to date
 

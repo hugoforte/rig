@@ -309,6 +309,7 @@ rig stage feat/schema --cut                        # and make the branch, here, 
 rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
 rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
 rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
+rig stage feat/schema --planned                    # put a withdrawn stage back in the plan
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -353,7 +354,8 @@ deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work st
 a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
 rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
 next stage. Only a stage with no pull request open or merged can be withdrawn, and a withdrawn
-stage's own ticket is told why at `rig close` and left open.
+stage's own ticket is told why at `rig close` and left open. A withdrawal is undone with `--planned`,
+which puts the stage back as though it had never been withdrawn; the commit says so.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
@@ -392,7 +394,7 @@ The record is portable and the work root is not: a second machine that clones th
 
 **A restore is not an attach, and writes nothing down.** `work.json` is byte-identical afterwards and nothing is committed. **It never recreates a branch**: one that the remote and the mirror have both lost — never pushed, or deleted with its closed PR — is named with its PR's state and left alone. Branches stacked on top that the record does not know are named in order; `rig stage <branch>` records them, and `--tip` checks out the top of the stack when it is one line. rig never picks between the branches of a fork.
 
-A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it.
+A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
 ## Staying up to date
 

@@ -300,7 +300,7 @@ test('the registry is the location\'s to answer, and never the merged config\'s'
 // ------------------------------------------------------------------ the CLI
 
 const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} }, inProcess: true })
-const { tmp, dataRoot, workRoot, localConfig, rig, gitMust, cleanup } = install
+const { tmp, dataRoot, workRoot, localConfig, githubStateFile, rig, gitMust, cleanup } = install
 const second = path.join(tmp, 'rig-data-personal')
 
 // Two data roots, each a checkout of its own with a rig.json this rig stamped, and the
@@ -349,6 +349,43 @@ test('--data-repo --name adds a second root rather than refusing to move the fir
   assert.match(machine.dataRoots.third.path, /rig-data-third$/, 'in a directory named for it, not for the repo')
   assert.notEqual(path.resolve(machine.dataRoots.third.path), path.resolve(dataRoot), 'and not on top of the first')
   fs.writeFileSync(localConfig, saved)
+})
+
+test('joining an empty data repo pushes its first commit without ever asking for credentials', () => {
+  // A server-side hook runs under the pushing git's environment on a local remote, so it
+  // sees what the push was run with. The two variables are taken out of the run's own
+  // environment first, so a shell that already sets them cannot pass this for rig.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const bare = path.join(tmp, 'empty-data.git')
+  const seen = path.join(tmp, 'push-env')
+  gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', bare)
+  fs.writeFileSync(path.join(bare, 'hooks', 'pre-receive'), `#!/bin/sh\necho "$GIT_TERMINAL_PROMPT $GCM_INTERACTIVE" >> '${seen.replaceAll('\\', '/')}'\n`, { mode: 0o755 })
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'ok', repos: { ...state.repos, 'acme/empty-data': { language: '', prs: [], issues: [], source: bare } } }))
+  const env = Object.fromEntries(Object.entries(install.env).filter(([k]) => !['GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE'].includes(k)))
+
+  const r = rig(['init', '--data-repo', 'acme/empty-data', '--name', 'joined', '--orgs', 'acme'], { env })
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 0, r.out)
+  // The first push, and then the save every mutating command ends in.
+  assert.deepEqual(fs.readFileSync(seen, 'utf8').trim().split(/\r?\n/), ['0 never', '0 never'])
+})
+
+test('a first push refused for want of credentials names the command that signs git in', () => {
+  // The remote refuses in Git Credential Manager's words for a sign-in it may not ask for.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const bare = path.join(tmp, 'signed-out.git')
+  gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', bare)
+  fs.writeFileSync(path.join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "fatal: Cannot prompt because user interactivity has been disabled." >&2\nexit 1\n', { mode: 0o755 })
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'ok', repos: { ...state.repos, 'acme/signed-out': { language: '', prs: [], issues: [], source: bare } } }))
+
+  const r = rig(['init', '--data-repo', 'acme/signed-out', '--name', 'signed-out', '--orgs', 'acme'])
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /git needed credentials, and rig never waits at a prompt: sign git in with `gh auth setup-git`/)
 })
 
 test('rig use lists every root and marks the current one', () => {

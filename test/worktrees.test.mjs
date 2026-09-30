@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { remotesOnGitHub, remotesInDirectory, worktrees } from '../bin/worktrees.mjs'
 import { RigError } from '../bin/errors.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 import { worktreesFixture } from './worktrees-fixture.mjs'
 
 const f = worktreesFixture('rig-worktrees-')
@@ -425,6 +426,58 @@ test('contains asks the remote\'s copy too, when the one the mirror kept is wher
   trees().fetch({ org: 'acme', repo: 'restored' })
 
   assert.equal(trees().contains({ org: 'acme', repo: 'restored', branch: 'feat/kept', other: 'feat/landed' }), true)
+})
+
+// ---------------------------------------------------------------- credentials
+
+// The module built over `run`, keeping every call's options, because the guard rides on each
+// call and a constant nobody passes guards nothing.
+const recorded = (answer = run) => {
+  const calls = []
+  const t = worktrees({
+    mirrorRoot,
+    remotes: remotesInDirectory(remotesDir),
+    run: (cmd, args, opts = {}) => { calls.push({ args, env: opts.env }); return answer(cmd, args, opts) },
+  })
+  return { t, calls }
+}
+const REMOTE_VERBS = ['clone', 'fetch', 'ls-remote', 'push', 'set-head']
+
+test('no git call a mirror makes to its remote can stop to ask for credentials', () => {
+  publish('acme', 'prompts')
+  const dest = workDir('p1', 'prompts')
+  const { t, calls } = recorded()
+  t.cut({ org: 'acme', repo: 'prompts', branch: 'feat/p1', dest })
+  gitMust(dest, 'push', '-q', 'origin', 'feat/p1')
+  const head = gitMust(dest, 'rev-parse', 'HEAD')
+  // A PR head the mirror never saw is fetched; the remote's copy at that head is deleted.
+  t.dropMerged({ org: 'acme', repo: 'prompts', branch: 'feat/p1', head: '0'.repeat(40), number: 1 })
+  t.dropMerged({ org: 'acme', repo: 'prompts', branch: 'feat/p1', head, number: 1 })
+
+  const remote = calls.filter(c => REMOTE_VERBS.some(v => c.args.includes(v)))
+  assert.deepEqual(REMOTE_VERBS.filter(v => !remote.some(c => c.args.includes(v))), [], 'every kind of remote call was made')
+  assert.deepEqual(remote.map(c => ({ call: c.args.join(' '), env: c.env })), remote.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
+})
+
+test('a checkout, which Git LFS may take to the remote, never stops to ask for credentials either', () => {
+  publish('acme', 'lfs')
+  const dest = workDir('l1', 'lfs')
+  const { t, calls } = recorded()
+  t.cut({ org: 'acme', repo: 'lfs', branch: 'feat/l1', dest })
+  assert.equal(t.cutHere({ dir: dest, branch: 'feat/l1-stage', base: 'feat/l1' }), null)
+
+  const checkouts = calls.filter(c => (c.args.includes('worktree') && c.args.includes('add')) || c.args.includes('checkout'))
+  assert.equal(checkouts.length, 2, 'the worktree add and the checkout were both made')
+  assert.deepEqual(checkouts.map(c => ({ call: c.args.join(' '), env: c.env })), checkouts.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
+})
+
+test('a clone that needed credentials says so, and how to give git some', () => {
+  const refused = (cmd, args, opts) => args.includes('clone')
+    ? { code: 128, out: '', err: "Cloning into bare repository 'x'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled" }
+    : run(cmd, args, opts)
+  const { t } = recorded(refused)
+  assert.throws(() => t.cut({ org: 'acme', repo: 'private', branch: 'feat/p2', dest: workDir('p2', 'private') }),
+    e => e instanceof RigError && /could not mirror acme\/private: git needed credentials .* and rig never waits at a prompt — sign git in \(`gh auth setup-git`\) and run this again/.test(e.message))
 })
 
 test('standing answers nothing for a base the mirror does not have, rather than a clean merge (#208)', () => {

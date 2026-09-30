@@ -182,7 +182,7 @@ test('ticketsLabel: keys joined, declined, or the placeholder', () => {
 // machine — the refresh that took forty seconds under load and hung a desktop finished inside
 // its deadline when nothing else was running, so the behavioural test went green on exactly
 // the machines that were fine. A wrong option here is not a refactor; it is the regression.
-// The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
+// The fetch's own environment, `NO_PROMPT_ENV`, is asserted the same way in
 // `test/checkouts-read.test.mjs`, where the operation it guards now lives.
 test('only the console-less run hides its spawns, because a hidden console is a whole process', () => {
   // `CREATE_NO_WINDOW` does not suppress a console, it allocates a hidden one — a

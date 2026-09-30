@@ -4,6 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { githubViaGh, githubInMemory, GithubError } from '../bin/github.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 
 // A canned `gh`: `reply(args)` returns stdout, or a { code, err } object.
 const canned = reply => {
@@ -173,6 +174,14 @@ test('gh adapter: clone and createRepo pass the right argv and fail on error', (
   ])
   const failing = canned(() => ({ code: 1, err: 'HTTP 403: no permission' })).github
   assert.throws(() => failing.createRepo('acme/rig-data', { source: '/tmp/x', description: 'd' }), /no permission/)
+})
+
+test('gh adapter: clone and createRepo never stop to ask for credentials', () => {
+  const envs = []
+  const github = githubViaGh({ exec: (args, opts = {}) => { envs.push(opts.env); return { status: 0, stdout: '', stderr: '' } } })
+  github.clone('acme/rig-data', '/tmp/rig-data')
+  github.createRepo('acme/rig-data', { source: '/tmp/rig-data', description: 'd' })
+  assert.deepEqual(envs, [NO_PROMPT_ENV, NO_PROMPT_ENV])
 })
 
 const world = () => ({

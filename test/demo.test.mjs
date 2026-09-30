@@ -409,7 +409,7 @@ test('rig demo: renders a page from a data root on disk, naming its repos', () =
 })
 
 test('rig demo: a record that will not parse is named and left out, and the page still renders', () => {
-  // A write cut short, or a byte-order mark from PowerShell 5.1: either is a SyntaxError.
+  // A write cut short is a SyntaxError.
   const { stdout, html } = demoOnDisk({ w1: JSON.stringify(work3()), cut: '{"id": "cut", "repos": [' })
   assert.match(stdout, /1 work record could not be read and was left out: cut/)
   assert.match(html, /rig attach billing/)

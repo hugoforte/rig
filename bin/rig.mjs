@@ -10,6 +10,7 @@ import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable } from './checkouts.mjs'
+import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
@@ -134,8 +135,8 @@ const spawnDefaults = command => ({ encoding: 'utf8', windowsHide: command === R
 // having to read it first.
 //
 // `opts.env` is additions to the run's environment rather than a replacement, because that is
-// what its one caller means by it — `GIT_TERMINAL_PROMPT=0` goes on top of what is already
-// there, and a replacement would drop everything an isolated run depends on.
+// what its callers mean by it — `NO_PROMPT_ENV` goes on top of what is already there, and a
+// replacement would drop everything an isolated run depends on.
 function exec (cmd, args, { env: extra, ...opts } = {}) {
   const options = { ...spawnDefaults(current.command), cwd: current.cwd, env: extra ? { ...env(), ...extra } : env(), ...opts }
   const r = spawnSync(cmd === 'git' ? gitProgram() : cmd, args, options)
@@ -357,7 +358,8 @@ function headSha (dir, place = discover(dir, env())) {
   const head = git(dir, 'rev-parse', 'HEAD')
   return head.code === 0 ? head.out : null
 }
-const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
+// A byte-order mark is how PowerShell 5.1 saves UTF-8, and a file saved that way is not damaged.
+const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''))
 const writeJson = (p, v) => writeText(p, JSON.stringify(v, null, 2) + '\n')
 const readText = p => fs.readFileSync(p, 'utf8')
 // Writes only when the content differs: the record, its doc header and its folder are
@@ -469,8 +471,8 @@ function adapterResolver (envVar, viaCli, inMemory) {
       if (resolved) return resolved
       const file = env()[envVar]
       if (!file) {
-        const spawnCli = args =>
-          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: env() })
+        const spawnCli = (args, { env: extra } = {}) =>
+          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: { ...env(), ...extra } })
         return (resolved = viaCli({ exec: spawnCli }))
       }
       fake = { file, state: exists(file) ? readJson(file) : {} }
@@ -664,7 +666,7 @@ function prepareDataRoot () {
       const fetched = co.fetch(root)
       if (!fetched.ok) {
         stampDataFetchFailure()
-        say(C.dim(`· data root: could not fetch (${fetched.error}) — working from what is here`))
+        say(C.dim(`· data root: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
       } else {
         clearDataFetchFailure()
         const { outcome, state, error } = co.fastForward(root)
@@ -779,7 +781,11 @@ function loadWork (cfg, id, root = dataRoot()) {
     const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
-  const w = readJson(recordFile(id, root))
+  // A record that will not parse is a sentence naming it, not a stack trace (decision 137).
+  let w
+  try { w = readJson(recordFile(id, root)) } catch (e) {
+    throw new RigError(`work record for "${id}" at ${recordFile(id, root)} could not be read (${e.message})`, { cause: e })
+  }
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
   w.repos = w.repos || []
@@ -863,12 +869,13 @@ function listWorkIds (dataRootPath = dataRoot()) {
 // unreadable record must not cost those their answer, and for `attach` it must not cost the
 // command it follows: the offer runs after the worktree is cut and the record saved, and a throw
 // there would skip the commit and leave the data root half-written. So a record that will not
-// read is left out and named with the error it raised, never swallowed.
+// read is left out and named with the error it raised (its cause, when `loadWork` has wrapped it
+// in a sentence that already names the record), never swallowed.
 function readRecords (root, read = id => readJson(recordFile(id, root))) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
-    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${e.message})`) }
+    try { works.push(read(id)) } catch (e) { unreadable.push(`${id} (${(e.cause ?? e).message})`) }
   }
   return { works, unreadable }
 }
@@ -1068,7 +1075,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -1672,14 +1679,14 @@ function commitDataRoot (message, loc = where(), known = null) {
   if (!staged && !state.ahead) { say(C.dim('· data root: nothing to commit, nothing to push')); return }
 
   const sent = co.pushRebasing(root)
-  if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error}) — nothing pushed`); return }
+  if (sent.outcome === 'fetch-failed') { warn(`data root: ${committed}, but could not fetch from origin (${sent.error})${signIn(sent.error)} — nothing pushed`); return }
   // Someone's rebase, and not rig's to finish or to throw away.
   if (sent.outcome === 'underway') { warn(`data root: ${committed}, but a rebase is already in progress in ${root} — finish or abort it, then \`rig save\`; nothing pushed`); return }
   if (sent.outcome === 'refused') { warn(`data root: ${committed}, but the rebase onto origin would not start (${sent.error}) — nothing pushed, nothing changed`); return }
   if (sent.outcome === 'conflict-stuck') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict and the abort failed — sort ${root} out by hand (git status)`); return }
   if (sent.outcome === 'conflict') { warn(`data root: ${committed}, but rebasing onto origin hit a conflict — rebase aborted, tree left clean; pull, resolve and push by hand in ${root}`); return }
   // `sent.hash` is HEAD as the rebase left it, which is not what was committed above.
-  if (sent.outcome === 'push-failed') { warn(`data root: ${committed} as ${sent.hash}, but the push failed (${sent.error}) — push it by hand`); return }
+  if (sent.outcome === 'push-failed') { warn(`data root: ${committed} as ${sent.hash}, but the push failed (${sent.error})${signIn(sent.error)} — push it by hand`); return }
   ok(`data root: ${staged ? `committed ${sent.hash}` : `pushed ${sent.hash}, committed earlier`} and pushed`)
 }
 
@@ -1781,7 +1788,7 @@ function joinOrCreateDataRepo (spec, named) {
       die(`${target} is a checkout of ${origin}, not ${spec}`)
     }
     say(`using the existing checkout at ${target}`)
-    if (ensureFirstCommit(target, name) && origin) must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'])
+    if (ensureFirstCommit(target, name) && origin) pushFirstCommit(target)
     return target
   }
 
@@ -1796,7 +1803,7 @@ function joinOrCreateDataRepo (spec, named) {
     github().clone(spec, target)
     // A repo with no commits clones fine and is useless; give it its first commit.
     if (ensureFirstCommit(target, name)) {
-      must('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'])
+      pushFirstCommit(target)
       ok(`${spec} was empty — pushed its first commit`)
     }
     return target
@@ -1814,6 +1821,13 @@ function joinOrCreateDataRepo (spec, named) {
   }
   ok(`created ${spec} and pushed its first commit`)
   return target
+}
+
+// A data root's first commit, pushed; a push refused for want of credentials names the fix.
+function pushFirstCommit (target) {
+  const r = exec('git', ['-C', target, 'push', '-q', '-u', 'origin', 'main'], { env: NO_PROMPT_ENV })
+  const detail = r.err || r.out
+  if (r.code !== 0) die(`could not push the first commit of ${target}${signIn(detail)}\n${detail}`)
 }
 
 cmds.init = ({ flags }) => {
@@ -3336,7 +3350,7 @@ function refreshPrs (work, stack) {
   }
 }
 
-// Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
+// Every branch of this work that every repo carries, flat: one `{ repo, branch, base, cutOn, pr }`
 // row each. The base is read live (decision 63) because the base is what says where a stage
 // sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
 //
@@ -3377,6 +3391,10 @@ function branchRows (cfg, work) {
         branch: b.branch,
         // The live base wins when GitHub answered; git, then the record, is the fallback.
         base: (!prError && pr?.base) || b.base,
+        // What the branch sits on now, for the checks that refuse over it: an open pull request's
+        // base, and git's otherwise. A closed one's base is where it sat when it closed, and a
+        // rebase since is the usual reason it closed.
+        cutOn: (!prError && pr?.state === 'OPEN' && pr.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
       })
@@ -3402,9 +3420,11 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (flags.planned) return replanStage(cfg, work, branch, flags)
   if (flags.dropped !== undefined || flags['replaced-by'] !== undefined) return withdrawStage(cfg, work, branch, flags)
 
   if (branch) {
+    if (typeof flags.delivers === 'string' && /[\r\n]/.test(flags.delivers)) die('--delivers takes one line — it goes in a table row')
     // Declaring and cutting are two acts on two days: a stage is normally declared before
     // anyone makes its branch, which is why recording the branch at declaration time could
     // never be the whole answer. `--cut` is how the second act reaches a stage already
@@ -3508,7 +3528,7 @@ function withdrawStage (cfg, work, branch, flags) {
   // A stage cut on this one carries its commits, so they would land with it while the record
   // said they were gone.
   const live = new Set(work.stages.filter(s => !withdrawalOf(s)).map(s => s.branch))
-  const above = rows.filter(r => r.base === branch && live.has(r.branch))
+  const above = rows.filter(r => r.cutOn === branch && live.has(r.branch))
   if (above.length) die(`${above.map(r => `${r.branch} is cut on it in ${r.repo}`).join(', ')} — rebase that off ${branch} first`)
   const reason = dropped?.trim()
   // A second withdrawal replaces the first: the date that matters is the current decision's.
@@ -3519,6 +3539,23 @@ function withdrawStage (cfg, work, branch, flags) {
   commitAs(work.id, done)
   saveWork(cfg, work)
   ok(`${work.id}: stage ${C.bold(branch)} ${withdrawnLabel(withdrawalOf(declared))}`)
+}
+
+// `--planned`: a withdrawn stage put back in the plan (decision 140). A stage cut on another that
+// is still withdrawn stays out, because it carries that one's commits and would land them.
+function replanStage (cfg, work, branch, flags) {
+  if (!branch) die('--planned names the stage: `rig stage <branch> --planned`')
+  const others = ['dropped', 'replaced-by', 'cut', 'key', 'delivers'].filter(k => flags[k] !== undefined)
+  if (others.length) die(`--planned puts a withdrawn stage back, and takes nothing else (${others.map(k => `--${k}`).join(', ')})`)
+  const declared = work.stages.find(s => s.branch === branch) || die(`${branch} is not a stage of ${work.id}`)
+  if (!withdrawalOf(declared)) die(`${branch} is not withdrawn — there is nothing to put back`)
+  const withdrawn = new Set(work.stages.filter(s => withdrawalOf(s)).map(s => s.branch))
+  const on = branchRows(cfg, work).find(r => r.branch === branch && withdrawn.has(r.cutOn))
+  if (on) die(`${branch} is cut on ${on.cutOn} in ${on.repo}, which was withdrawn — put that back first, or rebase ${branch} off it`)
+  for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]
+  commitAs(work.id, `${branch} back in the plan`)
+  saveWork(cfg, work)
+  ok(`${work.id}: stage ${C.bold(branch)} back in the plan`)
 }
 
 // `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
@@ -3735,12 +3772,15 @@ function dropMergedBranches (cfg, work, states, stack) {
 // rate limit is transient and a record saying "unknown forever" is worse than a retry.
 cmds.backfill = ({ flags }) => {
   const cfg = config()
-  const ids = flags.work ? [flags.work] : listWorkIds()
+  // One record that will not read costs the scan nothing but itself, as it does `list`; named
+  // with `--work`, it is the whole question, and dies saying so.
+  const { works, unreadable } = flags.work ? { works: [loadWork(cfg, flags.work)], unreadable: [] }
+    : readRecords(dataRoot(), id => loadWork(cfg, id))
   let filled = 0
   let touchedWorks = 0
   const unresolved = []
-  for (const id of ids) {
-    const work = loadWork(cfg, id)
+  for (const work of works) {
+    const id = work.id
     // Only a closed work is finished. A branch that is still open can carry a second PR
     // (`bin/github.mjs` answers with the newest), and a record is what stops rig looking —
     // so recording the first merge of a work still in progress would freeze the wrong one.
@@ -3774,6 +3814,7 @@ cmds.backfill = ({ flags }) => {
   } else {
     say('nothing to backfill — every merged PR already has a stored record')
   }
+  sayUnreadable(unreadable)
   if (unresolved.length) {
     warn(`GitHub would not answer for ${unresolved.length}, left unstored (retry later):`)
     for (const u of unresolved) say(`    ${C.red('•')} ${u}`)
@@ -3965,7 +4006,7 @@ function updateCheckout (label, root) {
     return { status: 'failed', clean }
   }
   const fetched = co.fetch(root)
-  if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error}) — not updated`); return { status: 'failed', clean } }
+  if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — not updated`); return { status: 'failed', clean } }
   // Every outcome, named. The three that look impossible here — this checkout was read a
   // few lines ago — are reachable all the same: a fetch that prunes a renamed default
   // branch takes the upstream with it, and a catch-all would report that as a
@@ -4147,7 +4188,11 @@ function doctorStamp (written) {
 // root's, and the work folder is the machine's, which is the whole shape of a shared work
 // root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
 function doctorWork (cfg, id, root, roots) {
-  const work = loadWork(cfg, id, root)
+  let work
+  try { work = loadWork(cfg, id, root) } catch (e) {
+    if (e instanceof RigError) return { id, unreadable: e.message }
+    throw e
+  }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
   if (out.closed) return out
   const wd = workDir(cfg, id)
@@ -4461,6 +4506,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --delivers "..."            the one line of prose a stage carries
        --dropped "why"             withdraw it from the plan: kept, dated, never deleted
        --replaced-by <stage>       withdraw it as done under another declared stage
+       --planned                   put a withdrawn stage back in the plan
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
