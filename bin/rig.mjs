@@ -22,7 +22,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, linkable, stackHolding } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -3131,6 +3131,15 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
+    // One lookup per repo with a chain of two or more open stage PRs, and none for any other.
+    // An answer GitHub will not give offers nothing.
+    unstacked: work.repos.filter(entry => {
+      const chain = linkable(stack, entry.repo, work.branch)
+      if (!chain || chain.problem) return false
+      let stacks = null
+      trackerFailure(() => { stacks = github().stacks(entry.org, entry.repo) })
+      return stacks !== null && !stackHolding(stacks, chain.prs, work.branch)
+    }).map(entry => entry.repo),
   })
 
   const phase = phaseOf(work, repos)
@@ -3441,6 +3450,7 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (flags.link) return linkStages(cfg, work, branch, flags)
   if (flags.planned) return replanStage(cfg, work, branch, flags)
   if (flags.dropped !== undefined || flags['replaced-by'] !== undefined) return withdrawStage(cfg, work, branch, flags)
 
@@ -3560,6 +3570,43 @@ function withdrawStage (cfg, work, branch, flags) {
   commitAs(work.id, done)
   saveWork(cfg, work)
   ok(`${work.id}: stage ${C.bold(branch)} ${withdrawnLabel(withdrawalOf(declared))}`)
+}
+
+// `--link`: each repo's open stage pull requests registered as one GitHub stack on the work
+// branch, with `gh stack link` (decision 152). It writes nothing into the record, so it commits
+// nothing, and every repo is a report: a repo that cannot be linked is said and the next is
+// tried. Without `gh stack` the base branches still carry the stack, so its absence is said and
+// never fatal.
+function linkStages (cfg, work, branch, flags) {
+  if (branch) die('--link registers every stage at once, and takes no branch: `rig stage --link`')
+  const others = ['dropped', 'replaced-by', 'cut', 'key', 'delivers', 'planned'].filter(k => flags[k] !== undefined)
+  if (others.length) die(`--link registers the stages as they are, and takes nothing else (${others.map(k => `--${k}`).join(', ')})`)
+  if (!work.stages.length) die(`${work.id} has no stages — there is nothing to link`)
+  const stack = stackOf(work, branchRows(cfg, work))
+  let tool = null
+  for (const entry of work.repos) {
+    const chain = linkable(stack, entry.repo, work.branch)
+    if (!chain) { step(`${entry.repo}: fewer than two stage PRs open — nothing to stack`); continue }
+    if (chain.problem) { warn(`${entry.repo}: not linked — ${chain.problem}`); continue }
+    const numbers = chain.prs.map(pr => `#${pr.number}`).join(', ')
+    const already = stackHolding(github().stacks(entry.org, entry.repo) || [], chain.prs, work.branch)
+    if (already) { step(`${entry.repo}: already GitHub stack #${already.number}`); sayStackMerge(already); continue }
+    tool = tool || github().stackTool()
+    if (tool === 'missing') return warn('gh stack is not installed — `gh extension install github/gh-stack`; the base branches already carry the stack')
+    if (tool === 'old') return warn('gh stack has no `link` — `gh extension upgrade gh-stack`; the base branches already carry the stack')
+    const failed = trackerFailure(() => github().linkStack(entry.org, entry.repo, { base: work.branch, urls: chain.prs.map(pr => pr.url) }))
+    if (failed) { warn(`${entry.repo}: could not link ${numbers} (${failed})`); continue }
+    const made = stackHolding(github().stacks(entry.org, entry.repo) || [], chain.prs, work.branch)
+    ok(`${entry.repo}: ${numbers} are GitHub stack${made ? ` #${made.number}` : ''}`)
+    sayStackMerge(made)
+  }
+}
+
+// A stage merges into the work branch with a merge commit (decision 75), and a stack records no
+// merge method, so it is said where the stack is made (decision 153). All at once rewrites no
+// head; bottom-up is fine too, and `rig close` compares what GitHub rewrote by patch.
+function sayStackMerge (stack) {
+  if (stack) say(`  ${C.dim(`merge it with a merge commit, never a squash — gh stack merge ${stack.number} --merge`)}`)
 }
 
 // `--planned`: a withdrawn stage put back in the plan (decision 140). A stage cut on another that
@@ -4529,6 +4576,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --dropped "why"             withdraw it from the plan: kept, dated, never deleted
        --replaced-by <stage>       withdraw it as done under another declared stage
        --planned                   put a withdrawn stage back in the plan
+  rig stage --link                register each repo's open stage PRs as one GitHub stack
+                                  on the work branch, with gh stack link
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
