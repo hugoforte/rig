@@ -37,7 +37,12 @@ export function billingInstall (prefix) {
     author: 'rig close',
     email: 'close@example.invalid',
     remotes: true,
-    github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', prs: [] } } },
+    // Private, like most repos a work touches: whether the context-doc link may be written into
+    // a PR or a ticket comment depends on it (hugoforte/rig#202), and a repo whose visibility
+    // GitHub never said would have every body leave the link out.
+    github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', visibility: 'private', prs: [] } } },
+    // An in-memory Jira with nothing in it, for the ticket keys that are Jira's.
+    twg: { present: true, issues: {} },
   })
   const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, gitMust } = m
 
@@ -56,6 +61,12 @@ export function billingInstall (prefix) {
   }
 
   const github = () => readJson(githubStateFile)
+  const jiraIssue = key => readJson(m.twgStateFile).issues[key]
+  const seedJiraIssue = (key, title) => {
+    const state = readJson(m.twgStateFile)
+    state.issues[key] = { title, body: '', comments: [] }
+    fs.writeFileSync(m.twgStateFile, JSON.stringify(state))
+  }
   const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 
   // What GitHub does when a PR lands on a repo that requires linear history: the branch's
@@ -112,9 +123,28 @@ export function billingInstall (prefix) {
     throw e
   }
 
+  // What a repo's visibility on GitHub is, as the next lookup will read it; `undefined` is a
+  // repo GitHub will not say for.
+  const setVisibility = (spec, visibility) => {
+    const state = github()
+    state.repos[spec] = { prs: [], ...state.repos[spec], visibility }
+    setGithub(state)
+  }
+  // `fn`, run with a repo's visibility set, and the visibility it had put back afterwards.
+  const withVisibility = (spec, visibility, fn) => {
+    const was = github().repos[spec]?.visibility
+    setVisibility(spec, visibility)
+    try { return fn() } finally { setVisibility(spec, was) }
+  }
+
   return {
     ...m,
     bare,
+    publish,
+    jiraIssue,
+    seedJiraIssue,
+    setVisibility,
+    withVisibility,
     github,
     setGithub,
     squashMergeAndDeleteBranch,

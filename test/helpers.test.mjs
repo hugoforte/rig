@@ -10,7 +10,7 @@ import {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
-  spawnFailure, repoOfRemote,
+  spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
 import { makeInstall } from './harness.mjs'
 
@@ -43,6 +43,17 @@ test('parseArgs: -m is --message, and a short flag is never eaten as another fla
 
 test('parseArgs: an unknown short flag fails rather than swallowing a positional', () => {
   assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
+})
+
+test('webUrlOf: credentials never reach a link, whatever the host (#202)', () => {
+  assert.equal(webUrlOf('https://oauth2:SECRET@gitlab.example/acme/rig-data.git'), 'https://gitlab.example/acme/rig-data')
+  assert.equal(webUrlOf('https://x-access-token:SECRET@github.com/acme/rig-data.git'), 'https://github.com/acme/rig-data')
+})
+
+test('webUrlOf: every way git spells a GitHub remote is the page\'s URL (#202)', () => {
+  for (const remote of ['git@github.com:acme/rig-data.git', 'ssh://git@github.com/acme/rig-data.git', 'https://github.com/acme/rig-data/']) {
+    assert.equal(webUrlOf(remote), 'https://github.com/acme/rig-data', remote)
+  }
 })
 
 test('repoOfRemote: a hosted remote names its org, and a path on disk names its repo alone', () => {

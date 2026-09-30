@@ -14,7 +14,7 @@ import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
 import { impact, unattached } from './catalog-graph.mjs'
-import { releaseMark, BRANCH_PREFIXES } from './release.mjs'
+import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { renderDemo, summarize as demoModel } from './demo.mjs'
 import { workState } from './workstate.mjs'
@@ -1187,9 +1187,15 @@ function retitleDoc (id, title) {
 // Where the work records live on GitHub, for linking issues back to context docs.
 function dataRemoteUrl () {
   const r = git(dataRoot(), 'remote', 'get-url', 'origin')
-  if (r.code !== 0 || !r.out) return null
-  return r.out.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/')
+  return r.code !== 0 || !r.out ? null : webUrlOf(r.out)
 }
+
+// A remote URL as a page to link to. Credentials in an http(s) URL come out whatever the host,
+// since the link goes into Jira and GitHub bodies alike; every way git spells a GitHub remote
+// (scp-style, `ssh://`, https) comes out as the page's URL.
+const webUrlOf = remote => remote.replace(/\/+$/, '').replace(/\.git$/, '')
+  .replace(/^(https?:\/\/)[^/@]+@/, '$1')
+  .replace(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)/, 'https://github.com/')
 
 // A file of a work's record on the data root's remote, or null when it has none.
 const recordUrl = (id, file) => {
@@ -1200,6 +1206,59 @@ const recordUrl = (id, file) => {
 // A relative reference when the data root has no remote: a machine path in an
 // issue body would leak into a tracker that may be public.
 const contextDocRef = id => recordUrl(id, 'context.md') || `work/${id}/context.md in the rig data root`
+
+// How widely a GitHub repo can be read, narrowest first.
+const REACH = ['private', 'internal', 'public']
+
+// A repo's visibility, or null when GitHub would not say.
+function visibilityOf (spec) {
+  const key = spec.toLowerCase()
+  if (!current.visibilities.has(key)) {
+    const [org, name] = spec.split('/')
+    let found = null
+    trackerFailure(() => { found = github().repo(org, name)?.visibility })
+    current.visibilities.set(key, REACH.includes(found) ? found : null)
+  }
+  return current.visibilities.get(key)
+}
+
+// A data root with no remote is private: nobody but this machine can read it. One GitHub does
+// not host answers `elsewhere`, since nothing says who can read it.
+function dataRootVisibility () {
+  const remote = dataRemoteUrl()
+  if (!remote) return 'private'
+  const spec = /^https:\/\/github\.com\/([^/]+\/[^/]+)$/.exec(remote)?.[1]
+  return spec ? visibilityOf(spec) : 'elsewhere'
+}
+
+// May text written into `spec`'s repo link the context doc? Only when that repo is no more
+// visible than the data root (hugoforte/rig#202): the link names the private repo and the work's
+// path in it, and GitHub keeps a body's edit history, so a link published cannot be taken back.
+// A data root hosted elsewhere is never linked. Null when GitHub would not say for either side,
+// which callers treat as no.
+function mayLink (spec) {
+  const [here, root] = [visibilityOf(spec), dataRootVisibility()]
+  if (root === 'elsewhere') return false
+  return here && root ? REACH.indexOf(here) <= REACH.indexOf(root) : null
+}
+
+// `mayLink` for text about to be written, saying once, of whichever side GitHub would not answer
+// for, that the link is left out: a link left out costs a click.
+function linkOrSay (spec) {
+  const may = mayLink(spec)
+  if (may !== null) return may
+  // Named for the side GitHub would not answer for: the data root once, whatever the target.
+  const rootUnknown = dataRootVisibility() === null
+  const key = rootUnknown ? '' : spec.toLowerCase()
+  if (!current.linkLeftOut.has(key)) {
+    current.linkLeftOut.add(key)
+    say(C.dim(`· context-doc link left out: GitHub would not say ${rootUnknown ? 'how visible the data root is' : `whether ${spec} is more visible than the data root`}`))
+  }
+  return false
+}
+
+// The context-doc line and the blank line above it, as lines to spread into a body.
+const contextDocLines = (id, link) => (link ? ['', `Context doc: ${contextDocRef(id)}`] : [])
 
 // Ticket keys: Jira `PROJ-42`, or GitHub `owner/repo#n`. Only the Jira shape is
 // safe in a branch name.
@@ -1309,9 +1368,10 @@ function resolveJiraFields (jiraClient, t, overrides) {
 
 // A ticket body: the prose, then where the design lives, then what opened it. One shape
 // for both trackers — the context reference is `contextDocRef`'s and nobody invents a
-// second format (hugoforte/rig#54).
-const ticketBody = (work, prose) => [
-  prose, '', `The design lives in the work record: ${contextDocRef(work.id)}`,
+// second format (hugoforte/rig#54). `link` is false where the ticket is more visible than
+// the data root (`mayLink`); a Jira ticket always has it.
+const ticketBody = (work, prose, { link }) => [
+  prose, ...(link ? ['', `The design lives in the work record: ${contextDocRef(work.id)}`] : []),
   '', `Opened by \`rig new ${work.id} --ticket\`.`,
 ].join('\n')
 
@@ -1328,8 +1388,8 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
     if (!t.repo) die(`tracker for ${t.org} is GitHub but has no "repo" (owner/name) in rig.json`)
     if (fieldOverrides.length) warn('--field is ignored for a GitHub tracker (no per-field create options)')
     const firstParagraph = brief.split(/\n\s*\n/)[0] || summary
-    const body = ticketBody(work, firstParagraph)
     if (dryRun) { say(`would create a GitHub issue in ${t.repo}:`); say(`  title  ${summary}`); say(`  body   ${firstParagraph}`); return null }
+    const body = ticketBody(work, firstParagraph, { link: linkOrSay(t.repo) })
     step(`creating GitHub issue in ${t.repo}`)
     const n = github().createIssue(t.repo, summary, body)
     ok(`ticket ${t.repo}#${n}`)
@@ -1344,7 +1404,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
     // has to stand on its own (hugoforte/rig#54). No truncation — Jira's own description
     // limit is 32,767 characters, which a piped brief does not reach, and silently cutting
     // the brief is the bug being fixed here; twg's error surfaces loudly if one ever does.
-    const description = ticketBody(work, brief.trim() || summary)
+    const description = ticketBody(work, brief.trim() || summary, { link: true })
     if (dryRun) {
       say(`would create a ${t.type} in ${t.project}:`)
       say(`  summary      ${summary}`)
@@ -1376,11 +1436,13 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
   for (const k of keys) {
     if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
   }
-  const githubKeys = keys.filter(isGithubKey)
-  const jiraKeys = keys.filter(isJiraKey)
+  // A ticket a slice also holds is left to `stageWriteBack`, which says why.
+  const sliceKeys = new Set(stages.flatMap(st => st.tickets || []))
+  const githubKeys = keys.filter(k => isGithubKey(k) && !sliceKeys.has(k))
+  const jiraKeys = keys.filter(k => isJiraKey(k) && !sliceKeys.has(k))
   // A work that declined a ticket can still have slices that carry one, so the stages are
   // written back either way.
-  if (!githubKeys.length && !jiraKeys.length) return stageWriteBack(work, stages, { abandoned })
+  if (!keys.length) return stageWriteBack(work, stages, { abandoned })
 
   // The same stack `close` refused on, so the comment that explains a forced close can name
   // the slice that never landed. Without it `workState` reached a second, kinder verdict here
@@ -1400,14 +1462,16 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
     ? 'Abandoned — `rig close --abandoned` ran. The work was stopped without finishing; the issue stays open.'
     : `Closed by \`${ranCmd}\`.${overridden}${merged ? '' : ` ${reason} The issue stays open.`}`
 
-  const githubBody = [
+  // Per ticket, because whether the context doc may be linked is a question about the repo the
+  // ticket is in (`mayLink`).
+  const githubBody = link => [
     opening,
     ...(prs.length ? ['', ...prs] : []),
-    '', `Context doc: ${contextDocRef(work.id)}`,
+    ...contextDocLines(work.id, link),
   ].join('\n')
   for (const key of githubKeys) {
     const [repo, n] = key.split('#')
-    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody))
+    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
     if (abandoned) { step(`commented on ${key} (left open: abandoned)`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
@@ -1421,7 +1485,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
       ? '`rig close --abandoned` ran. The work was stopped without finishing.'
       : `\`${ranCmd}\` ran.${overridden}${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
     ...(prs.length ? ['', ...prs] : []),
-    '', `Context doc: ${contextDocRef(work.id)}`,
+    ...contextDocLines(work.id, true),
     '', 'rig does not transition Jira tickets — move this one yourself.',
   ].join('\n')
   for (const key of jiraKeys) {
@@ -1430,7 +1494,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
     else step(`commented on ${key}`)
   }
 
-  stageWriteBack(work, stages, { abandoned })
+  stageWriteBack(work, stages, { abandoned, landing: { done: merged, reason, prs } })
 }
 
 // A stage's own tickets, told what became of the slice they were opened for.
@@ -1440,39 +1504,59 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
 // not a new rule about when rig speaks. A slice that landed closes its ticket; one that did
 // not is commented on and left open, because whether the slice is still wanted is not rig's
 // answer any more than an abandoned work's is.
-function stageWriteBack (work, stages, { abandoned }) {
+//
+// **One comment per ticket, whatever roles it holds** (hugoforte/rig#229). A key two slices
+// carry is told about both, and a key that is also one of the work's tickets is told here
+// rather than by `ticketWriteBack` as well, with the work's PRs beside the slice's. It closes
+// only when every role would close it: each slice landed, and, for a work ticket, the work did
+// too (`landing`, the verdict `ticketWriteBack` reached). Otherwise the first thing that kept
+// it open is what the comment says.
+function stageWriteBack (work, stages, { abandoned, landing = null }) {
+  const slicesOf = new Map()
   for (const st of stages) {
-    const keys = st.tickets || []
-    if (!keys.length) continue
-    const landed = !abandoned && st.landed
-    const prs = st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)
-    const ran = `\`rig close${abandoned ? ' --abandoned' : ''}\` ran on ${work.id}.`
-    const outcome = landed ? `The slice this was opened for landed in \`${work.branch}\`, and \`rig close\` ran on ${work.id}.`
-      : st.withdrawn ? `${ran} This slice was ${withdrawnLabel(st.withdrawn, b => `\`${b}\``)}. The issue stays open.`
-        : `${ran} This slice did not land, so the issue stays open.`
-    const body = [
+    for (const key of st.tickets || []) {
+      if (!slicesOf.has(key)) slicesOf.set(key, [])
+      slicesOf.get(key).push(st)
+    }
+  }
+  // A forced close says so here as it does on the work's tickets (decision 77).
+  const forced = work.forcedAt && !abandoned
+  const ran = `\`rig close${abandoned ? ' --abandoned' : forced ? ' --force' : ''}\` ran on ${work.id}.${forced ? ' The blockers were overridden deliberately.' : ''}`
+  for (const [key, slices] of slicesOf) {
+    const asWork = landing && (work.tickets || []).includes(key)
+    const stuck = slices.find(st => !st.landed)
+    const closes = !abandoned && !stuck && (!asWork || landing.done)
+    const names = slices.map(st => st.branch).join(', ')
+    const slice = slices.length > 1 ? `The slice \`${stuck?.branch}\`` : 'This slice'
+    const landed = `The slice${slices.length > 1 ? 's' : ''} this was opened for landed in \`${work.branch}\``
+    let outcome
+    if (closes) outcome = `${landed}, and ${ran}`
+    else if (stuck?.withdrawn) outcome = `${ran} ${slice} was ${withdrawnLabel(stuck.withdrawn, b => `\`${b}\``)}. The issue stays open.`
+    else if (stuck) outcome = `${ran} ${slice} did not land, so the issue stays open.`
+    else if (abandoned) outcome = `${ran} The work was stopped without finishing, so the issue stays open.`
+    else outcome = `${ran} ${landed}, but the work has not: ${landing.reason} The issue stays open.`
+    const prs = [...new Set([...slices.flatMap(st => st.prs.map(pr => `- ${pr.repo}: ${pr.url}`)), ...(asWork ? landing.prs : [])])]
+    const body = link => [
       outcome,
-      '', `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`,
+      '', ...slices.map(st => `Stage: \`${st.branch}\`${st.delivers ? ` — ${st.delivers}` : ''}`),
       ...(prs.length ? ['', ...prs] : []),
-      '', `Context doc: ${contextDocRef(work.id)}`,
+      ...contextDocLines(work.id, link),
     ].join('\n')
 
-    for (const key of keys) {
-      if (isJiraKey(key)) {
-        const notCommented = trackerFailure(() => jira().commentIssue(key, `${body}\n\nrig does not transition Jira tickets — move this one yourself.`))
-        if (notCommented) warn(`${key}: could not comment (${notCommented})`)
-        else step(`commented on ${key} (stage ${st.branch})`)
-        continue
-      }
-      if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
-      const [repo, n] = key.split('#')
-      const notCommented = trackerFailure(() => github().commentIssue(repo, n, body))
-      if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
-      if (!landed) { step(`commented on ${key} (left open: stage ${st.branch} did not land)`); continue }
-      const notClosed = trackerFailure(() => github().closeIssue(repo, n))
-      if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
-      else step(`closed ${key} (stage ${st.branch} landed)`)
+    if (isJiraKey(key)) {
+      const notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
+      if (notCommented) warn(`${key}: could not comment (${notCommented})`)
+      else step(`commented on ${key} (stage ${names})`)
+      continue
     }
+    if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
+    const [repo, n] = key.split('#')
+    const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
+    if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
+    if (!closes) { step(`commented on ${key} (left open: ${stuck ? `stage ${stuck.branch} did not land` : abandoned ? 'abandoned' : landing.reason})`); continue }
+    const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+    if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
+    else step(`closed ${key} (stage ${names} landed)`)
   }
 }
 
@@ -1988,8 +2072,9 @@ cmds.new = ({ flags, positional }) => {
   const title = flags.title || fetched?.title || ''
 
   const idKey = /^([A-Z][A-Z0-9]+-\d+)/.exec(id)?.[1] ?? ''
-  // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`;
-  // the PR links those with "Fixes #n" instead.
+  // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`, and the
+  // PR body names those instead: `Fixes` where its merge is the work landing (`closedByPr`),
+  // `Tickets:` everywhere else.
   const branchKey = keys.find(isJiraKey) || idKey
   const branchSlug = flags.slug || slug(title || id.replace(/^[A-Z][A-Z0-9]+-\d+-?/, '') || id)
   const branch = flags.branch ||
@@ -2593,8 +2678,9 @@ function repoEntryJson (cfg, entry, branch, live) {
   // A repo GitHub could not answer for says so, rather than reading as a repo with no PR.
   if (s.prError) out.prUnknown = s.prError
   else if (s.pr) {
-    // Its title and body are for `rig pr --refresh` to compare, not for a listing.
-    const { title: _title, body: _body, ...pr } = s.pr
+    // Its title and body are for `rig pr --refresh` to compare, and its labels for `rig pr` to
+    // read a bump from, not for a listing.
+    const { title: _title, body: _body, labels: _labels, ...pr } = s.pr
     out.pr = pr
   } else out.pr = null
   const timing = prTiming(entry, s.pr)
@@ -2982,7 +3068,6 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
-  const text = prText(work, stack)
   const offers = nextFor({
     work,
     repos,
@@ -2992,10 +3077,21 @@ cmds.next = ({ flags }) => {
     planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
     // The comparison `rig pr --refresh` makes, and never while a stage's PR is unknown, which
-    // is when the refresh would refuse.
+    // is when the refresh would refuse. Nor for a repo whose visibility GitHub would not say: a
+    // body without the context doc is then no evidence the PR is wrong.
     prStale: stack.some(st => st.prUnknown) ? []
-      : repos.filter(r => r.pr?.state === 'OPEN' && !prSaysRecord(r.pr, text)).map(r => r.repo),
+      : repos.filter((r, i) => {
+        if (r.pr?.state !== 'OPEN') return false
+        const spec = repoSpec(work.repos[i])
+        const link = mayLink(spec)
+        return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link }))
+      }).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
+    // Asked of a repo with no PR, which is the only kind the offer it goes beside can name.
+    bumps: work.closedAt ? [] : repos.flatMap((r, i) => {
+      const release = !r.pr && !r.merged && r.pushed ? releaseAsked(work.repos[i], work.branch) : null
+      return release ? [{ repo: r.repo, release }] : []
+    }),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
@@ -3083,10 +3179,17 @@ const directionProse = id => (exists(contextFile(id)) ? directionBody(readText(c
 // which order. Everything in it is already recorded somewhere — the point is that it is
 // assembled rather than retyped, and that the stage table is rendered from the stack rather
 // than hand-maintained, which is the whole complaint against the rollout plan.
-function prBody (work, stack) {
+//
+// Written for one repo, `spec`: which tickets its merge closes, and whether the context doc may
+// be linked from it (`link`, from `mayLink`), are both questions about that repo.
+function prBody (work, stack, { spec, link }) {
   const lines = []
   if (work.title) lines.push(work.title, '')
-  if (work.tickets?.length) lines.push(`Tickets: ${work.tickets.join(', ')}`, '')
+  const fixes = closedByPr(work, stack, spec)
+  const named = (work.tickets || []).filter(k => !fixes.includes(k))
+  if (fixes.length || named.length) {
+    lines.push(...fixes.map(k => `Fixes ${k}`), ...(named.length ? [`Tickets: ${named.join(', ')}`] : []), '')
+  }
 
   const direction = directionProse(work.id)
   if (direction) lines.push('## Direction', '', direction, '')
@@ -3095,14 +3198,45 @@ function prBody (work, stack) {
   // and a table that disagrees with itself is how this document got its reputation.
   if (stack.length) lines.push('## Stages', '', stageTable(stack), '')
 
-  lines.push(`Context doc: ${contextDocRef(work.id)}`)
-  return lines.join('\n')
+  if (link) lines.push(`Context doc: ${contextDocRef(work.id)}`)
+  return lines.join('\n').trimEnd()
 }
 
-// Everything `rig pr` writes into a pull request, rendered from the record as it stands. The
-// one renderer for opening a PR, refreshing it, and asking whether an open one has gone stale,
-// so the three cannot disagree about what the PR should say.
-const prText = (work, stack) => ({ title: work.title || work.id, body: prBody(work, stack) })
+// The tickets a work's PR into `spec` closes as it merges, with a `Fixes` line each: the work's
+// own GitHub tickets in that repo, and only when it is the work's one repo, because then merging
+// the PR is the work landing. In a work of several repos one PR's merge is not, and a keyword
+// would close the ticket before `rig close` can say whether everything landed. A stage's own
+// key merges into the work branch, where no keyword fires, and a work ticket that is also the
+// key of a withdrawn slice is told why at `rig close` and left open (decision 126). None at all
+// while a declared slice has not landed: merging then is not the work landing either, and
+// `rig next` offers the refresh that adds them once every slice is in.
+function closedByPr (work, stack, spec) {
+  if (work.repos.length !== 1) return []
+  if (stack.some(st => !st.landed && !st.withdrawn)) return []
+  const withdrawn = work.stages.filter(withdrawalOf).flatMap(st => st.tickets || [])
+  return (work.tickets || []).filter(k => isGithubKey(k) && !withdrawn.includes(k) &&
+    k.split('#')[0].toLowerCase() === spec.toLowerCase())
+}
+
+const repoSpec = entry => `${entry.org}/${entry.repo}`
+
+// Everything `rig pr` writes into one repo's pull request, rendered from the record as it
+// stands. The one renderer for opening a PR, refreshing it, and asking whether an open one has
+// gone stale, so the three cannot disagree about what the PR should say.
+const prText = (work, stack, { spec, link }) => ({ title: work.title || work.id, body: prBody(work, stack, { spec, link }) })
+
+// Which release a work PR asks for, and why — "a minor release (the branch prefix `feat/`)" —
+// as the `version` check's own `bumpFor` reads it (decision 130). Null on a repo that does not
+// release by bump (`releasesByBump`) or whose labels GitHub would not list, where the line
+// could be false, and for a branch that names no bump.
+function releaseAsked (entry, branch, prLabels = []) {
+  let labels = null
+  trackerFailure(() => { labels = github().labels(entry.org, entry.repo) })
+  if (!labels || !releasesByBump(labels)) return null
+  const { bump, reason } = bumpFor({ branch, labels: prLabels })
+  if (!bump) return null
+  return `${bump === 'none' ? 'no release' : `a ${bump} release`} (${reason})`
+}
 
 // Does an open PR still say what `rig pr` would write now? GitHub may hand a body back with
 // CRLF line ends or without the trailing newline, and neither is a difference worth an edit.
@@ -3125,8 +3259,7 @@ cmds.pr = ({ flags }) => {
   if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
-  const text = prText(work, stack)
-  if (flags.refresh) return refreshPrs(work, stack, text)
+  if (flags.refresh) return refreshPrs(work, stack)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3134,7 +3267,16 @@ cmds.pr = ({ flags }) => {
     // branch, which is right, and the worktree is what is behind.
     if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
-    if (state.pr && state.pr.state === 'OPEN') { step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`); continue }
+    const sayRelease = labels => {
+      const release = releaseAsked(entry, work.branch, labels)
+      if (release) step(`${entry.repo}: this PR asks for ${release}`)
+    }
+    if (state.pr && state.pr.state === 'OPEN') {
+      step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`)
+      // Worth saying of a PR already open too: a label can still change it before it merges.
+      sayRelease(state.pr.labels)
+      continue
+    }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
     if (!state.pushed) { warn(`${entry.repo}: ${work.branch} is not on the remote yet — push it first`); continue }
 
@@ -3142,18 +3284,39 @@ cmds.pr = ({ flags }) => {
     // open: a stage is reviewed on its own, in the repo it touches, and rig would have to
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
+    sayStanding(cfg, entry, work.branch, base)
+    const spec = repoSpec(entry)
+    const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
+    sayRelease([])
   }
+}
+
+// How far the base has moved past the work branch, and whether the branch conflicts with it,
+// said before its PR is opened (hugoforte/rig#208). The mirror is fetched here, at the one
+// moment the answer matters, because nothing else on the way to a PR fetches: the stack is read
+// without a network round trip. Said and never stopped at (decision 66): the PR opens either way,
+// and GitHub would say the same a minute later, only after review had begun. A base that moved
+// is ordinary in a busy repo and is only said; a conflict is something to act on, and warned.
+function sayStanding (cfg, entry, branch, base) {
+  const t = trees(cfg)
+  t.fetch({ org: entry.org, repo: entry.repo })
+  const standing = t.standing({ org: entry.org, repo: entry.repo, branch, base })
+  if (!standing) return
+  const { behind, conflicts, error } = standing
+  if (behind) step(`${entry.repo}: base moved — ${base} has ${behind} commit${behind === 1 ? '' : 's'} this branch does not`)
+  if (error) warn(`${entry.repo}: could not test-merge ${branch} with ${base}: ${error}`)
+  else if (conflicts.length) warn(`${entry.repo}: ${branch} conflicts with ${base} in ${conflicts.join(', ')} — \`git merge origin/${base}\` in the worktree, then push`)
 }
 
 // `rig pr --refresh`: each repo's open PR rewritten with `prText`. One that already says it is
 // left alone, and a refresh never opens one. A stage GitHub would not answer for renders as
 // "PR state unknown", so nothing is refreshed until it does, rather than writing that over a
 // table that was right.
-function refreshPrs (work, stack, text) {
+function refreshPrs (work, stack) {
   const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
   if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
   // A lookup gh refused answers null, which would read as "no open PR" here and as "no PR yet"
@@ -3164,6 +3327,8 @@ function refreshPrs (work, stack, text) {
     const { pr, prError } = prAndBase(entry, work.branch)
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
     if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
+    const spec = repoSpec(entry)
+    const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }
     const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, text))
     if (failed) { warn(`${entry.repo}: could not refresh PR #${pr.number} (${failed})`); continue }
@@ -4467,6 +4632,10 @@ function invocationOf ({
     pendingCommit: null,
     command: null,
     exitCode: 0,
+    // Each repo's visibility on GitHub as this run found it, and the repos it has already said
+    // it could not find one for: `rig close` writes to every ticket, and most share a repo.
+    visibilities: new Map(),
+    linkLeftOut: new Set(),
   }
 }
 
@@ -4498,7 +4667,7 @@ export function run (argv, io = {}) {
 // surface (decision 55), which is neither pure nor cheap, since it reads every record and may
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,

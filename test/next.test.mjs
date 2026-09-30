@@ -193,6 +193,27 @@ test('every stage in makes the work branch the thing that is left', () => {
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
 })
 
+test('which release a PR would ask for is said once, beside the offer that names its repo (#228)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+    bumps: [{ repo: 'a', release: 'a minor release (the branch prefix `feat/`)' }],
+  })
+  assert.match(says(out), /a is pushed with no PR open — its PR would ask for a minor release \(the branch prefix `feat\/`\)/)
+  assert.equal(says(out).match(/would ask for/g).length, 1, 'not again beside "every stage is in"')
+})
+
+test('a repo that is not ready for its PR is not named beside another\'s release (#228)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { pushed: true, unpushed: 2 }), repo('b', { pushed: true })],
+    bumps: [{ repo: 'a', release: 'a minor release' }, { repo: 'b', release: 'a patch release' }],
+  })
+  assert.match(says(out), /b is pushed with no PR open — its PR would ask for a patch release/)
+  assert.doesNotMatch(says(out), /a minor release/)
+})
+
 test('every stage in, with a worktree still on a stage that landed, names the switch to the work branch (#200)', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),

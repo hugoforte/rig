@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  versionFromTag, bumpFor, expectedVersion, checkBump, bumpOfRelease, pullsOf, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
+  versionFromTag, bumpFor, releasesByBump, expectedVersion, checkBump, bumpOfRelease, pullsOf, releaseVerdict, releaseNotes, parseDescribe, releaseMark,
 } from '../bin/release.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -40,6 +40,11 @@ test('a perf/ branch asks for a patch, because a faster rig is a change its user
 test('a release label overrides the prefix, because the prefix is a default not a decree', () => {
   assert.equal(bumpFor({ ...featPr, labels: ['enhancement', 'release:patch'] }).bump, 'patch')
   assert.equal(bumpFor({ branch: 'fix/typo', labels: ['release:none'] }).bump, 'none')
+})
+
+test('a repo releases by bump when it carries any release: label, and not otherwise', () => {
+  assert.equal(releasesByBump(['bug', 'release:none']), true)
+  assert.equal(releasesByBump(['bug', 'released', 'enhancement']), false)
 })
 
 test('the prefixes that ask for nothing say so, instead of needing a label each time', () => {
