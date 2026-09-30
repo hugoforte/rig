@@ -498,3 +498,32 @@ test('a stage cut on a withdrawn one is not put back, since it carries that one\
   assert.match(r.out, /feat\/replanned-upper is cut on feat\/replanned-lower in billing, which was withdrawn — put that back first, or rebase feat\/replanned-upper off it/)
   assert.equal(JSON.stringify(record('replanned').stages), before)
 })
+
+// A pull request GitHub still reports after it was closed names the base it had then, and a
+// rebase since has moved the branch: only an open one says where a branch sits now.
+const closedPr = (branch, number, base) => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch, number, state: 'CLOSED', url: `https://github.com/acme/billing/pull/${number}`, base, openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] })
+  setGithub(state)
+}
+
+test('a closed pull request\'s base does not let a stage cut on a withdrawn one be put back', () => {
+  closedPr('feat/replanned-upper', 130, 'feat/replanned-work')
+  const r = rig(['stage', 'feat/replanned-upper', '--planned', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /is cut on feat.replanned-lower in billing, which was withdrawn/)
+})
+
+test('a closed pull request\'s base does not stop a stage being withdrawn once what sat on it was rebased off', () => {
+  const dest = worktree('replanned', 'billing')
+  assert.equal(rig(['stage', 'feat/replanned-w2', '--delivers', 'a lower part', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-x2', '--delivers', 'an upper part', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-w2', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'a lower part' })
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-x2', from: 'feat/replanned-w2', back: 'feat/replanned-work', message: 'an upper part' })
+  closedPr('feat/replanned-x2', 131, 'feat/replanned-w2')
+  // Moved off it, the way a rebase would, and cut again from the work branch.
+  gitMust(dest, 'branch', '-q', '-D', 'feat/replanned-x2')
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-x2', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'an upper part, again' })
+  const r = rig(['stage', 'feat/replanned-w2', '--dropped', 'not needed', '--work', 'replanned'])
+  assert.equal(r.code, 0, r.out)
+})

@@ -3185,7 +3185,7 @@ function refreshPrs (work, stack, text) {
   }
 }
 
-// Every branch of this work that every repo carries, flat: one `{ repo, branch, base, pr }`
+// Every branch of this work that every repo carries, flat: one `{ repo, branch, base, cutOn, pr }`
 // row each. The base is read live (decision 63) because the base is what says where a stage
 // sits in the stack — a recorded base is right once, and wrong the moment anything is rebased.
 //
@@ -3226,6 +3226,10 @@ function branchRows (cfg, work) {
         branch: b.branch,
         // The live base wins when GitHub answered; git, then the record, is the fallback.
         base: (!prError && pr?.base) || b.base,
+        // What the branch sits on now, for the checks that refuse over it: an open pull request's
+        // base, and git's otherwise. A closed one's base is where it sat when it closed, and a
+        // rebase since is the usual reason it closed.
+        cutOn: (!prError && pr?.state === 'OPEN' && pr.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
       })
@@ -3359,7 +3363,7 @@ function withdrawStage (cfg, work, branch, flags) {
   // A stage cut on this one carries its commits, so they would land with it while the record
   // said they were gone.
   const live = new Set(work.stages.filter(s => !withdrawalOf(s)).map(s => s.branch))
-  const above = rows.filter(r => r.base === branch && live.has(r.branch))
+  const above = rows.filter(r => r.cutOn === branch && live.has(r.branch))
   if (above.length) die(`${above.map(r => `${r.branch} is cut on it in ${r.repo}`).join(', ')} — rebase that off ${branch} first`)
   const reason = dropped?.trim()
   // A second withdrawal replaces the first: the date that matters is the current decision's.
@@ -3381,8 +3385,8 @@ function replanStage (cfg, work, branch, flags) {
   const declared = work.stages.find(s => s.branch === branch) || die(`${branch} is not a stage of ${work.id}`)
   if (!withdrawalOf(declared)) die(`${branch} is not withdrawn — there is nothing to put back`)
   const withdrawn = new Set(work.stages.filter(s => withdrawalOf(s)).map(s => s.branch))
-  const on = branchRows(cfg, work).find(r => r.branch === branch && withdrawn.has(r.base))
-  if (on) die(`${branch} is cut on ${on.base} in ${on.repo}, which was withdrawn — put that back first, or rebase ${branch} off it`)
+  const on = branchRows(cfg, work).find(r => r.branch === branch && withdrawn.has(r.cutOn))
+  if (on) die(`${branch} is cut on ${on.cutOn} in ${on.repo}, which was withdrawn — put that back first, or rebase ${branch} off it`)
   for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]
   commitAs(work.id, `${branch} back in the plan`)
   saveWork(cfg, work)
