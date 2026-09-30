@@ -1187,6 +1187,9 @@ test('doctor reports a record that will not read as a problem, and still checks 
 // TypeError out of `loadWork` or a command reading the record raw.
 const MISSHAPEN = [
   ['[]', /is not an object/],
+  ['{"repos": []}', /its `id` is not "broken"/],
+  ['{"id": "other"}', /its `id` is not "broken"/],
+  ['{"id": "broken", "stages": [{"branch": "s", "tickets": {}}]}', /`tickets` of stage s is not a list/],
   ['{"id": "broken", "repos": {}}', /`repos` is not a list/],
   ['{"id": "broken", "repos": "x"}', /`repos` is not a list/],
   ['{"id": "broken", "stages": {}}', /`stages` is not a list/],
