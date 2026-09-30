@@ -349,6 +349,24 @@ test('a work ticket whose slice was withdrawn is named, never closed by the merg
   assert.doesNotMatch(body, /Fixes/)
 })
 
+test('no ticket is closed by the merge while a declared slice has not landed (#202)', () => {
+  pushedWork('unlanded', 'Unlanded', ['ticket', 'acme/billing#50'],
+    ['stage', 'feat/unlanded-two', '--delivers', 'the rest'])
+  assert.equal(rig(['pr', '--work', 'unlanded']).code, 0)
+  const body = bodyOf('feat/unlanded')
+  assert.match(body, /\nTickets: acme\/billing#50\n/)
+  assert.doesNotMatch(body, /Fixes/)
+})
+
+test('and once the slice lands, the refresh writes the Fixes the merge can now honour (#202)', () => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch: 'feat/unlanded-two', number: 90, state: 'MERGED', base: 'feat/unlanded', url: 'https://github.com/acme/billing/pull/90', openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] })
+  setGithub(state)
+  assert.match(rig(['next', '--work', 'unlanded']).out, /rig pr --refresh/)
+  assert.equal(rig(['pr', '--refresh', '--work', 'unlanded']).code, 0)
+  assert.match(bodyOf('feat/unlanded'), /\nFixes acme\/billing#50\n/)
+})
+
 test('in a work of two repos no one PR closes a ticket, because its merge is not the landing (#202)', () => {
   publish('orders')
   setVisibility('acme/orders', 'private')

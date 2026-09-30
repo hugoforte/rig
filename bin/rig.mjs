@@ -3179,7 +3179,7 @@ const directionProse = id => (exists(contextFile(id)) ? directionBody(readText(c
 function prBody (work, stack, { spec, link }) {
   const lines = []
   if (work.title) lines.push(work.title, '')
-  const fixes = closedByPr(work, spec)
+  const fixes = closedByPr(work, stack, spec)
   const named = (work.tickets || []).filter(k => !fixes.includes(k))
   if (fixes.length || named.length) {
     lines.push(...fixes.map(k => `Fixes ${k}`), ...(named.length ? [`Tickets: ${named.join(', ')}`] : []), '')
@@ -3201,9 +3201,12 @@ function prBody (work, stack, { spec, link }) {
 // the PR is the work landing. In a work of several repos one PR's merge is not, and a keyword
 // would close the ticket before `rig close` can say whether everything landed. A stage's own
 // key merges into the work branch, where no keyword fires, and a work ticket that is also the
-// key of a withdrawn slice is told why at `rig close` and left open (decision 126).
-function closedByPr (work, spec) {
+// key of a withdrawn slice is told why at `rig close` and left open (decision 126). None at all
+// while a declared slice has not landed: merging then is not the work landing either, and
+// `rig next` offers the refresh that adds them once every slice is in.
+function closedByPr (work, stack, spec) {
   if (work.repos.length !== 1) return []
+  if (stack.some(st => !st.landed && !st.withdrawn)) return []
   const withdrawn = work.stages.filter(withdrawalOf).flatMap(st => st.tickets || [])
   return (work.tickets || []).filter(k => isGithubKey(k) && !withdrawn.includes(k) &&
     k.split('#')[0].toLowerCase() === spec.toLowerCase())
