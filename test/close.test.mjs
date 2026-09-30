@@ -376,13 +376,14 @@ test('and stops offering the gate once it has been recorded', () => {
   assert.match(r.out, /yours to write/, 'nothing is written yet, and rig is not the tool that writes it')
 })
 
-test('a pushed branch with no PR is offered one; an unpushed one is offered a push', () => {
+test('an unpushed branch is offered a push by name, and once pushed with no PR, a PR', () => {
   const dest = worktree('what-now', 'billing')
   fs.appendFileSync(path.join(dest, 'README.md'), 'some work\n')
   gitMust(dest, 'commit', '-qam', 'some work')
 
   let r = rig(['next', '--work', 'what-now'])
   assert.match(r.out, /commits that are not pushed/)
+  assert.match(r.out, /git push origin feat\/what-now$/m, 'by name, since the branch\'s upstream is its base')
   assert.doesNotMatch(r.out, /no PR open/, 'one branch state, one offer')
 
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')

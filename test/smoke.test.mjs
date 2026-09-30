@@ -792,10 +792,10 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
 
 // A record that no longer parses — truncated, or cut off by an interrupted write — planted for
 // one test and taken away after it, so the tests below read the root they were written for.
-const withBrokenRecord = body => {
+const withBrokenRecord = (body, text = '{"id": "broken", "repos": [') => {
   const dir = path.join(dataRoot, 'work', 'broken')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'work.json'), '{"id": "broken", "repos": [')
+  fs.writeFileSync(path.join(dir, 'work.json'), text)
   try { body() } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -1182,6 +1182,50 @@ test('doctor reports a record that will not read as a problem, and still checks 
   assert.match(r.out, /broken: work record .*work\.json could not be read \(/)
   assert.match(r.out, /disk on /, 'the checks after the works still ran')
 }))
+
+// Valid JSON that is not a work record: only a hand edit makes one, and each of these was a
+// TypeError out of `loadWork` or a command reading the record raw.
+const MISSHAPEN = [
+  ['[]', /is not an object/],
+  ['{"id": "broken", "repos": {}}', /`repos` is not a list/],
+  ['{"id": "broken", "repos": "x"}', /`repos` is not a list/],
+  ['{"id": "broken", "stages": {}}', /`stages` is not a list/],
+  ['{"id": "broken", "tickets": "PROJ-1"}', /`tickets` is not a list/],
+  ['{"id": "broken", "repos": [{"org": "acme"}]}', /repo 1 has no `repo`/],
+  ['{"id": "broken", "repos": [{"repo": "a", "branches": {}}]}', /`branches` of a is not a list/],
+  ['{"id": "broken", "stages": [{"delivers": "x"}]}', /stage 1 has no `branch`/],
+]
+
+test('doctor reports a record of the wrong shape as unreadable, says why, and still checks everything else', () => {
+  for (const [text, why] of MISSHAPEN) {
+    withBrokenRecord(() => {
+      const r = rig(['doctor'])
+      assert.equal(r.code, 1, `${text}\n${r.out}`)
+      assert.match(r.out, /broken: work record .*work\.json could not be read \(/, text)
+      assert.match(r.out, why, text)
+      assert.match(r.out, /disk on /, `${text}: the checks after the works still ran`)
+    }, text)
+  }
+})
+
+test('list leaves out a record of the wrong shape and names it', () => withBrokenRecord(() => {
+  const r = rig(['list', '--quick'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1 work record could not be read and was left out: broken \(`repos` is not a list\)/)
+}, '{"id": "broken", "repos": {}}'))
+
+test('rig new over a record that will not read says the id is taken and why, not a stack trace', () => {
+  for (const text of ['{"id": "broken", "repos": [', '{"id": "broken", "repos": {}}']) {
+    withBrokenRecord(() => {
+      for (const args of [['new', 'broken', '--no-ticket'], ['new', 'broken', '--ticket', '--dry-run', '--org', 'acme']]) {
+        const r = rig(args)
+        assert.equal(r.code, 1, `${args.join(' ')} over ${text}\n${r.out}`)
+        assert.match(r.out, /work "broken" already exists, and its record could not be read: work record for "broken" at .*work\.json could not be read \(/, text)
+        assert.doesNotMatch(r.out, /TypeError|SyntaxError|\n\s+at /, 'no stack trace')
+      }
+    }, text)
+  }
+})
 
 test('a record saved with a byte-order mark reads like any other', () => {
   const file = path.join(dataRoot, 'work', 't10', 'work.json')

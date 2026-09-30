@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
-import { NO_PROMPT_ENV, NEEDS_CREDENTIALS } from './remote-env.mjs'
+import { NO_PROMPT_ENV, NEEDS_CREDENTIALS, signIn } from './remote-env.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -68,7 +68,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         const detail = clone.err || clone.out
         throw new RigError(NEEDS_CREDENTIALS.test(detail)
           ? `could not mirror ${org}/${repo}: git needed credentials for ${url}, and rig never waits at a prompt — sign git in (\`gh auth setup-git\`) and run this again\n${detail}`
-          : `git clone --bare ${url} ${mirror}\n${detail}`)
+          : `git clone --bare ${url} ${mirror}${signIn(detail)}\n${detail}`)
       }
       // A --bare clone has no fetch refspec; give it one so remote branches land
       // in refs/remotes/origin/* and never collide with our work branches.
@@ -297,10 +297,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
+      // A pattern matches a ref by its tail, so `a/refs/heads/<branch>` answers too: only the
+      // line naming exactly this branch is its tip.
       const ls = toRemote(mirror, 'ls-remote', '--heads', 'origin', local(branch))
+      const tip = ls.out.split('\n').map(line => line.trim().split(/\s+/)).find(([, name]) => name === local(branch))?.[0]
       if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
-      else if (ls.out.trim()) {
-        const tip = ls.out.trim().split(/\s+/)[0]
+      else if (tip) {
         const push = tip !== head ? null
           : toRemote(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
         out.remote = !push ? 'kept — it has moved since the PR merged'

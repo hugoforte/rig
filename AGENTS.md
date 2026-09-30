@@ -21,6 +21,9 @@ or secrets in either committed repo.
 
 Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH. rig
 needs git 2.38 or newer.
+rig never waits at a credential prompt, and no askpass program is run for it: git needs a
+credential helper (`gh auth setup-git`), and an ssh key rig reaches a remote with needs to be
+in an agent (`ssh-add`). Without one, the call fails and says which (DESIGN.md decision 156).
 `rig doctor` says "not set up" until there is a data root — separate from this checkout —
 with a `rig.json` in it. Run the setup interview; its first question is where the knowledge
 lives:
@@ -329,6 +332,12 @@ Two things to hold on to:
   stage — that is the join. A stage exists only in the repos that carry its branch, so the
   chain is per repo while the stage list is per work.
 
+**Push a work or stage branch by name**: `git push origin <branch>`. Never a bare `git push`: a
+work branch's upstream is its base, so git refuses one under its default `push.default=simple`
+and pushes the work onto the base under `upstream` or `tracking`. And never `-u`, which moves
+the upstream off the base that `rig status` measures ahead and behind against (DESIGN.md
+decisions 110 and 159).
+
 **How a stage lands.** A stage's pull request merges into the work branch **with a merge
 commit**; the work branch is **squashed** into the base branch at the end. The squash is what
 keeps one commit per work in the base branch. The merge is what keeps the stack readable: a
@@ -403,7 +412,12 @@ A handoff is addressed the same way. When a work has a `handoff.md`, `rig status
 
 A dim line on stderr — `rig is N commits behind … — rig update` — is addressed to you. Run
 `rig update` from the installed checkout; the copy inside a work's `rig` worktree refuses,
-because updating it would move the work's branch. `update` fast-forwards only, exits non-zero
+because updating it would move the work's branch.
+
+To run a work's own rig — the worktree's `bin/rig.mjs`, to try a change before it is released —
+borrow the installation's machine file: `RIG_LOCAL_CONFIG=<installed rig>/rig.local.json node
+<worktree>/bin/rig.mjs …`. Without it that copy knows no data roots, and every command but
+`help`, `prompt` and `doctor` refuses and says so (DESIGN.md decision 158). `update` fast-forwards only, exits non-zero
 when it could not do what was asked, and ends in the doctor checks.
 
 A mutating command that dies with "run `rig update`" hit the **write refusal**: the data root is

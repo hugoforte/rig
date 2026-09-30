@@ -208,3 +208,28 @@ test('the CLI moves its process out of the work folder it is closing, so the fol
   assert.equal(r.code, 0, r.out)
   assert.ok(!fs.existsSync(folder), r.out)
 })
+
+// A work on rig itself runs the work's own copy of rig: a linked worktree, with no machine file
+// beside it. Every default it would fall back to belongs to some other installation, so it
+// says what it needs instead of guessing, and doctor says the same rather than sending it to
+// `rig prompt setup`, which would write a second machine file into the worktree (decision 158).
+const installed = makeInstall({ prefix: 'rig-invocation-linked-', checkout: true })
+after(() => installed.cleanup())
+const linked = path.join(installed.tmp, 'a-work', 'rig')
+installed.gitMust(installed.install, 'worktree', 'add', '-q', '-b', 'fix/a-work', linked)
+const driveLinked = args => drive({ ...installed, install: linked }, args)
+const NEEDS = /this is a work's copy of rig, in a linked worktree, and it has no machine config of its own .* set RIG_LOCAL_CONFIG to the installed rig's rig\.local\.json/
+
+test('a work\'s own rig with no machine file says to set RIG_LOCAL_CONFIG, and runs nothing', () => {
+  for (const args of [['list'], ['use'], ['status', '--work', 'nothing']]) {
+    const r = driveLinked(args)
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}${r.err}`)
+    assert.match(r.err, NEEDS, args.join(' '))
+  }
+})
+
+test('and its doctor says the same, rather than sending it to rig prompt setup', () => {
+  const r = driveLinked(['doctor'])
+  assert.match(r.out, NEEDS)
+  assert.doesNotMatch(r.out, /rig prompt setup/)
+})

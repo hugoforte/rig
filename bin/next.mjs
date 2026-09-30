@@ -164,8 +164,12 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // A repo whose stages are replayed here is offered their force-push above; a plain push fails.
   const replaying = replaced.filter(r => r.rebased).map(r => r.repo)
   const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r) && !replaying.includes(r.repo))
+  // Pushed by name: a work branch's upstream is its base (decision 110), so a bare `git push`
+  // is refused under git's default `push.default` and lands on the base under `upstream`
+  // (decision 159).
   if (unpushed.length) {
-    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
+    const pushes = [...new Set(unpushed.map(r => `git push origin ${r.on ?? work.branch}`))]
+    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, pushes))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.

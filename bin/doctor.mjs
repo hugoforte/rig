@@ -183,6 +183,8 @@ function rootFindings (root) {
 //
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
+//   linkedCopyNeeds   without one, and when rig is running from a work's linked worktree,
+//                     the sentence saying what that copy needs instead; null otherwise
 //   strayOrgKeys      keys of the org half left behind in the machine file
 //   selection         { error } — why no data root could be resolved, or null when one was.
 //                     The only field here that is a *failure* to gather rather than a thing
@@ -211,7 +213,9 @@ function rootFindings (root) {
 //                     folderMissing, strays, repos, marker, holders }]: `marker` is the
 //                     folder's `.rig/data`, null when it has none, and `holders` the roots
 //                     that hold the work's record; a record that would not read is
-//                     { id, unreadable } instead, `unreadable` the sentence saying why
+//                     { id, unreadable, holders } instead, `unreadable` the sentence
+//                     saying why. One entry per work that reads, beside every copy that
+//                     would not
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -219,8 +223,10 @@ export function doctorFindings (snap = {}) {
   const out = []
 
   // Nothing else can be asked of an installation that does not exist yet.
+  // A work's own copy of rig is the exception: setting it up would write a second machine file
+  // into the worktree, so it is told how to borrow the installation's instead.
   if (!snap.setUp) {
-    out.push(warn(`not set up — no ${snap.localFile}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`))
+    out.push(warn(snap.linkedCopyNeeds ?? `not set up — no ${snap.localFile}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`))
     return out
   }
 
@@ -265,7 +271,7 @@ export function doctorFindings (snap = {}) {
     if (snap.gitConfig.symlinks === 'false') out.push(note('core.symlinks=false — by design, rig never symlinks'))
   }
 
-  out.push(check('config file', snap.configFileExists, { bad: `${snap.localFile} missing — run \`rig init\`` }))
+  out.push(check('config file', snap.configFileExists, { ok: snap.localFile, bad: `${snap.localFile} missing — run \`rig init\`` }))
   const wr = snap.workRoot || {}
   out.push(check('work root', wr.exists, { ok: wr.path, bad: `${wr.path} missing` }))
   const mr = snap.mirrorRoot || {}
@@ -315,9 +321,20 @@ export function doctorFindings (snap = {}) {
   // Strays: anything directly under a work folder that rig did not create. Over every root's
   // works at once, which is what makes the missing-folder warning below reach an unclosed work
   // whatever root holds its record.
+  // A record in two roots is said once per work, from whichever copy reaches it first: a copy
+  // that will not read has nothing else to ask of it, but it still says where its twin is.
+  const heldTwice = new Set()
+  const sayHeldTwice = w => {
+    if (heldTwice.has(w.id)) return
+    heldTwice.add(w.id)
+    out.push(warn(`${w.id}: data roots ${w.holders.join(', ')} each hold its record — delete the copy that is wrong`))
+  }
   for (const w of snap.works || []) {
-    // A record that will not read has nothing else to ask of it.
-    if (w.unreadable) { out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`)); continue }
+    if (w.unreadable) {
+      out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`))
+      if ((w.holders || []).length > 1) sayHeldTwice(w)
+      continue
+    }
     if (w.closed) continue
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
@@ -331,7 +348,7 @@ export function doctorFindings (snap = {}) {
     const holders = w.holders || []
     const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
     if (holders.length > 1) {
-      out.push(warn(`${w.id}: data roots ${holders.join(', ')} each hold its record — delete the copy that is wrong`))
+      sayHeldTwice(w)
     } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
       out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
     } else if (holders.length && w.marker && w.marker !== holders[0]) {
