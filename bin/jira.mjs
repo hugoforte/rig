@@ -15,7 +15,7 @@
 // The interface:
 //   present()                                    is `twg` on PATH? never throws
 //   getIssue(key)                                { title, body }
-//   createIssue({ project, type, summary, description, assignee, fields })   the new key
+//   createIssue({ project, type, summary, description, assignee, parent, fields })   the new key
 //   commentIssue(key, body)
 // Both descriptions and comments are sent as **markdown**: twg's own default is HTML
 // (`--description-format`/`--body-format`, `twg --version` 1.1.0), and everything rig
@@ -97,10 +97,13 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     // nothing else. Carrying the format here is also why the create needs no follow-up
     // `update --description-format markdown`: the two-step in hugoforte/rig#53 exists for
     // Components, which twg's create silently drops, not for the description.
-    createIssue ({ project, type, summary, description, assignee, fields = {} }) {
+    // `parent` goes by twg's own `--parent`, which sends `fields.parent = { key }`; as a
+    // `--field` it would reach Jira as a bare string (hugoforte/rig#220).
+    createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
         '--summary', summary, '--description', description, '--description-format', 'markdown']
       if (assignee) args.push('--assignee', assignee)
+      if (parent) args.push('--parent', parent)
       for (const [id, value] of Object.entries(fields)) args.push('--field', `${id}=${value}`)
       args.push('-o', 'json', '-y')
       const out = must(args)
@@ -140,7 +143,7 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
 }
 
 // Canned Jira for tests. `state` is mutated in place: { present, issues: { KEY: {
-// title, body, comments, assignee, fields } }, fields: { project: { type: [{ id, name,
+// title, body, comments, assignee, parent, fields } }, fields: { project: { type: [{ id, name,
 // allowedValues }] } }, components: { project: [{ id, name }] },
 // boards: { boardId: activeSprintId | null } }.
 export function twgInMemory (state) {
@@ -154,13 +157,13 @@ export function twgInMemory (state) {
       const { title, body } = issue(key)
       return { title, body }
     },
-    createIssue ({ project, type, summary, description, assignee, fields = {} }) {
+    createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       guard()
       const numbers = Object.keys(state.issues)
         .filter(k => k.startsWith(`${project}-`))
         .map(k => Number(k.slice(project.length + 1)))
       const key = `${project}-${Math.max(0, ...numbers) + 1}`
-      state.issues[key] = { title: summary, body: description, ...(assignee ? { assignee } : {}), fields, comments: [] }
+      state.issues[key] = { title: summary, body: description, ...(assignee ? { assignee } : {}), ...(parent ? { parent } : {}), fields, comments: [] }
       return key
     },
     commentIssue (key, body) {

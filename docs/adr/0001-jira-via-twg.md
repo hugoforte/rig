@@ -37,7 +37,9 @@ alternative Jira client.
 rig does three things with Jira, matching what it already does for GitHub:
 
 - **Create** (`rig new --ticket` on a Jira-tracked org): `twg jira workitem create`,
-  with per-org defaults from `rig.json` resolved first (below).
+  with per-org defaults from `rig.json` resolved first (below). `--parent PROJ-7` files it
+  under an epic through twg's own `--parent`, which sends `fields.parent = { key }`; a
+  parent is never one of the resolved fields (DESIGN.md decisions 145–146).
 - **Fetch** (`rig new --key KTLO-42`): `twg jira workitem get` supplies the summary and
   description, so the agent no longer has to fetch and pipe the brief itself for a
   Jira-tracked org. Piped stdin and `--title` still win when given.
