@@ -409,3 +409,41 @@ test('a PR labelled release:none is said to ask for no release (#228)', () => {
   labelPr('feat/bumped', ['release:none'])
   assert.match(rig(['pr', '--work', 'bumped']).out, /billing: this PR asks for no release \(the `release:none` label\)/)
 })
+
+// Another PR merging into billing's main after the work branch was cut: one commit, from a
+// clone of its own, appending `line` to `file`.
+let landedElsewhere = 0
+const landOnMain = (file, line) => {
+  const clone = path.join(m.tmp, `elsewhere-${++landedElsewhere}`)
+  gitMust(m.tmp, 'clone', '-q', m.bare('billing'), clone)
+  fs.appendFileSync(path.join(clone, file), `${line}\n`)
+  gitMust(clone, 'add', '-A')
+  gitMust(clone, 'commit', '-qm', `elsewhere: ${line}`)
+  gitMust(clone, 'push', '-q', 'origin', 'HEAD:main')
+}
+
+test('rig pr says how far the base moved since the branch was cut, and opens the PR (#208)', () => {
+  pushedWork('moved-base', 'Moved base')
+  landOnMain('OTHER.md', 'another PR')
+  const r = rig(['pr', '--work', 'moved-base'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: base moved — main has 1 commit this branch does not/)
+  assert.doesNotMatch(r.out, /conflicts/)
+  assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === 'feat/moved-base'), 'reported, never refused')
+})
+
+test('rig pr names the files a branch conflicts with its base in, and how to merge, then opens the PR (#208)', () => {
+  pushedWork('conflicted', 'Conflicted')
+  landOnMain('README.md', 'the same line, written elsewhere')
+  const r = rig(['pr', '--work', 'conflicted'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: feat\/conflicted conflicts with main in README\.md — `git merge origin\/main` in the worktree, then push/)
+  assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === 'feat/conflicted'), 'reported, never refused')
+})
+
+test('a branch the base has not moved past is told nothing about it (#208)', () => {
+  pushedWork('level', 'Level')
+  const r = rig(['pr', '--work', 'level'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /base moved|conflicts/)
+})

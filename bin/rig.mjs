@@ -3275,6 +3275,7 @@ cmds.pr = ({ flags }) => {
     // open: a stage is reviewed on its own, in the repo it touches, and rig would have to
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
+    sayStanding(cfg, entry, work.branch, base)
     const spec = repoSpec(entry)
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
@@ -3283,6 +3284,20 @@ cmds.pr = ({ flags }) => {
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
     sayRelease([])
   }
+}
+
+// Whether the base moved since the work branch was cut, and whether the branch conflicts with
+// it, said before its PR is opened (hugoforte/rig#208). The mirror is fetched here, at the one
+// moment the answer matters, because nothing else on the way to a PR fetches: the stack is read
+// without a network round trip. Said and never stopped at (decision 66): the PR opens either way,
+// and GitHub would say the same a minute later, only after review had begun.
+function sayStanding (cfg, entry, branch, base) {
+  trees(cfg).fetch({ org: entry.org, repo: entry.repo })
+  const standing = trees(cfg).against({ org: entry.org, repo: entry.repo, branch, base })
+  if (!standing) return
+  const { behind, conflicts } = standing
+  if (behind) warn(`${entry.repo}: base moved — ${base} has ${behind} commit${behind === 1 ? '' : 's'} this branch does not`)
+  if (conflicts.length) warn(`${entry.repo}: ${branch} conflicts with ${base} in ${conflicts.join(', ')} — \`git merge origin/${base}\` in the worktree, then push`)
 }
 
 // `rig pr --refresh`: each repo's open PR rewritten with `prText`. One that already says it is

@@ -168,6 +168,22 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       fetched(org, repo)
     },
 
+    // How a pushed branch stands against the base it is about to land on, both as the remote
+    // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
+    // files a merge of the two would conflict in, found without touching any worktree
+    // (`merge-tree --write-tree`, git 2.38). Null when git cannot answer, such as for a ref the
+    // mirror lacks. Call `fetch` first, or the base is the one this mirror last saw.
+    against ({ org, repo, branch, base }) {
+      const mirror = mirrorPath(org, repo)
+      const counted = git(mirror, 'rev-list', '--count', `${ref(branch)}..${ref(base)}`)
+      if (counted.code !== 0) return null
+      // Exit 1 is a merge that conflicts; the tree it wrote comes first, then one file a line.
+      const merged = git(mirror, 'merge-tree', '--write-tree', '--name-only', '--no-messages', ref(base), ref(branch))
+      if (merged.code !== 0 && merged.code !== 1) return null
+      const conflicts = merged.code === 1 ? merged.out.split('\n').slice(1).map(f => f.trim()).filter(Boolean) : []
+      return { behind: Number(counted.out), conflicts }
+    },
+
     // Check out a branch that already exists, and never make one: `cut` above, less its last
     // resort. A restore puts back what the record describes, and a branch gone from the remote
     // and the mirror alike is something to report, not to recreate from the remote HEAD as if
@@ -368,7 +384,8 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // and an answer copied into the record is wrong the first time anyone re-points a branch.
     //
     // No fetch, either: `rig stage`, `rig plan` and `rig pr` all come through here, and none
-    // of them asked for a network round trip. A branch cut in a worktree is already in the
+    // of them asked for a network round trip to read the stack. (`rig pr` fetches once, for
+    // itself, just before it opens a pull request: see `against`.) A branch cut in a worktree is already in the
     // mirror's `refs/heads`, because the worktree shares the mirror's ref store; a branch
     // pushed from another machine is under `refs/remotes/origin`.
     //

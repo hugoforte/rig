@@ -484,6 +484,11 @@ or finds open, with the reason: the branch prefix, or the `release:` label that 
 `rig next` says the same beside its offer to open the PR, while a label can still change it. A
 repo with no `release:` label is told nothing, because there the prefix is not how it releases.
 
+**It says whether the base moved.** Before opening each repo's PR, `rig pr` fetches that repo
+and says how many commits the base has that the work branch lacks, and, if a merge of the two
+would conflict, in which files, with the command to merge the base in. Then it opens the PR
+anyway: a report, never a stop.
+
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
 
