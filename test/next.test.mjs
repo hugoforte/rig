@@ -57,10 +57,26 @@ test('unpushed commits are offered a push, and not also a pull request', () => {
 
 test('the push it offers names the branch, since a bare push goes to the base (#259)', () => {
   const out = nextFor({
-    work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }),
+    work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
     repos: [repo('a', { unpushed: 2, on: 'feat/x' }), repo('b', { unpushed: 1, on: 'feat/x' }), repo('c', { unpushed: 1, on: 'feat/x-stage' })],
   })
   assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x', 'git push origin feat/x-stage'])
+})
+
+test('a worktree switched off this work\'s branches is offered no push, so the base is never pushed to by name', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: 'main' })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
+})
+
+test('a declared stage\'s branch is offered its push', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
+    repos: [repo('a', { unpushed: 1, on: 'feat/x-stage' })],
+  })
+  assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x-stage'])
 })
 
 test('a detached HEAD with unpushed commits is named, and offered no push it would not make', () => {
