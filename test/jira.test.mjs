@@ -278,6 +278,7 @@ test('twg adapter: projectComponents fails loudly on a JSON shape it cannot read
 
 // A real twg 1.3.3 `sprint snapshot` answer, cut down: one `sprint`, which is twg's pick
 // when a board has several active (its id is `activeSprints.selectedId`), and no list.
+// A board with no active sprint was never observed; its answer here is inferred.
 const snapshot = (sprint, total) => JSON.stringify({
   apiVersion: 'v2',
   command: 'jira.sprint.snapshot',
@@ -298,6 +299,10 @@ test('twg adapter: activeSprintId reads the active sprint from twg 1.3\'s apiVer
 
 test('twg adapter: activeSprintId is null when twg reports no active sprint', () => {
   assert.equal(canned(() => snapshot(null, 0)).twg.activeSprintId(123), null)
+})
+
+test('twg adapter: activeSprintId is null when twg counts no active sprint beside a sprint that is not active', () => {
+  assert.equal(canned(() => snapshot({ id: 8, state: 'future' }, 0)).twg.activeSprintId(123), null)
 })
 
 // The guessed `data.sprints` list read as "no active sprint" on a board that had one. A

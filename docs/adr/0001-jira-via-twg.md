@@ -115,13 +115,15 @@ prompt while rig itself stays single-shot (DESIGN.md decision 13).
   answered "no active sprint" on a board that had one. Every parser (`getIssue`,
   `createIssue`, `fieldMetadata`, `activeSprintId`, `projectComponents`) has now been
   checked against a real twg 1.3.3 answer, `createIssue` through a real create and the
-  rest through read-only calls, and each has a canned test of that shape. What that
-  changed is DESIGN.md decisions 148–150.
+  rest through read-only calls, and each has a canned test of that shape. One answer is
+  inferred rather than seen: a sprint snapshot of a board with no active sprint, since
+  every board tried had one. What that changed is DESIGN.md decisions 148–150.
 - **twg answers some commands differently under an agent.** With `CLAUDECODE`,
   `AI_AGENT` or a similar variable set, twg 1.3 replaces the JSON of some `-o json`
   commands (`workitem get` among them) with a YAML summary on stdout and writes the JSON
-  to a temp file. rig passes `--output-summary none` on every JSON call, so what it parses
-  does not depend on who ran it (DESIGN.md decision 149).
+  to a temp file. rig passes `--output-summary none` on every `-o json` call, so what it
+  parses does not depend on who ran it (DESIGN.md decision 149). `twg api`, behind
+  `projectComponents`, takes no `-o` and passes the REST answer through unwrapped.
 - Org resolution for a Jira fetch (`rig new --key KTLO-42`) is by project-prefix match
   against `rig.json`'s configured orgs (`orgForJiraKey`); an unconfigured project is
   silently not fetched (the old piped-brief flow still works). `--ticket`'s org

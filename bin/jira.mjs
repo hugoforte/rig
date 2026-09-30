@@ -2,8 +2,9 @@
 // client (docs/adr/0001-jira-via-twg.md supersedes DESIGN.md decisions 29 and 33): its
 // site and auth come from twg's own config, and rig calls nothing else.
 //
-// Every answer parsed here has been checked against a real twg 1.3.3 answer (apiVersion v2),
-// and each has a test of that shape (hugoforte/rig#260). A parser that meets a shape it
+// Every parser here has been checked against a real twg 1.3.3 answer (apiVersion v2), and
+// each has a test of that shape (hugoforte/rig#260). One answer is inferred rather than
+// seen: a sprint snapshot of a board with no active sprint. A parser that meets a shape it
 // cannot read fails with the raw output rather than guessing.
 //
 // The interface:
