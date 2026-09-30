@@ -312,6 +312,7 @@ rig stage feat/schema --cut                        # and make the branch, here, 
 rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
 rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
 rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
+rig stage feat/schema --planned                    # put a withdrawn stage back in the plan
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -341,7 +342,9 @@ their own commits and force-push them, when the squash is the stage as it stood.
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
 keyword never fires for it and a slice's ticket cannot close itself. `rig close` closes it when
-the slice landed, and comments and leaves it open when it did not. Everything else is derived — whether
+the slice landed, and comments and leaves it open when it did not. A ticket that is also the
+work's, or that two slices carry, gets one comment, and closes only when every role it holds
+would close it. Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
@@ -354,7 +357,8 @@ deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work st
 a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
 rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
 next stage. Only a stage with no pull request open or merged can be withdrawn, and a withdrawn
-stage's own ticket is told why at `rig close` and left open.
+stage's own ticket is told why at `rig close` and left open. A withdrawal is undone with `--planned`,
+which puts the stage back as though it had never been withdrawn; the commit says so.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
@@ -393,7 +397,7 @@ The record is portable and the work root is not: a second machine that clones th
 
 **A restore is not an attach, and writes nothing down.** `work.json` is byte-identical afterwards and nothing is committed. **It never recreates a branch**: one that the remote and the mirror have both lost — never pushed, or deleted with its closed PR — is named with its PR's state and left alone. Branches stacked on top that the record does not know are named in order; `rig stage <branch>` records them, and `--tip` checks out the top of the stack when it is one line. rig never picks between the branches of a fork.
 
-A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it.
+A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
 ## Staying up to date
 
@@ -467,6 +471,28 @@ The body is assembled from what the record already holds: the title, the tickets
 **Direction** section of the context doc lifted verbatim, and the stage table rendered from the
 stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
+
+**What it says in public.** The Direction is lifted into a body anyone who can read the repo
+reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
+visible than the data root** — public above internal above private, and a data root with no
+remote counts as private — because it names the private repo, and GitHub keeps a body's edit
+history. A visibility GitHub would not say leaves the link out, with one dim line saying so, and
+a data root hosted anywhere but GitHub is never linked.
+The same rule holds for `rig close`'s comments on GitHub tickets and for the issue `rig new
+--ticket` opens; Jira comments keep the link. In a work of **one** repo, each of the work's own
+GitHub tickets in that repo gets a `Fixes` line, since merging that PR is the work landing; every
+other ticket is named on the `Tickets:` line and closed by `rig close`.
+
+**It says which release the PR asks for.** On a repo that releases the way rig does, by a bump
+each PR names (it carries a `release:` label), `rig pr` prints the bump beside the PR it opens
+or finds open, with the reason: the branch prefix, or the `release:` label that overrides it.
+`rig next` says the same beside its offer to open the PR, while a label can still change it. A
+repo with no `release:` label is told nothing, because there the prefix is not how it releases.
+
+**It says whether the base moved.** Before opening each repo's PR, `rig pr` fetches that repo
+and says how many commits the base has that the work branch lacks, and, if a merge of the two
+would conflict, in which files, with the command to merge the base in. Then it opens the PR
+anyway: a report, never a stop.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.

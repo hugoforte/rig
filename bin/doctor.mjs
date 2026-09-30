@@ -210,7 +210,8 @@ function rootFindings (root) {
 //   works             every root's, in one list — [{ id, closed, contradictions,
 //                     folderMissing, strays, repos, marker, holders }]: `marker` is the
 //                     folder's `.rig/data`, null when it has none, and `holders` the roots
-//                     that hold the work's record
+//                     that hold the work's record; a record that would not read is
+//                     { id, unreadable } instead, `unreadable` the sentence saying why
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -315,6 +316,8 @@ export function doctorFindings (snap = {}) {
   // works at once, which is what makes the missing-folder warning below reach an unclosed work
   // whatever root holds its record.
   for (const w of snap.works || []) {
+    // A record that will not read has nothing else to ask of it.
+    if (w.unreadable) { out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`)); continue }
     if (w.closed) continue
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {

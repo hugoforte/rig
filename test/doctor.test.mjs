@@ -333,6 +333,22 @@ test('a missing work folder or worktree names the command that puts it back', ()
   assert.deepEqual(matching(found, /rig restore/).map(f => f.says.match(/`rig restore \S+`/)[0]), ['`rig restore gone`', '`rig restore w`'])
 })
 
+test('a work record that will not read is a problem that counts, and says which and why', () => {
+  const found = doctorFindings(snap({ works: [{ id: 'w', unreadable: 'work record for "w" at C:\\rig-data\\work\\w\\work.json could not be read (Unexpected end of JSON input)' }] }))
+  const one = only(found, /^w:/)
+  assert.equal(one.verdict, 'bad')
+  assert.match(one.says, /w: work record .* could not be read \(Unexpected end of JSON input\) — fix it, or bring it back from the data root's history/)
+  assert.equal(problemCount(found), 1)
+})
+
+test('the folder of a work whose record will not read is still accounted for, not called unmanaged', () => {
+  const found = doctorFindings(snap({
+    workRoot: { path: 'C:\\w', exists: true, entries: ['w'] },
+    works: [{ id: 'w', unreadable: 'work record for "w" could not be read (x)' }],
+  }))
+  assert.equal(matching(found, /unmanaged entry/).length, 0)
+})
+
 test('rig owns the work folder, so anything it did not put there is named', () => {
   const found = doctorFindings(snap({
     works: [{ id: 'w', closed: false, contradictions: [], folderMissing: false, strays: ['notes.md', 'scratch'], repos: [] }],

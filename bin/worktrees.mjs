@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
+import { NO_PROMPT_ENV, NEEDS_CREDENTIALS } from './remote-env.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -30,8 +31,11 @@ export const remotesInDirectory = dir => ({ url: (org, repo) => path.join(dir, o
 // to silence, because a caller that wants nothing said should not have to pass a sink.
 export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {}, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
-  const must = (cmd, args) => {
-    const r = run(cmd, args)
+  // A call that may reach the remote, which may never stop to ask for credentials (decision 138):
+  // a checkout is one, because Git LFS fetches what it checks out.
+  const toRemote = (dir, ...args) => run('git', ['-C', dir, ...args], { env: NO_PROMPT_ENV })
+  const must = (cmd, args, opts) => {
+    const r = run(cmd, args, opts)
     if (r.code !== 0) throw new RigError(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
     return r.out
   }
@@ -58,15 +62,22 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     if (!fs.existsSync(mirror)) {
       step(`mirroring ${org}/${repo} (first use)`)
       fs.mkdirSync(path.dirname(mirror), { recursive: true })
-      must('git', ['clone', '--bare', remotes.url(org, repo), mirror])
+      const url = remotes.url(org, repo)
+      const clone = run('git', ['clone', '--bare', url, mirror], { env: NO_PROMPT_ENV })
+      if (clone.code !== 0) {
+        const detail = clone.err || clone.out
+        throw new RigError(NEEDS_CREDENTIALS.test(detail)
+          ? `could not mirror ${org}/${repo}: git needed credentials for ${url}, and rig never waits at a prompt — sign git in (\`gh auth setup-git\`) and run this again\n${detail}`
+          : `git clone --bare ${url} ${mirror}\n${detail}`)
+      }
       // A --bare clone has no fetch refspec; give it one so remote branches land
       // in refs/remotes/origin/* and never collide with our work branches.
       must('git', ['-C', mirror, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'])
     }
     step(`fetching ${org}/${repo}`)
-    const f = git(mirror, 'fetch', '--prune', 'origin')
+    const f = toRemote(mirror, 'fetch', '--prune', 'origin')
     if (f.code !== 0) warn(`fetch failed for ${org}/${repo}: ${f.err.split('\n')[0]}`)
-    git(mirror, 'remote', 'set-head', 'origin', '-a')
+    toRemote(mirror, 'remote', 'set-head', 'origin', '-a')
     return mirror
   }
 
@@ -112,12 +123,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         `  if the remote is right, remove any worktree that has it checked out, then: git -C ${mirror} branch -D ${branch}`)
     }
     if (behind) {
-      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)])
+      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)], { env: NO_PROMPT_ENV })
       return
     }
     step(`keeping the mirror's copy of ${branch}, which is ahead of the remote`)
     must('git', ['-C', mirror, 'branch', `--set-upstream-to=origin/${branch}`, branch])
-    must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+    must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
   }
 
   // A branch that already exists somewhere this machine can see, checked out into `dest`:
@@ -135,7 +146,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     }
     if (kept(mirror, branch)) {
       warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
-      must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+      must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
       return 'mirror'
     }
     return null
@@ -157,7 +168,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (from === 'remote') warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
       if (from) return { base }
       step(`worktree ${repo} → ${branch} (base ${base})`)
-      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)])
+      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)], { env: NO_PROMPT_ENV })
       return { base }
     },
 
@@ -166,6 +177,28 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // read from a mirror this machine has never fetched is no stack at all.
     fetch ({ org, repo }) {
       fetched(org, repo)
+    },
+
+    // How a pushed branch stands against the base it is about to land on, both as the remote
+    // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
+    // files a merge of the two would conflict in, found without touching any worktree
+    // (`merge-tree --write-tree`, git 2.38). Null when git cannot count, such as for a ref the
+    // mirror lacks. When git will not try the merge, as for unrelated histories, `conflicts` is
+    // null and `error` says why, since no answer is not the same as a clean one. Call `fetch`
+    // first, or the base is the one this mirror last saw.
+    standing ({ org, repo, branch, base }) {
+      const mirror = mirrorPath(org, repo)
+      const counted = git(mirror, 'rev-list', '--count', `${ref(branch)}..${ref(base)}`)
+      if (counted.code !== 0) return null
+      // Exit 1 is a merge that conflicts; the tree it wrote comes first, then one file a line,
+      // unquoted so a name with a non-ASCII character reads as itself.
+      const merged = git(mirror, '-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only', '--no-messages', ref(base), ref(branch))
+      const behind = Number(counted.out)
+      if (merged.code !== 0 && merged.code !== 1) {
+        return { behind, conflicts: null, error: (merged.err || merged.out).split('\n')[0] || `git merge-tree exited ${merged.code}` }
+      }
+      const conflicts = merged.code === 1 ? merged.out.split('\n').slice(1).map(f => f.trim()).filter(Boolean) : []
+      return { behind, conflicts }
     },
 
     // Check out a branch that already exists, and never make one: `cut` above, less its last
@@ -258,18 +291,18 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (!fs.existsSync(mirror)) return out
       if (kept(mirror, branch)) {
         const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
-          : git(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+          : toRemote(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
         out.local = fetch && fetch.code !== 0 ? `kept — could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
           : !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
-      const ls = git(mirror, 'ls-remote', '--heads', 'origin', local(branch))
+      const ls = toRemote(mirror, 'ls-remote', '--heads', 'origin', local(branch))
       if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
       else if (ls.out.trim()) {
         const tip = ls.out.trim().split(/\s+/)[0]
         const push = tip !== head ? null
-          : git(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
+          : toRemote(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
         out.remote = !push ? 'kept — it has moved since the PR merged'
           : push.code === 0 ? 'deleted'
           : `kept — the push was refused: ${(push.err || push.out).split('\n')[0]}`
@@ -355,7 +388,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // its own stage is the ordinary way round. git decides whether that is possible, and its
     // refusal is what comes back.
     cutHere ({ dir, branch, base }) {
-      const r = git(dir, 'checkout', '-b', branch, base)
+      const r = toRemote(dir, 'checkout', '-b', branch, base)
       return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
     },
 
@@ -368,7 +401,8 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // and an answer copied into the record is wrong the first time anyone re-points a branch.
     //
     // No fetch, either: `rig stage`, `rig plan` and `rig pr` all come through here, and none
-    // of them asked for a network round trip. A branch cut in a worktree is already in the
+    // of them asked for a network round trip to read the stack. `rig pr` fetches for itself,
+    // once, just before it opens a pull request (`standing`). A branch cut in a worktree is already in the
     // mirror's `refs/heads`, because the worktree shares the mirror's ref store; a branch
     // pushed from another machine is under `refs/remotes/origin`.
     //

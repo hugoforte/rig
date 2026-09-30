@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedPr, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -34,6 +34,30 @@ test('a slice that landed closes its own ticket, at the one moment rig speaks', 
   assert.ok(c.out.includes('closed acme/billing#7 (stage feat/ticketed-one landed)'), c.out)
   assert.equal(issueNumbered(7).state, 'CLOSED')
   assert.match(issueNumbered(7).comments[0], /The slice this was opened for landed/)
+  // A private repo is no more visible than a data root with no remote, so it may name it.
+  assert.match(issueNumbered(7).comments[0], /\nContext doc: work\/ticketed\/context\.md in the rig data root$/)
+})
+
+test('a public repo\'s tickets are told what landed without the private data root\'s link (#202)', () => {
+  assert.equal(rig(['new', 'in-public', '--title', 'In public', '--type', 'feat', '--key', 'acme/billing#60']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'in-public']).code, 0)
+  seedIssue(60, 'In public')
+  seedIssue(61, 'the public slice')
+  const dest = worktree('in-public', 'billing')
+  assert.equal(rig(['stage', 'feat/in-public-one', '--delivers', 'the slice', '--key', 'acme/billing#61', '--cut', '--work', 'in-public'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the slice')
+  gitMust(dest, 'checkout', '-q', 'feat/in-public')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the slice', 'feat/in-public-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/in-public-one', number: 62, state: 'MERGED', base: 'feat/in-public', url: 'https://github.com/acme/billing/pull/62', mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: 'feat/in-public', number: 63, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/63', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = withVisibility('acme/billing', 'public', () => rig(['close', '--work', 'in-public']))
+  assert.equal(c.code, 0, c.out)
+  for (const n of [60, 61]) {
+    assert.equal(issueNumbered(n).state, 'CLOSED')
+    assert.doesNotMatch(issueNumbered(n).comments.join('\n'), /Context doc|context\.md/)
+  }
 })
 
 test('a pull request opened after a work closed is reported by status, which has the facts', () => {
@@ -151,4 +175,85 @@ test('a dropped slice tells its ticket why, and leaves it open', () => {
   assert.equal(c.code, 0, c.out)
   assert.equal(issueNumbered(11).state, 'OPEN')
   assert.match(issueNumbered(11).comments[0], /This slice was dropped: worth about 15%\. The issue stays open\./)
+})
+
+// A work rigged with `--key` for its ticket, and a stage declared with the same key: the shape
+// `rig new --key` then `rig stage --key` makes for a work that is one slice of one ticket. The
+// stage lands, and the work branch's own PR is seeded as `workPr` says.
+// `jira` names a Jira key to hold both roles instead of the GitHub issue.
+const bothRoles = ({ id, issue, stagePr, workPr, jira }) => {
+  const key = jira || `acme/billing#${issue}`
+  assert.equal(rig(['new', id, '--title', id, '--branch', `feat/${id}`, '--key', key]).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  if (jira) seedJiraIssue(jira, id)
+  else seedIssue(issue, id)
+  const dest = worktree(id, 'billing')
+  const r = rig(['stage', `feat/${id}-one`, '--delivers', 'the slice', '--key', key, '--cut', '--work', id], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  commitWork(dest, 'the slice')
+  gitMust(dest, 'checkout', '-q', `feat/${id}`)
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the slice', `feat/${id}-one`)
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: `feat/${id}-one`, number: stagePr, state: 'MERGED', base: `feat/${id}`, url: `https://github.com/acme/billing/pull/${stagePr}`, mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: `feat/${id}`, base: 'main', url: `https://github.com/acme/billing/pull/${workPr.number}`, ...workPr })
+}
+const MERGED = { state: 'MERGED', mergedAt: '2026-09-19T11:00:00Z' }
+
+test('a ticket that is the work\'s and a slice\'s is told once, with both PRs, and closed once (#229)', () => {
+  bothRoles({ id: 'both-roles', issue: 70, stagePr: 71, workPr: { number: 72, ...MERGED } })
+  const c = rig(['close', '--work', 'both-roles'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(c.out.match(/acme\/billing#70/g)?.length, 1, c.out)
+  assert.equal(issueNumbered(70).state, 'CLOSED')
+  assert.equal(issueNumbered(70).comments.length, 1)
+  const [comment] = issueNumbered(70).comments
+  assert.match(comment, /^The slice this was opened for landed/, 'the slice is the more specific news')
+  assert.match(comment, /pull\/71\n- billing: https:\/\/github\.com\/acme\/billing\/pull\/72\n/, 'and the work PR is named beside the stage\'s')
+})
+
+test('a ticket in both roles stays open while the work has not landed, though its slice did (#229)', () => {
+  bothRoles({ id: 'half-landed', issue: 73, stagePr: 74, workPr: { number: 75, state: 'OPEN', mergedAt: null } })
+  assert.equal(rig(['close', '--work', 'half-landed']).code, 1, 'it refuses first')
+  const c = rig(['close', '--force', '--work', 'half-landed'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(c.out.match(/acme\/billing#73/g)?.length, 1, c.out)
+  assert.equal(issueNumbered(73).state, 'OPEN')
+  assert.equal(issueNumbered(73).comments.length, 1)
+  assert.match(issueNumbered(73).comments[0], /^`rig close --force` ran on half-landed\. The blockers were overridden deliberately\. The slice this was opened for landed in `feat\/half-landed`, but the work has not: Not every PR is merged — billing \(PR #75 open\)\. The issue stays open\./)
+})
+
+test('a ticket two slices hold is told once, naming both, and stays open for the one that did not land (#229)', () => {
+  bothRoles({ id: 'two-slices', issue: 76, stagePr: 77, workPr: { number: 78, ...MERGED } })
+  assert.equal(rig(['stage', 'feat/two-slices-two', '--delivers', 'the rest', '--key', 'acme/billing#76', '--work', 'two-slices']).code, 0)
+  const c = rig(['close', '--work', 'two-slices'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(issueNumbered(76).state, 'OPEN')
+  assert.equal(issueNumbered(76).comments.length, 1)
+  const [comment] = issueNumbered(76).comments
+  assert.match(comment, /The slice `feat\/two-slices-two` did not land, so the issue stays open\./)
+  assert.match(comment, /\n\nStage: `feat\/two-slices-one` — the slice\nStage: `feat\/two-slices-two` — the rest\n/)
+})
+
+test('a withdrawn slice is what a ticket two slices hold is told stays open for (#229)', () => {
+  assert.equal(rig(['new', 'withdrawn-two', '--title', 'Withdrawn two', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'withdrawn-two']).code, 0)
+  seedIssue(79, 'withdrawn two')
+  for (const b of ['one', 'two']) {
+    assert.equal(rig(['stage', `feat/withdrawn-two-${b}`, '--delivers', `slice ${b}`, '--key', 'acme/billing#79', '--work', 'withdrawn-two']).code, 0)
+  }
+  assert.equal(rig(['stage', 'feat/withdrawn-two-one', '--dropped', 'not needed', '--work', 'withdrawn-two']).code, 0)
+  const c = rig(['close', '--abandoned', '--work', 'withdrawn-two'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(issueNumbered(79).comments.length, 1)
+  assert.match(issueNumbered(79).comments[0], /The slice `feat\/withdrawn-two-one` was dropped: not needed\. The issue stays open\./)
+})
+
+test('a Jira ticket that is the work\'s and a slice\'s is told once too, and never moved (#229)', () => {
+  bothRoles({ id: 'jira-both', jira: 'PROJ-80', stagePr: 81, workPr: { number: 82, ...MERGED } })
+  const c = rig(['close', '--work', 'jira-both'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(c.out.match(/PROJ-80/g)?.length, 1, c.out)
+  const { comments } = jiraIssue('PROJ-80')
+  assert.equal(comments.length, 1)
+  assert.match(comments[0], /^The slice this was opened for landed[\s\S]*pull\/82\n[\s\S]*rig does not transition Jira tickets/)
 })

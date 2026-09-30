@@ -10,8 +10,8 @@
 // the temp dir, so nothing this suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
-// new before close). node:test runs a file's tests serially by default; running a
-// single one with --test-name-pattern is not supported.
+// new before close). node:test runs a file's tests serially by default; a test selected on
+// its own with --test-name-pattern fails at once, since it would have no installation.
 //
 // GitHub and Jira are the in-memory adapters (test/harness.mjs says how). Tests seed them
 // and read them back; the real `gh`/`twg` are never spawned. That state is shared too: a
@@ -22,7 +22,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
 import { BRANCH_PREFIXES } from '../bin/release.mjs'
 import { makeInstall, readJson, strip } from './harness.mjs'
@@ -34,7 +34,7 @@ const VERSION = FORMAT_STAMP
 
 const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
-  githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
+  githubStateFile, twgStateFile, rig: rigIn, git: gitIn, cleanup,
 } = makeInstall({
   // Nothing here is about the process rig runs in, so the runs happen in this one.
   inProcess: true,
@@ -57,6 +57,15 @@ const lastCommit = dir => gitIn(dir, 'log', '-1', '--format=%s').stdout.trim()
 const dirty = dir => gitIn(dir, 'status', '--porcelain').stdout.trim()
 
 after(cleanup)
+
+// Until the init test has built the installation, only `doctor` and an init that names its work
+// root may run: anything else falls through to this machine's defaults, and a test selected on
+// its own would write into its real work root (hugoforte/rig#217).
+const ALONE = 'the smoke tests share one installation, built by the init test; run the file whole'
+const rig = (args, opts) => {
+  if (!fs.existsSync(localConfig) && args[0] !== 'doctor' && !args.includes('--work-root')) throw new Error(ALONE)
+  return rigIn(args, opts)
+}
 
 test('importing the tool runs nothing', () => {
   const url = pathToFileURL(path.join(tool, 'bin', 'rig.mjs')).href
@@ -100,6 +109,15 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.equal(local.current, DEFAULT_ROOT_NAME)
   assert.deepEqual(local.identities, { acme: 'you@acme.example' })
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
+})
+
+test('a smoke test run on its own fails at once, rather than running without the installation', () => {
+  // Without NODE_TEST_CONTEXT the child prints its own report, rather than streaming it to this runner.
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const r = spawnSync(process.execPath, ['--test', '--test-name-pattern', '^rig --help and rig -h are rig help$', fileURLToPath(import.meta.url)], { encoding: 'utf8', env })
+  assert.notEqual(r.status, 0, r.stdout)
+  assert.match(r.stdout, new RegExp(ALONE))
 })
 
 test('a tool copy with no repository pays no git for the freshness check', () => {
@@ -236,6 +254,7 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
     repos: {
       'acme/platform': {
         language: 'TypeScript',
+        visibility: 'private',
         issues: [{ number: 3, title: 'Existing', body: '', state: 'OPEN', comments: [] }],
       },
     },
@@ -264,6 +283,24 @@ test('close on a work with no repos comments on the GitHub ticket and leaves it 
   assert.equal(issue.state, 'OPEN')
   assert.equal(issue.comments.length, 1)
   assert.match(issue.comments[0], /No repos were attached/)
+})
+
+test('a GitHub issue opened in a public repo never links the private data root (#202)', () => {
+  const setPlatform = visibility => {
+    const state = github()
+    state.repos['acme/platform'].visibility = visibility
+    setGithub(state)
+  }
+  setPlatform('public')
+  try {
+    const r = rig(['new', 't4p', '--title', 'Public ticketed work', '--ticket', '--org', 'acme'], { input: 'the brief' })
+    assert.equal(r.code, 0, r.out)
+    const issue = github().repos['acme/platform'].issues.at(-1)
+    assert.equal(issue.title, 'Public ticketed work')
+    assert.doesNotMatch(issue.body, /design lives|context\.md/)
+  } finally {
+    setPlatform('private')
+  }
 })
 
 test('rig.json can carry full per-org Jira ticket config; --dry-run previews without creating', () => {
@@ -753,29 +790,31 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
   setGithub(state)
 })
 
-test('a record that will not parse is named and left out by list, list --json and dash', () => {
-  const cut = path.join(dataRoot, 'work', 'cut')
-  fs.mkdirSync(cut)
-  fs.writeFileSync(path.join(cut, 'work.json'), '{"id": "cut", "repos": [')
-  try {
-    const named = /1 work record could not be read and was left out: cut \(Unexpected end of JSON input\)/
-    const list = rig(['list', '--quick'])
-    assert.equal(list.code, 0, list.out)
-    assert.match(list.out, named)
-    assert.match(list.out, /^old\b/m, 'the records that read are still listed')
+// A record that no longer parses — truncated, or cut off by an interrupted write — planted for
+// one test and taken away after it, so the tests below read the root they were written for.
+const withBrokenRecord = body => {
+  const dir = path.join(dataRoot, 'work', 'broken')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'work.json'), '{"id": "broken", "repos": [')
+  try { body() } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+}
 
-    const json = rig(['list', '--json', '--quick'])
-    assert.equal(json.code, 0, json.out)
-    assert.ok(JSON.parse(json.stdout).works.length, 'the payload on stdout still parses')
-    assert.match(json.out, named, 'and the unreadable record is named off it, on stderr')
+test('a record that will not parse is named and left out by list, list --json and dash', () => withBrokenRecord(() => {
+  const named = /1 work record could not be read and was left out: broken \(Unexpected end of JSON input\)/
+  const list = rig(['list', '--quick'])
+  assert.equal(list.code, 0, list.out)
+  assert.match(list.out, named)
+  assert.match(list.out, /^old\b/m, 'the records that read are still listed')
 
-    const dash = rig(['dash', '--quick', '--no-open'])
-    assert.equal(dash.code, 0, dash.out)
-    assert.match(dash.out, named)
-  } finally {
-    fs.rmSync(cut, { recursive: true })
-  }
-})
+  const json = rig(['list', '--json', '--quick'])
+  assert.equal(json.code, 0, json.out)
+  assert.ok(JSON.parse(json.stdout).works.length, 'the payload on stdout still parses')
+  assert.match(json.out, named, 'and the unreadable record is named off it, on stderr')
+
+  const dash = rig(['dash', '--quick', '--no-open'])
+  assert.equal(dash.code, 0, dash.out)
+  assert.match(dash.out, named)
+}))
 
 test('dash dies on a window it cannot parse rather than showing everything', () => {
   const captured = path.join(tmp, 'window-payload.json')
@@ -1122,6 +1161,36 @@ test('rig backfill with no --work scans every work in the data root', () => {
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /backfilled 1 PR record\(s\) across 1 work\(s\)/)
   assert.equal(readJson(path.join(dataRoot, 'work', 't10', 'work.json')).repos[0].branches[0].pr.number, 40)
+})
+
+test('backfill leaves out a record that will not read, names it, and carries on', () => withBrokenRecord(() => {
+  const r = rig(['backfill'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1 work record could not be read and was left out: broken \(Unexpected end of JSON input\)$/m)
+  assert.match(r.out, /nothing to backfill/)
+}))
+
+test('backfill --work on a record that will not read says so in a sentence, not a stack trace', () => withBrokenRecord(() => {
+  const r = rig(['backfill', '--work', 'broken'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /work record for "broken" at .*work\.json could not be read \(/)
+}))
+
+test('doctor reports a record that will not read as a problem, and still checks everything else', () => withBrokenRecord(() => {
+  const r = rig(['doctor'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /broken: work record .*work\.json could not be read \(/)
+  assert.match(r.out, /disk on /, 'the checks after the works still ran')
+}))
+
+test('a record saved with a byte-order mark reads like any other', () => {
+  const file = path.join(dataRoot, 'work', 't10', 'work.json')
+  const saved = fs.readFileSync(file, 'utf8')
+  fs.writeFileSync(file, `\uFEFF${saved}`)
+  try {
+    const r = rig(['status', '--work', 't10'])
+    assert.equal(r.code, 0, r.out)
+  } finally { fs.writeFileSync(file, saved) }
 })
 
 test('acceptance: with gh unavailable, rig list --json still emits complete PR timestamps for backfilled work', () => {
