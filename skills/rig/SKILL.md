@@ -42,7 +42,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Where has this work got to | `rig status` |
 | What is open, what can close | `rig list` |
 | Slice the work into reviewable parts | `rig stage` |
-| A planned stage was dropped, or done under another | `rig stage <branch> --dropped "why"`, `rig stage <branch> --replaced-by <stage>` |
+| A planned stage was dropped, or done under another | `rig stage <branch> --dropped "why"`, `rig stage <branch> --replaced-by <stage>`; `rig stage <branch> --planned` puts it back |
 | Put it up for review | `rig pr` |
 | The PR says what the work used to be | `rig pr --refresh` |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |

@@ -1068,7 +1068,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -3237,9 +3237,11 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (flags.planned) return replanStage(cfg, work, branch, flags)
   if (flags.dropped !== undefined || flags['replaced-by'] !== undefined) return withdrawStage(cfg, work, branch, flags)
 
   if (branch) {
+    if (typeof flags.delivers === 'string' && /[\r\n]/.test(flags.delivers)) die('--delivers takes one line — it goes in a table row')
     // Declaring and cutting are two acts on two days: a stage is normally declared before
     // anyone makes its branch, which is why recording the branch at declaration time could
     // never be the whole answer. `--cut` is how the second act reaches a stage already
@@ -3354,6 +3356,23 @@ function withdrawStage (cfg, work, branch, flags) {
   commitAs(work.id, done)
   saveWork(cfg, work)
   ok(`${work.id}: stage ${C.bold(branch)} ${withdrawnLabel(withdrawalOf(declared))}`)
+}
+
+// `--planned`: a withdrawn stage put back in the plan (decision 140). A stage cut on another that
+// is still withdrawn stays out, because it carries that one's commits and would land them.
+function replanStage (cfg, work, branch, flags) {
+  if (!branch) die('--planned names the stage: `rig stage <branch> --planned`')
+  const others = ['dropped', 'replaced-by', 'cut', 'key', 'delivers'].filter(k => flags[k] !== undefined)
+  if (others.length) die(`--planned puts a withdrawn stage back, and takes nothing else (${others.map(k => `--${k}`).join(', ')})`)
+  const declared = work.stages.find(s => s.branch === branch) || die(`${branch} is not a stage of ${work.id}`)
+  if (!withdrawalOf(declared)) die(`${branch} is not withdrawn — there is nothing to put back`)
+  const withdrawn = new Set(work.stages.filter(s => withdrawalOf(s)).map(s => s.branch))
+  const on = branchRows(cfg, work).find(r => r.branch === branch && withdrawn.has(r.base))
+  if (on) die(`${branch} is cut on ${on.base} in ${on.repo}, which was withdrawn — put that back first, or rebase ${branch} off it`)
+  for (const k of ['droppedAt', 'reason', 'replacedAt', 'replacedBy']) delete declared[k]
+  commitAs(work.id, `${branch} back in the plan`)
+  saveWork(cfg, work)
+  ok(`${work.id}: stage ${C.bold(branch)} back in the plan`)
 }
 
 // `--cut`: make the stage's branch here, on top of whatever this repo's stack reaches.
@@ -4296,6 +4315,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --delivers "..."            the one line of prose a stage carries
        --dropped "why"             withdraw it from the plan: kept, dated, never deleted
        --replaced-by <stage>       withdraw it as done under another declared stage
+       --planned                   put a withdrawn stage back in the plan
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure
