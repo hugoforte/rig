@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedPr, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -34,6 +34,30 @@ test('a slice that landed closes its own ticket, at the one moment rig speaks', 
   assert.ok(c.out.includes('closed acme/billing#7 (stage feat/ticketed-one landed)'), c.out)
   assert.equal(issueNumbered(7).state, 'CLOSED')
   assert.match(issueNumbered(7).comments[0], /The slice this was opened for landed/)
+  // A private repo is no more visible than a data root with no remote, so it may name it.
+  assert.match(issueNumbered(7).comments[0], /\nContext doc: work\/ticketed\/context\.md in the rig data root$/)
+})
+
+test('a public repo\'s tickets are told what landed without the private data root\'s link (#202)', () => {
+  assert.equal(rig(['new', 'in-public', '--title', 'In public', '--type', 'feat', '--key', 'acme/billing#60']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'in-public']).code, 0)
+  seedIssue(60, 'In public')
+  seedIssue(61, 'the public slice')
+  const dest = worktree('in-public', 'billing')
+  assert.equal(rig(['stage', 'feat/in-public-one', '--delivers', 'the slice', '--key', 'acme/billing#61', '--cut', '--work', 'in-public'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the slice')
+  gitMust(dest, 'checkout', '-q', 'feat/in-public')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the slice', 'feat/in-public-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/in-public-one', number: 62, state: 'MERGED', base: 'feat/in-public', url: 'https://github.com/acme/billing/pull/62', mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: 'feat/in-public', number: 63, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/63', mergedAt: '2026-09-19T11:00:00Z' })
+
+  const c = withVisibility('acme/billing', 'public', () => rig(['close', '--work', 'in-public']))
+  assert.equal(c.code, 0, c.out)
+  for (const n of [60, 61]) {
+    assert.equal(issueNumbered(n).state, 'CLOSED')
+    assert.doesNotMatch(issueNumbered(n).comments.join('\n'), /Context doc|context\.md/)
+  }
 })
 
 test('a pull request opened after a work closed is reported by status, which has the facts', () => {
