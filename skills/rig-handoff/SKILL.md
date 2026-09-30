@@ -17,9 +17,9 @@ If it answers "not inside a work" but this conversation was about one — its fo
 
 **Inside a work** — `rig status` answers — first push its branches. `rig restore` on the next machine brings back only a branch the remote has, and a branch made here is in this machine's mirror alone until it is pushed. For each repo `rig status` lists, in its worktree:
 
-1. **Commit** what is uncommitted, with a message that says what it is. If it is half done and unfit to commit, stop and ask the user.
+1. **Commit** the tracked changes only — `git add -u`, never `git add -A` — with a message that says what they are. If they are half done and unfit to commit, stop and ask the user. List any untracked files and ask the user before adding one: rig copies secret files into a worktree (the `secrets` entries in `rig.local.json`), and the repo's `.gitignore` may not cover them, so never add a path one of those entries wrote.
 2. **Push** the work branch (the `branch` line of `rig status`) and each stage `rig stage` shows as cut in that repo and not landed: `git push origin <branch>`. Not `-u`, because a work branch's upstream is its base and `rig status` measures ahead and behind against it.
-3. **Check** that each push landed: `git ls-remote origin refs/heads/<branch>` must name the commit `git rev-parse <branch>` does. Name any branch that would not go, in the handoff and to the user in so many words.
+3. **Check** that each push landed: `git ls-remote origin refs/heads/<branch>` must name the commit `git rev-parse <branch>` does. Name any branch that would not go, in the handoff and to the user in so many words. A push rejected as non-fast-forward means this machine rewrote the branch, a restack say: stop and ask the user, and never force-push on your own.
 
 When the work's folder is missing on this machine there is nothing here to push; go straight on to the handoff.
 
