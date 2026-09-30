@@ -2,9 +2,10 @@
 // make in it: a bare remote with a checkout that tracks it, a checkout whose upstream has
 // gone, one on a `(wip)` branch, and a push from another machine.
 //
-// Three files test `bin/checkouts.mjs`, each with a tree of its own built from here: reading a
+// Four files test `bin/checkouts.mjs`, each with a tree of its own built from here: reading a
 // checkout in checkouts-read, fetching and fast-forwarding in checkouts-forward, committing
-// and pushing in checkouts-push. They were one file, the slowest in the suite on its own at
+// and pushing in checkouts-push, and the data root's lock in checkouts-lock. The first three
+// were one file, the slowest in the suite on its own at
 // about 39 s on a Windows runner, and `node --test` parallelises by file: apart, no file of
 // the family is above 20 s, which is what lets CI deal the suite across runners in parts of
 // a similar size (hugoforte/rig#155). Every checkout a test reads is made by that test or

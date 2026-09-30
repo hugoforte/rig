@@ -28,7 +28,9 @@
 // `.git` entry the way git does, reads the branch out of HEAD, and answers null for the
 // layouts it will not commit to — so the readings below spawn git for the questions only git
 // can answer, and ask it about a path only when the filesystem handed the question back.
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { discover, headBranch, refSha, symref } from './gitfs.mjs'
 import { sameDir } from './roots.mjs'
@@ -72,7 +74,33 @@ export const unreadable = () => ({ ...UNREAD })
 const firstLine = s => (s || '').split('\n')[0]
 const lines = s => s.split('\n').filter(Boolean)
 
-export function checkouts ({ run, env = () => process.env }) {
+// How long a command waits for the data root's lock, and how often it looks (decision 161).
+// Both sections it guards finish in seconds, bounded by git's own network timeouts, so a wait
+// almost always ends with the lock taken; one that does not has found something wrong.
+export const LOCK_WAIT_MS = 30_000
+export const LOCK_POLL_MS = 200
+// Past either section's worst case, two network timeouts in a row. Also what frees a lock
+// whose pid the OS has since handed to an unrelated process, which Windows does readily.
+export const LOCK_STALE_MS = 5 * 60_000
+// A holder writes its lock straight after creating it, so an unreadable one means "held" only
+// for that moment: past it, it was left by a process killed in between.
+export const LOCK_UNREADABLE_MS = 5_000
+
+// What the lock asks of the machine, handed in so a test can be the machine instead: the time,
+// a sleep that blocks this thread (rig is synchronous throughout), whether a process is
+// running, and the name that says whose pids a lock's pid can be checked against. `EPERM` is
+// a process that exists and is not ours to signal, which is still a holder.
+const synchronousSleep = new Int32Array(new SharedArrayBuffer(4))
+export const REAL_MACHINE = Object.freeze({
+  now: () => Date.now(),
+  sleep: ms => { Atomics.wait(synchronousSleep, 0, 0, ms) },
+  alive: pid => {
+    try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
+  },
+  hostname: os.hostname(),
+})
+
+export function checkouts ({ run, env = () => process.env, machine = () => REAL_MACHINE }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
 
   // A commit count, or null when git could not answer. Never 0 for "we do not know": a
@@ -432,5 +460,111 @@ export function checkouts ({ run, env = () => process.env }) {
     return { outcome: 'pushed', hash }
   }
 
-  return { countCommits, describe, identify, fetch, fastForward, arrived, commitAll, pushRebasing }
+  // The checkout's own git dir, where the lock lives: nothing under it is ever part of the
+  // tree, so `git add -A` cannot sweep the lock into a commit. Per worktree, as HEAD, the index
+  // and a rebase in progress are, which is the state the lock is about.
+  function gitDirOf (dir) {
+    const found = discover(dir, env())
+    if (found) return found.gitDir
+    const asked = git(dir, 'rev-parse', '--absolute-git-dir')
+    return asked.code === 0 && asked.out ? asked.out : null
+  }
+
+  // A lock file as it stands: its raw text, for the check before a delete, and what it says,
+  // or null when it says nothing a holder writes. Null for a file that has gone.
+  function readLock (file) {
+    let raw, mtimeMs
+    try {
+      raw = fs.readFileSync(file, 'utf8')
+      mtimeMs = fs.statSync(file).mtimeMs
+    } catch { return null }
+    let holder = null
+    try {
+      const parsed = JSON.parse(raw)
+      if (Number.isInteger(parsed?.pid) && !Number.isNaN(Date.parse(parsed.since))) holder = parsed
+    } catch { /* unreadable: judged by its age alone */ }
+    return { raw, mtimeMs, holder }
+  }
+
+  // Why a lock nobody should wait for is one, or null while it is held (decision 162). A pid is
+  // only asked about on the machine that wrote it.
+  function staleness (seen, m) {
+    if (!seen.holder) return m.now() - seen.mtimeMs > LOCK_UNREADABLE_MS ? 'unreadable' : null
+    if (m.now() - Date.parse(seen.holder.since) > LOCK_STALE_MS) return 'old'
+    if (seen.holder.host === m.hostname && !m.alive(seen.holder.pid)) return 'gone'
+    return null
+  }
+
+  // Deletes the lock only while it is still the one judged: a waiter that took it over a
+  // moment ago has written a new one, and that one is not ours to delete.
+  function removeIfUnchanged (file, raw) {
+    try {
+      if (fs.readFileSync(file, 'utf8') !== raw) return false
+      fs.unlinkSync(file)
+      return true
+    } catch (e) { return e.code === 'ENOENT' }
+  }
+
+  // Created exclusively, which is atomic on NTFS and POSIX alike. `EPERM` and `EBUSY` are
+  // Windows saying a file of that name is being deleted: taken, for now. Answers true, false
+  // for taken, or git's-style words for anything else.
+  function create (file, body) {
+    let fd
+    try { fd = fs.openSync(file, 'wx') } catch (e) {
+      return ['EEXIST', 'EPERM', 'EBUSY'].includes(e.code) ? false : e.message
+    }
+    try {
+      fs.writeSync(fd, JSON.stringify(body) + '\n')
+      return true
+    } catch (e) {
+      try { fs.unlinkSync(file) } catch { /* the age rule frees what this could not */ }
+      return e.message
+    } finally { fs.closeSync(fd) }
+  }
+
+  // The data root's lock, for the two sections of a command that move its git state
+  // (decisions 160–162). Waits up to `LOCK_WAIT_MS` for a live holder, and takes over a stale
+  // one. `holder` is what a waiter is told: `{ command, work, section }`.
+  //
+  //   taken · taken-over (`stale` is `{ why, holder }`; why is gone, old or unreadable)
+  //   · busy (`holder` is null for an unreadable lock; `heldFor` in ms) · failed
+  //
+  // The lock is advisory. git's own `index.lock` is under it, and so are `pushRebasing`'s
+  // outcomes, so a lock that fails leaves rig as it was without one — never worse.
+  function lock (dir, holder) {
+    const m = machine() ?? REAL_MACHINE
+    const gitDir = gitDirOf(dir)
+    if (!gitDir) return { outcome: 'failed', error: `${dir} is not a git checkout` }
+    const file = path.join(gitDir, 'rig.lock')
+    const start = m.now()
+    let stale = null
+    for (;;) {
+      const nonce = randomUUID()
+      const made = create(file, { pid: process.pid, host: m.hostname, ...holder, since: new Date(m.now()).toISOString(), nonce })
+      if (made === true) return { outcome: stale ? 'taken-over' : 'taken', lock: { file, nonce }, stale }
+      if (made !== false) return { outcome: 'failed', error: made }
+      const seen = readLock(file)
+      if (!seen) continue
+      const why = staleness(seen, m)
+      if (why && removeIfUnchanged(file, seen.raw)) { stale = { why, holder: seen.holder }; continue }
+      if (m.now() - start >= LOCK_WAIT_MS) {
+        const since = seen.holder ? Date.parse(seen.holder.since) : seen.mtimeMs
+        return { outcome: 'busy', file, holder: seen.holder, heldFor: m.now() - since }
+      }
+      m.sleep(LOCK_POLL_MS)
+    }
+  }
+
+  // Lets go of a lock `lock` took, and only while it is still that lock. False when it was
+  // not: taken over, or already gone.
+  function unlock (held) {
+    if (!held) return false
+    try {
+      if (JSON.parse(fs.readFileSync(held.file, 'utf8')).nonce !== held.nonce) return false
+      fs.unlinkSync(held.file)
+      return true
+    } catch { return false }
+  }
+
+  return { countCommits, describe, identify, fetch, fastForward, arrived, commitAll, pushRebasing, lock, unlock }
 }
