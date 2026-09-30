@@ -61,9 +61,10 @@ hugoforte/rig#53 was opened for; twg 1.3's create resolves each `--field` agains
 own create-screen metadata, system fields included, and shapes the value for Jira — a
 component name or id becomes `{ id }`. It reads each value as JSON first, so a lone id sent
 bare arrives as a number and is never shaped. `bin/jira.mjs` therefore sends a list as JSON
-(`components=["11023"]`), and no REST passthrough or second create path is needed (DESIGN.md
-decision 147). The shaping is read from twg's own source, not yet proved against a live
-site that requires Components.
+(`components=["10001"]`), so that no REST passthrough or second create path should be
+needed (DESIGN.md decision 147). That rests on twg's own source, read rather than run: it is
+proved only by a live create into a project that requires Components, which has not been
+made yet.
 
 A Jira description is the **whole** brief plus the context-doc link, where a GitHub issue
 body is the brief's first paragraph plus the same link. Not an inconsistency: the GitHub
@@ -81,7 +82,8 @@ same way a catalogue entry gets corrected by hand. Field ids (`customfield_10058
 Story Points, say) are **discovered** through `twg jira workitem field
 create-metadata`, never pasted into `rig.json` or this codebase from a one-off
 inspection — the KTLO ids the `rig-workflow-gates` context doc records are a fixture
-for that org's data root, not a shortcut for this one.
+for that org's data root, not a shortcut for this one. A single-value field takes a scalar
+there, and a list only where Jira wants several: a one-item list reaches twg as a list.
 
 That holds for **custom** fields. `field create-metadata` turned out to return custom
 fields only (hugoforte/rig#45), so Jira's **system** fields — `components`, `labels`,

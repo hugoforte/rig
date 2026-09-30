@@ -1289,7 +1289,8 @@ function resolveJiraField (jiraClient, t, cache, key, value) {
 // Resolves an org's Jira create defaults (rig.json `tracker.<org>.fields`, `--field`
 // overrides applied on top) to `{ assignee, fields }`: `fields` maps field ids —
 // `customfield_*`, or a system field's own Jira name — to the values `twg jira workitem
-// create --field` wants.
+// create --field` wants. A single-value field takes a scalar in rig.json: a one-item list
+// reaches twg as a list (DESIGN.md decision 147).
 function resolveJiraFields (jiraClient, t, overrides) {
   const configured = mergeFieldOverrides(t.fields, overrides)
   configured.sprint = resolveActiveSprint(jiraClient, t, configured.sprint)
