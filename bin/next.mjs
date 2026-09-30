@@ -44,6 +44,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
 //   planExists     a rollout plan has been scaffolded for this work
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
+//   prStale        the repos whose open PR's title or body is not what `rig pr` would write now
 //   stack          the work's stages, ordered and with their state (`stackOf`), empty when
 //                  the work has none — which is most works, and is not a deficiency
 //   replaced       one `{ repo, branch, head, ... }` per merged stage `worktrees.replaced`
@@ -56,7 +57,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, stack = [], replaced = [], drafts = [], neighbours = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [] } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -121,7 +122,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       const where = [...on].map(([b, rs]) => `${rs.join(', ')} ${rs.length === 1 ? 'is' : 'are'} still on ${b}, which has landed`).join('; ')
       out.push(stranded.length
         ? offer('reviewing', `every stage is in — ${where} — move ${stranded.length === 1 ? 'it' : 'each'} to the work branch, then \`rig pr\``, backToWorkBranch(work))
-        : offer('reviewing', `every stage is in — the work branch is what is left to land`, 'rig pr'))
+        : offer('reviewing', `every stage is ${stack.some(st => st.withdrawn) ? 'in or withdrawn' : 'in'} — the work branch is what is left to land`, 'rig pr'))
     }
     // Decision 113. The rebase is offered only where the squash is the stage as it stood;
     // anywhere else, replaying onto it is a merge somebody has to look at.
@@ -187,6 +188,12 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // wrote it and nothing ever looked again. This is the something that looks.
   if (planStale) {
     out.push(offer('landing', 'the rollout plan\'s deploy order no longer matches the stack', 'rig plan --refresh'))
+  }
+
+  // The same read-back for the open pull request: its title and body, compared with what
+  // `rig pr` would write now.
+  if (prStale.length) {
+    out.push(offer('reviewing', `${prStale.join(', ')}: the open PR no longer says what the record does`, 'rig pr --refresh'))
   }
 
   const merged = repos.filter(r => r.merged)

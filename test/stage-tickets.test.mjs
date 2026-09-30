@@ -140,3 +140,15 @@ test('and forcing the close past it leaves the work ticket open, naming the slic
   assert.match(comment, /^Closed by `rig close --force`\. The blockers were overridden deliberately\./,
     'a work torn down past an open PR must not read like one that had nothing to get past')
 })
+
+test('a dropped slice tells its ticket why, and leaves it open', () => {
+  assert.equal(rig(['new', 'dropping', '--title', 'Dropping work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'dropping']).code, 0)
+  seedIssue(11, 'the gathering')
+  assert.equal(rig(['stage', 'feat/dropping-one', '--delivers', 'the gathering', '--key', 'acme/billing#11', '--work', 'dropping']).code, 0)
+  assert.equal(rig(['stage', 'feat/dropping-one', '--dropped', 'worth about 15%', '--work', 'dropping']).code, 0)
+  const c = rig(['close', '--abandoned', '--work', 'dropping'])
+  assert.equal(c.code, 0, c.out)
+  assert.equal(issueNumbered(11).state, 'OPEN')
+  assert.match(issueNumbered(11).comments[0], /This slice was dropped: worth about 15%\. The issue stays open\./)
+})

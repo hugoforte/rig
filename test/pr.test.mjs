@@ -156,3 +156,76 @@ test('a worktree left on a stage that landed is told how to get back to the work
   assert.equal(gitMust(dest, 'branch', '--show-current'), work)
   assert.match(fs.readFileSync(path.join(dest, 'README.md'), 'utf8'), /the schema/)
 })
+
+test('pr --refresh rewrites an open PR from the record as it stands now', () => {
+  const doc = path.join(dataRoot, 'work', 'reviewed-2', 'context.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('Because the adjacent effort would have cost a third major.', 'Because a trial run showed the cheaper path.'))
+  assert.equal(rig(['ticket', 'acme/billing#12', '--work', 'reviewed-2']).code, 0)
+  assert.equal(rig(['save', '--title', 'Second, as it turned out', '--work', 'reviewed-2']).code, 0)
+
+  const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: PR #\d+ refreshed from the record/)
+  const pr = github().repos['acme/billing'].prs.find(p => p.branch === 'feat/second')
+  assert.equal(pr.title, 'Second, as it turned out')
+  assert.match(pr.body, /^Second, as it turned out\n\nTickets: acme\/billing#12\n\n## Direction\n\nBecause a trial run showed the cheaper path\.\n/)
+})
+
+test('pr --refresh again finds nothing to change, and edits nothing', () => {
+  const before = github().repos['acme/billing'].prs.find(p => p.branch === 'feat/second')
+  const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: PR #\d+ is already up to date/)
+  assert.deepEqual(github().repos['acme/billing'].prs.find(p => p.branch === 'feat/second'), before)
+})
+
+test('a body GitHub hands back with CRLF line ends and a trailing newline still counts as up to date', () => {
+  const state = github()
+  const pr = state.repos['acme/billing'].prs.find(p => p.branch === 'feat/second')
+  pr.body = `${pr.body.replace(/\n/g, '\r\n')}\r\n`
+  setGithub(state)
+  const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
+  assert.match(r.out, /billing: PR #\d+ is already up to date/)
+})
+
+test('list --json leaves out the PR title and body the refresh compares', () => {
+  const listed = JSON.parse(rig(['list', '--json']).out)
+  const repo = listed.works.find(w => w.id === 'reviewed-2').repos[0]
+  assert.ok(repo.pr.number, 'the PR itself is listed')
+  assert.deepEqual([repo.pr.title, repo.pr.body], [undefined, undefined])
+})
+
+test('a stage GitHub will not answer for stops the refresh, rather than writing "PR state unknown" into the PR', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'missing' })
+  const r = rig(['pr', '--refresh', '--work', 'sliced'])
+  setGithub(state)
+  assert.match(r.out, /would not say what became of feat\/sliced-one, feat\/sliced-two — nothing refreshed/)
+})
+
+test('dropping a stage changes the stage table, so the open PR is offered a refresh that says so', () => {
+  assert.equal(rig(['stage', 'feat/sliced-three', '--delivers', 'the UI', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['pr', '--refresh', '--work', 'sliced']).code, 0)
+  assert.equal(rig(['stage', 'feat/sliced-three', '--dropped', 'the UI moved to its own work', '--work', 'sliced']).code, 0)
+  assert.match(rig(['next', '--work', 'sliced']).out, /rig pr --refresh/)
+  assert.equal(rig(['pr', '--refresh', '--work', 'sliced']).code, 0)
+  const body = github().repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body
+  assert.match(body, /\| `feat\/sliced-three` \| the UI \| — \| — \| dropped: the UI moved to its own work \|/)
+})
+
+test('pr --refresh with no open PR says so and opens nothing', () => {
+  assert.equal(rig(['new', 'unopened', '--title', 'Not up yet', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'unopened']).code, 0)
+  const before = github().repos['acme/billing'].prs.length
+  const r = rig(['pr', '--refresh', '--work', 'unopened'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: no open PR — nothing to refresh/)
+  assert.equal(github().repos['acme/billing'].prs.length, before)
+})
+
+test('rig next offers the refresh while an open PR says something the record no longer does', () => {
+  assert.equal(rig(['ticket', 'acme/billing#13', '--work', 'reviewed-2']).code, 0)
+  assert.match(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
+  assert.equal(rig(['pr', '--refresh', '--work', 'reviewed-2']).code, 0)
+  assert.doesNotMatch(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
+})

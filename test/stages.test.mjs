@@ -321,3 +321,28 @@ test('the markers say what they are and how to rewrite them', () => {
   assert.match(PLAN_MARK.open, /generated/)
   assert.match(PLAN_MARK.open, /rig plan --refresh/)
 })
+
+// ---------------------------------------------------------------- withdrawn stages
+
+const dropped = (branch, reason) => ({ branch, delivers: '', droppedAt: '2026-09-29T10:00:00.000Z', reason })
+const replaced = (branch, by) => ({ branch, delivers: '', replacedAt: '2026-09-29T10:00:00.000Z', replacedBy: by })
+
+test('a dropped stage says it was dropped, and why, in the table, never as not started', () => {
+  const t = stageTable(stackOf(work({ stages: [dropped('feat/one', 'worth about 15%')] }), []))
+  assert.match(t, /\| 1 \| `feat\/one` \| — \| — \| — \| dropped: worth about 15% \|/)
+})
+
+test('a replaced stage names the stage that replaced it', () => {
+  const t = stageTable(stackOf(work({ stages: [replaced('feat/one', 'feat/two'), stage('feat/two')] }), []))
+  assert.match(t, /\| 1 \| `feat\/one` \| — \| — \| — \| replaced by `feat\/two` \|/)
+})
+
+test('a withdrawn stage is never the next one', () => {
+  const w = work({ stages: [dropped('feat/one', 'not needed'), replaced('feat/two', 'feat/three'), stage('feat/three')] })
+  assert.equal(nextStage(stackOf(w, [])).branch, 'feat/three')
+})
+
+test('a stack whose stages all landed or were withdrawn has no next stage', () => {
+  const w = work({ stages: [stage('feat/one'), dropped('feat/two', 'not needed')] })
+  assert.equal(nextStage(stackOf(w, [on('a', 'feat/one', 'feat/work', merged(1))])), null)
+})
