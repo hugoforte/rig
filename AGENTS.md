@@ -62,6 +62,9 @@ resolved to real ids via `rig.json`'s per-org config) and exits without creating
 <brief> | rig new refund-double-charge --title "..." --ticket             # then create
 ```
 
+A Jira ticket that belongs under an epic says so with `--parent PROJ-7`, on the preview and the
+create alike (DESIGN.md decisions 145–146).
+
 No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the decision —
 `Tickets: none (declined)`, not a silent empty list. On `rig close`, every ticket gets a
 comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets

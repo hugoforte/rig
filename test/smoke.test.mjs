@@ -376,6 +376,14 @@ test('--field name=value,... overrides the org\'s configured default', () => {
   assert.equal(issue.fields.customfield_10058, '5')
 })
 
+// A dry run, so no GitHub issue is made to move the numbering the tests below rely on.
+test('--parent is ignored for a GitHub tracker, and says so', () => {
+  const r = rig(['new', 't7g', '--title', 'Parent on GitHub', '--ticket', '--org', 'acme', '--parent', 'PROJ-9', '--dry-run'],
+    { input: 'brief' })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /--parent is ignored for a GitHub tracker/)
+})
+
 test('rig new --key <a Jira key> fetches title and description from Jira, no piped brief needed', () => {
   const state = twg()
   state.issues['PROJ-2'] = { title: 'Fetched summary', body: 'Fetched description', comments: [] }

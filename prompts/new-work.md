@@ -57,11 +57,14 @@ Present this table. The user confirms, or gives overrides as
 itself contains a comma (multiple components, say) isn't expressible this way, so change
 `rig.json`'s default for that field instead.
 
+If the ticket belongs under an epic, add `--parent <epic key>` to both commands; the preview
+shows it as a `parent` line. It is never a `--field` or a `rig.json` default.
+
 **Then, once confirmed, the same command without `--dry-run`** creates it for real, in one
 shot:
 
 ```
-<brief> | rig new <id> --title "<title>" --ticket --org <org> [--field k=v,...]
+<brief> | rig new <id> --title "<title>" --ticket --org <org> [--field k=v,...] [--parent <epic key>]
 ```
 
 **No tracker for this org, or a genuine spike that should have no ticket:** confirm with
