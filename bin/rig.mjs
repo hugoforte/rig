@@ -3286,17 +3286,19 @@ cmds.pr = ({ flags }) => {
   }
 }
 
-// Whether the base moved since the work branch was cut, and whether the branch conflicts with
-// it, said before its PR is opened (hugoforte/rig#208). The mirror is fetched here, at the one
+// How far the base has moved past the work branch, and whether the branch conflicts with it,
+// said before its PR is opened (hugoforte/rig#208). The mirror is fetched here, at the one
 // moment the answer matters, because nothing else on the way to a PR fetches: the stack is read
 // without a network round trip. Said and never stopped at (decision 66): the PR opens either way,
-// and GitHub would say the same a minute later, only after review had begun.
+// and GitHub would say the same a minute later, only after review had begun. A base that moved
+// is ordinary in a busy repo and is only said; a conflict is something to act on, and warned.
 function sayStanding (cfg, entry, branch, base) {
-  trees(cfg).fetch({ org: entry.org, repo: entry.repo })
-  const standing = trees(cfg).against({ org: entry.org, repo: entry.repo, branch, base })
+  const t = trees(cfg)
+  t.fetch({ org: entry.org, repo: entry.repo })
+  const standing = t.standing({ org: entry.org, repo: entry.repo, branch, base })
   if (!standing) return
   const { behind, conflicts } = standing
-  if (behind) warn(`${entry.repo}: base moved — ${base} has ${behind} commit${behind === 1 ? '' : 's'} this branch does not`)
+  if (behind) step(`${entry.repo}: base moved — ${base} has ${behind} commit${behind === 1 ? '' : 's'} this branch does not`)
   if (conflicts.length) warn(`${entry.repo}: ${branch} conflicts with ${base} in ${conflicts.join(', ')} — \`git merge origin/${base}\` in the worktree, then push`)
 }
 

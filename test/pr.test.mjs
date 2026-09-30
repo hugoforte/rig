@@ -11,7 +11,7 @@ import path from 'node:path'
 import { billingInstall, slicedWork } from './billing-install.mjs'
 
 const m = billingInstall('rig-pr-')
-const { dataRoot, rig, gitMust, github, setGithub, setVisibility, withVisibility, publish, worktree, cleanup } = m
+const { tmp, bare, dataRoot, rig, gitMust, github, setGithub, setVisibility, withVisibility, publish, worktree, cleanup } = m
 
 after(cleanup)
 
@@ -414,15 +414,15 @@ test('a PR labelled release:none is said to ask for no release (#228)', () => {
 // clone of its own, appending `line` to `file`.
 let landedElsewhere = 0
 const landOnMain = (file, line) => {
-  const clone = path.join(m.tmp, `elsewhere-${++landedElsewhere}`)
-  gitMust(m.tmp, 'clone', '-q', m.bare('billing'), clone)
+  const clone = path.join(tmp, `elsewhere-${++landedElsewhere}`)
+  gitMust(tmp, 'clone', '-q', bare('billing'), clone)
   fs.appendFileSync(path.join(clone, file), `${line}\n`)
   gitMust(clone, 'add', '-A')
   gitMust(clone, 'commit', '-qm', `elsewhere: ${line}`)
   gitMust(clone, 'push', '-q', 'origin', 'HEAD:main')
 }
 
-test('rig pr says how far the base moved since the branch was cut, and opens the PR (#208)', () => {
+test('rig pr says how far the base has moved past the branch, and opens the PR (#208)', () => {
   pushedWork('moved-base', 'Moved base')
   landOnMain('OTHER.md', 'another PR')
   const r = rig(['pr', '--work', 'moved-base'])
@@ -439,6 +439,13 @@ test('rig pr names the files a branch conflicts with its base in, and how to mer
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /billing: feat\/conflicted conflicts with main in README\.md — `git merge origin\/main` in the worktree, then push/)
   assert.ok(github().repos['acme/billing'].prs.some(pr => pr.branch === 'feat/conflicted'), 'reported, never refused')
+})
+
+test('a PR already open is not asked about the base again, since GitHub shows its own (#208)', () => {
+  landOnMain('OTHER.md', 'yet another PR')
+  const r = rig(['pr', '--work', 'moved-base'])
+  assert.match(r.out, /is already open/)
+  assert.doesNotMatch(r.out, /fetching|base moved/)
 })
 
 test('a branch the base has not moved past is told nothing about it (#208)', () => {
