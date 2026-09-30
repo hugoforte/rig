@@ -1242,16 +1242,19 @@ function mayLink (spec) {
   return here && root ? REACH.indexOf(here) <= REACH.indexOf(root) : null
 }
 
-// `mayLink` for text about to be written, saying once per repo when GitHub would not answer: the
-// link is left out then, because a link left out costs a click.
+// `mayLink` for text about to be written, saying once, of whichever side GitHub would not answer
+// for, that the link is left out: a link left out costs a click.
 function linkOrSay (spec) {
   const may = mayLink(spec)
-  const key = spec.toLowerCase()
-  if (may === null && !current.linkLeftOut.has(key)) {
+  if (may !== null) return may
+  // Named for the side GitHub would not answer for: the data root once, whatever the target.
+  const rootUnknown = dataRootVisibility() === null
+  const key = rootUnknown ? '' : spec.toLowerCase()
+  if (!current.linkLeftOut.has(key)) {
     current.linkLeftOut.add(key)
-    say(C.dim(`· context-doc link left out: GitHub would not say whether ${spec} is more visible than the data root`))
+    say(C.dim(`· context-doc link left out: GitHub would not say ${rootUnknown ? 'how visible the data root is' : `whether ${spec} is more visible than the data root`}`))
   }
-  return may === true
+  return false
 }
 
 // The context-doc line and the blank line above it, as lines to spread into a body.

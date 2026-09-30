@@ -329,13 +329,14 @@ test('an internal repo is linked from a public data root, and not from a private
   }))
 })
 
-test('a data root GitHub will not say for leaves the link out as well, and says so (#202)', () => {
+test('a data root GitHub will not say for leaves the link out as well, and says it was the data root (#202)', () => {
   withDataRemote('https://github.com/acme/rig-data.git', () => {
     withVisibility('acme/rig-data', 'private', () => refresh('public-pr'))
     assert.match(bodyOf('feat/public-pr'), LINK)
     const r = withVisibility('acme/rig-data', undefined, () => refresh('public-pr'))
     assert.doesNotMatch(bodyOf('feat/public-pr'), LINK)
-    assert.match(r.out, LEFT_OUT)
+    assert.match(r.out, /context-doc link left out: GitHub would not say how visible the data root is/)
+    assert.doesNotMatch(r.out, LEFT_OUT, 'acme/billing answered, so it is not the one named')
   })
 })
 
