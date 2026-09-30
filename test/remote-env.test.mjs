@@ -17,12 +17,17 @@ const askpass = path.join(tmp, 'askpass.sh')
 fs.writeFileSync(askpass, `#!/bin/sh\necho ran > '${marker.replace(/\\/g, '/')}'\necho secret\n`, { mode: 0o755 })
 const askpassPath = askpass.replace(/\\/g, '/')
 
-// `git credential fill` with no helper asks for a username the way a fetch or push would.
-const fill = env => spawnSync('git', ['-c', 'credential.helper=', '-c', `core.askPass=${askpassPath}`, 'credential', 'fill'], {
-  input: 'protocol=https\nhost=example.invalid\n\n',
-  encoding: 'utf8',
-  env: { ...process.env, SSH_ASKPASS: askpassPath, ...env },
-})
+// `git credential fill` with no helper asks for a username the way a fetch or push would. The
+// shell's own askpass variables are dropped first: an editor's terminal sets `GIT_ASKPASS`,
+// which would answer in place of this one.
+const fill = env => {
+  const { GIT_ASKPASS: _editor, SSH_ASKPASS_REQUIRE: _ssh, ...shell } = process.env
+  return spawnSync('git', ['-c', 'credential.helper=', '-c', `core.askPass=${askpassPath}`, 'credential', 'fill'], {
+    input: 'protocol=https\nhost=example.invalid\n\n',
+    encoding: 'utf8',
+    env: { ...shell, SSH_ASKPASS: askpassPath, ...env },
+  })
+}
 
 test('an askpass that is configured is never run, and git says so in the words the hint knows', () => {
   fs.rmSync(marker, { force: true })
@@ -48,7 +53,7 @@ test('an ssh key ssh could not use without asking is named, with how to give it 
 
 test('a host ssh has never seen is named, with how to accept its key', () => {
   assert.match(signIn('Host key verification failed.\nfatal: Could not read from remote repository.'),
-    /rig never waits at a prompt: accept the host's key once with `ssh -T`/)
+    /rig never waits at a prompt: accept the host's key once with `ssh -T git@<host>`/)
 })
 
 test('any other failure gets no hint', () => {

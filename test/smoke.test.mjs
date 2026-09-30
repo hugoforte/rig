@@ -1220,7 +1220,7 @@ test('rig new over a record that will not read says the id is taken and why, not
       for (const args of [['new', 'broken', '--no-ticket'], ['new', 'broken', '--ticket', '--dry-run', '--org', 'acme']]) {
         const r = rig(args)
         assert.equal(r.code, 1, `${args.join(' ')} over ${text}\n${r.out}`)
-        assert.match(r.out, /work "broken" already exists, and its record could not be read: work record for "broken" at .*work\.json could not be read \(/, text)
+        assert.match(r.out, /work "broken" already exists: work record for "broken" at .*work\.json could not be read \(/, text)
         assert.doesNotMatch(r.out, /TypeError|SyntaxError|\n\s+at /, 'no stack trace')
       }
     }, text)

@@ -220,7 +220,7 @@ installed.gitMust(installed.install, 'worktree', 'add', '-q', '-b', 'fix/a-work'
 const driveLinked = args => drive({ ...installed, install: linked }, args)
 const NEEDS = /this is a work's copy of rig, in a linked worktree, and it has no machine config of its own .* set RIG_LOCAL_CONFIG to the installed rig's rig\.local\.json/
 
-test('a work\'s own rig with no machine file says to set RIG_LOCAL_CONFIG, and runs nothing', () => {
+test('a work\'s own rig with no machine file says to set RIG_LOCAL_CONFIG instead of running', () => {
   for (const args of [['list'], ['use'], ['status', '--work', 'nothing']]) {
     const r = driveLinked(args)
     assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}${r.err}`)

@@ -63,6 +63,14 @@ test('the push it offers names the branch, since a bare push goes to the base (#
   assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x', 'git push origin feat/x-stage'])
 })
 
+test('a detached HEAD with unpushed commits is named, and offered no push it would not make', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: null })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
+})
+
 test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),

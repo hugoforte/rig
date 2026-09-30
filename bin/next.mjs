@@ -166,10 +166,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r) && !replaying.includes(r.repo))
   // Pushed by name: a work branch's upstream is its base (decision 110), so a bare `git push`
   // is refused under git's default `push.default` and lands on the base under `upstream`
-  // (decision 159).
+  // (decision 159). A detached HEAD has no branch to name, so it is told nothing to type.
   if (unpushed.length) {
-    const pushes = [...new Set(unpushed.map(r => `git push origin ${r.on ?? work.branch}`))]
-    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, pushes))
+    const pushes = [...new Set(unpushed.filter(r => r.on).map(r => `git push origin ${r.on}`))]
+    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, pushes.length ? pushes : null))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.

@@ -17,13 +17,14 @@ export const NO_PROMPT_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never
 // every place that reports such a failure names the fix with `signIn`.
 export const NEEDS_CREDENTIALS = /terminal prompts disabled|could not read (Username|Password)|cannot prompt/i
 
-// ssh's words for the two things it would otherwise have asked about.
+// Each refusal a prompt would have answered, in git's or ssh's words, with what it needed and
+// how to give it that without a prompt.
 const HINTS = [
-  [NEEDS_CREDENTIALS, 'git needed credentials, and rig never waits at a prompt: sign git in with `gh auth setup-git`'],
-  [/Permission denied \(publickey/i, 'ssh had no key it could use without asking, and rig never waits at a prompt: load the key into an agent with `ssh-add`'],
-  [/Host key verification failed/i, "ssh has not seen this host before, and rig never waits at a prompt: accept the host's key once with `ssh -T` to it"],
+  [NEEDS_CREDENTIALS, 'git needed credentials', 'sign git in with `gh auth setup-git`'],
+  [/Permission denied \(publickey/i, 'ssh had no key it could use without asking', 'load the key into an agent with `ssh-add`'],
+  [/Host key verification failed/i, 'ssh has not seen this host before', "accept the host's key once with `ssh -T git@<host>`"],
 ]
 export const signIn = error => {
   const hint = HINTS.find(([words]) => words.test(error || ''))
-  return hint ? ` — ${hint[1]}` : ''
+  return hint ? ` — ${hint[1]}, and rig never waits at a prompt: ${hint[2]}` : ''
 }

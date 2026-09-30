@@ -798,12 +798,11 @@ function recordShapeProblem (w) {
 // `cause`, which is what the commands that leave a record out name it by (`readRecords`).
 function readRecord (id, root = dataRoot()) {
   const file = recordFile(id, root)
+  const unreadable = cause => new RigError(`work record for "${id}" at ${file} could not be read (${cause.message})`, { cause })
   let w
-  let cause
-  try { w = readJson(file) } catch (e) { cause = e }
-  const shape = cause ? null : recordShapeProblem(w)
-  if (shape) cause = new Error(shape)
-  if (cause) throw new RigError(`work record for "${id}" at ${file} could not be read (${cause.message})`, { cause })
+  try { w = readJson(file) } catch (e) { throw unreadable(e) }
+  const shape = recordShapeProblem(w)
+  if (shape) throw unreadable(new Error(shape))
   return w
 }
 
@@ -2108,10 +2107,7 @@ cmds.new = ({ flags, positional }) => {
   // the real run would just warn-and-skip (an id that already has one).
   let existing = null
   if (exists(recordFile(id))) {
-    try { existing = readRecord(id) } catch (e) {
-      if (!(e instanceof RigError)) throw e
-      die(`work "${id}" already exists, and its record could not be read: ${e.message}`)
-    }
+    try { existing = readRecord(id) } catch (e) { die(`work "${id}" already exists: ${e.message}`) }
   }
   if (dryRun) {
     if (existing?.tickets?.length) { warn(`${id} already has a ticket (${existing.tickets.join(', ')}) — nothing to preview`); return }
@@ -4428,8 +4424,7 @@ function workRootEntries (cfg) {
 
 // One copy of each work whose record reads, and every copy that does not. A work in two roots
 // has one folder, and each readable copy would repeat every finding about it; but a copy that
-// will not read is its own file to fix, and keeping only the first copy met let a broken one
-// hide a readable one, and the reverse (decision 157).
+// will not read is its own file to fix (decision 157).
 const oneCopyEach = works => {
   const readable = works.filter(w => !w.unreadable)
   return works.filter(w => w.unreadable || readable.find(o => o.id === w.id) === w)
@@ -4646,16 +4641,6 @@ rig record format ${MAJOR} — \`rig doctor\` names the release this checkout st
 how far it is behind its remote, \`rig update\` brings it forward.`)
 }
 
-// ----------------------------------------------------------------- one run
-
-// What one invocation does, from the argv it was handed to the exit code it earns. Split from
-// `run` below so that building the invocation and running a command inside it stay two
-// things: everything here already has `current` to read, and nothing here decides what
-// `current` is.
-//
-// A `RigError` is rig's own refusal and is printed; anything else is a bug and propagates,
-// which is what stops the data root being committed — `pendingCommit` is never reached — and
-// leaves it exactly as the failed command found it.
 // A work on rig itself runs the work's own copy — a linked worktree, with no machine file beside
 // it. Every default it would fall back to is some other installation's, so a command there would
 // work in data roots nobody chose, and `rig prompt setup` would write a second machine file into
@@ -4666,9 +4651,21 @@ function linkedCopyNeeds () {
   if (exists(localFile) || !toolState().linked) return null
   return `this is a work's copy of rig, in a linked worktree, and it has no machine config of its own (no ${localFile}) — set RIG_LOCAL_CONFIG to the installed rig's rig.local.json`
 }
-// The commands that run without one: the two that only print, and doctor, which reports it.
-const MACHINELESS = new Set(['help', 'prompt', 'doctor', REFRESH_COMMAND])
+// The commands that run without one: the two that only print, `init`, which is how an
+// installation gets one, `doctor`, which reports it, and the detached refresh, which has nobody
+// to tell.
+const MACHINELESS = new Set(['help', 'prompt', 'init', 'doctor', REFRESH_COMMAND])
 
+// ----------------------------------------------------------------- one run
+
+// What one invocation does, from the argv it was handed to the exit code it earns. Split from
+// `run` below so that building the invocation and running a command inside it stay two
+// things: everything here already has `current` to read, and nothing here decides what
+// `current` is.
+//
+// A `RigError` is rig's own refusal and is printed; anything else is a bug and propagates,
+// which is what stops the data root being committed — `pendingCommit` is never reached — and
+// leaves it exactly as the failed command found it.
 function invoke (argv) {
   const [first, ...rest] = argv
   const cmdName = !first || first === '--help' || first === '-h' ? 'help' : first
