@@ -94,14 +94,11 @@ export function twgViaCli ({ exec = spawnTwg } = {}) {
     // `--description-format markdown` because twg's default is HTML: without it a brief's
     // blank lines collapse into one run-on paragraph and anything angle-bracketed is eaten
     // as a tag (hugoforte/rig#54). It is fixed, not a parameter — rig writes markdown and
-    // nothing else, so the create needs no follow-up `update --description-format markdown`.
+    // nothing else.
     // `parent` goes by twg's own `--parent`, which sends `fields.parent = { key }`; as a
     // `--field` it would reach Jira as a bare string (hugoforte/rig#220).
-    // A `--field` value is read by twg as JSON when it parses as JSON, and twg then shapes it
-    // for Jira against the create screen's metadata, system fields included — a component
-    // name or id becomes `{ id }` — but only a list it can read as a list. So anything but a
-    // string goes as JSON: `components=["11023"]`, where a template string made
-    // `components=11023`, one bare number (hugoforte/rig#53).
+    // twg reads a `--field` value as JSON when it parses, so a list goes as JSON to arrive as
+    // a list; as `components=11023` it would arrive as one bare number (DESIGN.md decision 147).
     createIssue ({ project, type, summary, description, assignee, parent, fields = {} }) {
       const args = ['jira', 'workitem', 'create', '--space', project, '--type', type,
         '--summary', summary, '--description', description, '--description-format', 'markdown']

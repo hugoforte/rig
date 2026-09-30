@@ -59,10 +59,11 @@ its full description in **one** call (hugoforte/rig#54).
 System fields go on the same call. An earlier twg's create dropped them, which is what
 hugoforte/rig#53 was opened for; twg 1.3's create resolves each `--field` against Jira's
 own create-screen metadata, system fields included, and shapes the value for Jira — a
-component name or id becomes `{ id }` — as long as a list arrives as a list. That is read
-from twg's own source, not yet proved against a live site that requires Components. So
-`bin/jira.mjs` sends every value that is not a string as JSON (`components=["11023"]`), and
-no REST passthrough or second create path is needed (DESIGN.md decision 147).
+component name or id becomes `{ id }`. It reads each value as JSON first, so a lone id sent
+bare arrives as a number and is never shaped. `bin/jira.mjs` therefore sends a list as JSON
+(`components=["11023"]`), and no REST passthrough or second create path is needed (DESIGN.md
+decision 147). The shaping is read from twg's own source, not yet proved against a live
+site that requires Components.
 
 A Jira description is the **whole** brief plus the context-doc link, where a GitHub issue
 body is the brief's first paragraph plus the same link. Not an inconsistency: the GitHub
