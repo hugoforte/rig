@@ -3081,10 +3081,10 @@ cmds.next = ({ flags }) => {
         return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link }))
       }).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
-    // Asked only of the repos a `rig pr` would open a PR on, since it is only said beside that.
-    bumps: repos.flatMap((r, i) => {
-      const asked = !r.pr && !r.merged && r.pushed ? bumpAsked(work.repos[i], work.branch) : null
-      return asked ? [{ repo: r.repo, asked }] : []
+    // Asked of a repo with no PR, which is the only kind the offer it goes beside can name.
+    bumps: work.closedAt ? [] : repos.flatMap((r, i) => {
+      const release = !r.pr && !r.merged && r.pushed ? releaseAsked(work.repos[i], work.branch) : null
+      return release ? [{ repo: r.repo, release }] : []
     }),
     // Only this work's repos, not the whole catalogue: `doctor` reports every draft in the
     // root, and the question here is what is available on the work in hand.
@@ -3216,21 +3216,17 @@ const repoSpec = entry => `${entry.org}/${entry.repo}`
 // gone stale, so the three cannot disagree about what the PR should say.
 const prText = (work, stack, { spec, link }) => ({ title: work.title || work.id, body: prBody(work, stack, { spec, link }) })
 
-// What a work PR asks the release for, and why: "asks for a minor release (the branch prefix
-// `feat/`)" (hugoforte/rig#228). The work PR is a release, and nothing said which until the
-// `version` check ran, by which time a work rigged `fix/` that grew a feature was a merge away
-// from shipping it as a patch. `bumpFor` is the check's own answer, so the two cannot differ.
-//
-// Said only on a repo that releases that way (`releasesByBump`), and null everywhere else,
-// including a repo whose labels GitHub would not list: a prefix read as a bump where it is
-// not one is a false line, and saying nothing is not. Null too when the branch names no bump.
-function bumpAsked (entry, branch, prLabels = []) {
+// Which release a work PR asks for, and why — "a minor release (the branch prefix `feat/`)" —
+// as the `version` check's own `bumpFor` reads it (decision 130). Null on a repo that does not
+// release by bump (`releasesByBump`) or whose labels GitHub would not list, where the line
+// could be false, and for a branch that names no bump.
+function releaseAsked (entry, branch, prLabels = []) {
   let labels = null
   trackerFailure(() => { labels = github().labels(entry.org, entry.repo) })
   if (!labels || !releasesByBump(labels)) return null
   const { bump, reason } = bumpFor({ branch, labels: prLabels })
   if (!bump) return null
-  return `asks for ${bump === 'none' ? 'no release' : `a ${bump} release`} (${reason})`
+  return `${bump === 'none' ? 'no release' : `a ${bump} release`} (${reason})`
 }
 
 // Does an open PR still say what `rig pr` would write now? GitHub may hand a body back with
@@ -3262,14 +3258,14 @@ cmds.pr = ({ flags }) => {
     // branch, which is right, and the worktree is what is behind.
     if (onLandedStage(stack, state.on)) warn(`${entry.repo}: the worktree is still on ${state.on}, a stage that has landed — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)
     if (state.prError) { warn(`${entry.repo}: GitHub would not say whether a PR exists (${state.prError}) — not opening one`); continue }
-    // A bump is worth saying of a PR already open too: a label can still change it before it merges.
-    const sayBump = labels => {
-      const asked = bumpAsked(entry, work.branch, labels)
-      if (asked) step(`${entry.repo}: this PR ${asked}`)
+    const sayRelease = labels => {
+      const release = releaseAsked(entry, work.branch, labels)
+      if (release) step(`${entry.repo}: this PR asks for ${release}`)
     }
     if (state.pr && state.pr.state === 'OPEN') {
       step(`${entry.repo}: PR #${state.pr.number} is already open — ${state.pr.url}`)
-      sayBump(state.pr.labels)
+      // Worth saying of a PR already open too: a label can still change it before it merges.
+      sayRelease(state.pr.labels)
       continue
     }
     if (state.pr && state.pr.state === 'MERGED') { step(`${entry.repo}: PR #${state.pr.number} already merged`); continue }
@@ -3285,7 +3281,7 @@ cmds.pr = ({ flags }) => {
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
     if (failed) { warn(`${entry.repo}: could not open a PR (${failed})`); continue }
     ok(`${entry.repo}: PR #${made.number} → ${base}  ${C.dim(made.url)}`)
-    sayBump([])
+    sayRelease([])
   }
 }
 
