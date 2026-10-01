@@ -508,12 +508,36 @@ test('a work abandoned in the current root and open in another is the open one, 
   t.after(() => { fs.rmSync(copy, { recursive: true, force: true }); fs.writeFileSync(record, saved) })
   fs.cpSync(path.dirname(record), copy, { recursive: true })
   fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(saved), closedAt: '2026-10-01T00:00:00Z', abandonedAt: '2026-10-01T00:00:00Z' }))
-  const inFolder = rig(['status'], { cwd: path.join(workRoot, 'only-here') })
-  assert.doesNotMatch(inFolder.out, /abandoned/i, inFolder.out)
+  for (const [r, how] of [[rig(['status'], { cwd: path.join(workRoot, 'only-here') }), 'in its folder'], [rig(['status', '--work', 'only-here']), 'by --work']]) {
+    assert.equal(r.code, 0, `${how}: ${r.out}`)
+    assert.match(r.out, /only-here/, how)
+    assert.doesNotMatch(r.out, /abandoned/i, how)
+  }
   assert.match(rig(['restore', 'only-here']).out, /has no repos attached/, 'not "abandoned — there is nothing to restore"')
   const doctor = strip(rig(['doctor']).out)
   assert.match(doctor, /only-here: data roots hugoforte, personal each hold its record/)
   assert.equal(doctor.match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
+})
+
+test('a work moved, then closed, is closed in two roots: close says --data, commands ask for it, doctor and tidy name it', (t) => {
+  assert.equal(rig(['new', 'moved-twice', '--title', 'Moved, then closed', '--no-ticket']).code, 0)
+  const record = path.join(dataRoot, 'work', 'moved-twice', 'work.json')
+  fs.cpSync(path.dirname(record), path.join(second, 'work', 'moved-twice'), { recursive: true })
+  fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(fs.readFileSync(record, 'utf8')), closedAt: '2026-10-01T00:00:00Z', abandonedAt: '2026-10-01T00:00:00Z' }))
+  t.after(() => { for (const root of [dataRoot, second]) fs.rmSync(path.join(root, 'work', 'moved-twice'), { recursive: true, force: true }) })
+  t.after(() => fs.rmSync(path.join(workRoot, 'moved-twice'), { recursive: true, force: true }))
+  const closed = rig(['close', '--work', 'moved-twice'])
+  assert.equal(closed.code, 0, closed.out)
+  assert.match(strip(closed.out), /`rig save --work moved-twice --data personal -m "lessons reviewed" --learned`/)
+  const status = rig(['status', '--work', 'moved-twice'])
+  assert.equal(status.code, 1, status.out)
+  assert.match(strip(status.out), /data roots hugoforte, personal each hold a record of work "moved-twice" — pass --data <name> to say which/)
+  assert.equal(rig(['status', '--work', 'moved-twice', '--data', 'personal']).code, 0)
+  assert.match(strip(rig(['doctor']).out), /moved-twice: data roots hugoforte, personal each hold its record/)
+  // A copy of the folder left on this machine, with a file in it that only this machine has.
+  fs.mkdirSync(path.join(workRoot, 'moved-twice'), { recursive: true })
+  fs.writeFileSync(path.join(workRoot, 'moved-twice', 'notes.txt'), 'mine')
+  assert.match(strip(rig(['tidy', '--dry-run']).out), /`rig close --work moved-twice --data hugoforte --force` to discard it/)
 })
 
 test('a record in two roots with a copy unreadable: doctor names each broken copy and says both roots hold it, whichever is broken', (t) => {

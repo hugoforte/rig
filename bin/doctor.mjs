@@ -330,9 +330,10 @@ export function doctorFindings (snap = {}) {
     out.push(warn(`${w.id}: data roots ${w.holders.join(', ')} each hold its record — delete the copy that is wrong`))
   }
   for (const w of snap.works || []) {
+    // Open or closed: two closed copies are a pick every command about the work refuses.
+    if ((w.holders || []).length > 1) sayHeldTwice(w)
     if (w.unreadable) {
       out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`))
-      if ((w.holders || []).length > 1) sayHeldTwice(w)
       continue
     }
     // The mirror of a missing folder: the close ran on another machine, and this one still has
@@ -345,7 +346,6 @@ export function doctorFindings (snap = {}) {
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
     }
-    if ((w.holders || []).length > 1) sayHeldTwice(w)
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))
       if (r.secretsUnconfigured) {

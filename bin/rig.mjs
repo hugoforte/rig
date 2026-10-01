@@ -805,8 +805,9 @@ function loadWork (cfg, id, root = dataRoot()) {
   if (!exists(recordFile(id, root))) {
     // A work id is unique across every root on the machine, so the one that has it is worth
     // naming: on a second machine the work in hand is often not in the current root.
-    const { name } = rootHoldingWork(where().roots, id)
-    const hint = name ? ` — data root "${name}" has it: add \`--data ${name}\`` : ''
+    const { name, candidates } = rootHoldingWork(where().roots, id)
+    const hint = name ? ` — data root "${name}" has it: add \`--data ${name}\``
+      : candidates.length ? ` — data roots ${candidates.map(h => h.name).join(', ')} each hold it: add \`--data <name>\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
   const w = readRecord(id, root)
@@ -4068,7 +4069,8 @@ cmds.tidy = ({ flags }) => {
         continue
       }
       seen.add(id)
-      if (leftHere(cfg, work, loc.roots)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
+      // `--data` only where the rule cannot place the work by itself (decision 191).
+      if (leftHere(cfg, work, loc.roots)) leftovers.push({ work, root: rootHoldingWork(loc.roots, id).name ? null : name })
     }
   }
   sayUnreadable(unreadable)
@@ -4555,18 +4557,18 @@ function doctorStamp (written) {
 // which is the whole shape of a shared work root: `cfg` answers where the tree is, `root`
 // answers who has the paperwork for it.
 function doctorWork (cfg, id, root, roots) {
+  const holders = rootHoldingWork(roots, id).holders.map(h => h.name)
   let work
   try { work = loadWork(cfg, id, root) } catch (e) {
-    if (e instanceof RigError) return { id, unreadable: e.message, holders: rootHoldingWork(roots, id).holders.map(h => h.name) }
+    if (e instanceof RigError) return { id, unreadable: e.message, holders }
     throw e
   }
-  const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
+  const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [], holders }
   if (out.closed) return leftHere(cfg, work, roots) ? { ...out, leftover: stoppedOn(work) } : out
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
   out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
-  out.holders = rootHoldingWork(roots, id).holders.map(h => h.name)
   out.repos = work.repos.map(r => {
     const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {

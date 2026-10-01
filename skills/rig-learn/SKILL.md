@@ -11,7 +11,7 @@ Run it while the worktrees are still on disk, before `rig close`, because a less
 
 ## 1. Read the story
 
-Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with the `--data <root>` `rig close` printed, when another data root keeps a copy of the work. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
@@ -125,4 +125,4 @@ Once the lessons have landed, or the user says there are none:
 rig save -m "lessons reviewed" --learned
 ```
 
-This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
+This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone, and `--data <root>` where `rig close` named one. `rig next` stops offering the review, and `rig close` stops naming it.

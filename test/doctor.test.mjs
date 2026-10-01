@@ -395,10 +395,12 @@ const held = holders => ({
 })
 const twoRoots = { dataRoots: [root({ name: 'work' }), root({ name: 'personal', path: 'C:\\rig-data-personal' })] }
 
-test('a record held by one root says nothing, and one held by two is named', () => {
+test('a record held by one root says nothing, and one held by two is named, open or closed', () => {
   assert.equal(matching(doctorFindings(snap({ ...twoRoots, works: [held(['work'])] })), /^w:/).length, 0)
-  const found = doctorFindings(snap({ ...twoRoots, works: [held(['work', 'personal'])] }))
-  assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
+  for (const closed of [false, true]) {
+    const found = doctorFindings(snap({ ...twoRoots, works: [{ ...held(['work', 'personal']), closed }] }))
+    assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
+  }
 })
 
 // Doctor keeps every copy that will not read beside the one that does (decision 157).

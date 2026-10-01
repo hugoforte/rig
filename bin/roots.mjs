@@ -248,7 +248,7 @@ function chooseRoot (reg, env, opts) {
   if (pinned) return known(pinned, 'env', DATA_ROOT_ENV)
   // The work named on the command, else the work folder it runs in: a command about another
   // work is not about the folder it stands in (decision 189).
-  const work = opts.work ?? workIdAt(opts.cwd ?? process.cwd())
+  const work = opts.work || workIdAt(opts.cwd ?? process.cwd())
   if (work) {
     const { name, candidates } = rootHoldingWork(reg.roots, work)
     if (name) return { name, source: 'work' }
