@@ -247,8 +247,9 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     // Every open PR's threads known to be resolved. Unknown is not resolved: going on past a
     // count GitHub would not give is the "nobody could tell" mistake decision 62 exists to prevent.
     const resolved = openPrs.every(r => reviewOf(r)?.unresolved === 0)
-    // A review recorded before the design was last agreed was a review of another design.
-    const adversarial = work.adversarial === true && !(work.reviewedAt && work.reviewedAt >= work.designedAt)
+    // A review recorded before the design was last agreed was a review of another design. Dates
+    // are compared as instants, not strings, and one nobody can read is no review at all.
+    const adversarial = work.adversarial === true && !(Date.parse(work.reviewedAt) >= (Date.parse(work.designedAt) || 0))
     if (adversarial && resolved) {
       out.push(offer('reviewing',
         'the design chose an adversarial review — a reviewer told to find what is wrong with the PR, fixing what it finds and pushing',
@@ -258,12 +259,19 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     if (failing.length) {
       out.push(offer('reviewing', `${failing.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
     }
+    // Neither green nor failing — running, or required and never reported. Said, because the
+    // hand-over waits on it, and a wait nothing names reads as "nothing to suggest".
+    const unreported = openPrs.filter(r => ![null, 'SUCCESS', 'FAILURE', 'ERROR'].includes(reviewOf(r)?.checks ?? null))
+    if (unreported.length) {
+      out.push(offer('reviewing', `${unreported.map(r => `${r.repo} (${reviewOf(r).checks})`).join(', ')}: the PR's checks have not all reported — it is handed over once they pass`))
+    }
     // The design gate passed, with its review choice; every check green or none set up; nothing
-    // local left, or that nobody could count; no stage still to come and no PR body behind the
-    // record.
+    // local left, or that nobody could count, including on a landed stage; no stage still to
+    // come, no PR body behind the record, and no sibling PR closed without merging, since the
+    // work cannot land as a whole while one is.
     const green = openPrs.every(r => [null, 'SUCCESS'].includes(reviewOf(r)?.checks ?? null))
-    const pending = dirty.length || unpushed.length || awaiting.length || prStale.length || (stack.length && nextStage(stack)) ||
-      repos.some(r => !r.merged && (r.missing || r.unpushed === null))
+    const pending = dirty.length || unpushed.length || stranded.length || awaiting.length || prStale.length || (stack.length && nextStage(stack)) ||
+      repos.some(r => !r.merged && (r.missing || r.unpushed === null || r.pr?.state === 'CLOSED'))
     if (work.designedAt && resolved && !adversarial && green && !pending) {
       out.push(offer('reviewing', 'the PR is ready for a human reviewer — hand it over'))
     }

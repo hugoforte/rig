@@ -2574,8 +2574,16 @@ cmds.save = ({ flags }) => {
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
+  // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
+  // read as a yes.
+  for (const f of ['adversarial', 'no-adversarial']) {
+    if (typeof flags[f] === 'string') die(`--${f} takes no value — the flag is the answer`)
+  }
   const choice = flags.adversarial ? true : flags['no-adversarial'] ? false : null
   if (flags.adversarial && flags['no-adversarial']) die('--adversarial or --no-adversarial, not both')
+  // In one call the review would be dated a moment after the design it answers, and count as done
+  // before any PR was opened.
+  if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
   commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
@@ -3250,8 +3258,9 @@ cmds.next = ({ flags }) => {
       return !!s && !s.unknown && !s.problem && !s.linked
     }).map(entry => entry.repo),
     // One more lookup per open work-branch PR, and only here: `rig next` is the one command
-    // that walks a PR through its review.
-    reviews: repos.flatMap((r, i) => {
+    // that walks a PR through its review. Only while it is in review: a stopped work keeps its
+    // PRs open by design and has nothing to ask.
+    reviews: phaseOf(work, repos) !== 'reviewing' ? [] : repos.flatMap((r, i) => {
       if (r.pr?.state !== 'OPEN' || !r.pr.number) return []
       const { org, repo: name } = work.repos[i]
       const review = github().prReview(org, name, r.pr.number)

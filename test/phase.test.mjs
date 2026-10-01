@@ -167,6 +167,13 @@ test('a design gate dated after the close is a contradiction', () => {
   assert.match(found[0], /design gate/)
 })
 
+test('a review choice that is neither true nor false is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, adversarial: 'true' }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /`adversarial` is "true", which is neither true nor false/)
+  assert.deepEqual(contradictions(work({ designedAt: AT, adversarial: false }), []), [])
+})
+
 test('an adversarial review dated after the close is a contradiction', () => {
   const found = contradictions(work({ designedAt: AT, reviewedAt: '2026-09-20T00:00:00.000Z', closedAt: AT }), [])
   assert.equal(found.length, 1)

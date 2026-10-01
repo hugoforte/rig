@@ -135,6 +135,11 @@ export function contradictions (work, repos = []) {
       found.push(`${work.id}: \`${field}\` is "${work[field]}", which is not a date — the ${gate} gate cannot be read`)
     }
   }
+  // `rig save` writes only true or false; anything else is read as "not chosen" and would skip
+  // a review someone asked for.
+  if (work.adversarial !== undefined && typeof work.adversarial !== 'boolean') {
+    found.push(`${work.id}: \`adversarial\` is ${JSON.stringify(work.adversarial)}, which is neither true nor false — the review choice cannot be read`)
+  }
 
   // An abandoned work carries both dates, and that is not a contradiction: `closedAt` is when
   // the teardown ran and `abandonedAt` is the decision that it ended unfinished. The two are

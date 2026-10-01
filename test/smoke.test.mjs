@@ -455,6 +455,16 @@ test('rig save --reviewed is refused before the design gate, whose choice it ans
   assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).reviewedAt, undefined)
 })
 
+test('rig save refuses --reviewed beside --designed, and a value on the review choice', () => {
+  for (const args of [['--designed', '--adversarial', '--reviewed'], ['--designed', '--adversarial=false'], ['--designed', '--no-adversarial=yes']]) {
+    const r = rig(['save', '--work', 't7', ...args])
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}`)
+  }
+  const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
+  assert.equal(record.designedAt, undefined)
+  assert.equal(record.reviewedAt, undefined)
+})
+
 test('rig save --designed --adversarial records the choice beside the gate', () => {
   const r = rig(['save', '--work', 't7', '--designed', '--adversarial'])
   assert.equal(r.code, 0, r.out)
