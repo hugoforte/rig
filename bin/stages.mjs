@@ -128,9 +128,10 @@ export function stageState (stage, perRepo = []) {
     // Up for review while any repo's PR is **open**, and landed only when every repo that
     // carries the stage has merged it — the same all-or-nothing rule `workState` uses for a
     // work, scoped to one slice of it. CLOSED is neither: a stage somebody gave up on is not
-    // one waiting for a reviewer, which is what "not merged" said before.
+    // one waiting for a reviewer, which is what "not merged" said before. Never landed while a
+    // repo GitHub would not answer for may still hold it open.
     open: prs.some(r => r.pr.state === OPEN),
-    landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
+    landed: repos.length > 0 && !unknown.length && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
     prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
   }
