@@ -312,7 +312,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
     // thing to say, not a reason to fail.
-    dropMerged ({ org, repo, branch, head, number }) {
+    //
+    // `remote: false` leaves the remote unasked and answers `absent` for it. That is the leftover
+    // of a work closed on another machine: what happened on the remote was that close's to
+    // decide, and a branch it chose to keep must not get a second chance from a machine nobody
+    // asked.
+    dropMerged ({ org, repo, branch, head, number, remote = true }) {
       const mirror = mirrorPath(org, repo)
       const out = { local: 'absent', remote: 'absent' }
       if (!fs.existsSync(mirror)) return out
@@ -325,6 +330,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
+      if (!remote) return out
       const ls = toRemote(mirror, 'ls-remote', '--heads', 'origin', local(branch))
       if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
       else if (ls.out.trim()) {
