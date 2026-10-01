@@ -100,12 +100,15 @@ export function stageOrder (work, chains = []) {
 // that carries this stage's branch — absent repos simply do not appear, which is what "a
 // stage exists only in the repos it touches" means in data.
 export function stageState (stage, perRepo = []) {
-  const repos = perRepo.filter(r => r.branch === stage.branch)
+  const rows = perRepo.filter(r => r.branch === stage.branch)
+  // A row marked `absent` is a branch gone from here whose lookup failed: it may have landed,
+  // so it counts as unknown, and nothing carries it, so it is not where the stage is.
+  const repos = rows.filter(r => !r.absent)
   const prs = repos.filter(r => r.pr)
   // A lookup GitHub refused, with nothing recorded to fall back on. Carried rather than
   // dropped, because a stage rig could not ask about must never read as one nobody has
   // opened anything on — the `prUnknown` rule the rest of rig already follows.
-  const unknown = repos.filter(r => r.prError && !r.pr).map(r => r.repo)
+  const unknown = rows.filter(r => r.prError && !r.pr).map(r => r.repo)
   return {
     branch: stage.branch,
     delivers: stage.delivers || '',

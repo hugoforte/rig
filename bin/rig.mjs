@@ -1051,16 +1051,19 @@ function draftEntries (work) {
 }
 
 // Which org a repo belongs to: the catalogue first, then GitHub. The language comes
-// along from GitHub for the catalogue stub `rig attach` drafts on first sight.
+// along from GitHub for the catalogue stub `rig attach` drafts on first sight. An org GitHub
+// would not answer for is named with why, since the repo may well be there.
 function resolveOrg (cfg, repo) {
   const cat = findCatalog(repo)
   if (cat) return { org: cat.org, repo: cat.repo }
+  const unanswered = []
   for (const org of cfg.orgs) {
-    const found = github().repo(org, repo)
+    let found = null
+    const error = trackerFailure(() => { found = github().repo(org, repo) })
+    if (error) unanswered.push(`${org} (${error})`)
     if (found) return { org, repo: found.name, language: found.language }
   }
-  const auth = github().auth()
-  const why = auth === 'ok' ? '' : ` — gh is ${auth === 'missing' ? 'not on PATH' : 'not authenticated'}, so GitHub was never asked`
+  const why = unanswered.length ? ` — GitHub would not say for ${unanswered.join(', ')}` : ''
   die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}${why}`)
 }
 
@@ -1882,13 +1885,13 @@ function joinOrCreateDataRepo (spec, named) {
     return target
   }
 
-  // Everything from here asks GitHub, and "gh could not answer" would otherwise read as
-  // "does not exist" and send an existing repo down the create path.
-  const auth = github().auth()
-  if (auth === 'missing') die('gh not found on PATH — joining or creating a data repo needs it')
-  if (auth === 'unauthenticated') die('gh is not authenticated — joining or creating a data repo needs it (gh auth login)')
+  // Everything from here asks GitHub. A lookup gh could not answer throws rather than reading
+  // as "does not exist", which would send an existing repo down the create path.
+  let existing = false
+  const unasked = trackerFailure(() => { existing = github().repoExists(spec) })
+  if (unasked) die(`GitHub would not say whether ${spec} exists (${unasked}) — joining or creating a data repo needs it`)
 
-  if (github().repoExists(spec)) {
+  if (existing) {
     step(`joining ${spec}: cloning to ${target}`)
     github().clone(spec, target)
     // A repo with no commits clones fine and is useless; give it its first commit.
@@ -2392,9 +2395,6 @@ function whyAbsent (entry, branch) {
   let pr = null
   const error = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, branch) })
   if (error) return `GitHub would not say whether it had a PR (${error})`
-  // A lookup gh refused answers null too, and "never pushed" would then be a guess.
-  const auth = pr ? 'ok' : github().auth()
-  if (auth !== 'ok') return `GitHub would not say whether it had a PR (gh is ${auth})`
   if (!pr) return 'it has no PR, so it was never pushed from the machine that made it'
   return `PR #${pr.number} ${pr.state} ${pr.url}`
 }
@@ -2682,8 +2682,8 @@ function prTiming (entry, pr) {
   const fromBranch = () => branchFirstCommitAt(entry, pr?.base)
   if (!pr) return { firstCommitAt: fromBranch() }
   let times = null
-  // `prTimeline` answers null for a PR gh could not read at all, which is not a PR nobody
-  // reviewed. Left as a plain null, that work leaves the review figures without a trace.
+  // A PR gh could not read throws, and one gh answered with nothing is null; neither is a PR
+  // nobody reviewed. Left as a plain null, that work leaves the review figures without a trace.
   const error = trackerFailure(() => { times = github().prTimeline(entry.org, entry.repo, pr.number) }) ||
     (times ? undefined : `GitHub would not answer for ${entry.org}/${entry.repo}#${pr.number}`)
   if (!times) return { firstCommitAt: fromBranch(), error }
@@ -3450,10 +3450,6 @@ function sayStanding (cfg, entry, branch, base) {
 function refreshPrs (work, stack) {
   const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
   if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
-  // A lookup gh refused answers null, which would read as "no open PR" here and as "no PR yet"
-  // in the stage table.
-  const auth = github().auth()
-  if (auth !== 'ok') return warn(`GitHub would not say whether a PR is open (gh is ${auth}) — nothing refreshed`)
   for (const entry of work.repos) {
     const { pr, prError } = prAndBase(entry, work.branch)
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
@@ -3498,11 +3494,14 @@ function branchRows (cfg, work) {
     // asked for the branches git could not find, and only those: a repo carrying the branch
     // costs nothing extra, and a row survives only if a pull request answers for it.
     for (const b of declared) if (!known.has(b)) known.set(b, { branch: b, base: null, absent: true })
+    //
+    // A branch gone from here whose lookup failed is kept, marked `absent`, because it may have
+    // landed: `stageState` counts it as unknown and never as a branch this repo carries.
     for (const b of known.values()) {
       let pr = null
       const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
       const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
-      if (b.absent && !pr && !recorded) continue
+      if (b.absent && !pr && !recorded && !prError) continue
       rows.push({
         repo: entry.repo,
         branch: b.branch,
@@ -3514,6 +3513,7 @@ function branchRows (cfg, work) {
         cutOn: (!prError && pr?.state === 'OPEN' && pr.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
+        ...(b.absent && !pr && !recorded ? { absent: true } : {}),
       })
     }
   }
@@ -3594,7 +3594,8 @@ cmds.stage = ({ flags, positional }) => {
     if (st.tickets.length) say(`       ${C.dim(st.tickets.join(', '))}`)
     if (st.withdrawn) say(`       ${C.dim(`${withdrawnLabel(st.withdrawn)} (${st.withdrawn.at.slice(0, 10)})`)}`)
     if (st.started) say(`       ${C.dim(st.repos.join(', '))}`)
-    else if (!st.withdrawn) say(`       ${C.dim('not cut in any repo yet')}`)
+    // Not while GitHub would not say: the branch may be gone because the stage landed.
+    else if (!st.withdrawn && !st.prUnknown) say(`       ${C.dim('not cut in any repo yet')}`)
     for (const pr of st.prs) {
       say(`       ${C.dim(`${pr.repo}: PR #${pr.number} ${pr.state.toLowerCase()} ${pr.url}`)}`)
     }
@@ -3640,9 +3641,6 @@ function withdrawStage (cfg, work, branch, flags) {
   if (merged.length) die(`${branch} has landed in ${merged.map(pr => pr.repo).join(', ')} — it is in ${work.branch}, so it cannot be withdrawn`)
   if (open.length) die(`${branch} has ${open.map(pr => `PR #${pr.number} open in ${pr.repo}`).join(', ')} — close it first, then withdraw the stage`)
   if (st.prUnknown) die(`GitHub would not say whether ${branch} has a PR in ${st.prUnknown.join(', ')} — nothing recorded`)
-  // A lookup gh refused answers null too, so "no PR" is only believed from a gh that is signed in.
-  const auth = st.started && !st.prs.length ? github().auth() : 'ok'
-  if (auth !== 'ok') die(`GitHub would not say whether ${branch} has a PR (gh is ${auth}) — nothing recorded`)
   // A stage cut on this one carries its commits, so they would land with it while the record
   // said they were gone.
   const live = new Set(work.stages.filter(s => !withdrawalOf(s)).map(s => s.branch))

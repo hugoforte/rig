@@ -184,3 +184,14 @@ test('the reason names every unmerged repo in the PR\'s own terms', () => {
     ])
   assert.equal(v.reason, 'Not every PR is merged — orders (PR state unknown), warehouse (no PR).')
 })
+
+test('a stage whose PR state is unknown blocks the close', () => {
+  // A slice rig could not ask about may still be up for review, which is what an open one
+  // blocks for (decision 172). A withdrawn stage is meant to land nothing, so it is not asked.
+  const stage = (branch, extra) => ({ branch, prs: [], prUnknown: null, withdrawn: null, ...extra })
+  const v = workState(work({ repo: 'billing' }), [{ repo: 'billing', ...clean({ pr: mergedPr }) }], {
+    stages: [stage('feat/w-one', { prUnknown: ['billing'] }), stage('feat/w-two', { prUnknown: ['billing'], withdrawn: { droppedAt: '2026-09-01' } })],
+  })
+  assert.deepEqual(v.blockers, [{ repo: 'billing', kind: 'stage-pr-unknown', message: 'billing: stage feat/w-one PR state unknown' }])
+  assert.equal(v.safeToClose, false)
+})

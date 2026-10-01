@@ -1139,6 +1139,23 @@ test('backfill: a lookup GitHub refuses is reported and left unstored, never cac
   assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].branches[0].pr.number, 30)
 })
 
+test('backfill: a signed-out gh is reported for the branch it would not answer for, never skipped as unmerged', () => {
+  // gh runs and exits non-zero when signed out, and that used to read as "no PR yet", so the
+  // branch was passed over in silence (decision 168).
+  const state = github()
+  plantWork('t9b', {
+    id: 't9b', title: 'Asked while signed out', tickets: [], ticketsDeclined: true, type: 'feat',
+    branch: 'feat/t9b', status: 'closed',
+    repos: [{ repo: 'warehouse', org: 'acme', base: 'main', attachedAt: '2026-02-10T00:00:00.000Z' }],
+    createdAt: '2026-02-10T00:00:00.000Z', closedAt: '2026-02-12T01:00:00.000Z',
+  })
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['backfill', '--work', 't9b'])
+  setGithub(state)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /t9b\/warehouse feat\/t9b: gh is not authenticated/)
+})
+
 test('rig backfill with no --work scans every work in the data root', () => {
   const state = github()
   state.repos['acme/reporting'] = {

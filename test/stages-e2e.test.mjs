@@ -437,7 +437,44 @@ test('a cut stage is not withdrawn while gh cannot say whether it has a PR', () 
   const r = rig(['stage', 'feat/replanned-review', '--dropped', 'changed my mind', '--work', 'replanned'])
   setGithub(state)
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /GitHub would not say whether feat\/replanned-review has a PR \(gh is unauthenticated\) — nothing recorded/)
+  assert.match(r.out, /GitHub would not say whether feat\/replanned-review has a PR in billing — nothing recorded/)
+})
+
+test('a stage is not withdrawn while its own PR lookup fails, with gh signed in', () => {
+  // A rate limit or a network error passes `gh auth status`, so asking it was never the
+  // answer: the lookup says it could not answer (decision 169).
+  assert.equal(rig(['stage', 'feat/replanned-quiet', '--delivers', 'nothing yet', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-quiet', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'quiet' })
+  const state = github()
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/replanned-quiet': 'HTTP 403: API rate limit exceeded' }
+  setGithub(failing)
+  const r = rig(['stage', 'feat/replanned-quiet', '--dropped', 'changed my mind', '--work', 'replanned'])
+  setGithub(state)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /GitHub would not say whether feat\/replanned-quiet has a PR in billing — nothing recorded/)
+  assert.equal(record('replanned').stages.find(s => s.branch === 'feat/replanned-quiet').droppedAt, undefined)
+})
+
+test('a landed stage whose branch is gone, and whose lookup fails, reads as unknown, never not started', () => {
+  // The branch is gone from here, so only GitHub can say the stage landed; a refused lookup
+  // used to drop the row and the stage read as one nobody had cut (decision 170).
+  assert.equal(rig(['new', 'vanished', '--title', 'Vanished work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'vanished']).code, 0)
+  assert.equal(rig(['stage', 'feat/vanished-one', '--delivers', 'the schema', '--work', 'vanished']).code, 0)
+  cutStage({ work: 'vanished', repo: 'billing', branch: 'feat/vanished-one', from: 'feat/vanished-work', back: 'feat/vanished-work', message: 'the schema' })
+  gitMust(worktree('vanished', 'billing'), 'branch', '-q', '-D', 'feat/vanished-one')
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch: 'feat/vanished-one', number: 140, state: 'MERGED', url: 'https://github.com/acme/billing/pull/140', base: 'feat/vanished-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] })
+  setGithub(state)
+  assert.match(rig(['stage', '--work', 'vanished']).out, /PR #140 merged/, 'GitHub answering says it landed')
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/vanished-one': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const out = rig(['stage', '--work', 'vanished']).out
+  setGithub(state)
+  assert.match(out, /PR state unknown/)
+  assert.doesNotMatch(out, /not started|not cut in any repo yet/)
 })
 
 test('a withdrawn stage is put back with --planned, and the commit says so', () => {

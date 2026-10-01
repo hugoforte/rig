@@ -23,10 +23,11 @@
 //   repoExists(spec)                    spec is owner/name
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
-// Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, prTimeline, labels, stacks, repoExists) answer
-// null or false — "not found" and "gh could not answer" look the same to them — and every
-// other call throws GithubError carrying gh's stderr.
+// Every call but auth() and stackTool() throws GithubError when gh cannot be spawned, and
+// when gh runs and exits non-zero, carrying gh's stderr. A lookup that gh could not answer —
+// signed out, rate limited, offline — therefore throws, and never reads as "not found"
+// (DESIGN.md decision 168). Not found is said only where gh says it: exit 0 with nothing
+// (prForBranch, prTimeline, prsOnto, pullsForCommit), or HTTP 404 (repo, repoExists).
 //
 // createIssue, commentIssue and closeIssue are the tracker operations: what rig does to
 // a ticket. bin/jira.mjs presents the same operations for Jira under its own names.
@@ -51,7 +52,15 @@ const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].
 const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
 
 export function githubViaGh ({ exec = spawnGh } = {}) {
-  const { run: gh, must } = cliRunner('gh', exec, fail)
+  const { run: gh, must, refused } = cliRunner('gh', exec, fail)
+  // `gh api`'s answer, or null when GitHub says it has no such thing. Only a 404 is "not
+  // found": a 401, a rate limit or a network error is gh failing to ask, and throws.
+  const unless404 = args => {
+    const r = gh(args)
+    if (r.code === 0) return r.out
+    if (/\(HTTP 404\)/.test(r.err)) return null
+    refused(args, r)
+  }
 
   return {
     auth () {
@@ -60,9 +69,9 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       return r.status === 0 ? 'ok' : 'unauthenticated'
     },
     repo (org, name) {
-      const r = gh(['api', `repos/${org}/${name}`, '--jq', '{name,language,visibility}'])
-      if (r.code !== 0 || !r.out) return null
-      const { name: canonical, language, visibility } = parseJson(r.out, 'gh api')
+      const out = unless404(['api', `repos/${org}/${name}`, '--jq', '{name,language,visibility}'])
+      if (!out) return null
+      const { name: canonical, language, visibility } = parseJson(out, 'gh api')
       return { name: canonical, language: language || '', visibility: visibility || null }
     },
     // `baseRefName` is the base the PR lands on *now* — repoint a PR at another branch and
@@ -75,30 +84,29 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // `title` and `body` are what `rig next` and `rig pr --refresh` compare with what `rig pr`
     // would write now.
     prForBranch (org, name, branch) {
-      const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
+      const out = must(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
         '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels', '--limit', '1'])
-      if (r.code !== 0 || !r.out) return null
-      const prs = parseJson(r.out, 'gh pr list')
-      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
+      if (!out) return null
+      const prs = parseJson(out, 'gh pr list')
+      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(out)}`)
       const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: (pr.labels || []).map(l => l.name) } : null
     },
     // Every label a repo has, by name. `rig pr` asks whether any is a `release:` label, which is
     // what says the repo releases the way rig does.
     labels (org, name) {
-      const r = gh(['api', `repos/${org}/${name}/labels`, '--paginate', '--jq', '.[].name'])
-      if (r.code !== 0) return null
-      return r.out.split('\n').map(l => l.trim()).filter(Boolean)
+      const out = must(['api', `repos/${org}/${name}/labels`, '--paginate', '--jq', '.[].name'])
+      return out.split('\n').map(l => l.trim()).filter(Boolean)
     },
     // The open pull requests that land on a branch — what is stacked on top of it. `rig
     // restore` follows these up from the highest branch a work records, to name the stack
     // somebody built on it without telling rig.
     prsOnto (org, name, base) {
-      const r = gh(['pr', 'list', '--repo', `${org}/${name}`, '--base', base,
+      const out = must(['pr', 'list', '--repo', `${org}/${name}`, '--base', base,
         '--state', 'open', '--json', 'number,headRefName,url'])
-      if (r.code !== 0 || !r.out) return []
-      const prs = parseJson(r.out, 'gh pr list')
-      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(r.out)}`)
+      if (!out) return []
+      const prs = parseJson(out, 'gh pr list')
+      if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(out)}`)
       return prs.map(pr => ({ number: pr.number, branch: pr.headRefName, url: pr.url }))
     },
     // Every pull request a commit belongs to, for assembling a release. Asked of the API per
@@ -111,11 +119,11 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // the other from the notes. An empty list is a real answer and stays one: it is what
     // `bin/release.mjs` refuses on rather than folding away.
     pullsForCommit (org, name, sha) {
-      const r = gh(['api', `repos/${org}/${name}/commits/${sha}/pulls`, '--jq',
+      const out = must(['api', `repos/${org}/${name}/commits/${sha}/pulls`, '--jq',
         'map({number, title, url: .html_url, body, headRefName: .head.ref, baseRefName: .base.ref, labels: [.labels[].name]})'])
-      if (r.code !== 0 || !r.out) return []
-      const pulls = parseJson(r.out, 'gh api commits/pulls')
-      if (!Array.isArray(pulls)) fail(`gh api commits/pulls returned something that is not a list: ${firstLine(r.out)}`)
+      if (!out) return []
+      const pulls = parseJson(out, 'gh api commits/pulls')
+      if (!Array.isArray(pulls)) fail(`gh api commits/pulls returned something that is not a list: ${firstLine(out)}`)
       return pulls
     },
     // The PR, not the branch, because a merged PR's branch is usually deleted — this is the
@@ -124,10 +132,10 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // `jq` reduces before parsing, because review bodies are the bulk of the answer and
     // nothing here wants them.
     prTimeline (org, name, number) {
-      const r = gh(['pr', 'view', String(number), '--repo', `${org}/${name}`,
+      const out = must(['pr', 'view', String(number), '--repo', `${org}/${name}`,
         '--json', 'commits,reviews', '--jq', PR_TIMELINE_JQ])
-      if (r.code !== 0 || !r.out) return null
-      const t = parseJson(r.out, 'gh pr view')
+      if (!out) return null
+      const t = parseJson(out, 'gh pr view')
       return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
     },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
@@ -145,12 +153,11 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, '--title', title, '--body', body])
     },
     // Every GitHub stack a repo has, open or merged, by the endpoint the gh-stack extension
-    // itself reads. GitHub's REST reference does not list it, so an answer it will not give is
-    // unknown, never "no stacks".
+    // itself reads. GitHub's REST reference does not list it, so an answer it will not give —
+    // a 404 included — throws, and is unknown to the caller, never "no stacks".
     stacks (org, name) {
-      const r = gh(['api', `repos/${org}/${name}/stacks`, '--paginate', '--jq', STACKS_JQ])
-      if (r.code !== 0) return null
-      return r.out.split('\n').filter(l => l.trim()).map(l => {
+      const out = must(['api', `repos/${org}/${name}/stacks`, '--paginate', '--jq', STACKS_JQ])
+      return out.split('\n').filter(l => l.trim()).map(l => {
         const s = parseJson(l, 'gh api stacks')
         return { number: s.number, open: s.open, base: s.base, prs: s.prs, openPrs: s.openPrs }
       })
@@ -172,7 +179,13 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
       const n = /\/issues\/(\d+)\s*$/.exec(out)?.[1]
-      if (!n) fail(`could not read the issue number from gh output:\n${out}`)
+      // gh exited 0, so the issue exists whether or not its answer can be read, and a retry
+      // makes a second one (DESIGN.md decision 171, the twin of 150).
+      if (!n) {
+        fail(`gh exited 0 but rig could not read the new issue's number from its answer, so the issue may have been created. ` +
+          `Search ${repo} for "${title}" before retrying, ` +
+          `then record it on this work with \`rig ticket ${repo}#<n> --work <id>\`.\ngh's answer:\n${out}`)
+      }
       return Number(n)
     },
     commentIssue (repo, number, body) {
@@ -181,8 +194,9 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     closeIssue (repo, number) {
       must(['issue', 'close', String(number), '--repo', repo])
     },
+    // Asked of `gh api`, as `repo` is, so a 404 is the one "does not exist".
     repoExists (spec) {
-      return gh(['repo', 'view', spec, '--json', 'name']).code === 0
+      return unless404(['api', `repos/${spec}`, '--jq', '.name']) !== null
     },
     clone (spec, target) {
       // Both go through git, which may never stop to ask for credentials (decision 138).
@@ -196,23 +210,34 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 
 // Canned GitHub for tests. `state` is mutated in place so the harness can persist and
 // inspect it: { auth, repos: { 'owner/name': { language, visibility, labels, prs, issues, source } } }.
-// A repo with no `visibility` or no `labels` is one GitHub would not say them for.
-// `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' makes
-// lookups answer null or false, as gh's non-zero exit does, and writes fail.
+// A repo with no `visibility` is one GitHub would not say it for; one with no `labels`, or with
+// `stacks: null`, is one gh could not list them for, so the lookup throws as the real one does.
+// `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' fails every
+// call but auth(), lookups included, as gh's non-zero exit does (DESIGN.md decision 168).
+// One lookup can fail on its own, with gh's message: a repo's `lookupFails` fails every lookup
+// on that repo, and its `branchLookupFails: { <branch>: <message> }` fails prForBranch for that
+// branch only — "the work PR answered and one stage's did not".
 // `env` is the run's, for the one call below that spawns anything: a clone made under the
 // machine's real global config rather than the run's is how an isolated test starts
 // answering for the machine it happens to be on.
 export function githubInMemory (state, { env } = {}) {
   state.repos = state.repos || {}
-  // Can gh answer at all (missing fails everything), and is it allowed to (writes need auth)?
-  const answers = () => {
-    if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
-    return state.auth !== 'unauthenticated'
-  }
-  const write = () => { if (!answers()) fail('gh is not authenticated (in-memory GitHub)') }
   const lookup = spec => {
     const key = Object.keys(state.repos).find(k => k.toLowerCase() === spec.toLowerCase())
     return key ? { key, repo: state.repos[key] } : null
+  }
+  // Can gh answer at all (missing), is it signed in, and will GitHub answer for this repo and
+  // branch? Every call but auth() and stackTool() asks first.
+  const write = () => {
+    if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
+    if (state.auth === 'unauthenticated') fail('gh is not authenticated (in-memory GitHub)')
+  }
+  const ask = (spec, branch) => {
+    write()
+    const repo = lookup(spec)?.repo
+    if (repo?.lookupFails) fail(repo.lookupFails)
+    const failsFor = branch === undefined ? null : repo?.branchLookupFails?.[branch]
+    if (failsFor) fail(failsFor)
   }
   const issue = (spec, number) => {
     const found = lookup(spec)?.repo.issues?.find(i => i.number === Number(number))
@@ -222,12 +247,12 @@ export function githubInMemory (state, { env } = {}) {
   return {
     auth: () => state.auth || 'ok',
     repo (org, name) {
-      if (!answers()) return null
+      ask(`${org}/${name}`)
       const found = lookup(`${org}/${name}`)
       return found ? { name: found.key.split('/')[1], language: found.repo.language || '', visibility: found.repo.visibility || null } : null
     },
     prForBranch (org, name, branch) {
-      if (!answers()) return null
+      ask(`${org}/${name}`, branch)
       // The newest PR on the branch, as `gh pr list --limit 1` answers — a closed PR
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
@@ -235,12 +260,11 @@ export function githubInMemory (state, { env } = {}) {
       return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: pr.labels || [] } : null
     },
     labels (org, name) {
-      if (!answers()) return null
-      const found = lookup(`${org}/${name}`)
-      return found?.repo.labels ?? null
+      ask(`${org}/${name}`)
+      return lookup(`${org}/${name}`)?.repo.labels ?? fail(`gh api: ${org}/${name}: labels not listed (in-memory GitHub)`)
     },
     prsOnto (org, name, base) {
-      if (!answers()) return []
+      ask(`${org}/${name}`)
       return (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.base === base && p.state === 'OPEN')
         .map(p => ({ number: p.number, branch: p.branch, url: p.url }))
@@ -249,7 +273,7 @@ export function githubInMemory (state, { env } = {}) {
     // declares them — a commit in two of them answers with both, which is the case the real
     // adapter's `map(...)` exists for and the one a release has to get right.
     pullsForCommit (org, name, sha) {
-      if (!answers()) return []
+      ask(`${org}/${name}`)
       return (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => (p.commits || []).includes(sha))
         .map(p => ({
@@ -263,7 +287,7 @@ export function githubInMemory (state, { env } = {}) {
         }))
     },
     prTimeline (org, name, number) {
-      if (!answers()) return null
+      ask(`${org}/${name}`)
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       if (!pr) return null
       const earliest = dates => dates.filter(Boolean).slice().sort()[0] || null
@@ -293,9 +317,9 @@ export function githubInMemory (state, { env } = {}) {
       Object.assign(pr, { title, body })
     },
     stacks (org, name) {
-      if (!answers()) return null
+      ask(`${org}/${name}`)
       const found = lookup(`${org}/${name}`)
-      if (!found || found.repo.stacks === null) return null
+      if (!found || found.repo.stacks === null) fail(`gh api: ${org}/${name}: stacks not listed (in-memory GitHub)`)
       const open = n => (found.repo.prs || []).some(p => p.number === n && p.state === 'OPEN')
       return (found.repo.stacks || []).map(s => ({ ...s, prs: [...s.prs], openPrs: s.prs.filter(open) }))
     },
@@ -336,7 +360,8 @@ export function githubInMemory (state, { env } = {}) {
       issue(spec, number).state = 'CLOSED'
     },
     repoExists (spec) {
-      return answers() && lookup(spec) !== null
+      ask(spec)
+      return lookup(spec) !== null
     },
     clone (spec, target) {
       write()

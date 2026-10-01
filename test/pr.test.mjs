@@ -102,16 +102,15 @@ test('a PR state GitHub would not answer for opens nothing, rather than opening 
   assert.equal(github().repos['acme/billing'].prs.length, before, 'and nothing was opened blind')
 })
 
-test('an unauthenticated gh cannot be told from "no PR", so the refusal lands on the write', () => {
-  // The adapter's contract: a lookup that failed and a lookup that found nothing both answer
-  // null. So this path reaches `createPr`, which refuses — which is the safe direction, and
-  // worth pinning because the alternative is a duplicate PR.
+test('an unauthenticated gh is not opened over: GitHub would not say whether a PR exists', () => {
+  // A lookup gh could not answer throws, so the refusal comes before any write is tried
+  // (DESIGN.md decision 168), rather than resting on `createPr` refusing too.
   const state = github()
   const before = state.repos['acme/billing'].prs.length
   setGithub({ ...state, auth: 'unauthenticated' })
   const r = rig(['pr', '--work', 'to-review'])
-  assert.match(r.out, /could not open a PR/)
   setGithub(state)
+  assert.match(r.out, /billing: GitHub would not say whether a PR exists \(gh is not authenticated \(in-memory GitHub\)\) — not opening one/)
   assert.equal(github().repos['acme/billing'].prs.length, before)
 })
 
@@ -208,7 +207,7 @@ test('an unauthenticated gh is not reported as having no open PR, and nothing is
   setGithub({ ...state, auth: 'unauthenticated' })
   const r = rig(['pr', '--refresh', '--work', 'reviewed-2'])
   setGithub(state)
-  assert.match(r.out, /GitHub would not say whether a PR is open \(gh is unauthenticated\) — nothing refreshed/)
+  assert.match(r.out, /billing: GitHub would not say whether a PR is open \(gh is not authenticated \(in-memory GitHub\)\) — nothing refreshed/)
   assert.doesNotMatch(r.out, /no open PR/)
 })
 
@@ -237,6 +236,21 @@ test('rig next offers the refresh while an open PR says something the record no 
   assert.match(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
   assert.equal(rig(['pr', '--refresh', '--work', 'reviewed-2']).code, 0)
   assert.doesNotMatch(rig(['next', '--work', 'reviewed-2']).out, /rig pr --refresh/)
+})
+
+test('rig next offers no refresh of a stale PR while one stage\'s lookup fails', () => {
+  // The work PR answered and one stage's lookup did not: the stage table the refresh would
+  // write says "PR state unknown" for it, so the PR is no evidence of being stale (decision 170).
+  const state = github()
+  state.repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body = 'a body the record no longer says'
+  setGithub(state)
+  assert.match(rig(['next', '--work', 'sliced']).out, /rig pr --refresh/, 'the stale PR is offered a refresh while every lookup answers')
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/sliced-two': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const out = rig(['next', '--work', 'sliced']).out
+  setGithub(state)
+  assert.doesNotMatch(out, /rig pr --refresh/)
 })
 
 // A work with one repo, one commit pushed and whatever `extra` commands it names, so the PR

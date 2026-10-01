@@ -124,7 +124,7 @@ function reasonFor (repos, blockers, done) {
 //
 //   repos       per-repo facts plus `merged` and that repo's blockers
 //   blockers    every blocker, in repo order: { repo, kind, message }
-//               kind: dirty | unbranched | unpushed | distance-unknown | pr-open | pr-unknown | stage-pr-open
+//               kind: dirty | unbranched | unpushed | distance-unknown | pr-open | pr-unknown | stage-pr-open | stage-pr-unknown
 //   safeToClose nothing is in the way of `rig close`
 //   done        safe to close *and* every attached repo landed a PR
 //   reason      one line saying why not done, empty when it is
@@ -145,7 +145,14 @@ export function workState (work, states = [], { stages = [] } = {}) {
     kind: 'stage-pr-open',
     message: `${pr.repo}: stage ${st.branch} still has PR #${pr.number} open`,
   })))
-  const blockers = repos.flatMap(v => v.blockers).concat(slices)
+  // A slice GitHub would not answer for may be one still up for review (decision 172). A
+  // withdrawn one is meant to land nothing, so what became of it is not asked.
+  const unknown = stages.filter(st => !st.withdrawn).flatMap(st => (st.prUnknown || []).map(repo => ({
+    repo,
+    kind: 'stage-pr-unknown',
+    message: `${repo}: stage ${st.branch} PR state unknown`,
+  })))
+  const blockers = repos.flatMap(v => v.blockers).concat(slices, unknown)
   const safeToClose = blockers.length === 0
   const done = safeToClose && repos.length > 0 && repos.every(v => v.merged)
   return { repos, blockers, safeToClose, done, reason: reasonFor(repos, blockers, done) }
