@@ -156,3 +156,15 @@ test('e2e: the gathering reads the range oldest first, so the notes read in orde
   assert.deepEqual(commits.map(c => c.pulls[0].number), [1, 2], 'oldest commit first')
   assert.ok(notes.indexOf('First') < notes.indexOf('Second'), notes)
 })
+
+test('e2e: a commit GitHub would not say the pull requests of stops the gather, rather than reading as one with none', () => {
+  // A refused lookup used to answer [], and the release then refused for the wrong reason: a
+  // commit with no pull request (decision 169).
+  const repo = repoWith({ commits: ['add-retries'], prs: s => [{ number: 7, branch: 'feat/add-retries', base: 'main', title: 'Add retries', body: 'Why.', commits: [s['add-retries']] }] })
+  const state = JSON.parse(fs.readFileSync(repo.fake, 'utf8'))
+  state.repos[REPO].lookupFails = 'HTTP 502: Bad Gateway'
+  fs.writeFileSync(repo.fake, JSON.stringify(state))
+  const gathered = runIn(repo.dir, repo.fake, [path.join(SRC, 'bin', 'release-gather.mjs'), '--repo', REPO, '--previous', repo.tag])
+  assert.notEqual(gathered.status, 0, gathered.stdout)
+  assert.match(gathered.stderr, /HTTP 502: Bad Gateway/)
+})

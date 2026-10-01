@@ -23,10 +23,13 @@ export function cliRunner (binary, exec, fail) {
     if (r.error) fail(`${binary} not found on PATH (${r.error.message})`)
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
   }
+  // The failure sentence `must` uses, for a caller that inspects `run`'s result first — a lookup
+  // that answers "not found" for one particular failure.
+  const refused = (args, r) => fail(`${binary} ${args.slice(0, 2).join(' ')}: ${r.err || r.out}`)
   const must = (args, opts) => {
     const r = run(args, opts)
-    if (r.code !== 0) fail(`${binary} ${args.slice(0, 2).join(' ')}: ${r.err || r.out}`)
+    if (r.code !== 0) refused(args, r)
     return r.out
   }
-  return { run, must }
+  return { run, must, refused }
 }

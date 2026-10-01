@@ -100,12 +100,15 @@ export function stageOrder (work, chains = []) {
 // that carries this stage's branch — absent repos simply do not appear, which is what "a
 // stage exists only in the repos it touches" means in data.
 export function stageState (stage, perRepo = []) {
-  const repos = perRepo.filter(r => r.branch === stage.branch)
+  const rows = perRepo.filter(r => r.branch === stage.branch)
+  // A row marked `absent` is a branch gone from here whose lookup failed: it may have landed,
+  // so it counts as unknown, and nothing carries it, so it is not where the stage is.
+  const repos = rows.filter(r => !r.absent)
   const prs = repos.filter(r => r.pr)
   // A lookup GitHub refused, with nothing recorded to fall back on. Carried rather than
   // dropped, because a stage rig could not ask about must never read as one nobody has
   // opened anything on — the `prUnknown` rule the rest of rig already follows.
-  const unknown = repos.filter(r => r.prError && !r.pr).map(r => r.repo)
+  const unknown = rows.filter(r => r.prError && !r.pr).map(r => r.repo)
   return {
     branch: stage.branch,
     delivers: stage.delivers || '',
@@ -125,9 +128,10 @@ export function stageState (stage, perRepo = []) {
     // Up for review while any repo's PR is **open**, and landed only when every repo that
     // carries the stage has merged it — the same all-or-nothing rule `workState` uses for a
     // work, scoped to one slice of it. CLOSED is neither: a stage somebody gave up on is not
-    // one waiting for a reviewer, which is what "not merged" said before.
+    // one waiting for a reviewer, which is what "not merged" said before. Never landed while a
+    // repo GitHub would not answer for may still hold it open.
     open: prs.some(r => r.pr.state === OPEN),
-    landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
+    landed: repos.length > 0 && !unknown.length && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
     prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
   }
@@ -163,6 +167,11 @@ export const withdrawnLabel = (w, mark = b => b) => (w.by ? `replaced by ${mark(
 // every stage is in or withdrawn, which is what makes the work branch's own PR the thing that
 // is available next.
 export const nextStage = stack => stack.find(s => !s.landed && !s.withdrawn) || null
+
+// The live stages whose pull request GitHub would not say anything about. A withdrawn one is
+// meant to land nothing and renders as withdrawn whatever GitHub says, so it is never asked
+// about (decisions 171 and 173).
+export const unknownStages = stack => stack.filter(s => s.prUnknown && !s.withdrawn)
 
 // Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
 // GitHub merges that stage and deletes its branch, while the work branch it merged into moves on

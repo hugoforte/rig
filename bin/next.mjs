@@ -25,7 +25,7 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
-import { backToWorkBranch, nextStage, onLandedStage } from './stages.mjs'
+import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
@@ -130,9 +130,11 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       // — this stage sits on something the stack does not contain — it says so. A fact about
       // what the branches report, not a reproach and not a guess at why. The ordinary reasons
       // a stack cannot be walked end to end are deliberately silent here.
+      // A stage GitHub would not answer for may have landed and lost its branch, so it is never
+      // called uncut (decision 171).
       const where = up.started
         ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.adrift ? ' — outside the stack' : ''}`
-        : 'not cut in any repo yet'
+        : up.prUnknown ? `PR state unknown in ${up.prUnknown.join(', ')}` : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
       const on = new Map()
@@ -194,8 +196,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // Asked of `pushed` as well as `unpushed`: `unpushed` reads 0 both for a branch that has
   // been pushed and for one nobody has written anything on, and nagging the second to open a
   // pull request for nothing is exactly the reproach this command does not make.
-  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
+  // A repo whose PR lookup failed is neither: its PR may be open, and `rig pr` would refuse.
+  const noPr = r => !r.pr && !r.prUnknown && !r.merged && !r.missing && r.unpushed === 0
+  const untouched = repos.filter(r => noPr(r) && !r.pushed)
+  const awaiting = repos.filter(r => noPr(r) && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
     // Which release each of those PRs would ask for, said while a label can still change it
     // (decision 130), and said here alone: this is the offer that names the repos.
@@ -353,13 +357,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       `rig attach ${neighbours[0].repo}`))
   }
 
-  // A slice still up for review is a refusal `close` makes, so offering it here would be a
-  // command that fails and a second answer one line under the stage offer that just named the
-  // slice. The stack was in hand the whole time; this asks it. Silence rather than a warning,
-  // because the stage offer above has already said what is next.
+  // A slice still up for review, or one GitHub would not answer for, is a refusal `close` makes
+  // (decision 173), so offering it here would be a command that fails and a second answer one
+  // line under the stage offer that just named the slice. The stack was in hand the whole time;
+  // this asks it. Silence rather than a warning, because the stage offer above has already said
+  // what is next.
   //
   // Last, because it is the one offer that takes the worktrees away.
-  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open)) {
+  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open) && !unknownStages(stack).length) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
 

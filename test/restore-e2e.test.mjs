@@ -130,6 +130,18 @@ scenario('a work is restored on a second machine from its record alone', {
     assert.equal(headOf(m, STAGED), SLICE)
   }),
 
+  step('a branch whose PR GitHub would not say anything about is named so, never as never pushed', m => {
+    // A lookup gh could not answer throws, and the restore says so in its words (decision 170).
+    const state = readJson(m.githubStateFile)
+    const failing = structuredClone(state)
+    failing.repos[`${ORG}/${CLOSED}`].lookupFails = 'HTTP 502: Bad Gateway'
+    fs.writeFileSync(m.githubStateFile, JSON.stringify(failing))
+    const r = m.rig(['restore', ID])
+    fs.writeFileSync(m.githubStateFile, JSON.stringify(state))
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, new RegExp(`${CLOSED}: ${WORK_BRANCH} is on neither the remote nor the mirror — not recreated; GitHub would not say whether it had a PR \\(HTTP 502: Bad Gateway\\)`))
+  }),
+
   step('attach on a recorded repo whose worktree is gone puts it back, not "nothing to do"', m => {
     fs.rmSync(worktree(m, STAGED), { recursive: true, force: true, maxRetries: 5 })
     const r = m.rig(['attach', STAGED, '--work', ID])
