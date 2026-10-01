@@ -571,11 +571,13 @@ once the one before it is done:
 2. **The adversarial review**, when the design chose one: a reviewer told to find what is wrong
    with the PR, fixing what it finds and pushing. GitHub cannot say one happened, so
    `rig save -m "adversarial review" --reviewed` records `reviewedAt`. A design agreed again
-   after it asks for another, and `--reviewed` is refused before the design gate.
+   after it asks for another, and `--reviewed` is refused before the design gate and beside
+   `--designed`.
 3. **The hand-over.** With the design gate passed, every thread resolved, the adversarial
    review done or declined, the PR's checks green (or none set up), nothing uncommitted or
-   unpushed, no stage still to come and the PR body matching the record, `rig next` says the PR
-   is ready for a human reviewer; failing checks are named on their own. It names no command: who reviews is the
+   unpushed, no stage still to come, no sibling PR closed without merging and the PR body
+   matching the record, `rig next` says the PR is ready for a human reviewer. Checks that are
+   failing, or have not reported, are named on their own, so the wait is never silent. It names no command: who reviews is the
    human's call, and rig takes no outward-facing step on its own.
 
 rig names each step and says nothing about how it is done; an agent host maps them to its own
