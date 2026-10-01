@@ -98,7 +98,7 @@ test('a repo GitHub would not answer for is not resolved, and the refusal is nam
   const r = rig(['attach', 'orders', '--work', 't1'])
   fs.writeFileSync(githubStateFile, JSON.stringify(state))
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /cannot resolve "orders": GitHub would not say whether acme\/orders exists \(gh is not authenticated \(in-memory GitHub\)\)/)
+  assert.match(r.out, /cannot resolve "orders": could not ask GitHub whether acme\/orders exists \(gh is not authenticated \(in-memory GitHub\)\) — authorise gh's token for acme \(SAML SSO, for one\), catalogue the repo, or list acme after the org that has it in `orgs`/)
   assert.equal(attached('orders'), undefined)
 })
 
@@ -114,7 +114,7 @@ test('a repo another org has is not taken while an earlier org would not say', (
   const r = rig(['attach', 'ledger', '--work', 't1'])
   fs.writeFileSync(githubStateFile, JSON.stringify(state))
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /cannot resolve "ledger": GitHub would not say whether acme\/ledger exists \(HTTP 502: Bad Gateway\)/)
+  assert.match(r.out, /cannot resolve "ledger": could not ask GitHub whether acme\/ledger exists \(HTTP 502: Bad Gateway\)/)
   assert.equal(attached('ledger'), undefined)
 })
 

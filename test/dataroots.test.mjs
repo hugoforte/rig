@@ -361,7 +361,7 @@ test('a data repo GitHub would not say exists is neither joined nor created', ()
   fs.writeFileSync(localConfig, saved)
   fs.writeFileSync(githubStateFile, JSON.stringify(state))
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /GitHub would not say whether acme\/unasked exists \(gh is not authenticated \(in-memory GitHub\)\) — joining or creating a data repo needs it/)
+  assert.match(r.out, /could not ask GitHub whether acme\/unasked exists \(gh is not authenticated \(in-memory GitHub\)\) — joining or creating a data repo needs it/)
   assert.doesNotMatch(r.out, /cloning to|creating it, private/, 'nothing was joined or created')
 })
 

@@ -1060,7 +1060,10 @@ function resolveOrg (cfg, repo) {
   for (const org of cfg.orgs) {
     let found = null
     const error = trackerFailure(() => { found = github().repo(org, repo) })
-    if (error) die(`cannot resolve "${repo}": GitHub would not say whether ${org}/${repo} exists (${error})`)
+    if (error) {
+      die(`cannot resolve "${repo}": could not ask GitHub whether ${org}/${repo} exists (${error}) — ` +
+        `authorise gh's token for ${org} (SAML SSO, for one), catalogue the repo, or list ${org} after the org that has it in \`orgs\``)
+    }
     if (found) return { org, repo: found.name, language: found.language }
   }
   die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}`)
@@ -1894,7 +1897,7 @@ function joinOrCreateDataRepo (spec, named) {
   // as "does not exist", which would send an existing repo down the create path.
   let existing = false
   const unasked = trackerFailure(() => { existing = github().repoExists(spec) })
-  if (unasked) die(`GitHub would not say whether ${spec} exists (${unasked}) — joining or creating a data repo needs it`)
+  if (unasked) die(`could not ask GitHub whether ${spec} exists (${unasked}) — joining or creating a data repo needs it`)
 
   if (existing) {
     step(`joining ${spec}: cloning to ${target}`)
