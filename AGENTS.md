@@ -571,7 +571,8 @@ abandoned, deletes no branch. Nothing else is ever auto-deleted.
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot
 say so. So does a stage or a repo whose pull request GitHub would not say anything about —
-gh signed out, rate limited or offline — since it may be one still open. `--force` tears down past all of it and **records that it did** (`forcedAt`), because
+gh signed out, rate limited or offline — since it may be one still open. `--force` tears down
+past all of it and **records that it did** (`forcedAt`), because
 forcing is a decision and a work closed over an open pull request is otherwise
 indistinguishable from a bug — which is what `rig status` would call it.
 

@@ -195,3 +195,9 @@ test('a stage whose PR state is unknown blocks the close', () => {
   assert.deepEqual(v.blockers, [{ repo: 'billing', kind: 'stage-pr-unknown', message: 'billing: stage feat/w-one PR state unknown' }])
   assert.equal(v.safeToClose, false)
 })
+
+test('the reason says GitHub would not say whether a slice landed, rather than that something is uncommitted', () => {
+  const stage = { branch: 'feat/w-one', prs: [], prUnknown: ['billing'], withdrawn: null }
+  const v = workState(work({ repo: 'billing' }), [{ repo: 'billing', ...clean({ pr: mergedPr }) }], { stages: [stage] })
+  assert.equal(v.reason, 'The work branch landed, and GitHub would not say whether every slice did — billing: stage feat/w-one PR state unknown.')
+})

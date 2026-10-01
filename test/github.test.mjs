@@ -180,7 +180,7 @@ test('gh adapter: repoExists is false on HTTP 404 and throws when gh could not a
   assert.throws(() => canned(() => ({ code: 4, err: 'To get started with GitHub CLI, please run:  gh auth login' })).github.repoExists('acme/rig-data'), GithubError)
 })
 
-test('gh adapter: prsOnto and pullsForCommit throw when gh could not answer, rather than answering none', () => {
+test('gh adapter: prsOnto and pullsForCommit throw when gh could not answer, and answer none only when gh says so', () => {
   const { github } = canned(() => ({ code: 1, err: 'gh: Bad credentials (HTTP 401)' }))
   assert.throws(() => github.prsOnto('acme', 'platform', 'feat/x'), GithubError)
   assert.throws(() => github.pullsForCommit('acme', 'platform', 'abc123'), GithubError)

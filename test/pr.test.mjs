@@ -242,15 +242,16 @@ test('rig next offers no refresh of a stale PR while one stage\'s lookup fails',
   // The work PR answered and one stage's lookup did not: the stage table the refresh would
   // write says "PR state unknown" for it, so the PR is no evidence of being stale (decision 170).
   const state = github()
-  state.repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body = 'a body the record no longer says'
+  const stale = structuredClone(state)
+  stale.repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body = 'a body the record no longer says'
+  setGithub(stale)
+  const answered = rig(['next', '--work', 'sliced']).out
+  stale.repos['acme/billing'].branchLookupFails = { 'feat/sliced-two': 'HTTP 502: Bad Gateway' }
+  setGithub(stale)
+  const refused = rig(['next', '--work', 'sliced']).out
   setGithub(state)
-  assert.match(rig(['next', '--work', 'sliced']).out, /rig pr --refresh/, 'the stale PR is offered a refresh while every lookup answers')
-  const failing = structuredClone(state)
-  failing.repos['acme/billing'].branchLookupFails = { 'feat/sliced-two': 'HTTP 502: Bad Gateway' }
-  setGithub(failing)
-  const out = rig(['next', '--work', 'sliced']).out
-  setGithub(state)
-  assert.doesNotMatch(out, /rig pr --refresh/)
+  assert.match(answered, /rig pr --refresh/, 'the stale PR is offered a refresh while every lookup answers')
+  assert.doesNotMatch(refused, /rig pr --refresh/)
 })
 
 // A work with one repo, one commit pushed and whatever `extra` commands it names, so the PR

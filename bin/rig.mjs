@@ -3199,7 +3199,9 @@ cmds.next = ({ flags }) => {
     // The scaffolded stub, still standing where the design should be.
     directionTodo: directionIsTodo(doc),
     planExists: exists(planFile(work.id)),
-    planStale: exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
+    // Never while a stage's PR is unknown: the refresh would write "PR state unknown" over a
+    // deploy order that may be right.
+    planStale: !stack.some(st => st.prUnknown) && exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
     // The comparison `rig pr --refresh` makes, and never while a stage's PR is unknown, which
     // is when the refresh would refuse. Nor for a repo whose visibility GitHub would not say: a
@@ -3492,16 +3494,16 @@ function branchRows (cfg, work) {
     // pull request the record has nothing either — so a stage that finished would read as one
     // nobody ever cut, which is the symptom this whole change exists to remove. GitHub is
     // asked for the branches git could not find, and only those: a repo carrying the branch
-    // costs nothing extra, and a row survives only if a pull request answers for it.
+    // costs nothing extra, and a row survives only if a pull request answers for it — or GitHub
+    // would not say, since it may have landed. That row is marked `absent`, and `stageState`
+    // counts it as unknown and never as a branch this repo carries.
     for (const b of declared) if (!known.has(b)) known.set(b, { branch: b, base: null, absent: true })
-    //
-    // A branch gone from here whose lookup failed is kept, marked `absent`, because it may have
-    // landed: `stageState` counts it as unknown and never as a branch this repo carries.
     for (const b of known.values()) {
       let pr = null
       const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
       const recorded = b.pr ? { ...b.pr, state: 'MERGED', recorded: true } : null
-      if (b.absent && !pr && !recorded && !prError) continue
+      const absent = Boolean(b.absent && !pr && !recorded)
+      if (absent && !prError) continue
       rows.push({
         repo: entry.repo,
         branch: b.branch,
@@ -3513,7 +3515,7 @@ function branchRows (cfg, work) {
         cutOn: (!prError && pr?.state === 'OPEN' && pr.base) || b.base,
         pr: pr || recorded,
         prError: prError || null,
-        ...(b.absent && !pr && !recorded ? { absent: true } : {}),
+        absent,
       })
     }
   }

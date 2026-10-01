@@ -122,9 +122,11 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       // — this stage sits on something the stack does not contain — it says so. A fact about
       // what the branches report, not a reproach and not a guess at why. The ordinary reasons
       // a stack cannot be walked end to end are deliberately silent here.
+      // A stage GitHub would not answer for may have landed and lost its branch, so it is never
+      // called uncut (decision 170).
       const where = up.started
         ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.adrift ? ' — outside the stack' : ''}`
-        : 'not cut in any repo yet'
+        : up.prUnknown ? `PR state unknown in ${up.prUnknown.join(', ')}` : 'not cut in any repo yet'
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
     } else {
       const on = new Map()
@@ -298,13 +300,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       `rig attach ${neighbours[0].repo}`))
   }
 
-  // A slice still up for review is a refusal `close` makes, so offering it here would be a
-  // command that fails and a second answer one line under the stage offer that just named the
-  // slice. The stack was in hand the whole time; this asks it. Silence rather than a warning,
-  // because the stage offer above has already said what is next.
+  // A slice still up for review, or one GitHub would not answer for, is a refusal `close` makes
+  // (decision 172), so offering it here would be a command that fails and a second answer one
+  // line under the stage offer that just named the slice. The stack was in hand the whole time;
+  // this asks it. Silence rather than a warning, because the stage offer above has already said
+  // what is next.
   //
   // Last, because it is the one offer that takes the worktrees away.
-  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open)) {
+  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open || (st.prUnknown && !st.withdrawn))) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
 

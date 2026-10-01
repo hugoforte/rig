@@ -9,22 +9,24 @@
 //   repo(org, name)                     { name, language, visibility } with GitHub's canonical name, or null;
 //                                       visibility is 'public', 'internal' or 'private', or null when not said
 //   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels } newest PR, or null
-//   labels(org, name)                   every label's name, or null when gh cannot list them
+//   labels(org, name)                   every label's name
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
-//   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack, or null
+//   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack
 //   stackTool()                         'ok' | 'missing' | 'old': is `gh stack link` there; never
 //                                       throws for a non-zero exit, which is 'missing'
 //   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
+//   prsOnto(org, name, base)            [{ number, branch, url }] the open PRs landing on `base`
+//   pullsForCommit(org, name, sha)      every PR the commit belongs to
 //   createIssue(repo, title, body)      the new issue's number
 //   commentIssue(repo, number, body)
 //   closeIssue(repo, number)
-//   repoExists(spec)                    spec is owner/name
+//   repoExists(spec)                    true or false; spec is owner/name
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
-// Every call but auth() and stackTool() throws GithubError when gh cannot be spawned, and
-// when gh runs and exits non-zero, carrying gh's stderr. A lookup that gh could not answer —
+// Every call but auth() throws GithubError when gh cannot be spawned, and every call but
+// auth() and stackTool() when gh runs and exits non-zero, carrying gh's stderr. A lookup that gh could not answer —
 // signed out, rate limited, offline — therefore throws, and never reads as "not found"
 // (DESIGN.md decision 168). Not found is said only where gh says it: exit 0 with nothing
 // (prForBranch, prTimeline, prsOnto, pullsForCommit), or HTTP 404 (repo, repoExists).
@@ -226,18 +228,17 @@ export function githubInMemory (state, { env } = {}) {
     const key = Object.keys(state.repos).find(k => k.toLowerCase() === spec.toLowerCase())
     return key ? { key, repo: state.repos[key] } : null
   }
-  // Can gh answer at all (missing), is it signed in, and will GitHub answer for this repo and
-  // branch? Every call but auth() and stackTool() asks first.
-  const write = () => {
+  // Can gh run at all (missing), and is it signed in? Every call but auth() and stackTool()
+  // asks first; a lookup also asks whether GitHub will answer for this repo and branch.
+  const signedIn = () => {
     if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
     if (state.auth === 'unauthenticated') fail('gh is not authenticated (in-memory GitHub)')
   }
   const ask = (spec, branch) => {
-    write()
+    signedIn()
     const repo = lookup(spec)?.repo
     if (repo?.lookupFails) fail(repo.lookupFails)
-    const failsFor = branch === undefined ? null : repo?.branchLookupFails?.[branch]
-    if (failsFor) fail(failsFor)
+    if (repo?.branchLookupFails?.[branch]) fail(repo.branchLookupFails[branch])
   }
   const issue = (spec, number) => {
     const found = lookup(spec)?.repo.issues?.find(i => i.number === Number(number))
@@ -299,7 +300,7 @@ export function githubInMemory (state, { env } = {}) {
       }
     },
     createPr (org, name, { branch, base, title, body }) {
-      write()
+      signedIn()
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
       found.repo.prs = found.repo.prs || []
       const number = Math.max(0, ...found.repo.prs.map(pr => pr.number)) + 1
@@ -311,7 +312,7 @@ export function githubInMemory (state, { env } = {}) {
       return { number, url }
     },
     editPr (org, name, number, { title, body }) {
-      write()
+      signedIn()
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       if (!pr) fail(`${org}/${name}#${number}: no such pull request (in-memory GitHub)`)
       Object.assign(pr, { title, body })
@@ -328,7 +329,7 @@ export function githubInMemory (state, { env } = {}) {
     // a new one is made. Stack numbers share the PRs' sequence, as they do on GitHub.
     // `linkFails` is gh stack's error, for a link that fails.
     linkStack (org, name, { base, urls }) {
-      write()
+      signedIn()
       if (state.linkFails) fail(state.linkFails)
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
       const numbers = urls.map(u => Number(/\/pull\/(\d+)$/.exec(u)?.[1] || fail(`${u}: not a pull request URL (in-memory GitHub)`)))
@@ -342,7 +343,7 @@ export function githubInMemory (state, { env } = {}) {
       for (const n of numbers) if (!stack.prs.includes(n)) stack.prs.push(n)
     },
     createIssue (spec, title, body) {
-      write()
+      signedIn()
       const found = lookup(spec) || fail(`${spec}: no such repo (in-memory GitHub)`)
       found.repo.issues = found.repo.issues || []
       const number = Math.max(0, ...found.repo.issues.map(i => i.number)) + 1
@@ -350,13 +351,13 @@ export function githubInMemory (state, { env } = {}) {
       return number
     },
     commentIssue (spec, number, body) {
-      write()
+      signedIn()
       const found = issue(spec, number)
       found.comments = found.comments || []   // a hand-seeded fixture may omit it
       found.comments.push(body)
     },
     closeIssue (spec, number) {
-      write()
+      signedIn()
       issue(spec, number).state = 'CLOSED'
     },
     repoExists (spec) {
@@ -364,7 +365,7 @@ export function githubInMemory (state, { env } = {}) {
       return lookup(spec) !== null
     },
     clone (spec, target) {
-      write()
+      signedIn()
       // The one on-disk effect: a clone is a checkout, so it clones from the recorded source.
       const found = lookup(spec) || fail(`${spec}: no such repo (in-memory GitHub)`)
       const source = found.repo.source || fail(`${spec}: exists but has no \`source\` to clone from (in-memory GitHub)`)
@@ -373,7 +374,7 @@ export function githubInMemory (state, { env } = {}) {
       if (r.status !== 0) fail(`clone of ${spec}: ${(r.stderr || '').trim()}`)
     },
     createRepo (spec, { source }) {
-      write()
+      signedIn()
       if (lookup(spec)) fail(`${spec}: already exists (in-memory GitHub)`)
       state.repos[spec] = { language: '', prs: [], issues: [], source }
     },

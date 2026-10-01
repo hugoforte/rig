@@ -113,9 +113,13 @@ function reasonFor (repos, blockers, done) {
   if (!repos.length) return 'No repos were attached, so there are no PRs to check.'
   const unmerged = repos.filter(v => !v.merged)
   if (unmerged.length) return `Not every PR is merged — ${unmerged.map(describe).join(', ')}.`
-  const slices = blockers.filter(b => b.kind === 'stage-pr-open')
-  if (slices.length) return `The work branch landed, but a slice of it did not — ${slices.map(b => b.message).join(', ')}.`
-  // Every PR landed and something is still in the way — an uncommitted change, in practice.
+  const open = blockers.filter(b => b.kind === 'stage-pr-open')
+  const unknown = blockers.filter(b => b.kind === 'stage-pr-unknown')
+  const named = slices => slices.map(b => b.message).join(', ')
+  if (open.length) return `The work branch landed, but a slice of it did not — ${named([...open, ...unknown])}.`
+  if (unknown.length) return `The work branch landed, and GitHub would not say whether every slice did — ${named(unknown)}.`
+  // Every PR and every slice landed and something is still in the way — an uncommitted change,
+  // in practice.
   return `Every PR is merged, but ${blockers.map(b => b.message).join(', ')}.`
 }
 

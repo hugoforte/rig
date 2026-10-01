@@ -856,6 +856,17 @@ test('when gh cannot answer, status and list say the PR state is unknown, and cl
   setGithub(state)
 })
 
+test('a signed-out gh is a PR state unknown too, and close refuses on it', () => {
+  // gh runs and exits non-zero when signed out, which used to read as "no PR" (decision 169).
+  const state = github()
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['close', '--work', 'old'])
+  setGithub(state)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: PR state unknown \(gh is not authenticated/)
+  assert.ok(fs.existsSync(path.join(workRoot, 'old', 'billing')), 'nothing torn down')
+})
+
 test('close refuses on an open PR even when the repo\'s worktree folder is already gone', () => {
   const state = github()
   state.repos['acme/billing'].prs[0].state = 'OPEN'

@@ -143,15 +143,17 @@ test("close refuses while one stage's PR lookup fails, and --force goes past it"
   seedPr({ branch: 'feat/unasked-one', number: 60, state: 'MERGED', base: 'feat/unasked-work', url: 'https://github.com/acme/billing/pull/60', mergedAt: '2026-09-19T10:00:00Z' })
   seedPr({ branch: 'feat/unasked-work', number: 61, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/61', mergedAt: '2026-09-19T11:00:00Z' })
   const state = github()
-  state.repos['acme/billing'].branchLookupFails = { 'feat/unasked-one': 'HTTP 502: Bad Gateway' }
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/unasked-one': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const n = rig(['next', '--work', 'unasked'])
+  const c = rig(['close', '--work', 'unasked'])
+  const f = rig(['close', '--force', '--work', 'unasked'])
   setGithub(state)
 
-  const c = rig(['close', '--work', 'unasked'])
+  assert.doesNotMatch(n.out, /rig close/, 'a close that would refuse is not offered')
   assert.equal(c.code, 1, c.out)
   assert.ok(c.out.includes('billing: stage feat/unasked-one PR state unknown'), c.out)
-  const f = rig(['close', '--force', '--work', 'unasked'])
-  delete state.repos['acme/billing'].branchLookupFails
-  setGithub(state)
   assert.equal(f.code, 0, f.out)
   assert.ok(record('unasked').forcedAt, 'forcing past it is recorded, like any blocker')
 })
