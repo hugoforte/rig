@@ -196,8 +196,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // Asked of `pushed` as well as `unpushed`: `unpushed` reads 0 both for a branch that has
   // been pushed and for one nobody has written anything on, and nagging the second to open a
   // pull request for nothing is exactly the reproach this command does not make.
-  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
+  // A repo whose PR lookup failed is neither: its PR may be open, and `rig pr` would refuse.
+  const noPr = r => !r.pr && !r.prUnknown && !r.merged && !r.missing && r.unpushed === 0
+  const untouched = repos.filter(r => noPr(r) && !r.pushed)
+  const awaiting = repos.filter(r => noPr(r) && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
     // Which release each of those PRs would ask for, said while a label can still change it
     // (decision 130), and said here alone: this is the offer that names the repos.
