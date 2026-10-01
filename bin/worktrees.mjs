@@ -409,6 +409,13 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         if (u.code !== 0) s.distanceUnknown ??= (u.err || u.out).split('\n')[0].trim() || `git could not count what ${dir} has not pushed`
         // Null on a detached HEAD, and not always `branch` (`onLandedStage` in stages.mjs).
         s.on = checkedOut(dir)
+        // A detached HEAD's own commits are on no branch, so removing the worktree loses them,
+        // and a merged PR says nothing about them. Asked only when detached: on a branch, the
+        // branch outlives the worktree. Null when git could not count them.
+        if (s.on === null) {
+          const d = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes')
+          s.unbranched = d.code === 0 ? Number(d.out) : null
+        }
       }
       return s
     },
