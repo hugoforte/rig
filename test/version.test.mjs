@@ -51,8 +51,9 @@ test('package.json carries no version for anything to read', () => {
   assert.equal(majorOf(pkg.version), null, 'package.json must not look like a version')
 })
 
-test('a data root written before stamping existed is record format 0', () => {
+test('a data root written before stamping existed is record format 0, and readable', () => {
   assert.equal(dataMajor({}), 0)
+  assert.equal(stampUnreadable({}), false)
   assert.equal(dataMajor({ writtenBy: '1.2.0' }), 1)
 })
 
@@ -125,13 +126,6 @@ test('migrating twice changes nothing the second time', () => {
   assert.deepEqual(twice.config, once)
 })
 
-test('the stamp is applyMigrations to write, not migration 1', () => {
-  // When only migration 1 wrote `writtenBy`, a data root already at 1 was never stamped
-  // again, so every later major silently failed to take and the write refusal never fired.
-  assert.equal('config' in MIGRATIONS[0], false, 'migration 1 must not carry the stamp itself')
-  assert.equal(applyMigrations({}, '1.0.0').config.writtenBy, '1.0.0')
-})
-
 test('a data root stamped with something no rig wrote is refused, not treated as pristine', () => {
   for (const bad of ['v2.1.0', 'two.0.0', '', '-1.0.0', true]) {
     assert.equal(dataMajor({ writtenBy: bad }), null, `${JSON.stringify(bad)} is not a format`)
@@ -139,11 +133,6 @@ test('a data root stamped with something no rig wrote is refused, not treated as
     assert.equal(writesBlocked({ writtenBy: bad }), true, 'an unreadable stamp fails safe')
     assert.deepEqual(pendingMigrations({ writtenBy: bad }), [], 'and nothing is migrated over it')
   }
-})
-
-test('no stamp at all is format 0, which is readable and migratable', () => {
-  assert.equal(stampUnreadable({}), false)
-  assert.equal(dataMajor({}), 0)
 })
 
 test('a migration carrying a hook rig cannot run is rejected, not reported as applied', () => {

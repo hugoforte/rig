@@ -12,6 +12,14 @@ You are choosing which repositories a piece of cross-repo work will touch.
    rig catalog --verbose    # also prints talks_to edges
    ```
 
+   And, for every repo you select, its neighbourhood:
+
+   ```
+   rig impact <repo>        # one and two hops of talks_to, each with its direction and
+                            # how far behind its entry is, and the repos past works kept
+                            # pairing it with
+   ```
+
    Pull the full body of an entry only when you need it:
 
    ```
@@ -26,8 +34,9 @@ expensive, and — worse — it would paper over a thin catalogue, so the pain t
 you to improve the catalogue never arrives. If the catalogue can't answer the question,
 that is a finding: say so, and say which entry needs work.
 
-**Traverse `talks_to` explicitly.** For every repo you select, look at its `talks_to`
-neighbours and state, for each one, whether it is in scope and why. Cross-repo work is
+**Traverse `talks_to` explicitly.** For every repo you select, run `rig impact <repo>` and
+state, for each neighbour it names, whether it is in scope and why — including the repos
+past works kept pairing it with that `talks_to` does not explain. Cross-repo work is
 graph traversal; the repo you forget is almost always one hop from a repo you remembered.
 
 **Err inclusive.** The failure that costs real time is a *missing* repo discovered on day

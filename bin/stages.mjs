@@ -25,7 +25,8 @@
 //   list is per-work**. Same branch name in two repos means the same stage — that is the join,
 //   and it is why the branch name *is* the stage's identity rather than a field beside it.
 //
-// **Stored (intent):** the branch and one line of what it delivers. That is all.
+// **Stored (intent):** the branch and one line of what it delivers, and once a stage is
+// withdrawn from the plan, when and why: dropped with a reason, or replaced by another stage.
 // **Derived (state):** started (does the branch exist), up for review (is there a PR), landed
 // (did it merge), which repos it touches (where the branch is found), and what it sits on
 // (what it was cut from, read live — decision 63) — and whether what it was cut from is part
@@ -112,6 +113,7 @@ export function stageState (stage, perRepo = []) {
     // pull request that merges into the default branch, and a stage's never does — so a
     // slice's ticket cannot close itself, and rig is the only thing that can.
     tickets: stage.tickets || [],
+    withdrawn: withdrawalOf(stage),
     repos: repos.map(r => r.repo),
     // Started the moment the branch exists somewhere. Nothing is stored for this: a stage
     // nobody has cut yet is simply one no repo reports.
@@ -127,7 +129,7 @@ export function stageState (stage, perRepo = []) {
     open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
-    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url })),
+    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
   }
 }
 
@@ -148,9 +150,30 @@ const groupByRepo = perRepo => {
   return [...by.values()]
 }
 
-// The next stage to look at: the first that has not landed. Null when every stage is in, which
-// is what makes the work branch's own PR the thing that is available next.
-export const nextStage = stack => stack.find(s => !s.landed) || null
+// A declared stage withdrawn from the plan (decision 126): `{ at, reason }` when it was dropped,
+// `{ at, by }` when another stage replaced it, and null while it is still planned.
+export const withdrawalOf = stage => (stage.droppedAt ? { at: stage.droppedAt, reason: stage.reason || '' }
+  : stage.replacedAt ? { at: stage.replacedAt, by: stage.replacedBy } : null)
+
+// What became of a withdrawn stage, in a few words. `mark` is how the caller writes a branch
+// name, as for `adriftNote`.
+export const withdrawnLabel = (w, mark = b => b) => (w.by ? `replaced by ${mark(w.by)}` : `dropped: ${w.reason}`)
+
+// The next stage to look at: the first that has neither landed nor been withdrawn. Null when
+// every stage is in or withdrawn, which is what makes the work branch's own PR the thing that
+// is available next.
+export const nextStage = stack => stack.find(s => !s.landed && !s.withdrawn) || null
+
+// Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
+// GitHub merges that stage and deletes its branch, while the work branch it merged into moves on
+// without it (hugoforte/rig#200).
+export const onLandedStage = (stack, branch) => stack.some(s => s.landed && s.branch === branch)
+
+// The commands that put such a worktree back on the work branch, brought up to what merged into
+// it on the remote. Two lines, run in order, because Windows PowerShell does not take `&&`.
+// `git pull` names the branch because a work branch's upstream is its base. Named and never run,
+// like `attach --setup` and `check --run`.
+export const backToWorkBranch = work => [`git switch ${work.branch}`, `git pull --ff-only origin ${work.branch}`]
 
 // The one line of honesty under an order that is partly a guess, or null when nothing
 // contradicts it. `mark` is how the caller writes a branch name — backticked for markdown,
@@ -178,6 +201,44 @@ export function adriftNote (stack, mark = b => b) {
   return `Outside the stack, so shown in declaration order: ${lost.map(st => mark(st.branch)).join(', ')}`
 }
 
+// Where one repo's open stage pull requests stand as a GitHub stack (hugoforte/rig#224), given
+// `stacks`, every stack GitHub has for the repo. Null where the repo has fewer than two, and
+// there is nothing to stack. Otherwise `{ prs, stack, problem }`: `prs` bottom to top, `stack`
+// the open stack that holds any of them, and `problem` why linking them as they stand would
+// move something. Only a chain is linked, the lowest PR based on the work branch and each next
+// on the branch below, because `gh stack link` retargets anything else. And only onto a stack
+// on the work branch whose open PRs are a bottom run of the chain, in order, since the rest go
+// on top of whatever it holds. `linked` says the stack already holds them all. A stack's
+// `openPrs` are the numbers of its PRs still open, whoever's they are.
+export function stackState (stack, repo, workBranch, stacks) {
+  const prs = stack.filter(st => !st.withdrawn)
+    .flatMap(st => st.prs.filter(pr => pr.repo === repo && pr.state === OPEN).map(pr => ({ ...pr, branch: st.branch })))
+  if (prs.length < 2) return null
+  const numbers = prs.map(pr => pr.number)
+  const found = stacks.find(s => s.open && s.prs.some(n => numbers.includes(n))) || null
+  const held = found ? found.prs.filter(n => numbers.includes(n)) : []
+  const others = found ? found.openPrs.filter(n => !numbers.includes(n)) : []
+  const problem = chainProblem(prs, workBranch) || (!found ? null
+    : found.base !== workBranch ? `GitHub stack #${found.number} is on ${found.base}, not ${workBranch}`
+    : others.length ? `GitHub stack #${found.number} also holds ${others.map(n => `#${n}`).join(', ')}, which is not a stage PR of this chain`
+    : held.some((n, i) => n !== numbers[i]) ? `GitHub stack #${found.number} holds them in another order`
+    : null)
+  return { prs, stack: found, problem, linked: !problem && !!found && held.length === numbers.length }
+}
+
+// Why `prs` are not a chain on the work branch, or null. Only a PR sitting on the work branch
+// itself, beside the stage below rather than on it, is offered the retarget that would chain
+// it. A PR on any other branch is named and left: when that branch is a stage with no open PR,
+// retargeting past it would fold that stage's commits into this one.
+function chainProblem (prs, workBranch) {
+  const below = i => (i ? prs[i - 1].branch : workBranch)
+  const off = prs.findIndex((pr, at) => pr.base !== below(at))
+  if (off < 0) return null
+  const pr = prs[off]
+  const says = `#${pr.number} (${pr.branch}) is based on ${pr.base}, not ${below(off)}`
+  return pr.base === workBranch ? `${says} — \`gh pr edit ${pr.number} --base ${below(off)}\` if it belongs on it` : says
+}
+
 // The deploy-order table, rendered. One renderer, two readers — the PR body (`rig pr`) and the
 // rollout plan (`rig plan`) — because the whole complaint against the rollout plan was that
 // its table was typed by hand, and two generators would be two tables that disagree.
@@ -185,15 +246,23 @@ export function adriftNote (stack, mark = b => b) {
 // The note goes **inside** this output rather than beside it at each call site: `planIsStale`
 // compares the rendered region against the live stack, so a note rendered outside would leave a
 // plan that says one thing and a stack that says another, with nothing able to tell.
+//
+// Every cell that carries text from the record goes through `cell`, because a `|` in one splits
+// the row (decision 139): what a stage delivers is prose, a dropped stage's reason is too, and git
+// allows a `|` in a branch name. GFM reads `\|` as a pipe inside a code span as well, so one
+// escape covers all of them. A line break ends the row whatever is escaped, and the input refuses
+// one, so one a record already holds — written before that, or by hand — becomes a space.
 export function stageTable (stack) {
-  const where = st => st.landed ? 'landed' : st.open ? 'up for review'
-    : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
+  const where = st => st.landed ? 'landed'
+    : st.withdrawn ? withdrawnLabel(st.withdrawn, b => `\`${b}\``)
+      : st.open ? 'up for review' : st.prUnknown ? 'PR state unknown' : st.started ? 'in progress' : 'not started'
   const prs = st => st.prs.length ? st.prs.map(pr => `#${pr.number}`).join(', ') : '—'
+  const cell = s => s.replaceAll('|', '\\|').replace(/\r?\n/g, ' ')
   const note = adriftNote(stack, b => `\`${b}\``)
   return [
     '| Order | Stage | Delivers | Repos | PR | State |',
     '|------:|-------|----------|-------|----|-------|',
-    ...stack.map((st, i) => `| ${i + 1} | \`${st.branch}\` | ${st.delivers || '—'} | ${st.repos.join(', ') || '—'} | ${prs(st)} | ${where(st)} |`),
+    ...stack.map((st, i) => `| ${i + 1} | ${cell(`\`${st.branch}\``)} | ${cell(st.delivers || '—')} | ${st.repos.join(', ') || '—'} | ${prs(st)} | ${cell(where(st))} |`),
     ...(note ? ['', `_${note}._`] : []),
   ].join('\n')
 }
@@ -209,7 +278,7 @@ export const PLAN_MARK = {
 }
 
 const planRegion = () => new RegExp(`${escapeRe(PLAN_MARK.open)}[\\s\\S]*?${escapeRe(PLAN_MARK.close)}`, 'm')
-const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 export const renderPlanRegion = stack => [
   PLAN_MARK.open,

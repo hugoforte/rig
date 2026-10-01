@@ -10,7 +10,7 @@ import { nextFor } from '../bin/next.mjs'
 const AT = '2026-09-19T10:00:00.000Z'
 
 const work = (over = {}) => ({ id: 'w', branch: 'feat/x', repos: [], ...over })
-const repo = (name, over = {}) => ({ repo: name, merged: false, pr: null, dirty: 0, ahead: 0, pushed: false, missing: false, ...over })
+const repo = (name, over = {}) => ({ repo: name, merged: false, pr: null, dirty: 0, unpushed: 0, pushed: false, missing: false, ...over })
 const attached = (...names) => names.map(n => ({ repo: n }))
 const says = out => out.map(o => o.says).join(' | ')
 const commands = out => out.map(o => o.command).filter(Boolean)
@@ -41,7 +41,7 @@ test('a recorded design gate stops being offered', () => {
 test('uncommitted changes are named before anything that would build on them', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
-    repos: [repo('a', { dirty: 3 }), repo('b', { ahead: 1 })],
+    repos: [repo('a', { dirty: 3 }), repo('b', { unpushed: 1 })],
   })
   assert.match(out[0].says, /uncommitted changes in a/)
 })
@@ -49,10 +49,19 @@ test('uncommitted changes are named before anything that would build on them', (
 test('unpushed commits are offered a push, and not also a pull request', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: 2 })],
+    repos: [repo('a', { unpushed: 2 })],
   })
   assert.match(says(out), /commits that are not pushed/)
   assert.doesNotMatch(says(out), /no PR open/, 'one branch state, one offer')
+})
+
+test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { ahead: 3, unpushed: 0, pushed: true })],
+  })
+  assert.doesNotMatch(says(out), /not pushed/)
+  assert.match(says(out), /a is pushed with no PR open/)
 })
 
 test('a pushed branch with no PR is offered one', () => {
@@ -65,7 +74,7 @@ test('a pushed branch with no PR is offered one', () => {
 })
 
 test('a branch nobody has written on is never nagged about opening a PR', () => {
-  // `ahead` reads 0 both for a pushed branch and for one with nothing on it, which is why
+  // `unpushed` reads 0 both for a pushed branch and for one with nothing on it, which is why
   // this rung asks `pushed` instead. Getting it wrong here is a reproach, and this command
   // does not make them.
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
@@ -73,14 +82,13 @@ test('a branch nobody has written on is never nagged about opening a PR', () => 
   assert.match(says(out), /yours to write/)
 })
 
-test('a distance git could not measure is never read as nothing outstanding', () => {
-  // `ahead: null` is what `worktrees.state()` answers when it could not measure at all, and
-  // that is the *ordinary* state of a branch whose PR was squash-merged (decision 62). Read as
-  // 0 it means "pushed, waiting for a PR", which is a confident answer to a question nobody
-  // could answer.
+test('an unpushed count git could not make is never read as nothing outstanding', () => {
+  // `unpushed: null` is what `worktrees.state()` answers when git could not count at all.
+  // Read as 0 it means "pushed, waiting for a PR", which is a confident answer to a question
+  // nobody could answer (decision 62).
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: null, pushed: true })],
+    repos: [repo('a', { unpushed: null, pushed: true })],
   })
   assert.doesNotMatch(says(out), /no PR open/)
   assert.doesNotMatch(says(out), /not pushed/)
@@ -89,17 +97,9 @@ test('a distance git could not measure is never read as nothing outstanding', ()
 test('nor as work waiting to be written', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: null, pushed: false })],
+    repos: [repo('a', { unpushed: null, pushed: false })],
   })
   assert.doesNotMatch(says(out), /yours to write/)
-})
-
-test('a measured zero still reads as zero, which is the distinction that was lost', () => {
-  const pushed = nextFor({
-    work: work({ repos: attached('a'), designedAt: AT }),
-    repos: [repo('a', { ahead: 0, pushed: true })],
-  })
-  assert.match(says(pushed), /is pushed with no PR open/)
 })
 
 // ---------------------------------------------------------------- weight, derived
@@ -132,7 +132,7 @@ test('and not twice — a plan that exists is not offered again', () => {
 test('a partly merged work says what is still out', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
-    repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } }), repo('b', { ahead: 1 })],
+    repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } }), repo('b', { unpushed: 1 })],
   })
   assert.match(says(out), /1 of 2 merged — still out: b/)
 })
@@ -157,6 +157,11 @@ test('everything merged but a dirty tree is not offered the close', () => {
 test('a stopped work has nothing to offer, and that is an answer', () => {
   assert.deepEqual(nextFor({ work: work({ repos: attached('a'), closedAt: AT }), repos: [repo('a')] }), [])
   assert.deepEqual(nextFor({ work: work({ repos: attached('a'), closedAt: AT, abandonedAt: AT }), repos: [repo('a')] }), [])
+})
+
+test('a stopped work whose folder is still on this machine is offered rig close, and nothing else', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), closedAt: AT }), repos: [repo('a')], leftover: true, drafts: ['a'] })
+  assert.deepEqual(commands(out), ['rig close'])
 })
 
 // ---------------------------------------------------------------- stages
@@ -193,6 +198,122 @@ test('every stage in makes the work branch the thing that is left', () => {
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
 })
 
+test('which release a PR would ask for is said once, beside the offer that names its repo (#228)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+    bumps: [{ repo: 'a', release: 'a minor release (the branch prefix `feat/`)' }],
+  })
+  assert.match(says(out), /a is pushed with no PR open — its PR would ask for a minor release \(the branch prefix `feat\/`\)/)
+  assert.equal(says(out).match(/would ask for/g).length, 1, 'not again beside "every stage is in"')
+})
+
+test('a repo that is not ready for its PR is not named beside another\'s release (#228)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { pushed: true, unpushed: 2 }), repo('b', { pushed: true })],
+    bumps: [{ repo: 'a', release: 'a minor release' }, { repo: 'b', release: 'a patch release' }],
+  })
+  assert.match(says(out), /b is pushed with no PR open — its PR would ask for a patch release/)
+  assert.doesNotMatch(says(out), /a minor release/)
+})
+
+test('every stage in, with a worktree still on a stage that landed, names the switch to the work branch (#200)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one' }), repo('b', { on: 'feat/x' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  const o = out.find(x => /every stage is in/.test(x.says))
+  assert.match(o.says, /a is still on feat\/one, which has landed — move it to the work branch, then `rig pr`/)
+  assert.deepEqual(o.command, ['git switch feat/x', 'git pull --ff-only origin feat/x'])
+})
+
+test('a worktree on a landed stage is offered the move, and not also a push or a pull request', () => {
+  // Pushed, with no PR on the work branch: the state the move is offered in. Offering `rig pr`
+  // or `git push` beside it would be acting from the stage the worktree is leaving.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one', pushed: true, unpushed: 1 })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  assert.deepEqual(commands(out), [['git switch feat/x', 'git pull --ff-only origin feat/x']])
+})
+
+test('several repos on one landed stage are named together', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/one' }), repo('b', { on: 'feat/one' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a', 'b'] })],
+  })
+  assert.match(says(out), /every stage is in — a, b are still on feat\/one, which has landed — move each to the work branch/)
+})
+
+test('a worktree already on the work branch is not told to move', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { on: 'feat/x' })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+  })
+  assert.ok(commands(out).includes('rig pr'))
+  assert.doesNotMatch(says(out), /still on/)
+})
+
+const HEAD = 'a'.repeat(40)
+const squashStack = () => [
+  stage('feat/one', { landed: true, started: true, repos: ['a'] }),
+  stage('feat/two', { started: true, repos: ['a'], open: true }),
+  stage('feat/three', { started: true, repos: ['a'], open: true }),
+]
+const replacedOffer = (replaced, over = {}) => nextFor({
+  work: work({ repos: attached('a'), designedAt: AT }),
+  repos: [repo('a', over)],
+  stack: squashStack(),
+  replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, ...replaced }],
+}).find(x => /feat\/one/.test(x.says) && !/^stage /.test(x.says))
+
+test('a stage squashed under the one above it is offered the rebase, with the real sha (#193)', () => {
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: [], sameTree: true })
+  assert.match(o.says, /feat\/one landed as new commits \(a squash or a rebase\), and feat\/two in a still carries the commits it replaced/)
+  assert.deepEqual(o.command, ['git switch feat/two', `git rebase --onto origin/feat/x ${HEAD}`, 'git push --force-with-lease origin feat/two'])
+})
+
+test('several stages carrying it are replayed in one rebase from the top, and each is pushed', () => {
+  const o = replacedOffer({ carriers: ['feat/two', 'feat/three'], rebased: false, behind: [], sameTree: true })
+  assert.deepEqual(o.command, ['git switch feat/three', `git rebase --update-refs --onto origin/feat/x ${HEAD}`,
+    'git push --force-with-lease origin feat/two', 'git push --force-with-lease origin feat/three'])
+})
+
+test('once the stages are replayed here, only the push is offered, and not a plain git push', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1 })],
+    stack: squashStack(),
+    replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, carriers: ['feat/two'], rebased: true, behind: ['feat/two'], sameTree: true }],
+  })
+  assert.ok(commands(out).some(c => String(c) === 'git push --force-with-lease origin feat/two'))
+  assert.ok(!commands(out).includes('git push'))
+})
+
+test('a squash that is not the stage as it stood is named, and no command is offered for it', () => {
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: [], sameTree: false })
+  assert.match(o.says, /is not the stage as it stood/)
+  assert.equal(o.command, null)
+})
+
+test('a stage whose copy here is behind the remote\'s is named, and no command is offered for it', () => {
+  const o = replacedOffer({ carriers: ['feat/two'], rebased: false, behind: ['feat/two'], sameTree: true })
+  assert.match(o.says, /the copy here of feat\/two is behind the remote's/)
+  assert.equal(o.command, null)
+})
+
+test('a merge this machine has not fetched is offered the fetch', () => {
+  const o = replacedOffer({ unfetched: true })
+  assert.match(o.says, /feat\/one merged in a, and this machine has not fetched it/)
+  assert.equal(o.command, 'git fetch origin')
+})
+
 test('a work with no stages behaves exactly as it did before stages existed', () => {
   const withNone = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
   const withEmpty = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], stack: [] })
@@ -208,7 +329,7 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
   const shapes = [
     { work: work() },
     { work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true },
-    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, ahead: 1 })] },
+    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
     {
       work: work({ repos: attached('a'), designedAt: AT }),
@@ -226,8 +347,246 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
 test('every offer names the phase it belongs to', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }),
-    repos: [repo('a', { ahead: 1 }), repo('b'), repo('c')],
+    repos: [repo('a', { unpushed: 1 }), repo('b'), repo('c')],
   })
   assert.ok(out.length > 0)
   for (const o of out) assert.match(o.phase, /^(planning|designing|building|reviewing|landing)$/)
+})
+
+// Correcting the catalogue is offered while the worktrees still exist — through building,
+// reviewing and landing — because that is the only span in which the repos are both loaded in
+// the operator's head and present on disk. `rig close` cannot be the moment: it commits before
+// it removes the worktrees, and no rig command waits for a human.
+test('a draft catalogue entry for an attached repo is offered for correction', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a'), repo('b')],
+    drafts: ['a'],
+  })
+  assert.match(says(out), /catalogue entry for a is still a draft/)
+})
+
+test('the correction carries no command, because editing prose is not one', () => {
+  // Same idiom as the design gate: an offer whose work is a conversation names no command. The
+  // line points at `rig catalog`, which shows the entry and names its file, and stops there —
+  // rig has no edit mode and should not grow one.
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
+  const catalogue = out.find(o => /catalogue/.test(o.says))
+  assert.equal(catalogue.command, null)
+  assert.match(catalogue.says, /`rig catalog a` names the file/)
+})
+
+test('several drafts are one offer, because they are one sitting of work', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a'), repo('b')],
+    drafts: ['a', 'b'],
+  })
+  assert.equal(out.filter(o => /catalogue entr/.test(o.says)).length, 1)
+  assert.match(says(out), /catalogue entries for a, b are still drafts/)
+})
+
+test('correcting the catalogue is offered, never demanded', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    drafts: ['a'],
+  })
+  assert.doesNotMatch(says(out), /should|must|need to|failed/i)
+})
+
+test('no drafts means nothing is said about the catalogue', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: [] })
+  assert.doesNotMatch(says(out), /catalogue/)
+})
+
+test('a closed work is not asked to correct anything: the worktrees are already gone', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, closedAt: AT }),
+    repos: [repo('a', { merged: true })],
+    drafts: ['a'],
+  })
+  assert.deepEqual(out, [])
+})
+
+test('the catalogue offer comes above rig close, which ends the window it exists for', () => {
+  // Read top-down, a close offered first is a teardown run before the line that needed the
+  // worktrees. Same argument as ranking uncommitted changes first.
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { merged: true, pr: { state: 'MERGED' } })],
+    drafts: ['a'],
+  })
+  const order = out.map(o => o.says)
+  const cat = order.findIndex(s => /catalogue/.test(s))
+  const close = order.findIndex(s => /every PR is merged/.test(s))
+  assert.ok(close !== -1, 'the close offer is reachable in this state')
+  assert.ok(cat < close, 'the correction is offered before the command that removes the trees')
+})
+
+test('a draft entry does not silence the line saying the code is yours to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
+  assert.match(says(out), /this part is yours to write/)
+  assert.match(says(out), /catalogue entry for a is still a draft/)
+})
+test('the catalogue offer comes after the work itself, never ahead of unsaved changes', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { dirty: 2 })],
+    drafts: ['a'],
+  })
+  const order = out.map(o => o.says)
+  assert.ok(order.findIndex(s => /uncommitted/.test(s)) < order.findIndex(s => /catalogue/.test(s)))
+})
+
+// -------------------------------------------------- the neighbours not attached
+
+// Rule 5's "attaching a fourth repo on day two is normal", with something behind it. The
+// gathering is the caller's — this asserts only what is worth offering, and that it stops
+// being worth offering once the pull requests are open.
+
+const near = (repo, via, direction = null) => ({ repo, via, direction })
+
+test('a repo the catalogue says talks to an attached one, and is not attached, is offered', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing', 'downstream')],
+  })
+  assert.match(says(out), /orders talks to billing/)
+  assert.ok(commands(out).includes('rig attach orders'))
+})
+
+test('the direction rides along when the catalogue states one, and is left out when it does not', () => {
+  const stated = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing', 'downstream')],
+  })
+  assert.match(says(stated), /a change in billing can break it/)
+
+  const silent = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(silent), /can break/)
+})
+
+test('several neighbours are one offer, not one each', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing'), near('ledger', 'billing')],
+  })
+  assert.equal(out.filter(o => /talks to/.test(o.says)).length, 1)
+})
+
+test('nothing is offered once the work is up for review — attaching a repo then is a different decision', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing', { pr: { number: 7, state: 'OPEN' }, pushed: true })],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /talks to/)
+})
+
+test('the offer is an offer: it never warns and never refuses', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /should|must|missing|forgot/i)
+})
+
+test('the floor does not say everything is attached one line above a repo that is not', () => {
+  const out = nextFor({
+    work: work({ repos: attached('billing'), designedAt: AT }),
+    repos: [repo('billing')],
+    neighbours: [near('orders', 'billing')],
+  })
+  assert.doesNotMatch(says(out), /everything is attached/)
+  assert.match(says(out), /orders talks to billing/)
+})
+
+test('with no neighbour to offer, the floor still says the code is yours to write', () => {
+  const out = nextFor({ work: work({ repos: attached('billing'), designedAt: AT }), repos: [repo('billing')] })
+  assert.match(says(out), /everything is attached and agreed/)
+})
+
+// ------------------------------------------------------------- the lesson review
+
+// What the work taught is asked once there is a story to read — a pull request — and while
+// the worktrees are still on disk, because a lesson for a repo has to be committed in one.
+// `rig close` cannot ask it for the reason it cannot ask for catalogue corrections.
+
+const inReview = () => repo('a', { pr: { number: 1, state: 'OPEN' } })
+const landed = () => repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })
+
+test('a work under review is offered the lesson review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [inReview()] })
+  assert.match(says(out), /rig-learn/)
+  assert.ok(commands(out).includes('rig save -m "lessons reviewed" --learned'))
+})
+
+test('a work still being built is not asked what it taught', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { unpushed: 1 })] })
+  assert.doesNotMatch(says(out), /rig-learn/)
+})
+
+test('a recorded lesson review is not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
+  assert.doesNotMatch(says(out), /rig-learn/)
+})
+
+test('the lesson review comes above rig close, which removes the trees a repo lesson lands in', () => {
+  const order = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] }).map(o => o.says)
+  const learn = order.findIndex(s => /rig-learn/.test(s))
+  const close = order.findIndex(s => /every PR is merged/.test(s))
+  assert.ok(learn !== -1 && close !== -1, 'both are reachable in this state')
+  assert.ok(learn < close)
+})
+
+test('the lesson review is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.doesNotMatch(says(out), /should|must|need to|failed/i)
+})
+
+test('a worktree not on this machine is offered the restore, before anything else', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b') }),
+    repos: [repo('a', { missing: true, pr: { number: 14, state: 'OPEN' } }), repo('b', { missing: true })],
+    directionTodo: true,
+  })
+  assert.equal(out[0].command, 'rig restore w')
+})
+
+test('a missing worktree whose PR closed is not offered the restore it cannot have', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { missing: true, pr: { number: 3, state: 'CLOSED' } })],
+  })
+  assert.ok(!commands(out).includes('rig restore w'))
+})
+
+test('a stack whose other stages were withdrawn says so, rather than calling every stage in', () => {
+  const stack = [
+    { branch: 'feat/one', landed: true, withdrawn: null, prs: [], repos: ['a'] },
+    { branch: 'feat/two', landed: false, withdrawn: { at: AT, reason: 'not needed' }, prs: [], repos: [] },
+  ]
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], stack })
+  assert.match(says(out), /every stage is in or withdrawn — the work branch is what is left to land/)
+})
+
+test('an open PR that no longer matches the record is offered a refresh', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pr: { state: 'OPEN' }, pushed: true })], prStale: ['a'] })
+  assert.match(says(out), /a: the open PR no longer says what the record does/)
+  assert.ok(commands(out).includes('rig pr --refresh'))
+})
+
+test('open stage PRs that are not a GitHub stack are offered rig stage --link', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], unstacked: ['a'] })
+  assert.match(says(out), /a: the open stage PRs are not a GitHub stack/)
+  assert.ok(commands(out).includes('rig stage --link'))
 })

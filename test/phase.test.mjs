@@ -26,7 +26,7 @@ test('active phases are present participles and terminal ones past', () => {
 })
 
 test('every gate names the field it is stored in', () => {
-  assert.deepEqual(GATES, { designed: 'designedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
+  assert.deepEqual(GATES, { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
 })
 
 // ---------------------------------------------------------------- deriving the phase
@@ -103,6 +103,7 @@ test('the status line carries the phase and the design gate once it is passed', 
 
 test('the status line is the phase alone before the design gate', () => {
   assert.equal(statusLine(work({ repos: [{ repo: 'r' }] }), [repo()]), 'Designing')
+  assert.equal(statusLine(work({ repos: [{ repo: 'r' }] })), 'Designing', 'and without repo facts, as a document is written')
 })
 
 test('an abandoned work says so and keeps its design gate', () => {
@@ -111,12 +112,18 @@ test('an abandoned work says so and keeps its design gate', () => {
 })
 
 test('the gates passed are listed with their dates, in lifecycle order', () => {
-  assert.deepEqual(gatesOf(work({ designedAt: AT, abandonedAt: AT, closedAt: AT })), [
+  assert.deepEqual(gatesOf(work({ designedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
     { gate: 'designed', at: AT },
+    { gate: 'learned', at: AT },
     { gate: 'abandoned', at: AT },
     { gate: 'closed', at: AT },
   ])
   assert.deepEqual(gatesOf(work()), [])
+})
+
+test('a lesson review recorded after the close is listed after it', () => {
+  const later = '2026-09-28T00:00:00.000Z'
+  assert.deepEqual(gatesOf(work({ closedAt: AT, learnedAt: later })).map(g => g.gate), ['closed', 'learned'])
 })
 
 // ---------------------------------------------------------------- contradictions

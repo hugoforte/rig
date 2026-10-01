@@ -8,7 +8,7 @@
   "homepage": "https://github.com/hugoforte/rig#readme",
   "bugs": "https://github.com/hugoforte/rig/issues",
   "keywords": ["git", "worktree", "monorepo", "cross-repo", "cli"],
-  "engines": { "node": ">=18" },
+  "engines": { "node": "^18.17.0 || >=20.3.0" },
   "bin": { "rig": "bin/rig.mjs" },
   "files": [
     "bin/",

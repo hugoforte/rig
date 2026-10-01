@@ -45,17 +45,20 @@ export const PHASES = ['planning', 'designing', 'building', 'reviewing', 'landin
 // have to lie about it (the old alternative was `rig close --force`, which did).
 export const TERMINAL = ['closed', 'abandoned']
 
-// Each gate and the field its date is stored in. `closedAt` predates all of this; the other
-// two join it rather than replacing anything.
-export const GATES = { designed: 'designedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+// Each gate and the field its date is stored in. `closedAt` predates all of this; the others
+// join it rather than replacing anything. `learnedAt` is the lesson review, and unlike the
+// design gate it may be passed after the close: the catalogue and rig's tracker outlive the work.
+export const GATES = { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
 
 const MERGED = 'MERGED'
 
-// The gates a record has passed, in lifecycle order, each with the date it was passed.
+// The gates a record has passed, each with its date, in the order they were passed: a lesson
+// review recorded after the close is listed after it. Ties keep the order of `GATES`.
 export const gatesOf = work =>
   Object.entries(GATES)
     .filter(([, field]) => work?.[field])
     .map(([gate, field]) => ({ gate, at: work[field] }))
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
 
 // The phase, from the gates and the repo facts. `repos` is one entry per attached repo in
 // the shape `{ merged, pr }` — what `workState` already decided for `rig list`, `rig status`

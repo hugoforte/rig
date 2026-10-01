@@ -13,7 +13,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { buildGraph, components, layout, nodeRadius, halfBox, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { components, layout, halfBox, repoBranch, pickExample, walkthrough, summarize, renderDemo } from '../bin/demo.mjs'
+import { buildGraph } from '../bin/catalog-graph.mjs'
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -28,56 +29,30 @@ const work = (over = {}) => ({
   createdAt: '2026-01-01T00:00:00Z', ...over,
 })
 
+// The same work in record format 3, where a repo carries `branches[]` — one entry per branch
+// of this work it holds, each with its own base and, once merged, that PR's terminal facts.
+//
+// Both shapes exist in a live data root at the same time, because records migrate only when rig
+// next writes one. Every fixture in this file was the legacy shape for exactly that reason: it
+// is what the root on this machine happened to hold, and the whole suite passed while `rig demo`
+// could not read a migrated record at all. A fixture is a claim about a format, and a claim
+// nothing checks is the kind that is quietly wrong for a week.
+const work3 = (over = {}) => {
+  const { repos, ...rest } = work(over)
+  return {
+    ...rest,
+    repos: repos.map(({ base, pr: merged, ...repo }) => ({
+      ...repo,
+      branches: [{ branch: rest.branch, base, ...(merged ? { pr: merged } : {}) }],
+    })),
+  }
+}
+
 const pr = (over = {}) => ({
   number: 7, url: 'https://example.invalid/7',
   openedAt: '2026-01-02T10:00:00Z', firstCommitAt: '2026-01-02T09:00:00Z',
   firstReviewAt: '2026-01-02T11:00:00Z', approvedAt: '2026-01-02T12:00:00Z',
   mergedAt: '2026-01-02T13:00:00Z', ...over,
-})
-
-// ------------------------------------------------------------------- the graph
-
-test('buildGraph: a relationship both ends describe is one edge, not two', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]),
-    entry('orders', [{ repo: 'billing', how: 'emits OrderReturned' }]),
-  ])
-  assert.equal(graph.edges.length, 1)
-})
-
-test('buildGraph: that one edge keeps what each end said, with its direction', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'pushes invoices' }]),
-    entry('orders', [{ repo: 'billing', how: 'emits OrderReturned' }]),
-  ])
-  assert.deepEqual(graph.edges[0].says.map(s => `${s.from}→${s.to}: ${s.how}`).sort(), [
-    'billing→orders: pushes invoices',
-    'orders→billing: emits OrderReturned',
-  ])
-})
-
-test('buildGraph: a neighbour with no entry of its own is kept, and marked', () => {
-  const graph = buildGraph([entry('billing', [{ repo: 'ancient-mainframe', how: 'nightly batch' }])])
-  const found = graph.nodes.find(n => n.id === 'ancient-mainframe')
-  assert.equal(found.catalogued, false, 'the catalogue being thin is a finding, not something to hide')
-})
-
-test('buildGraph: a repo naming itself gets no edge to itself', () => {
-  const graph = buildGraph([entry('billing', [{ repo: 'billing', how: 'talks to itself' }])])
-  assert.equal(graph.edges.length, 0)
-})
-
-test('buildGraph: degree counts relationships, not mentions of them', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'one way' }]),
-    entry('orders', [{ repo: 'billing', how: 'the other way' }]),
-  ])
-  assert.equal(graph.nodes.find(n => n.id === 'billing').degree, 1)
-})
-
-test('buildGraph: a bare string in talks_to is an edge with nothing said about it', () => {
-  const graph = buildGraph([entry('billing', ['orders']), entry('orders')])
-  assert.deepEqual([graph.edges.length, graph.edges[0].says.length], [1, 0])
 })
 
 // ------------------------------------------------------------------- the layout
@@ -314,30 +289,99 @@ test('renderDemo: counts only the works that spanned more than one repo as cross
 })
 
 test('renderDemo: a merged PR is reported with the stretches it spent, not a duration invented for it', () => {
-  const landed = work({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] })
-  const html = page({ works: [landed] })
+  // Nobody reviewed before approving, so the two stretches that end or start at a review have
+  // nothing to be measured from.
+  const merged = pr({ firstCommitAt: '2026-01-02T09:30:00Z', firstReviewAt: null, mergedAt: '2026-01-02T15:00:00Z' })
+  const html = page({ works: [work({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: merged }] })] })
+  const row = /<th>a<\/th>([\s\S]*?)<\/tr>/.exec(html)?.[1] ?? ''
+  assert.deepEqual([...row.matchAll(/<td>(?:<code>)?([^<]*)(?:<\/code>)?<\/td>/g)].map(m => m[1]), ['main', '#7', '30m', '—', '—', '3.0h'], row)
+})
+
+// --------------------------------------------------------- both record formats
+
+test('repoBranch: reads the branch entry when the record has been migrated', () => {
+  const repo = { repo: 'a', branches: [{ branch: 'feat/x', base: 'uat', pr: pr() }] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'uat')
+})
+
+test('repoBranch: falls back to the legacy fields when it has not', () => {
+  assert.equal(repoBranch({ repo: 'a', base: 'develop', pr: pr() }, 'feat/x').base, 'develop')
+})
+
+test('repoBranch: picks the entry for this work’s branch, not merely the first', () => {
+  const repo = { repo: 'a', branches: [
+    { branch: 'feat/stage-one', base: 'main' },
+    { branch: 'feat/x', base: 'develop' },
+  ] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'develop')
+})
+
+test('repoBranch: a repo with no branch entry for this work still answers', () => {
+  const repo = { repo: 'a', branches: [{ branch: 'feat/other', base: 'main' }] }
+  assert.equal(repoBranch(repo, 'feat/x').base, 'main')
+})
+
+test('pickExample: a migrated record is ranked on its merged PRs like any other', () => {
+  const migrated = work3({ id: 'migrated', repos: [
+    { repo: 'a', org: 'acme', base: 'main', pr: pr() },
+    { repo: 'b', org: 'acme', base: 'uat', pr: pr() },
+  ] })
+  const legacy = work({ id: 'legacy', repos: [{ repo: 'c', org: 'acme', base: 'main', pr: pr() }] })
+  assert.equal(pickExample([legacy, migrated]).id, 'migrated',
+    'a migrated work used to score zero and lose to an unmigrated one')
+})
+
+test('walkthrough: a migrated record still knows where each repo lands', () => {
+  const steps = walkthrough(work3({ repos: [
+    { repo: 'a', org: 'acme', base: 'develop' },
+    { repo: 'b', org: 'acme', base: 'uat' },
+  ] }))
+  assert.match(steps.find(s => s.command === 'rig attach b').note, /`uat`, not `develop`/)
+})
+
+test('walkthrough: a migrated record never prints an undefined base', () => {
+  const steps = walkthrough(work3({ repos: [{ repo: 'a', org: 'acme', base: 'develop', pr: pr() }] }))
+  assert.doesNotMatch(JSON.stringify(steps), /undefined/)
+})
+
+test('walkthrough: a migrated record keeps its `rig pr` step', () => {
+  const steps = walkthrough(work3({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] }))
+  assert.equal(steps.filter(s => s.command === 'rig pr').length, 1)
+})
+
+test('renderDemo: a migrated record still reports what survived the branch', () => {
+  const html = page({ works: [work3({ repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr() }] })] })
   assert.match(html, /What survived the branch/)
+})
+
+test('both record formats describe the same work the same way', () => {
+  const repos = [{ repo: 'a', org: 'acme', base: 'develop', pr: pr() }, { repo: 'b', org: 'acme', base: 'uat', pr: pr() }]
+  assert.deepEqual(walkthrough(work3({ repos })), walkthrough(work({ repos })))
 })
 
 // ------------------------------------------------------------- the real command
 
-// The one test that touches disk. Everything above trusts a fixture to be the shape rig
-// writes; this drives the real command over a real data root, so the day `loadCatalog` or the
-// record format moves, it fails here.
+// The tests that touch disk. Everything above trusts a fixture to be the shape rig writes;
+// these drive the real command over a real data root, so the day `loadCatalog` or the record
+// format moves, they fail here.
 const temps = []
 after(() => { for (const dir of temps) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) })
 
-test('rig demo: renders a page from a data root on disk, naming its repos', () => {
+// A data root with two catalogued repos, and `rig demo` run over it in a process of its own.
+// `records` maps a work id to the text of its `work.json`, written as it stands.
+const demoOnDisk = records => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-demo-'))
   temps.push(tmp)
   const root = path.join(tmp, 'data')
   fs.mkdirSync(path.join(root, 'catalog', 'acme'), { recursive: true })
-  fs.mkdirSync(path.join(root, 'work', 'w1'), { recursive: true })
   fs.writeFileSync(path.join(root, 'catalog', 'acme', 'billing.md'),
     '---\nrepo: billing\norg: acme\nrole: Owns invoices\nstack: C#\ntalks_to:\n  - repo: orders\n    how: posts invoices\n---\nProse.\n')
   fs.writeFileSync(path.join(root, 'catalog', 'acme', 'orders.md'),
     '---\nrepo: orders\norg: acme\nrole: Owns orders\nstack: Node\ntalks_to: []\n---\nProse.\n')
-  fs.writeFileSync(path.join(root, 'work', 'w1', 'work.json'), JSON.stringify(work()))
+  for (const [id, text] of Object.entries(records)) {
+    fs.mkdirSync(path.join(root, 'work', id), { recursive: true })
+    fs.writeFileSync(path.join(root, 'work', id, 'work.json'), text)
+  }
 
   const localFile = path.join(tmp, 'rig.local.json')
   fs.writeFileSync(localFile, JSON.stringify({
@@ -352,10 +396,194 @@ test('rig demo: renders a page from a data root on disk, naming its repos', () =
   env.RIG_LOCAL_CONFIG = localFile
   const r = spawnSync(process.execPath, [path.join(SRC, 'bin', 'rig.mjs'), 'demo', '--out', out, '--no-open'],
     { encoding: 'utf8', env, cwd: tmp })
-
   assert.equal(r.status, 0, r.stderr || r.stdout)
-  const html = fs.readFileSync(out, 'utf8')
+  return { stdout: r.stdout, html: fs.readFileSync(out, 'utf8') }
+}
+
+test('rig demo: renders a page from a data root on disk, naming its repos', () => {
+  // Written in the current record format, so this fails the day the demo stops reading it.
+  const { html } = demoOnDisk({ w1: JSON.stringify(work3()) })
   assert.match(html, /data-repo="billing"/)
   assert.match(html, /posts invoices/)
   assert.match(html, /rig attach billing/)
+})
+
+test('rig demo: a record that will not parse is named and left out, and the page still renders', () => {
+  // A write cut short is a SyntaxError.
+  const { stdout, html } = demoOnDisk({ w1: JSON.stringify(work3()), cut: '{"id": "cut", "repos": [' })
+  assert.match(stdout, /1 work record could not be read and was left out: cut/)
+  assert.match(html, /rig attach billing/)
+})
+
+// -------------------------------------------------- what the works cost
+
+// The header counted inventory — repos, relationships, works — and nothing about what any of
+// it produced. These are read out of the terminal PR facts `rig close` stores, which is what
+// lets the page claim them without a network call and without going stale (decision 91).
+
+const landedWork = (id, ...repos) => work({
+  id,
+  repos: repos.map(([repo, firstCommitAt, mergedAt]) =>
+    ({ repo, org: 'acme', base: 'main', pr: pr({ firstCommitAt, mergedAt }) })),
+})
+
+test('outcome: a work lands when every one of its pull requests merged, not when it was closed', () => {
+  const closedNothingMerged = work({ id: 'c', closedAt: '2026-02-01T00:00:00Z', repos: [{ repo: 'a', base: 'main' }] })
+  const s = summarize({ catalog: sampleCatalog(), works: [closedNothingMerged] })
+  assert.equal(s.outcome.landed, 0, 'closedAt is when the teardown ran, not evidence that anything shipped')
+})
+
+test('outcome: a work with one repo merged and another still out has not landed', () => {
+  const partial = work({
+    id: 'p',
+    repos: [{ repo: 'a', org: 'acme', base: 'main', pr: pr({ mergedAt: '2026-01-02T02:00:00Z' }) },
+      { repo: 'b', org: 'acme', base: 'main' }],
+  })
+  assert.equal(summarize({ catalog: sampleCatalog(), works: [partial] }).outcome.landed, 0,
+    'counting it would stop its clock at the first merge, which makes the widest works look fastest')
+})
+
+test('outcome: an abandoned work has not landed, whatever merged before it was stopped', () => {
+  const stopped = { ...landedWork('s', ['a', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z']), abandonedAt: '2026-01-02T00:00:00Z' }
+  assert.equal(summarize({ catalog: sampleCatalog(), works: [stopped] }).outcome.landed, 0)
+})
+
+test('outcome: the cycle runs from the first commit anywhere to the last merge anywhere', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'],
+      ['b', '2026-01-02T00:00:00Z', '2026-01-05T00:00:00Z'])],
+  })
+  assert.equal(s.outcome.cycleDays, 4, 'a cross-repo work is not finished until its last repo is')
+})
+
+test('outcome: the figure is a median, and carries the n it was taken over', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [
+      landedWork('w1', ['a', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z']),
+      landedWork('w2', ['a', '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z']),
+      landedWork('w3', ['a', '2026-01-01T00:00:00Z', '2026-01-11T00:00:00Z']),
+    ],
+  })
+  assert.deepEqual([s.outcome.landed, s.outcome.cycleDays], [3, 4])
+})
+
+test('outcome: repos per landed work is taken over the works that landed, not over all of them', () => {
+  const s = summarize({
+    catalog: sampleCatalog(),
+    works: [
+      landedWork('w1', ['a', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'], ['b', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z']),
+      work({ id: 'open', repos: [1, 2, 3, 4, 5].map(n => ({ repo: `r${n}`, base: 'main' })) }),
+    ],
+  })
+  assert.deepEqual([s.outcome.landed, s.outcome.reposPerWork], [1, 2])
+})
+
+test('outcome: with nothing landed there is no figure, and the page says nothing rather than zero', () => {
+  const s = summarize({ catalog: sampleCatalog(), works: [work()] })
+  assert.deepEqual([s.outcome.landed, s.outcome.cycleDays], [0, null])
+  assert.doesNotMatch(renderDemo(s), /landed/)
+})
+
+test('outcome: the figures reach the page, with the n each was taken over', () => {
+  const html = page({ works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])] })
+  assert.match(html, /1<\/strong> of those works landed/)
+  assert.match(html, /2 days<\/strong> from the first commit to the last merge \(n=1\)/)
+  assert.doesNotMatch(html, /saved|faster than|would have/, 'no claim the records cannot support')
+})
+
+test('outcome: a cycle under a day is shown in hours, because zero days reads as a broken page', () => {
+  const html = page({ works: [landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-01T03:00:00Z'])] })
+  assert.match(html, /3 hours<\/strong> from the first commit/)
+})
+
+// The unit is picked from the number, and the number is rounded for a reader: four places is
+// what the model keeps so that hours survive, and it is not what a person should be shown.
+const cycle = (from, to) => {
+  const html = page({ works: [landedWork('w', ['a', from, to])] })
+  return html.match(/<strong>([^<]+)<\/strong> from the first commit/)[1]
+}
+
+test('outcome: days are shown to one place, not to the four the model keeps', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-04T03:24:00Z'), '3.1 days')
+})
+
+test('outcome: exactly one day is a day, singular', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'), '1 day')
+})
+
+test('outcome: a cycle of seconds is one minute, singular', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T00:00:30Z'), '1 minute')
+})
+
+test('outcome: a cycle that rounds up to sixty minutes is an hour', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T00:59:54Z'), '1 hour')
+})
+
+test('outcome: a cycle that rounds up to twenty-four hours is a day', () => {
+  assert.equal(cycle('2026-01-01T00:00:00Z', '2026-01-01T23:59:50Z'), '1 day')
+})
+
+test('outcome: a migrated record is read the same as a legacy one', () => {
+  const legacy = landedWork('w', ['a', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])
+  const migrated = work3(legacy)
+  assert.deepEqual(summarize({ catalog: sampleCatalog(), works: [migrated] }).outcome,
+    summarize({ catalog: sampleCatalog(), works: [legacy] }).outcome)
+})
+
+// ------------------------------------------------ direction in the drawing
+
+test('renderDemo: an edge with a stated direction is drawn with an arrowhead', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]), entry('b')] })
+  assert.match(html, /marker-end="url\(#arrow\)"/)
+})
+
+test('renderDemo: an edge nobody placed is drawn plain, so the drawing shows where the catalogue is thin', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x' }]), entry('b')] })
+  assert.doesNotMatch(html, /marker-end=|marker-start=/)
+})
+
+test('renderDemo: `both` is drawn with a head at each end', () => {
+  const html = page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'both' }]), entry('b')] })
+  assert.match(html, /marker-start="url\(#arrowback\)"[\s\S]*marker-end="url\(#arrow\)"|marker-end="url\(#arrow\)"[\s\S]*marker-start="url\(#arrowback\)"/)
+})
+
+test('renderDemo: two entries that disagree are drawn plain rather than pointed one way', () => {
+  const html = page({
+    catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]),
+      entry('b', [{ repo: 'a', how: 'y', direction: 'downstream' }])],
+  })
+  assert.doesNotMatch(html, /marker-(end|start)=/, 'no head of either kind, not just not the one it would have had')
+})
+
+// Where a head actually lands. The nodes are drawn after the edges with an opaque fill, so a head
+// at a node's centre is painted over and the page shows a plain line — which is how the first
+// version shipped, with every attribute test above passing. So: which end carries the head, and
+// is that end outside the circle it points at.
+const drawn = html => {
+  const nodes = new Map([...html.matchAll(/data-repo="([^"]+)"[^>]*transform="translate\(([-\d.]+),([-\d.]+)\)"><circle r="([\d.]+)"/g)]
+    .map(([, id, x, y, r]) => [id, { x: Number(x), y: Number(y), r: Number(r) }]))
+  const [tag] = html.match(/<line class="edge"[^>]*>/)
+  const attr = k => tag.match(new RegExp(`${k}="([^"]*)"`))[1]
+  const line = { a: attr('data-a'), b: attr('data-b'), x1: Number(attr('x1')), y1: Number(attr('y1')), x2: Number(attr('x2')), y2: Number(attr('y2')) }
+  return { nodes, line, end: /marker-end=/.test(tag), start: /marker-start=/.test(tag) }
+}
+const clear = (x, y, n) => Math.hypot(x - n.x, y - n.y) - n.r
+
+test('renderDemo: a downstream head is on the far end, and outside the dot it points at', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'downstream' }]), entry('b')] }))
+  assert.deepEqual([d.line.a, d.line.b, d.end, d.start], ['a', 'b', true, false])
+  assert.ok(clear(d.line.x2, d.line.y2, d.nodes.get('b')) >= 0, 'the head is painted over if it ends under b')
+})
+
+test('renderDemo: an upstream head is on the near end, and outside the dot it points at', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'upstream' }]), entry('b')] }))
+  assert.deepEqual([d.end, d.start], [false, true])
+  assert.ok(clear(d.line.x1, d.line.y1, d.nodes.get('a')) >= 0, 'the head is painted over if it ends under a')
+})
+
+test('renderDemo: `both` keeps both heads clear of both dots', () => {
+  const d = drawn(page({ catalog: [entry('a', [{ repo: 'b', how: 'x', direction: 'both' }]), entry('b')] }))
+  assert.ok(clear(d.line.x1, d.line.y1, d.nodes.get('a')) >= 0 && clear(d.line.x2, d.line.y2, d.nodes.get('b')) >= 0)
 })

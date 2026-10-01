@@ -1,7 +1,7 @@
 // Journeys: one machine, walked through a sequence of states, with nothing restored between
 // the steps.
 //
-// Every other subprocess suite starts from a machine that has nothing and asserts one
+// Every other CLI suite starts from a machine that has nothing and asserts one
 // command. The bugs this file exists for are in the *second* command against a machine that
 // already had state — an existing root, an existing `current`, an existing legacy pointer —
 // and none of them is in resolution, which is where the fast tests are. Resolution order
@@ -43,6 +43,8 @@ const publish = ({ tmp, remotesDir, gitMust }, repo) => {
 // README's own recipe for the second root, refused outright — and both are invisible to a test
 // that asserts a single `init` against a machine with nothing.
 scenario('one root becomes three', {
+  // A journey about records and machine files, so it is walked in this process.
+  inProcess: true,
   prefix: 'e2e-roots-',
   localConfig: true,
   // No repos seeded: the data repo `--data-repo` names does not exist, so init takes the
@@ -139,7 +141,7 @@ scenario('one root becomes three', {
 // file this one wrote — and it once read it as an installation that had never been set up,
 // because `init` had deleted the only key it knows. That window opens on every machine at
 // every release, and nothing could express it: the suite could fabricate a *newer* rig
-// (test/installation.test.mjs) and never an older one.
+// (test/installation-update.test.mjs) and never an older one.
 const PREVIOUS = previousReleaseTag()
 
 // The last release that had never heard of named roots, and so the last one that reads
@@ -153,6 +155,9 @@ const BEFORE_NAMED_ROOTS = 'v3.4.0'
 const noTagFor = wanted => `${wanted} is not in this checkout — a shallow clone carries no tags`
 
 scenario('the previous release, against a machine file this one wrote', {
+  // The steps that drive *this* rig run here; the ones that name `root: PREVIOUS.root` are
+  // about a different tool on disk, and `rig()` spawns those whatever this says.
+  inProcess: true,
   prefix: 'e2e-window-',
   localConfig: true,
   github: { auth: 'ok', repos: {} },
@@ -216,6 +221,7 @@ scenario('the previous release, against a machine file this one wrote', {
 // from where the catalogue entry and the record now sit, which is the only reason the split is
 // a file move and not a migration — and the only way to show that is to move them and ask.
 scenario('splitting a data root', {
+  inProcess: true,
   prefix: 'e2e-split-',
   localConfig: true,
   remotes: true,
@@ -297,7 +303,7 @@ scenario('splitting a data root', {
 
 // ------------------------------------------- the machine file survives a packaged upgrade
 
-// The regression decision 92 exists to prevent, and the only shape of test that can see it:
+// The regression decision 167 exists to prevent, and the only shape of test that can see it:
 // an installation is set up, the directory the tool runs from is **replaced wholesale** — what
 // `npm i -g @hugoforte/rig@latest` does to a package it owns — and the machine is asked
 // whether it still knows anything. With `rig.local.json` beside `package.json` the answer was
@@ -350,7 +356,7 @@ scenario('a packaged upgrade replaces the tool, and the machine keeps its config
 
 // ------------------------------------------ an installation made before the file moved
 
-// The other half of decision 92: the tool tree is still *read*, so a clone install that
+// The other half of decision 167: the tool tree is still *read*, so a clone install that
 // predates the move keeps working with nothing done to it — and is told where the file
 // belongs, once, before an upgrade is the thing that tells it.
 scenario('a machine file left beside the tool is read, and named by doctor', {

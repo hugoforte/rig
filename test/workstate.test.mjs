@@ -42,9 +42,14 @@ test('uncommitted changes block the close and are not done', () => {
 })
 
 test('unpushed commits block the close', () => {
-  const v = one(clean({ ahead: 3 }))
+  const v = one(clean({ unpushed: 3 }))
   assert.deepEqual(kinds(v), ['unpushed'])
   assert.equal(v.blockers[0].message, 'billing: 3 unpushed commit(s)')
+})
+
+test('commits ahead of the base that are all on the remote do not block the close (#192)', () => {
+  const v = one(clean({ ahead: 3, unpushed: 0 }))
+  assert.deepEqual(v.blockers, [])
 })
 
 test('a distance git could not measure blocks the close, and says what git said', () => {
@@ -96,7 +101,7 @@ test('a missing worktree is not a verdict on its own: judged on its PR alone', (
 test('a merged PR settles a branch whose upstream the squash merge deleted (#52)', () => {
   // The exact shape of #52: the head branch is gone, so `rev-list` measures against the
   // base instead and the pre-squash commits read as unpushed forever.
-  const v = one(clean({ ahead: 4, pr: mergedPr }))
+  const v = one(clean({ ahead: 4, unpushed: 4, pr: mergedPr }))
   assert.deepEqual(v.blockers, [], 'no --force needed to close work that is already merged')
   assert.equal(v.done, true)
 })
@@ -110,10 +115,15 @@ test('a merged PR settles a distance nobody could measure either', () => {
 })
 
 test('a merge settles the branch, never the working tree', () => {
-  const v = one(clean({ dirty: 1, ahead: 4, pr: mergedPr }))
+  const v = one(clean({ dirty: 1, ahead: 4, unpushed: 4, pr: mergedPr }))
   assert.deepEqual(kinds(v), ['dirty'], 'unsaved work is the one thing close could destroy')
   assert.equal(v.done, false)
   assert.equal(v.reason, 'Every PR is merged, but billing: 1 uncommitted change(s).')
+})
+
+test('commits on a detached HEAD that no branch holds block, whatever the PR says', () => {
+  const v = one(clean({ unbranched: 2, pr: mergedPr }))
+  assert.deepEqual(kinds(v), ['unbranched'], 'removing the worktree is the end of them')
 })
 
 test('a merged PR whose worktree is gone is done, with nothing in the way', () => {

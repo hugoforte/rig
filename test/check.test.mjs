@@ -20,6 +20,8 @@ import path from 'node:path'
 import { makeInstall } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
+  // Everything but `--run`, which opts back out below.
+  inProcess: true,
   prefix: 'rig-check-',
   author: 'rig check',
   email: 'check@example.invalid',
@@ -33,6 +35,11 @@ const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInsta
     },
   },
 })
+
+// `--run` is the one thing in this file whose subject is the process: a catalogue command
+// inherits rig's stdio, so what it printed only reaches an assertion when rig is a child with
+// a pipe on the other end of it.
+const SUBPROCESS = { inProcess: false }
 
 const BRANCH = 'feat/check-work'
 const catalogEntry = repo => path.join(dataRoot, 'catalog', 'acme', `${repo}.md`)
@@ -107,7 +114,7 @@ test('a repo with nothing in its check says where to write one', () => {
 })
 
 test('--run runs them, in the repo\'s own worktree, and only for the repo named', () => {
-  const r = rig(['check', 'billing', '--work', 't1', '--run'])
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, new RegExp(BRANCH), 'the worktree is where the command ran')
   assert.doesNotMatch(r.out, /no-such-ref/, 'the repo that was not named was not touched')
@@ -115,13 +122,13 @@ test('--run runs them, in the repo\'s own worktree, and only for the repo named'
 
 test('a run records nothing — not in the catalogue, not in the work record', () => {
   const before = [fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)]
-  assert.equal(rig(['check', 'billing', '--work', 't1', '--run']).code, 0)
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
   assert.deepEqual([fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)], before,
     'the catalogue holds the command; a result is nobody\'s durable fact')
 })
 
 test('a failed check is reported, and the exit code carries the verdict', () => {
-  const r = rig(['check', '--work', 't1', '--run'])
+  const r = rig(['check', '--work', 't1', '--run'], SUBPROCESS)
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /check command failed: git rev-parse --verify --quiet no-such-ref/)
 })

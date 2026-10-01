@@ -22,6 +22,11 @@
 // use it are contradictions, and this is the module that words them.
 export const ISSUES_URL = 'https://github.com/hugoforte/rig/issues'
 
+// How many entries the catalogue-freshness line names before it stops counting out loud. A
+// display bound and not a threshold: the count is always the whole population, and the tail of
+// a ranked list is the same news as its head.
+const CATALOGUE_NAMED = 5
+
 // One finding: the glyph it prints as, what it says, and whether it moves the exit code.
 //
 //   verdict  'ok' (✓), 'warn' (!), 'bad' (✗) or 'note' (·) — the four channels the output
@@ -78,12 +83,20 @@ function rootFindings (root) {
       // rig commits after its own commands; an edit made outside rig waits for `rig save`.
       // `dirty` is null when git could not read the tree, which is neither clean nor a
       // count — a green tick on the strength of a command that failed is the one thing
-      // this check must never print.
+      // this check must never print. `ahead` is null the same way, when git could not count
+      // against the upstream, and that is not "nothing unpushed" either.
       const dirty = state.dirty
       if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
       else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
       if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
+      // Not fetched yet, never pushed, or gone from the remote: doctor does not fetch, so it
+      // cannot tell which, and names the way out of each.
+      else if (!state.upstream && state.tracks) {
+        const remote = state.tracks.split('/')[0]
+        out.push(warn(`data root tracks ${state.tracks}, which is not here — \`rig update\` fetches it; if the remote does not have it, push (\`git push -u ${remote} ${state.branch}\`) or re-point the branch (\`git branch -u\`)`, { counts: false }))
+      }
       else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
+      else if (state.ahead === null) out.push(warn(`data root: git could not measure the distance from ${state.upstream} — \`git -C ${root.path} status\` says why`))
       else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))
       else if (dirty === 0) out.push(ok('data root is committed and pushed'))
       // Measured against the last fetch, which a mutating command does for itself.
@@ -134,14 +147,39 @@ function rootFindings (root) {
   if (drafts.length) {
     out.push(warn(`${drafts.length} draft catalogue entr${drafts.length === 1 ? 'y' : 'ies'}: ${drafts.join(', ')}`, { counts: false }))
   }
+
+  // An entry behind the repo it describes is the same kind of finding as a draft — an invitation
+  // to correct it, not a fault — so it warns and does not count. Drafts are left out: a stub
+  // nobody has written yet is already reported above, and saying it twice would make the shorter
+  // list the noisier one.
+  //
+  // **Reported, never judged**, which is what CONTEXT.md's Freshness has always meant. The line
+  // carries the count and the date and no opinion about either, because rig cannot know which
+  // commits touched what the entry claims: 400 in code the entry never described is not
+  // staleness, and 3 that moved a `talks_to` edge is. Zero is dropped all the same — it is the
+  // answer for every entry anyone has just corrected, and it is not news.
+  const behind = (root.catalogueFreshness || [])
+    .filter(e => e.commits > 0 && !drafts.includes(e.repo))
+    .sort((a, b) => b.commits - a.commits)
+  if (behind.length) {
+    const named = behind.slice(0, CATALOGUE_NAMED)
+    const rest = behind.length - named.length
+    const list = named.map(e => `${e.repo} (${e.commits} commit${e.commits === 1 ? '' : 's'} since ${e.writtenAt})`).join(', ')
+    const one = behind.length === 1
+    out.push(warn(
+      `${behind.length} catalogue entr${one ? 'y' : 'ies'} behind ${one ? 'its repo' : 'their repos'}: ${list}${rest ? `, and ${rest} more` : ''}`,
+      { counts: false },
+    ))
+  }
   return out
 }
 
 // Everything the findings need that they cannot work out for themselves, gathered by the
 // caller so this stays pure. **Decision 54 is a field here, not a branch**: a check this
 // machine cannot make arrives null — `git: null` with no git on PATH, `gitConfig: null`
-// with it, `disk: null` on a machine with neither free-space probe — and a null is dropped
-// or noted, never counted against the machine.
+// with it, `disk: null` when free space could not be measured (no `df` on PATH, a Node
+// without `fs.statfsSync`, a work root the filesystem will not report on) — and a null is
+// dropped or noted, never counted against the machine.
 //
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
@@ -164,13 +202,20 @@ function rootFindings (root) {
 //                     minus the two things rig keeps there itself
 //   mirrorRoot        { path, exists }
 //   dataRoots         one per root this installation configures, each
-//                     { name, path, split, exists, state, repoConfig, orgs, drafts }:
-//                     `state` is `checkouts.describe()` and null when there is nothing
-//                     readable to describe, `repoConfig` is { path, exists, orgs, stamp }
-//                     with `stamp` the record-format reading, and `orgs` is
-//                     [{ org, identity: { email, source }, tracker }]
+//                     { name, path, split, exists, state, repoConfig, orgs, drafts,
+//                     catalogueFreshness }: `state` is `checkouts.describe()` and null when
+//                     there is nothing readable to describe, `repoConfig` is
+//                     { path, exists, orgs, stamp } with `stamp` the record-format reading,
+//                     `orgs` is [{ org, identity: { email, source }, tracker }], and
+//                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
+//                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos }]
+//                     folderMissing, strays, repos, marker, holders, leftover }]: `marker` is
+//                     the folder's `.rig/data`, null when it has none, `holders` the roots
+//                     that hold the work's record, and `leftover` set only on a closed work
+//                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
+//                     a record that would not read is { id, unreadable } instead,
+//                     `unreadable` the sentence saying why
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -283,13 +328,34 @@ export function doctorFindings (snap = {}) {
   // works at once, which is what makes the missing-folder warning below reach an unclosed work
   // whatever root holds its record.
   for (const w of snap.works || []) {
-    if (w.closed) continue
-    if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed`)); continue }
+    // A record that will not read has nothing else to ask of it.
+    if (w.unreadable) { out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`)); continue }
+    // The mirror of a missing folder: the close ran on another machine, and this one still has
+    // the copy it tore down there. Nothing else is asked of the folder, which is on its way out.
+    if (w.closed) {
+      if (w.leftover) out.push(warn(`${w.id}: ${w.leftover}, but its folder is still on this machine — \`rig tidy\` clears it`))
+      continue
+    }
+    if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
     }
+    // The marker is what a command run in the folder resolves by. Without one it falls back to
+    // `current`, which only matters when there is more than one root to fall between; one
+    // naming a root that does not hold the record sends it to the wrong root, or to none. A
+    // record in two roots is named whatever the marker says, since either copy may be the
+    // wrong one and no marker can say which.
+    const holders = w.holders || []
+    const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
+    if (holders.length > 1) {
+      out.push(warn(`${w.id}: data roots ${holders.join(', ')} each hold its record — delete the copy that is wrong`))
+    } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
+      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
+    } else if (holders.length && w.marker && w.marker !== holders[0]) {
+      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${holders[0]}" — ${rewrite}`))
+    }
     for (const r of w.repos || []) {
-      if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone`))
+      if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))
       if (r.secretsUnconfigured) {
         out.push(warn(`${w.id}: ${r.repo} mentions secrets in its catalogue entry but has no source in rig.local.json`))
       }
@@ -308,8 +374,9 @@ export function doctorFindings (snap = {}) {
     out.push(warn(`unmanaged entry "${entry}" in ${wr.path} — no data root has a work record for it; rig owns this tree`))
   }
 
-  // The label comes from the probe, not from the path: a drive letter on Windows, the mount
-  // point the work root actually sits on anywhere else.
+  // The label names the volume that was measured, which is not always the one the path is
+  // written on: the drive, or the share, the work root resolves to on Windows; the mount point
+  // `df` found it on anywhere else.
   if (snap.disk) {
     out.push(check(`disk on ${snap.disk.label}`, snap.disk.freeGb > 20, {
       ok: `${snap.disk.freeGb} GB free`,

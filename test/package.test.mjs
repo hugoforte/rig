@@ -12,6 +12,11 @@
 // context doc and the rollout plan are scaffolded from `templates/`, and `AGENTS.md` is what an
 // agent is told to read at `<root>/AGENTS.md` — for a packaged install that copy is the only
 // one on the machine.
+//
+// What `npm install -g <the clone>` reads to make `rig` a command. The install itself — a link
+// to the checkout, which is what lets `rig update` move the command by fast-forwarding it — is
+// driven end to end by test/install.test.mjs, through the scripts the README hands people.
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -73,4 +78,12 @@ test('the package is scoped, because the bare name is taken on the registry', { 
 test('nothing marks the package unpublishable', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.notEqual(pkg.private, true, '`private: true` refuses `npm publish` outright')
+})
+
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+
+test('package.json names rig as a command, pointing at a script a POSIX shell can run', () => {
+  assert.equal(pkg.bin?.rig, 'bin/rig.mjs')
+  const first = fs.readFileSync(path.join(ROOT, pkg.bin.rig), 'utf8').split('\n')[0]
+  assert.equal(first, '#!/usr/bin/env node', 'a global install on Linux and macOS runs the file itself')
 })

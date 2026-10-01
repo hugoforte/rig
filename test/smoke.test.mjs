@@ -1,14 +1,17 @@
-// Runs a temp copy of the tool as a subprocess against temp work and data roots.
+// Drives a temp copy of the tool against temp work and data roots. The runs happen in this
+// process, through `bin/rig.mjs`'s `run(argv, io)`: the copy is the installation rig reads its
+// files from, and the code that runs is this checkout's. The two tests whose subject is a
+// process start one of their own; test/harness.mjs says when else a run is a subprocess.
 //
-// The copy is for git alone: it has no `.git`, which is what keeps `rig update` and every
-// freshness path off the checkout these tests are running from (test/installation.test.mjs
-// is where a real installation with a remote is built, and says so). The machine config no
-// longer needs it — `RIG_LOCAL_CONFIG` puts rig.local.json in the temp dir, so nothing this
-// suite writes lands beside the tool.
+// What the copy lacks matters as much as what it holds: it has no `.git`, which is what keeps
+// `rig update` and every freshness path off the checkout these tests are running from
+// (test/installation-fixture.mjs is where a real installation with a remote is built, and says
+// so). And no machine config is written into it — `RIG_LOCAL_CONFIG` puts rig.local.json in
+// the temp dir, so nothing this suite writes lands beside the tool.
 //
 // The tests below share one temp installation and run in order (init before new,
-// new before close). node:test runs a file's tests serially by default; running a
-// single one with --test-name-pattern is not supported.
+// new before close). node:test runs a file's tests serially by default; a test selected on
+// its own with --test-name-pattern fails at once, since it would have no installation.
 //
 // GitHub and Jira are the in-memory adapters (test/harness.mjs says how). Tests seed them
 // and read them back; the real `gh`/`twg` are never spawned. That state is shared too: a
@@ -19,9 +22,10 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { MAJOR, MIGRATIONS, FORMAT_STAMP } from '../bin/version.mjs'
-import { SRC, makeInstall, readJson, strip } from './harness.mjs'
+import { BRANCH_PREFIXES } from '../bin/release.mjs'
+import { makeInstall, readJson, strip } from './harness.mjs'
 import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 // What this tool stamps a data root with: the record format, derived (ADR 0004). Not read
@@ -30,8 +34,10 @@ const VERSION = FORMAT_STAMP
 
 const {
   tmp, install: tool, localConfig, dataRoot, workRoot, env,
-  githubStateFile, twgStateFile, rig, git: gitIn, cleanup,
+  githubStateFile, twgStateFile, rig: rigIn, git: gitIn, cleanup,
 } = makeInstall({
+  // Nothing here is about the process rig runs in, so the runs happen in this one.
+  inProcess: true,
   prefix: 'rig-smoke-',
   author: 'rig smoke',
   email: 'smoke@example.invalid',
@@ -51,6 +57,15 @@ const lastCommit = dir => gitIn(dir, 'log', '-1', '--format=%s').stdout.trim()
 const dirty = dir => gitIn(dir, 'status', '--porcelain').stdout.trim()
 
 after(cleanup)
+
+// Until the init test has built the installation, only `doctor` and an init that names its work
+// root may run: anything else falls through to this machine's defaults, and a test selected on
+// its own would write into its real work root (hugoforte/rig#217).
+const ALONE = 'the smoke tests share one installation, built by the init test; run the file whole'
+const rig = (args, opts) => {
+  if (!fs.existsSync(localConfig) && args[0] !== 'doctor' && !args.includes('--work-root')) throw new Error(ALONE)
+  return rigIn(args, opts)
+}
 
 test('importing the tool runs nothing', () => {
   const url = pathToFileURL(path.join(tool, 'bin', 'rig.mjs')).href
@@ -96,6 +111,24 @@ test('init --data-root makes a git checkout with a first commit and writes both 
   assert.ok(!('orgs' in local), 'orgs never go in the local file')
 })
 
+test('a smoke test run on its own fails at once, rather than running without the installation', () => {
+  // Without NODE_TEST_CONTEXT the child prints its own report, rather than streaming it to this runner.
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const r = spawnSync(process.execPath, ['--test', '--test-name-pattern', '^rig --help and rig -h are rig help$', fileURLToPath(import.meta.url)], { encoding: 'utf8', env })
+  assert.notEqual(r.status, 0, r.stdout)
+  assert.match(r.stdout, new RegExp(ALONE))
+})
+
+test('a tool copy with no repository pays no git for the freshness check', () => {
+  // After init, so the check has a config to read and, with no cache yet, is due: all that
+  // stands between it and `git rev-parse HEAD` is knowing that this copy is no checkout.
+  const trace = path.join(tmp, 'help.trace')
+  const r = rig(['help'], { env: { ...env, GIT_TRACE2: trace } })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(trace), fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '')
+})
+
 test('init warns rather than crashes without a usable gh', () => {
   const r = rig(['init'])
   assert.equal(r.code, 0, r.out)
@@ -113,6 +146,46 @@ test('new refuses without a ticket decision once a tracker is configured', () =>
   assert.equal(r.code, 1)
   assert.match(r.out, /--key.*--ticket.*--no-ticket/)
   assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 't1')), 'nothing half-created on refusal')
+})
+
+test('new refuses a --type the release check would refuse, and names the ones it knows', () => {
+  const r = rig(['new', 'wip-work', '--title', 'Wip', '--type', 'wip', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.ok(r.out.includes(`--type wants a branch prefix the release check knows: ${BRANCH_PREFIXES.join(', ')} — not "wip"`), r.out)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'wip-work')), 'no record written')
+})
+
+test('new --type perf is accepted and names the branch perf/', () => {
+  const r = rig(['new', 'quicker', '--title', 'Quicker', '--type', 'perf', '--no-ticket'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 'quicker', 'work.json')).branch, 'perf/quicker')
+})
+
+test('--help prints the command\'s own usage and does nothing else, and so does -h', () => {
+  const head = lastCommit(dataRoot)
+  for (const help of ['--help', '-h']) {
+    const r = rig(['new', 'helped', '--title', 'Helped', '--no-ticket', help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /^ {2}rig new <id> --title/)
+    assert.doesNotMatch(r.out, /rig attach/, 'only new\'s lines, not the whole help')
+  }
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'helped')), 'no record written')
+  assert.equal(lastCommit(dataRoot), head, 'and nothing committed')
+})
+
+test('rig --help and rig -h are rig help', () => {
+  for (const help of ['--help', '-h']) {
+    const r = rig([help])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /cross-repo work harness/)
+  }
+})
+
+test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {
+  const r = rig(['new', 'typo', '--titel', 'Typo', '--no-ticket'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /rig new takes no --titel\n {2}rig new <id> --title/)
+  assert.ok(!fs.existsSync(path.join(dataRoot, 'work', 'typo')), 'no record written')
 })
 
 test('new --no-ticket, ticket, list, status, close on a work with no repos', () => {
@@ -181,6 +254,7 @@ test('new --ticket opens a ticket in the org\'s GitHub tracker and records its k
     repos: {
       'acme/platform': {
         language: 'TypeScript',
+        visibility: 'private',
         issues: [{ number: 3, title: 'Existing', body: '', state: 'OPEN', comments: [] }],
       },
     },
@@ -209,6 +283,24 @@ test('close on a work with no repos comments on the GitHub ticket and leaves it 
   assert.equal(issue.state, 'OPEN')
   assert.equal(issue.comments.length, 1)
   assert.match(issue.comments[0], /No repos were attached/)
+})
+
+test('a GitHub issue opened in a public repo never links the private data root (#202)', () => {
+  const setPlatform = visibility => {
+    const state = github()
+    state.repos['acme/platform'].visibility = visibility
+    setGithub(state)
+  }
+  setPlatform('public')
+  try {
+    const r = rig(['new', 't4p', '--title', 'Public ticketed work', '--ticket', '--org', 'acme'], { input: 'the brief' })
+    assert.equal(r.code, 0, r.out)
+    const issue = github().repos['acme/platform'].issues.at(-1)
+    assert.equal(issue.title, 'Public ticketed work')
+    assert.doesNotMatch(issue.body, /design lives|context\.md/)
+  } finally {
+    setPlatform('private')
+  }
 })
 
 test('rig.json can carry full per-org Jira ticket config; --dry-run previews without creating', () => {
@@ -245,8 +337,12 @@ test('rig.json can carry full per-org Jira ticket config; --dry-run previews wit
 })
 
 test('rig new --ticket on a Jira org creates via twg with resolved fields', () => {
+  // A subprocess, so the brief comes down a real stdin: in this process the harness hands the
+  // run a reader of its own, and this is the one test that reads the CLI's. The newline the
+  // pipe ends on is the CLI's to trim, and the context doc, which takes the brief as it came,
+  // is where a brief that was not trimmed would show.
   const r = rig(['new', 't5', '--title', 'Jira ticketed work', '--ticket', '--org', 'acme-labs'],
-    { input: 'the jira brief\n\nmore detail' })
+    { input: 'the jira brief\n\nmore detail\n', inProcess: false })
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /ticket PROJ-1/)
   const record = readJson(path.join(dataRoot, 'work', 't5', 'work.json'))
@@ -257,7 +353,9 @@ test('rig new --ticket on a Jira org creates via twg with resolved fields', () =
   assert.equal(issue.body.split('\n\nThe design lives')[0], 'the jira brief\n\nmore detail')
   assert.equal(issue.assignee, 'me')
   assert.deepEqual(issue.fields, { customfield_10755: ['10755'], customfield_10058: 3, customfield_10020: 7 })
-  assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8'), /^Tickets: PROJ-1 · Status: Planning$/m)
+  const doc = fs.readFileSync(path.join(dataRoot, 'work', 't5', 'context.md'), 'utf8')
+  assert.match(doc, /^Tickets: PROJ-1 · Status: Planning$/m)
+  assert.match(doc, /## Problem\n\nthe jira brief\n\nmore detail\n\n## Direction/)
 })
 
 test('a Jira ticket-creation failure surfaces as a clean error, not a stack trace', () => {
@@ -313,6 +411,14 @@ test('--field name=value,... overrides the org\'s configured default', () => {
   const record = readJson(path.join(dataRoot, 'work', 't6', 'work.json'))
   const issue = twg().issues[record.tickets[0]]
   assert.equal(issue.fields.customfield_10058, '5')
+})
+
+// A dry run, so no GitHub issue is made to move the numbering the tests below rely on.
+test('--parent is ignored for a GitHub tracker, and says so', () => {
+  const r = rig(['new', 't7g', '--title', 'Parent on GitHub', '--ticket', '--org', 'acme', '--parent', 'PROJ-9', '--dry-run'],
+    { input: 'brief' })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /--parent is ignored for a GitHub tracker/)
 })
 
 test('rig new --key <a Jira key> fetches title and description from Jira, no piped brief needed', () => {
@@ -398,11 +504,23 @@ test('with an upstream, a mutating command pushes, rebasing over what others pus
   assert.ok(fs.existsSync(path.join(dataRoot, 'NOTES.md')), 'the other machine\'s commit was rebased under ours')
 })
 
+test('with nothing to commit, a mutating command still pushes a commit an earlier push left behind', () => {
+  // A commit made by hand stands in for one whose push failed. Nothing is staged, so what
+  // decides the push is how far ahead of origin the data root is, and nothing else.
+  const remote = path.join(tmp, 'rig-data-remote.git')
+  fs.appendFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), '\nCommitted by hand.\n')
+  assert.equal(gitIn(dataRoot, 'commit', '-q', '-am', 'committed by hand').status, 0)
+  const r = rig(['save', '--work', 't7'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /data root: pushed [0-9a-f]{7,}, committed earlier and pushed/)
+  assert.equal(lastCommit(remote), 'committed by hand')
+})
+
 test('a mutating command fast-forwards a data root another machine moved', () => {
   // The correctness half of this feature: rig pushed the data root but never pulled it, so a
   // second machine read stale records and wrote on top of them. Nothing else reaches the
-  // plain behind-and-clean path — the tests either side of this one are behind *and* dirty,
-  // or behind *and* ahead, which take different branches.
+  // plain behind-and-clean path — the other data-root tests here are behind *and* dirty,
+  // behind *and* ahead, or ahead alone, which take different branches.
   const other = path.join(tmp, 'other-machine')
   assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
   fs.writeFileSync(path.join(other, 'FROM-THE-OTHER-MACHINE.md'), 'written elsewhere')
@@ -434,6 +552,56 @@ test('doctor reports a data root that is behind origin, as of the last fetch', (
   assert.ok(!fs.existsSync(path.join(dataRoot, 'AGAIN.md')), 'reported, not fast-forwarded: doctor does not mutate')
   // Left level with origin, which is what the tests that follow start from.
   assert.equal(gitIn(dataRoot, 'merge', '-q', '--ff-only', '@{u}').status, 0)
+})
+
+// A data root cloned from an empty remote, once another machine has pushed: the branch tracks
+// origin/main and there is no such ref here. Deleting the ref stands in for that.
+const loseUpstreamRef = () => assert.equal(gitIn(dataRoot, 'update-ref', '-d', 'refs/remotes/origin/main').status, 0)
+const pushFromTheOtherMachine = file => {
+  const other = path.join(tmp, 'other-machine')
+  assert.equal(gitIn(other, 'pull', '-q', '--rebase').status, 0)
+  fs.writeFileSync(path.join(other, file), 'written elsewhere')
+  assert.equal(gitIn(other, 'add', '-A').status, 0)
+  assert.equal(gitIn(other, 'commit', '-q', '-m', `the other machine wrote ${file}`).status, 0)
+  assert.equal(gitIn(other, 'push', '-q').status, 0)
+}
+
+test('a mutating command fetches an upstream ref that is not here yet, rather than reading local only', () => {
+  pushFromTheOtherMachine('FETCHED-FOR.md')
+  loseUpstreamRef()
+  // Untracked, so it is committed at the end without blocking the fast-forward at the start.
+  fs.writeFileSync(path.join(dataRoot, 'work', 't7', 'found.md'), 'After the ref went missing.\n')
+  try {
+    const r = rig(['save', '--work', 't7', '-m', 'upstream found'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /data root: fast-forwarded 1 commit\(s\) from origin/)
+    assert.match(r.out, /and pushed/, 'the upstream it found is the one it pushes to')
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
+})
+
+test('rig update fetches an upstream ref that is not here yet, and fast-forwards to it', () => {
+  pushFromTheOtherMachine('UPDATED-TO.md')
+  loseUpstreamRef()
+  try {
+    const r = rig(['update'])
+    assert.match(strip(r.out), /data root: fast-forwarded 1 commit\(s\)/)
+    assert.ok(fs.existsSync(path.join(dataRoot, 'UPDATED-TO.md')))
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
+})
+
+test('doctor names an upstream a data root tracks but has not fetched, rather than calling it local only', () => {
+  loseUpstreamRef()
+  try {
+    const out = strip(rig(['doctor']).out)
+    assert.match(out, /data root tracks origin\/main, which is not here — `rig update` fetches it; if the remote does not have it, push \(`git push -u origin main`\) or re-point the branch \(`git branch -u`\)/)
+    assert.doesNotMatch(out, /push it to a private repo/)
+  } finally {
+    assert.equal(gitIn(dataRoot, 'fetch', '-q').status, 0)
+  }
 })
 
 test('a rebase conflict is warned about, aborted, and leaves the data root clean', () => {
@@ -551,6 +719,7 @@ test('list --json carries the record plus the timestamps a consumer cannot deriv
   assert.deepEqual(old.tickets, ['acme/platform#3', 'PROJ-1'])
   assert.equal(old.branch, 'feat/old')
   assert.equal(old.createdAt, '2026-01-01T00:00:00.000Z')
+  assert.equal(old.learnedAt, null, 'a gate not passed is null, not missing')
   const [billing] = old.repos
   assert.equal(billing.pr.number, 12)
   assert.equal(billing.pr.openedAt, '2026-01-02T00:00:00Z')
@@ -609,13 +778,6 @@ test('dash renders the captured payload, and writes nothing into the data root',
   assert.ok(!fs.existsSync(path.join(dataRoot, 'dash.html')), 'and nothing was written into it')
 })
 
-test('dash reads the works itself when given no payload', () => {
-  const r = rig(['dash', '--no-open'])
-  assert.equal(r.code, 0, r.out)
-  // A directory of rig's own under the temp root, so the filename can stay stable.
-  assert.match(r.out, /dashboard at .+rig-dash.dash\.html/)
-})
-
 test('dash --quick looks nothing up, and still renders what is recorded', () => {
   // The flag was parsed and then never read, so the only symptom was a page that took as
   // long as the live one. With gh gone, a dash that reaches for it cannot quietly succeed.
@@ -627,6 +789,32 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
   assert.match(html, /no PR state was looked up|read from the records/, 'the page says nothing was looked up')
   setGithub(state)
 })
+
+// A record that no longer parses — truncated, or cut off by an interrupted write — planted for
+// one test and taken away after it, so the tests below read the root they were written for.
+const withBrokenRecord = body => {
+  const dir = path.join(dataRoot, 'work', 'broken')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'work.json'), '{"id": "broken", "repos": [')
+  try { body() } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+}
+
+test('a record that will not parse is named and left out by list, list --json and dash', () => withBrokenRecord(() => {
+  const named = /1 work record could not be read and was left out: broken \(Unexpected end of JSON input\)/
+  const list = rig(['list', '--quick'])
+  assert.equal(list.code, 0, list.out)
+  assert.match(list.out, named)
+  assert.match(list.out, /^old\b/m, 'the records that read are still listed')
+
+  const json = rig(['list', '--json', '--quick'])
+  assert.equal(json.code, 0, json.out)
+  assert.ok(JSON.parse(json.stdout).works.length, 'the payload on stdout still parses')
+  assert.match(json.out, named, 'and the unreadable record is named off it, on stderr')
+
+  const dash = rig(['dash', '--quick', '--no-open'])
+  assert.equal(dash.code, 0, dash.out)
+  assert.match(dash.out, named)
+}))
 
 test('dash dies on a window it cannot parse rather than showing everything', () => {
   const captured = path.join(tmp, 'window-payload.json')
@@ -975,6 +1163,36 @@ test('rig backfill with no --work scans every work in the data root', () => {
   assert.equal(readJson(path.join(dataRoot, 'work', 't10', 'work.json')).repos[0].branches[0].pr.number, 40)
 })
 
+test('backfill leaves out a record that will not read, names it, and carries on', () => withBrokenRecord(() => {
+  const r = rig(['backfill'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1 work record could not be read and was left out: broken \(Unexpected end of JSON input\)$/m)
+  assert.match(r.out, /nothing to backfill/)
+}))
+
+test('backfill --work on a record that will not read says so in a sentence, not a stack trace', () => withBrokenRecord(() => {
+  const r = rig(['backfill', '--work', 'broken'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /work record for "broken" at .*work\.json could not be read \(/)
+}))
+
+test('doctor reports a record that will not read as a problem, and still checks everything else', () => withBrokenRecord(() => {
+  const r = rig(['doctor'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /broken: work record .*work\.json could not be read \(/)
+  assert.match(r.out, /disk on /, 'the checks after the works still ran')
+}))
+
+test('a record saved with a byte-order mark reads like any other', () => {
+  const file = path.join(dataRoot, 'work', 't10', 'work.json')
+  const saved = fs.readFileSync(file, 'utf8')
+  fs.writeFileSync(file, `\uFEFF${saved}`)
+  try {
+    const r = rig(['status', '--work', 't10'])
+    assert.equal(r.code, 0, r.out)
+  } finally { fs.writeFileSync(file, saved) }
+})
+
 test('acceptance: with gh unavailable, rig list --json still emits complete PR timestamps for backfilled work', () => {
   const state = github()
   setGithub({ ...state, auth: 'missing' })
@@ -994,6 +1212,8 @@ test('acceptance: with gh unavailable, rig list --json still emits complete PR t
   // quietly drop out of every figure on the way.
   const page = rig(['dash', '--no-open'])
   assert.equal(page.code, 0, page.out)
+  // A directory of rig's own under the temp root, so the filename can stay stable.
+  assert.match(page.out, /dashboard at .+rig-dash.dash\.html/)
   const html = fs.readFileSync(/dashboard at (.+)$/m.exec(strip(page.out))[1].trim(), 'utf8')
   // t10 is backfilled, single-repo and merged. Before the reader put `state` back, a recorded
   // PR reduced to "not merged" and every closed work left the figures as in flight instead.

@@ -1,6 +1,8 @@
 # rig
 
-A cross-repo work harness: name a piece of work, attach the repos it touches, and rig gives you one folder with a worktree per repo, all on one shared branch. What is durable about that work — which repos, why, what was decided — lives in a committed **data root** beside the tool, and every command that changes a work commits it at that moment.
+A single ticket routinely touches four repos — a billing service, the integration hub that feeds it, an API and its web UI. Getting set up means finding them, cutting a branch in each with the same name, and holding the cross-repo picture in your head. Doing that by hand 51 times left a clone directory holding 51 worktrees across three different placement conventions, four redundant full clones, and one worktree pointing into a workspace that had already been deleted.
+
+rig is a cross-repo work harness: name a piece of work, attach the repos it touches, and rig gives you one folder with a worktree per repo, all on one shared branch. What is durable about that work — which repos, why, what was decided — lives in a committed **data root** beside the tool, and every command that changes a work commits it at that moment.
 
 ```powershell
 irm https://raw.githubusercontent.com/hugoforte/rig/main/install.ps1 | iex
@@ -17,6 +19,8 @@ rig new refund-double-charge --title "Refunds double-charge on retry" --key PROJ
 ```
 
 From there: `rig attach billing` adds a repo, once per repo; `rig status` shows every worktree live; `rig list` says what is open and what is safe to close; `rig close` takes the worktrees away and keeps the record. Before the first work, `rig init` names the roots once — see [Setting up](#setting-up) — and `rig doctor` checks the rest for you.
+
+rig is developed with rig: every piece of work behind the commits in this repo has a record in a rig data root.
 
 ## How it fits together
 
@@ -35,6 +39,7 @@ flowchart LR
   subgraph data["the data root — committed, private"]
     B["rig.json<br/>orgs, trackers,<br/>freshness policy"]
     C["catalog/org/repo.md<br/>what each repo is,<br/>and what it talks to"]
+    F["orgs/org.md<br/>what the org<br/>is trying to do"]
     D["work/id/context.md<br/>the only copy<br/>of the prose"]
   end
   subgraph work["the work root — disposable, reconstructible"]
@@ -68,7 +73,7 @@ stateDiagram-v2
 
 That is the **phase** — where a work is now. It is always derived, from the repos attached, the branches, the PRs and the gates recorded, and never stored, so it cannot go stale. Active phases are present participles and the two terminal ones are past, so the word itself tells you whether the work is still moving. Any phase can end in `abandoned`: the recorded decision to stop a work without finishing it, terminal like `closed` and deliberately distinct from it.
 
-The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` is the one you pass by hand.
+The only lifecycle facts written down are the **gates** that have been passed, each with its date — `designedAt`, `learnedAt`, `abandonedAt`, `closedAt` — because those are the only ones nothing can observe afterwards. A gate is a point where the agent stops for a decision, and it is also where rig commits and pushes the data root. `rig save -m "design agreed" --designed` and `rig save -m "lessons reviewed" --learned` are the two you pass by hand; the second follows the lesson review `rig next` offers once a PR is open.
 
 ### Branches and stages
 
@@ -100,7 +105,8 @@ Base is a relation, not a name for any particular branch. `rig status` reads eac
 - [DESIGN.md](./DESIGN.md) — why it is shaped this way, with the decision log and the post-mortem of the tool this one replaced.
 - [CONTEXT.md](./CONTEXT.md) — what the words mean: one definition each, with the synonyms it displaces.
 - [docs/adr/](./docs/adr/) — the decisions that were hard to reverse.
-- [Principles](./DESIGN.md#principles) — what the decisions have in common: keep it refactorable, don't factor it early; strong convictions, loosely held.
+- [docs/timeline.md](./docs/timeline.md) — how rig grew, in six phases, each named by the capacity it added.
+- [docs/philosophy.md](./docs/philosophy.md) — what the frictions behind that growth taught: the principles rig is built on, and how they grow.
 
 ## Reference
 
@@ -108,7 +114,8 @@ Everything from here down is detail. Nothing above needs it.
 
 ### Prerequisites
 
-- Node 18 or newer, and `git`.
+- Node 18.17 or newer on the 18 line, or 20.3 or newer. (Those are the first releases whose test runner runs a file's top-level `before` and `after`, which the suite relies on. rig itself uses `fs.statfsSync`, which is older.)
+- `git` 2.38 or newer, for `git merge-tree --write-tree` and `git rebase --update-refs`. The install scripts refuse an older one.
 - `gh`, logged in (`gh auth login`). rig uses it to find repos, read PR state and open issues.
 - `twg` on PATH, only for an org whose tickets live in Jira. GitHub-only setups never need it.
 
@@ -127,6 +134,8 @@ rig help
 ```
 
 `npm install -g` links the checkout rather than copying it, so the command always runs whatever is in `C:\rig`. That is what lets `rig update` bring it forward later. In Git Bash, Linux or macOS the same three lines work with a forward-slash path of your choosing, and `rig` is on PATH there too.
+
+`rig <command> --help` prints that command's lines of `rig help` and runs nothing. A flag the command does not take is refused with the same lines, before anything is written.
 
 ### Setting up
 
@@ -149,15 +158,19 @@ rig status
 
 `new` records the work in the data root and makes `C:\w\my-first-work`. Commands that act on a work find it from the folder you are in, or take `--work my-first-work` from anywhere. Each `attach` finds the repo in your org through `gh`, clones a bare mirror once, cuts a worktree on the work's branch, and for a repo it has not seen drafts a catalogue entry, asking with a `!` that you correct it while the repo is fresh in your head. A first run can come back to that. `status` shows every worktree, its branch, and how far it is from its base — all derived live, none of it written down.
 
-The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` passes the design gate. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees, keeping the record.
+The work's prose lives in one place, `C:\rig-data\work\my-first-work\context.md`. Edit it, then `rig save -m "…"` commits it; `rig save --designed` passes the design gate. A title that turned out wrong is corrected with `rig save --title "…"`, which leaves the branch and the id alone. When the PRs are merged, `rig list` says so and `rig close` removes the worktrees and the merged branches, keeping the record.
 
-**What now.** `rig next` answers it, by reading live state rather than a remembered plan: nothing attached yet, the design gate not recorded, commits not pushed, a branch waiting for a pull request, three repos that want a rollout plan, everything merged and ready to close. It **only ever offers** — it never warns, never blocks and never says you should have; warnings live in `rig doctor`, and only for contradictions. And it speaks only when asked: a command you run, not a hook. How much ceremony a work carries is derived from what it contains, never declared — there is no `--track`, because a declaration made at `rig new` is a prediction and predictions rot.
+**What now.** `rig next` answers it, by reading live state rather than a remembered plan: nothing attached yet, the design gate not recorded, commits not pushed, a branch waiting for a pull request, three repos that want a rollout plan, a PR up and its lessons not yet reviewed, everything merged and ready to close. It **only ever offers** — it never warns, never blocks and never says you should have; warnings live in `rig doctor`, and only for contradictions. And it speaks only when asked: a command you run, not a hook. How much ceremony a work carries is derived from what it contains, never declared — there is no `--track`, because a declaration made at `rig new` is a prediction and predictions rot.
 
-**Slicing a work up.** A big work is delivered in stages: `rig stage feat/schema --delivers "the write path"` declares one, and `rig stage` reads the stack back in the order the branches are actually stacked. What is stored is the branch and that one line; whether a stage has started, is up for review or has landed, which repos carry it and where it sits in the stack are all derived from the branches and the PRs every time you ask. rig does not cut the branch — you do, where branches are made — and declaring it is what joins those branches into one slice across repos. A work with no stages behaves exactly as it always did, which is most works.
+**Slicing a work up.** A big work is delivered in stages: `rig stage feat/schema --delivers "the write path"` declares one, and `rig stage` reads the stack back in the order the branches are actually stacked. What is stored is the branch and that one line; whether a stage has started, is up for review or has landed, which repos carry it and where it sits in the stack are all derived from the branches and the PRs every time you ask. rig does not cut the branch — you do, where branches are made — and declaring it is what joins those branches into one slice across repos. A work with no stages behaves exactly as it always did, which is most works. Once two stage PRs are open in a repo, each on the one below, `rig stage --link` registers them as a GitHub stack on the work branch, through the `gh stack` extension, and `rig next` offers it until they are one.
 
-**Opening the pull requests.** `rig pr` opens one per repo, work branch to the base it was cut from. The body is assembled from what the record already holds — the title, the tickets, the Direction section of the context doc lifted verbatim, and the stage table rendered from the stack — so the deploy-order table stops being something anyone types. It is not a gate, and it is idempotent: a repo that already has an open PR is reported, not duplicated.
+**Opening the pull requests.** `rig pr` opens one per repo, work branch to the base it was cut from. The body is assembled from what the record already holds — the title, the tickets, the Direction section of the context doc lifted verbatim, and the stage table rendered from the stack — so the deploy-order table stops being something anyone types. The Direction is published with it, so write it for whoever can read the repo. The link back to the context doc is written only where the repo is no more visible than the data root, so a public repo never names a private one; the same rule holds for `rig close`'s ticket comments and the issue `rig new --ticket` opens. In a work of one repo, each of the work's GitHub tickets in that repo gets a `Fixes` line, because merging that PR is the work landing. On a repo that releases by `release:` labels, as rig does, `rig pr` and `rig next` say which release the PR asks for and why. Before opening each PR, `rig pr` fetches the base and says how far it moved and which files would conflict, then opens the PR anyway. It is not a gate, and it is idempotent: a repo that already has an open PR is reported, not duplicated. When the record moves on — a ticket added, the Direction rewritten, the title corrected — `rig pr --refresh` rewrites each open PR's title and body from it, replacing any edit made on GitHub, and `rig next` offers that when an open PR says something the record no longer does. A worktree still on a stage that has landed is named, with the commands that move it to the work branch; `rig next` names it too, once every stage is in.
 
 **The rollout plan.** For a work spanning enough repos that deploy order matters, `rig plan` writes one — part generated, part prose. The deploy-order table lives between markers and is rendered from the stage list with live PR state; `rig plan --refresh` rewrites it when the stack moves, and touches nothing around it. The rest is yours, and it is the half that earns the document: why the order is mandatory, the rejection window between deploys, the per-tenant prerequisites, the rollback. `rig next` compares the table to the stack and offers the refresh when they disagree — because an artifact nothing reads back is one that quietly goes wrong.
+
+**Another machine.** The record travels with the data root and the worktrees do not. `rig restore <id>` rebuilds a work's folder from its record: each missing worktree on the top of its repo's stack, with the identity and secrets `rig attach` would give it. It writes nothing into the record and never recreates a branch. One the remote has lost, never pushed or deleted with a closed PR, is named with its PR's state and left alone. Pull requests stacked on top that rig does not know are named, and `--tip` checks out the top of them. `rig next` offers the restore while a worktree that could come back is missing.
+
+The other way round, a work closed on one machine leaves its folder on every other machine that had one, because a close can only tear down its own disk. `rig doctor` names each of those leftovers and `rig tidy` clears them. On such a work, `rig close` clears that one. Either way only this machine's copy goes: the worktrees, the folder and the mirror's copies of branches that landed. The record, the tickets and the remote were settled by the close that ran elsewhere and are not touched again. A leftover with work that may exist only on this machine — uncommitted changes, commits no branch or remote holds, and files in the work folder that are not one of its repos — is refused by `close` and skipped by `tidy`, and `rig close --force` discards it. `rig tidy --dry-run` lists what it would clear and skip.
 
 **Stopping a work you did not finish.** `rig close --abandoned` is the honest exit. It runs the same teardown and drops only the checks that ask whether the work landed — an unmerged PR and unpushed commits are what being abandoned looks like — while uncommitted changes still refuse, because unsaved work is the one thing a teardown can destroy. The ticket is told and left open, and open PRs are named and left alone.
 
@@ -222,7 +235,7 @@ cd D:\code\Payments; rig list          # answers for that repo's root, wherever 
 1. `--data <name>` on the command
 2. `RIG_DATA_ROOT` in the environment
 3. **the work folder you are standing in** — `C:\w\<work>\.rig\data` records the root that work's records live in
-4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue
+4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue. A checkout is matched by its remote's org as well as its name. A data root's own checkout answers for that root, after `--repos` and before the repo checkout
 5. `current`, moved by `rig use`
 
 Rules 3 and 4 are why this stays out of your way: inside a work folder, or inside a repo you have used before, you never pass a flag and never think about which root is current. The commands that fall through to `current` — `new`, `list`, `catalog`, `dash` — print which root chose for them, so a switch you forgot about is visible rather than silent.
@@ -233,8 +246,9 @@ Rules 3 and 4 are why this stays out of your way: inside a work folder, or insid
 
 - **One work root serves every data root**, so a work id is unique across all of them. `rig new` refuses an id whose folder already exists and names the root that owns it. Renaming a folder another root's records point at would break that work, so the id is what gives.
 - **A repo catalogued in two roots is ambiguous**, and rig asks rather than guesses: pass `--data <name>` once, and the work folder remembers it from then on.
-- **`rig update` brings every configured root forward**, not just the current one. The write refusal is per data root, so migrating one and leaving the others means the next `rig save` in another root refuses, mid-work.
+- **`rig update` brings every configured root forward**, not just the current one. The write refusal is per data root, so migrating one and leaving the others means the next `rig save` in another root refuses, mid-work. It needs no root in hand to do it: on a machine with two roots and none current it still updates the tool and every root, and the doctor checks it ends in report the missing selection.
 - **`rig doctor` checks every configured root**, in full and with each line named for the root it is about — a root nobody checks is a root that rots quietly. The two checks it makes of the *work* root are asked once against every root's records together, because the work root is shared: a folder the current root has no record for is usually another root's live work. A root whose directory has gone is one finding, and the rest are still checked. So is a machine that configures two roots and marks neither current: `doctor` is the command you run *because* something is broken, so it reports the selection it could not make and goes on to every check that never needed one. `list`, `status`, `catalog` and `next` die on that, and should — each answers a question about a root's *contents*, and with none in hand there is no answer to give, only a misleading empty one. `rig use` never dies on it, which is what makes the finding actionable: it reads the registry directly, so the selection you are told to fix is always fixable.
+- **A work folder's `.rig/data` is checked against the records.** With more than one root, a folder with none is named, since commands run in it fall back to `current`. So is a marker naming a root that does not hold the record, and a record held by two roots. For the first two, `rig save --data <root>` in the folder writes the right marker; rig writes one only when the root in hand is the one root holding the record, so a record in two roots needs the wrong copy deleted first.
 
 **A commit identity per root.** `identities` on a root entry beats the machine-wide map, which is what you want the first time the same org name means a different person in two roots:
 
@@ -262,6 +276,36 @@ rig check                    # every attached repo, printed
 rig check billing --run      # run billing's
 ```
 
+### What a change reaches
+
+The catalogue's `talks_to` is a graph, and `rig impact <repo>` walks it: the repos one hop and
+two hops away, what each end wrote about the relationship, and — beside each one — how far
+behind that entry is, because an edge asserted by an entry the repo has moved on from is a
+weaker claim.
+
+```powershell
+rig impact billing
+```
+
+An item in `talks_to` can carry a `direction` beside its `how`. `downstream` means a change
+here can break that one, `upstream` is the other way, `both` is both, and leaving it out means
+unstated — which is not the same as both ways. Either end can say it and rig reads it from
+whichever end is asking, so `downstream` in one entry and `upstream` in the other are the same
+claim made twice. Two entries that make *different* claims are reported as a disagreement and
+never resolved by picking a side. It offers and never blocks, and `rig impact` is the only place
+a disagreement is reported — `rig doctor` does not look for them.
+
+Underneath, `rig impact` prints a second graph rig has always held and never read: which repos
+have been attached to the **same work**, and how often. That one comes out of the records, so
+it cannot be wrong about what happened — though it only ever sees repos already worked on
+together. Where the two graphs disagree is the useful part: a pair that keeps recurring with
+nothing in `talks_to` to explain it is an entry missing an edge, and rig names the file.
+
+The same traversal reaches the two commands that can act on it. `rig attach` names the repos
+that talk to the one you just attached and are not attached themselves — rule 5's fourth repo,
+offered rather than waited for — and `rig next` keeps offering them through planning, designing
+and building, then goes quiet once a pull request is open.
+
 ### Reading the works back out
 
 `rig list` orders every work by when it was last touched, least recent first, so the last thing printed is the work in hand. `rig list --json` prints the same works as one JSON document — the records, plus the live fields a consumer cannot derive: each repo's PR with its `openedAt`, `firstReviewAt`, `approvedAt` and `mergedAt`, and the `firstCommitAt` that starts the clock. `closedAt` is when `rig close` ran, not when anything merged; measure from `firstCommitAt` to `mergedAt`. `--quick` skips every git and GitHub lookup and leaves those fields out entirely — except a merged PR that has been recorded (below), which is read straight out of `work.json` and carries `recorded: true`, live or `--quick` alike.
@@ -277,6 +321,8 @@ rig dash --from payload.json --org your-org --since 30d
 
 **Explaining rig to other people.** `rig demo` renders one self-contained interactive page that makes the case for rig *on the repos of whoever is watching*: the `talks_to` graph drawn from the catalogue, clickable to see what each relationship actually is — with the repos nothing is recorded about listed underneath rather than floating in it — and then one real work from the records walked through command by command — `new`, each `attach`, the design gate, `pr`, `close` — with what appeared in the work root and what was committed to the data root beside every step. It ends on that work's own pull-request timings, which are the argument that the durable half outlives the branch.
 
+The header counts the inventory — repos, relationships, works — and what those works produced: how many landed, which means every one of their pull requests merged, the median time from first commit to last merge with the `n` it was taken over, and the median repos each. All of it is read out of the terminal pull-request facts `rig close` already stores, so it needs no network and cannot be wrong tomorrow. What the page will not do is claim a saving: rig has no record of what the same work would have cost without it, so it does not pretend to one. In the drawing, a relationship with a stated `direction` gets an arrowhead and one without stays a plain line — which makes the picture itself a map of where the catalogue is thin.
+
 Nothing in it is a mock-up. Every command, path, branch, base and PR number comes out of a record, which is the only version of this that does not start disagreeing with the tool the week after it is written. The example work is the one with the most repos that actually merged, or name another with `--example <work-id>`.
 
 Unlike `rig dash`, the page is written **into the data root** — `demo/index.html` by default, so it is committed and pushed with everything else, and `--out` puts it elsewhere. The difference is the input: the dashboard renders live PR state and is wrong by the next merge, while this reads the catalogue and the terminal facts of closed work, which cannot change again. It is a generated file, so the usual rule applies — never edit it, re-render it.
@@ -287,7 +333,7 @@ rig demo --data employer --no-open --out C:	mp
 ig.html
 ```
 
-**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`.
+**Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which commits and pushes the work's branches and then writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
 
 ### Staying up to date
 
@@ -307,12 +353,12 @@ Nothing pulls a checkout for you, so rig measures its own freshness — how far 
 | the pull request | the bump |
 |---|---|
 | a `feat/…` branch — what `rig new --type feat` writes | minor |
-| a `fix/…` branch | patch |
+| a `fix/…` or `perf/…` branch | patch |
 | a `docs/`, `chore/`, `test/`, `ci/` or `refactor/` branch | none |
 | a `release:minor`, `release:patch` or `release:none` label | overrides the branch |
 | a PR that adds a migration | `MAJOR.0.0`, whatever the PR asked for |
 
-So branching the way `rig new` already branches is the whole contribution. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
+So branching the way `rig new` already branches is the whole contribution: `rig new --type` takes only a prefix this table lists, and refuses any other by naming them. The label is for the PR whose prefix lies — docs on a `feat/` branch. A branch the table does not list fails the check, which names the options: a bump is never assumed for you.
 
 **The check asks one question, about your PR alone: does it name a bump?** Nothing another pull request does can change that answer, so a merge elsewhere never turns your check red and never sends you back to rebase. That is the rule the whole design obeys: a pull request is only ever gated on questions about itself.
 
@@ -334,4 +380,4 @@ node bin/release.mjs check --branch feat/x --labels release:none
 node --test
 ```
 
-Unit tests for the helpers, the roots and config module, and the GitHub and Jira adapters, an installation suite for freshness and updates, and one smoke test that copies the tool to a temp directory and runs it end to end with its config (`RIG_LOCAL_CONFIG`) and in-memory `gh` and `twg` (`RIG_FAKE_GITHUB`, `RIG_FAKE_TWG`) in that directory too. Mirrors and worktrees are tested against real git: `RIG_FAKE_REMOTES` names a directory of bare repos, so `attach`, `detach`, `close` and `status` run on real clones, fetches and worktrees without a network. On top of those, `test/scenarios.test.mjs` walks one temp machine through a *sequence* of commands with nothing restored between the steps, because what those suites cannot see is the second command against a machine that already had state; one of its journeys clones the tool at a release tag and drives that older rig against a machine file this code just wrote, which is the window every machine is in between an `init` and the `rig update` that follows it — so CI checks the whole history out, for the tags. CI runs the same on Linux and Windows. [DESIGN.md](./DESIGN.md) holds the reasoning and the decision log, including the post-mortem of the tool this one replaced.
+Unit tests for the helpers, the roots and config module, and the GitHub and Jira adapters, an installation suite for freshness and updates, and one smoke test that copies the tool to a temp directory and runs it end to end with its config (`RIG_LOCAL_CONFIG`) and in-memory `gh` and `twg` (`RIG_FAKE_GITHUB`, `RIG_FAKE_TWG`) in that directory too; like most CLI tests it opts in (`inProcess: true`) to running rig in the test process through `run(argv, io)`, and a test whose subject is the process itself still starts one (DESIGN.md decision 99; `test/harness.mjs` says which tests do). Mirrors and worktrees are tested against real git: `RIG_FAKE_REMOTES` names a directory of bare repos, so `attach`, `detach`, `close` and `status` run on real clones, fetches and worktrees without a network. On top of those, `test/scenarios.test.mjs` walks one temp machine through a *sequence* of commands with nothing restored between the steps, because what those suites cannot see is the second command against a machine that already had state; one of its journeys clones the tool at a release tag and drives that older rig against a machine file this code just wrote, which is the window every machine is in between an `init` and the `rig update` that follows it — so CI checks the whole history out, for the tags. CI runs the whole suite on Linux and on Windows. On Windows, where a process costs more to start and the suite is mostly processes, it runs as eight jobs at once, the files dealt by weight (`node bin/shards.mjs 3/8` runs the third; `--print` names its files), each on Node 22 with its temp directory on the runner's own disk, behind one gate job carrying the check name the ruleset requires. [DESIGN.md](./DESIGN.md) holds the reasoning and the decision log, including the post-mortem of the tool this one replaced.

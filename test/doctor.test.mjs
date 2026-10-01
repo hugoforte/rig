@@ -4,7 +4,7 @@
 // tests, and the only way to reach a check was to build a real installation that had the
 // fault.
 //
-// The two things these fixtures cannot prove are in `test/installation.test.mjs`: that doctor
+// The two things these fixtures cannot prove are in `test/installation-update.test.mjs`: that doctor
 // *survives* a machine with no git and no free-space probe. Those are properties of the
 // probing, and the probing is the half that stays impure.
 import test from 'node:test'
@@ -192,6 +192,13 @@ test('a local-only data root is a note, and unpushed commits warn without counti
   assert.equal(problemCount(ahead), 0)
 })
 
+test('a distance git could not measure from the data root\'s upstream is never given the green tick', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ ahead: null, behind: null }) })] }))
+  assert.match(only(found, /could not measure the distance/).says, /origin\/main/)
+  assert.equal(matching(found, /committed and pushed/).length, 0)
+  assert.equal(problemCount(found), 1)
+})
+
 test('a data root behind its origin counts, and names the command that fast-forwards it', () => {
   const found = doctorFindings(snap({ dataRoots: [root({ state: checkout({ behind: 4 }) })] }))
   assert.match(only(found, /behind origin/).says, /`rig update` fast-forwards it/)
@@ -326,12 +333,46 @@ test('a closed work keeps its contradictions and loses its stray checks — its 
   assert.equal(matching(found, /work folder missing|unmanaged entry/).length, 0)
 })
 
+test('a closed work whose folder is still on this machine is a finding that counts, and names rig tidy', () => {
+  const found = doctorFindings(snap({
+    works: [{ id: 'w', closed: true, contradictions: [], folderMissing: false, strays: ['junk'], repos: [], leftover: 'closed on 2026-09-30' }],
+  }))
+  assert.equal(only(found, /^w:/).says, 'w: closed on 2026-09-30, but its folder is still on this machine — `rig tidy` clears it')
+  assert.equal(problemCount(found), 1)
+})
+
 test('a work folder that is missing is said once, and nothing under it is guessed at', () => {
   const found = doctorFindings(snap({
     works: [{ id: 'w', closed: false, contradictions: [], folderMissing: true, strays: ['junk'], repos: [{ repo: 'billing', worktreeMissing: true }] }],
   }))
   assert.match(only(found, /^w:/).says, /work folder missing but not closed/)
   assert.equal(problemCount(found), 1)
+})
+
+test('a missing work folder or worktree names the command that puts it back', () => {
+  const found = doctorFindings(snap({
+    works: [
+      { id: 'gone', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [] },
+      { id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [{ repo: 'billing', worktreeMissing: true }] },
+    ],
+  }))
+  assert.deepEqual(matching(found, /rig restore/).map(f => f.says.match(/`rig restore \S+`/)[0]), ['`rig restore gone`', '`rig restore w`'])
+})
+
+test('a work record that will not read is a problem that counts, and says which and why', () => {
+  const found = doctorFindings(snap({ works: [{ id: 'w', unreadable: 'work record for "w" at C:\\rig-data\\work\\w\\work.json could not be read (Unexpected end of JSON input)' }] }))
+  const one = only(found, /^w:/)
+  assert.equal(one.verdict, 'bad')
+  assert.match(one.says, /w: work record .* could not be read \(Unexpected end of JSON input\) — fix it, or bring it back from the data root's history/)
+  assert.equal(problemCount(found), 1)
+})
+
+test('the folder of a work whose record will not read is still accounted for, not called unmanaged', () => {
+  const found = doctorFindings(snap({
+    workRoot: { path: 'C:\\w', exists: true, entries: ['w'] },
+    works: [{ id: 'w', unreadable: 'work record for "w" could not be read (x)' }],
+  }))
+  assert.equal(matching(found, /unmanaged entry/).length, 0)
 })
 
 test('rig owns the work folder, so anything it did not put there is named', () => {
@@ -355,11 +396,37 @@ test('a work folder is accounted for by whichever root holds its record, not by 
   assert.equal(problemCount(found), 1)
 })
 
-test('an unclosed work is warned about whichever root holds its record', () => {
-  const found = doctorFindings(snap({
-    works: [{ id: 'in-the-other-root', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [] }],
-  }))
-  assert.match(only(found, /^in-the-other-root:/).says, /work folder missing but not closed/)
+// A work folder's `.rig/data`, read beside the roots that hold the work's record.
+const marked = (marker, holders = ['work']) => ({
+  id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [], marker, holders,
+})
+const twoRoots = { dataRoots: [root({ name: 'work' }), root({ name: 'personal', path: 'C:\\rig-data-personal' })] }
+
+test('with two roots, a work folder with no marker is named, with the command that writes one', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked(null)] }))
+  const hit = only(found, /^w: work folder has no \.rig\/data/)
+  assert.match(hit.says, /`rig save --data work`/)
+  assert.equal(hit.counts, true)
+})
+
+test('with one root, a work folder with no marker resolves to it anyway, and is not named', () => {
+  assert.equal(matching(doctorFindings(snap({ works: [marked(null)] })), /\.rig\/data/).length, 0)
+})
+
+test('a marker naming a root that does not hold the record is named, whatever the number of roots', () => {
+  // A root renamed by `rig init --name` leaves every marker naming the old one.
+  const found = doctorFindings(snap({ works: [marked('default')] }))
+  assert.match(only(found, /^w:/).says, /\.rig\/data names "default", but the record is in "work" — `rig save --data work`/)
+})
+
+test('a marker naming the root that holds the record says nothing', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work')] }))
+  assert.equal(matching(found, /^w:/).length, 0)
+})
+
+test('a record in two roots is named even when the marker names one of them', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work', ['work', 'personal'])] }))
+  assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
 })
 
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {
@@ -387,7 +454,62 @@ test('one draft entry is singular, because the line is read by a person', () => 
   assert.match(only(doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })] })), /draft catalogue/).says, /1 draft catalogue entry: billing/)
 })
 
-test('a free-space probe this machine does not have costs one line, not the verdict (decision 54)', () => {
+// One entry's freshness, as the caller measures it: how far the written entry is behind the
+// repo it describes. `commits` is null for an entry rig could not measure — no mirror to ask,
+// or no commit of its own yet — because decision 54's rule is that a check this machine could
+// not make arrives null rather than as a zero nobody can tell from a real one.
+const entry = (repo, commits, writtenAt = '2026-07-14') => ({ repo, commits, writtenAt })
+
+test('catalogue entries behind their repos warn and do not count, like drafts', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ catalogueFreshness: [entry('billing', 88), entry('orders', 12, '2026-09-02')] })],
+  }))
+  const one = only(found, /catalogue entr.* behind/)
+  assert.equal(one.verdict, 'warn')
+  assert.equal(problemCount(found), 0, 'an entry that has fallen behind is an invitation, not a fault')
+})
+
+test('the line names the number of commits and the date the entry was written', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', 88)] })] }))
+  assert.match(only(found, /catalogue entr.* behind/).says,
+    /1 catalogue entry behind its repo: billing \(88 commits since 2026-07-14\)/)
+})
+
+test('entries are named worst first, so the list reads as a ranking and not an inventory', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ catalogueFreshness: [entry('orders', 12), entry('pos', 412), entry('billing', 88)] })],
+  }))
+  assert.match(only(found, /catalogue entr.* behind/).says, /pos \(412 .*billing \(88 .*orders \(12 /)
+})
+
+test('an entry whose repo has not moved since it was written is not reported', () => {
+  // The measure is reported, never judged (CONTEXT.md's Freshness), but zero is not a measure
+  // worth a line: it is the answer for every entry anyone has just corrected.
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', 0)] })] }))
+  assert.equal(matching(found, /catalogue entr.* behind/).length, 0)
+})
+
+test('an entry rig could not measure costs no line and no verdict (decision 54)', () => {
+  const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', null)] })] }))
+  assert.equal(matching(found, /catalogue entr.* behind/).length, 0)
+  assert.equal(problemCount(found), 0)
+})
+
+test('a draft entry is not also reported as behind: it is already an invitation to rewrite it', () => {
+  const found = doctorFindings(snap({
+    dataRoots: [root({ drafts: ['billing'], catalogueFreshness: [entry('billing', 88), entry('orders', 12)] })],
+  }))
+  assert.match(only(found, /catalogue entr.* behind/).says, /1 catalogue entry behind its repo: orders/)
+})
+
+test('a long list is capped, because the line is read by a person and the tail is the same news', () => {
+  const many = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((r, i) => entry(r, 100 - i))
+  const says = only(doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: many })] })), /catalogue entr.* behind/).says
+  assert.match(says, /^7 catalogue entries behind their repos: /)
+  assert.match(says, /e \(96 commits since 2026-07-14\), and 2 more$/)
+})
+
+test('free space this machine could not measure costs one line, not the verdict (decision 54)', () => {
   const found = doctorFindings(snap({ disk: null }))
   assert.equal(matching(found, /disk on/).length, 0)
   assert.equal(problemCount(found), 0)
