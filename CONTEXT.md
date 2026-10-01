@@ -125,8 +125,12 @@ The refusal that stops a rig writing a record format it has never seen. Mutating
 _Avoid_: write gate, lock, block, version check
 
 **Save**:
-Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.
+Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly, unless another command holds the data root lock past the wait.
 _Avoid_: check in, sync, snapshot
+
+**Data root lock**:
+The file in the data root's git dir that a mutating command holds while it fast-forwards the data root and while it commits and pushes it, so two commands never move it at once. Advisory: taken over when its holder has gone, and gone past when it cannot be made. The one thing in rig called a lock.
+_Avoid_: mutex, semaphore
 
 **Release**:
 A version of the tool, tagged `v1.2.3` and published with notes assembled from the pull requests it contains. What a checkout is named by when it stands on one.
