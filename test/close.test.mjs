@@ -372,6 +372,13 @@ test('an abandoned work refuses the lesson review, and records nothing', () => {
   assert.equal(record('given-up').learnedAt, undefined)
 })
 
+test('an abandoned work refuses the adversarial review, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '-m', 'adversarial review', '--reviewed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').reviewedAt, undefined)
+})
+
 test('it records the decision and the teardown as two dates, and reads back as abandoned', () => {
   const w = record('given-up')
   assert.ok(w.abandonedAt, 'the decision, which nothing else could recover')
@@ -440,11 +447,11 @@ test('next points a fresh work at the repo interview, then at the design gate', 
   assert.equal(rig(['attach', 'billing', '--work', 'what-now']).code, 0)
   r = rig(['next', '--work', 'what-now'])
   assert.match(r.out, /Direction is still `_TODO_`/, 'the scaffolded stub is read, not guessed at')
-  assert.match(r.out, /rig save -m "design agreed" --designed/)
+  assert.match(r.out, /rig save -m "design agreed" --designed --adversarial/)
 })
 
 test('and stops offering the gate once it has been recorded', () => {
-  assert.equal(rig(['save', '--work', 'what-now', '--designed']).code, 0)
+  assert.equal(rig(['save', '--work', 'what-now', '--designed', '--adversarial']).code, 0)
   const r = rig(['next', '--work', 'what-now'])
   assert.doesNotMatch(r.out, /design gate/)
   assert.match(r.out, /yours to write/, 'nothing is written yet, and rig is not the tool that writes it')
@@ -463,6 +470,51 @@ test('an unpushed branch is offered a push by name, and once pushed with no PR, 
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
   r = rig(['next', '--work', 'what-now'])
   assert.match(r.out, /billing is pushed with no PR open/)
+})
+
+test('an open PR is walked through its review: threads, then the adversarial review, then a human', () => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({
+    branch: 'feat/what-now', number: 9, state: 'OPEN', url: 'https://github.com/acme/billing/pull/9',
+    openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [], reviewThreads: [{ resolved: false }, { resolved: true }],
+  })
+  setGithub(state)
+  let r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /billing: 1 unresolved review thread/)
+  assert.doesNotMatch(r.out, /adversarial review/, 'the review already on the PR comes first')
+
+  state.repos['acme/billing'].prs.find(pr => pr.number === 9).reviewThreads[0].resolved = true
+  setGithub(state)
+  r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /the design chose an adversarial review/)
+  assert.match(r.out, /rig save -m "adversarial review" --reviewed/)
+  assert.doesNotMatch(r.out, /human reviewer/)
+
+  assert.equal(rig(['save', '--work', 'what-now', '-m', 'adversarial review', '--reviewed']).code, 0)
+  assert.ok(record('what-now').reviewedAt, 'the review is stored with its date')
+  r = rig(['next', '--work', 'what-now'])
+  assert.doesNotMatch(r.out, /human reviewer/, 'not while the PR says something the record does not')
+
+  assert.equal(rig(['pr', '--refresh', '--work', 'what-now']).code, 0)
+  r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /the PR is ready for a human reviewer/)
+
+  const pr = state.repos['acme/billing'].prs.find(p => p.number === 9)
+  pr.checks = 'PENDING'
+  setGithub(state)
+  assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'not while its checks run')
+
+  pr.checks = 'SUCCESS'
+  pr.reviewUnknown = true
+  setGithub(state)
+  assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'nor while GitHub will not say what the review is')
+})
+
+test('a closed work refuses the adversarial review, and records nothing', () => {
+  const r = rig(['save', '--work', 'squashed', '-m', 'adversarial review', '--reviewed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /squashed is closed/)
+  assert.equal(record('squashed').reviewedAt, undefined)
 })
 
 test('a closed work has nothing to suggest, and says so rather than inventing something', () => {

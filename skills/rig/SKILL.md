@@ -47,10 +47,11 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Stage PRs show on GitHub as unrelated | `rig stage --link` |
 | Put it up for review | `rig pr` |
 | The PR says what the work used to be | `rig pr --refresh` |
+| A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified | `rig check [--run]` |
 | Context doc edited by hand | `rig save -m "…"` |
-| Design agreed with the user | `rig save -m "design agreed" --designed` |
+| Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |

@@ -1113,7 +1113,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -2561,8 +2561,9 @@ function offerNeighbours (work, name) {
 // The explicit save, for edits made outside rig — chiefly the context doc. `--designed`
 // records the "design agreed" gate, which is what the flag's name always said it did: a
 // decision someone took, on a date nothing else can recover. It used to set a status.
-// `--learned` records the lesson review the same way. `--title` corrects the title in the
-// record and the two headings that show it, and never the branch or the id.
+// `--learned` records the lesson review the same way, and `--reviewed` the adversarial review.
+// `--title` corrects the title in the record and the two headings that show it, and never the
+// branch or the id.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -2571,14 +2572,41 @@ cmds.save = ({ flags }) => {
   const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
   if (title === true || title === '') die('--title needs the title')
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
+  // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
+  // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
+  // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
+  // read as a yes.
+  for (const f of ['adversarial', 'no-adversarial']) {
+    if (typeof flags[f] === 'string') die(`--${f} takes no value — the flag is the answer`)
+  }
+  const choice = flags.adversarial ? true : flags['no-adversarial'] ? false : null
+  if (flags.adversarial && flags['no-adversarial']) die('--adversarial or --no-adversarial, not both')
+  // In one call the review would be dated a moment after the design it answers, and count as done
+  // before any PR was opened.
+  if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
+  if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
+  if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
   commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
     // Re-recorded rather than refused: agreeing the design a second time is a real thing to
     // do after a rethink, and the date that matters is the one the current design was agreed.
+    // The review choice is re-recorded with it, for the same reason.
     work.designedAt = new Date().toISOString()
-    ok(`${id}: design agreed`)
+    work.adversarial = choice
+    ok(`${id}: design agreed, ${choice ? 'with' : 'without'} an adversarial review`)
+  }
+  // The adversarial review. Recorded whatever the design chose, because it is a fact about what
+  // happened; refused once the work has stopped, since its PRs are no longer in review.
+  if (flags.reviewed) {
+    if (work.closedAt && !work.abandonedAt) die(`${id} is closed — its review is behind it`)
+    if (work.abandonedAt) die(`${id} was abandoned — there is no PR left to review`)
+    // Before the design gate there is no choice it answers, and a review recorded then would
+    // silence the one the design goes on to choose.
+    if (!work.designedAt) die(`${id} has no design gate yet — the adversarial review answers its choice, so record that first`)
+    work.reviewedAt = new Date().toISOString()
+    ok(`${id}: adversarial review done`)
   }
   // The lesson review. Allowed on a closed work, unlike the design gate: `close` names an
   // unreviewed work on its way out, and the catalogue a lesson lands in is still there.
@@ -2748,6 +2776,8 @@ const workJson = (cfg, work, live) => ({
   stages: (work.stages || []).map(st => ({ branch: st.branch, delivers: st.delivers || '', withdrawn: withdrawalOf(st) })),
   createdAt: work.createdAt || null,
   designedAt: work.designedAt || null,
+  adversarial: typeof work.adversarial === 'boolean' ? work.adversarial : null,
+  reviewedAt: work.reviewedAt || null,
   learnedAt: work.learnedAt || null,
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
@@ -3227,6 +3257,15 @@ cmds.next = ({ flags }) => {
       const s = stageStack(stack, entry, work.branch)
       return !!s && !s.unknown && !s.problem && !s.linked
     }).map(entry => entry.repo),
+    // One more lookup per open work-branch PR, and only here: `rig next` is the one command
+    // that walks a PR through its review. Only while it is in review: a stopped work keeps its
+    // PRs open by design and has nothing to ask.
+    reviews: phaseOf(work, repos) !== 'reviewing' ? [] : repos.flatMap((r, i) => {
+      if (r.pr?.state !== 'OPEN' || !r.pr.number) return []
+      const { org, repo: name } = work.repos[i]
+      const review = github().prReview(org, name, r.pr.number)
+      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks: review?.checks ?? null }]
+    }),
   })
 
   const phase = phaseOf(work, repos)
@@ -4861,7 +4900,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                   re-renders its deploy order from the stack
        [--force]                   write it again over the one that exists
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
-       [--learned]                 --designed records the "design agreed" gate,
+       [--adversarial]             --designed records the "design agreed" gate and
+       [--no-adversarial]          needs one of the two: does this work get an
+       [--reviewed] [--learned]    adversarial review; --reviewed records that review,
                                    --learned the lesson review (the rig-learn skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id
