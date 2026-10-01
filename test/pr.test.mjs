@@ -292,6 +292,7 @@ test('a stage GitHub would not answer for stops a PR being opened, rather than p
   const r = rig(['pr', '--work', 'unasked-stage'])
   setGithub(state)
   assert.match(r.out, /GitHub would not say what became of feat\/unasked-stage-one — not opening a PR/)
+  assert.doesNotMatch(r.out, /fetching|base moved|conflicts with/, 'a refusal costs no fetch and says nothing about the base')
   assert.equal(github().repos['acme/billing'].prs.length, before)
 })
 

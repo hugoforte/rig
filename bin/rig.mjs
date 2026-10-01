@@ -3440,7 +3440,10 @@ cmds.pr = ({ flags }) => {
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   if (flags.refresh) return refreshPrs(work, stack)
+  // A body is public and GitHub keeps its edit history, so a stage table that would say "PR
+  // state unknown" is not published (decision 171). Asked once, before anything is fetched.
   const unknown = unknownStages(stack).map(st => st.branch)
+  if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — not opening a PR`)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3467,9 +3470,6 @@ cmds.pr = ({ flags }) => {
     const base = workBranch(entry, work)?.base || entry.base
     sayStanding(cfg, entry, work.branch, base)
     const spec = repoSpec(entry)
-    // A body is public and GitHub keeps its edit history, so a stage table that would say "PR
-    // state unknown" is not published (decision 171).
-    if (unknown.length) { warn(`${entry.repo}: GitHub would not say what became of ${unknown.join(', ')} — not opening a PR`); continue }
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
