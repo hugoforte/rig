@@ -159,6 +159,11 @@ test('a stopped work has nothing to offer, and that is an answer', () => {
   assert.deepEqual(nextFor({ work: work({ repos: attached('a'), closedAt: AT, abandonedAt: AT }), repos: [repo('a')] }), [])
 })
 
+test('a stopped work whose folder is still on this machine is offered rig close, and nothing else', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), closedAt: AT }), repos: [repo('a')], leftover: true, drafts: ['a'] })
+  assert.deepEqual(commands(out), ['rig close'])
+})
+
 // ---------------------------------------------------------------- stages
 
 const stage = (branch, over = {}) => ({ branch, delivers: '', repos: [], started: false, open: false, landed: false, prs: [], ...over })

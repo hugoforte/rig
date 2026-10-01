@@ -315,6 +315,14 @@ test('a closed work keeps its contradictions and loses its stray checks — its 
   assert.equal(matching(found, /work folder missing|unmanaged entry/).length, 0)
 })
 
+test('a closed work whose folder is still on this machine is a finding that counts, and names rig tidy', () => {
+  const found = doctorFindings(snap({
+    works: [{ id: 'w', closed: true, contradictions: [], folderMissing: false, strays: ['junk'], repos: [], leftover: 'closed on 2026-09-30' }],
+  }))
+  assert.equal(only(found, /^w:/).says, 'w: closed on 2026-09-30, but its folder is still on this machine — `rig tidy` clears it')
+  assert.equal(problemCount(found), 1)
+})
+
 test('a work folder that is missing is said once, and nothing under it is guessed at', () => {
   const found = doctorFindings(snap({
     works: [{ id: 'w', closed: false, contradictions: [], folderMissing: true, strays: ['junk'], repos: [{ repo: 'billing', worktreeMissing: true }] }],

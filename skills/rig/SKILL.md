@@ -39,6 +39,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Standing in a work, what now | `rig next` |
 | Picking up a work someone else left | `rig status`; a `handoff.md` beside its `context.md` is the previous session's account — read it first |
 | A work whose folder is not on this machine | `rig restore <id>` |
+| Closed works whose folders are still here | `rig tidy` (`--dry-run` to preview) |
 | Where has this work got to | `rig status` |
 | What is open, what can close | `rig list` |
 | Slice the work into reviewable parts | `rig stage` |
