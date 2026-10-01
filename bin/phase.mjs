@@ -146,10 +146,13 @@ export function contradictions (work, repos = []) {
 
   // A gate cannot have been passed after the work stopped. Compared only when both dates are
   // readable, so an unparseable one is reported once, above, rather than twice.
+  // The adversarial review is refused on a stopped work just as the design gate is.
   const stoppedAt = work.abandonedAt || work.closedAt
-  if (stoppedAt && readable(stoppedAt) && work.designedAt && readable(work.designedAt) &&
-      Date.parse(work.designedAt) > Date.parse(stoppedAt)) {
-    found.push(`${work.id}: the design gate (${day(work.designedAt)}) is dated after the work stopped (${day(stoppedAt)})`)
+  for (const [gate, field] of [['design gate', 'designedAt'], ['adversarial review', 'reviewedAt']]) {
+    if (stoppedAt && readable(stoppedAt) && work[field] && readable(work[field]) &&
+        Date.parse(work[field]) > Date.parse(stoppedAt)) {
+      found.push(`${work.id}: the ${gate} (${day(work[field])}) is dated after the work stopped (${day(stoppedAt)})`)
+    }
   }
 
   // An open PR under a closed work means rig closed something that had not landed, which its

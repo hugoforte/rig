@@ -102,18 +102,28 @@ test('gh adapter: prTimeline is null when gh cannot answer', () => {
   assert.equal(canned(() => '').github.prTimeline('acme', 'platform', 12), null)
 })
 
-test('gh adapter: unresolvedThreads adds up the unresolved threads on every page GraphQL returns', () => {
-  const { calls, github } = canned(() => '2\n0\n1\n')
-  assert.equal(github.unresolvedThreads('acme', 'platform', 12), 3)
+test('gh adapter: prReview adds up the unresolved threads on every page and reads the checks off the first', () => {
+  const { calls, github } = canned(() => '2 PENDING\n0 PENDING\n1 PENDING\n')
+  assert.deepEqual(github.prReview('acme', 'platform', 12), { unresolved: 3, checks: 'PENDING' })
   assert.deepEqual(calls[0].slice(0, 3), ['api', 'graphql', '--paginate'])
-  assert.ok(calls[0].includes('number=12') && calls[0].includes('owner=acme') && calls[0].includes('name=platform'))
   assert.match(calls[0].find(a => a.startsWith('query=')), /\$endCursor: String/, 'pagination walks the cursor')
+  assert.match(calls[0].find(a => a.startsWith('query=')), /statusCheckRollup \{ state \}/)
 })
 
-test('gh adapter: unresolvedThreads is null when gh cannot answer, and zero when nothing is unresolved', () => {
-  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.unresolvedThreads('acme', 'platform', 12), null)
-  assert.equal(canned(() => 'oops').github.unresolvedThreads('acme', 'platform', 12), null)
-  assert.equal(canned(() => '0\n').github.unresolvedThreads('acme', 'platform', 12), 0)
+test('gh adapter: prReview sends owner and name as strings, so a repo named 2048 is not a number', () => {
+  const { calls, github } = canned(() => '0 SUCCESS\n')
+  github.prReview('acme', '2048', 12)
+  const flagOf = value => calls[0][calls[0].indexOf(value) - 1]
+  assert.equal(flagOf('owner=acme'), '-f')
+  assert.equal(flagOf('name=2048'), '-f')
+  assert.equal(flagOf('number=12'), '-F', 'the number stays typed: the query takes an Int!')
+})
+
+test('gh adapter: prReview is null when gh cannot answer, and says no checks where none are set up', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'oops').github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => '3\n').github.prReview('acme', 'platform', 12), null, 'a line without its rollup is not read')
+  assert.deepEqual(canned(() => '0 NONE\n').github.prReview('acme', 'platform', 12), { unresolved: 0, checks: null })
 })
 
 test('gh adapter: prForBranch is null when there is no PR', () => {
@@ -245,14 +255,16 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
 })
 
-test('in-memory adapter: unresolvedThreads counts the fixture threads not resolved', () => {
+test('in-memory adapter: prReview counts the fixture threads not resolved, beside its checks', () => {
   const state = { repos: { 'acme/platform': { prs: [
-    { branch: 'feat/x', number: 12, reviewThreads: [{ resolved: false }, { resolved: true }, { resolved: false }] },
+    { branch: 'feat/x', number: 12, checks: 'FAILURE', reviewThreads: [{ resolved: false }, { resolved: true }, { resolved: false }] },
     { branch: 'feat/y', number: 13 },
+    { branch: 'feat/z', number: 14, reviewUnknown: true },
   ] } } }
-  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 12), 2)
-  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 13), 0, 'no review on it')
-  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 99), null, 'no such PR')
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 12), { unresolved: 2, checks: 'FAILURE' })
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 13), { unresolved: 0, checks: null }, 'no review on it, no checks set up')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 14), null, 'GitHub would not say')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 99), null, 'no such PR')
 })
 
 test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {

@@ -59,15 +59,17 @@ const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
 //                  its PR would ask for and why; absent where the repo does not release by bump
 //   unstacked      the repos whose open stage PRs, two or more and a chain, GitHub does not
 //                  show as one stack; empty where GitHub would not list its stacks
-//   threads        one `{ repo, unresolved }` per repo whose work-branch PR is open: how many of
-//                  its review threads are unresolved, or null where GitHub would not say
+//   reviews        one `{ repo, unresolved, checks }` per repo whose work-branch PR is open: how
+//                  many of its review threads are unresolved and its head commit's check rollup
+//                  (`SUCCESS`, `PENDING`, `FAILURE`, …, or null where none are set up); both
+//                  null where GitHub would not say
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], threads = [], leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -232,25 +234,37 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // it (decision 168): the review already on the PR, the adversarial review the design chose,
   // then the hand-over to a human. The first is read off GitHub; the other two are read off
   // the record, because nothing on GitHub says a design chose a review or that one happened.
-  if (phase === 'reviewing') {
-    const open = threads.filter(t => t.unresolved > 0)
+  // Asked only of open PRs: a phase of `reviewing` can be a PR closed unmerged, or one repo
+  // merged beside another never opened, and neither has anything to review or hand over.
+  const openPrs = phase === 'reviewing' ? repos.filter(r => r.pr?.state === 'OPEN') : []
+  if (openPrs.length) {
+    const reviewOf = r => reviews.find(t => t.repo === r.repo)
+    const open = reviews.filter(t => t.unresolved > 0)
     if (open.length) {
       const counts = open.map(t => `${t.repo}: ${t.unresolved} unresolved review thread${t.unresolved === 1 ? '' : 's'}`)
       out.push(offer('reviewing', `${counts.join('; ')} — action what is worth actioning, reply to every thread, resolve ${open.length === 1 && open[0].unresolved === 1 ? 'it' : 'them'}`))
     }
-    const adversarial = work.adversarial === true && !work.reviewedAt
-    if (adversarial && !open.length) {
+    // Every open PR's threads known to be resolved. Unknown is not resolved: going on past a
+    // count GitHub would not give is the "nobody could tell" mistake decision 62 exists to prevent.
+    const resolved = openPrs.every(r => reviewOf(r)?.unresolved === 0)
+    // A review recorded before the design was last agreed was a review of another design.
+    const adversarial = work.adversarial === true && !(work.reviewedAt && work.reviewedAt >= work.designedAt)
+    if (adversarial && resolved) {
       out.push(offer('reviewing',
         'the design chose an adversarial review — a reviewer told to find what is wrong with the PR, fixing what it finds and pushing',
         'rig save -m "adversarial review" --reviewed'))
     }
-    // Every open PR's threads known to be resolved, nothing local left, no stage still to come
-    // and no PR body behind the record. Unknown is not resolved: a hand-over on a count GitHub
-    // would not give is the "nobody could tell" mistake decision 62 exists to prevent.
-    const settled = repos.filter(r => r.pr?.state === 'OPEN')
-      .every(r => threads.some(t => t.repo === r.repo && t.unresolved === 0))
-    const pending = dirty.length || unpushed.length || awaiting.length || prStale.length || (stack.length && nextStage(stack))
-    if (settled && !adversarial && !pending) {
+    const failing = openPrs.filter(r => ['FAILURE', 'ERROR'].includes(reviewOf(r)?.checks))
+    if (failing.length) {
+      out.push(offer('reviewing', `${failing.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
+    }
+    // The design gate passed, with its review choice; every check green or none set up; nothing
+    // local left, or that nobody could count; no stage still to come and no PR body behind the
+    // record.
+    const green = openPrs.every(r => [null, 'SUCCESS'].includes(reviewOf(r)?.checks ?? null))
+    const pending = dirty.length || unpushed.length || awaiting.length || prStale.length || (stack.length && nextStage(stack)) ||
+      repos.some(r => !r.merged && (r.missing || r.unpushed === null))
+    if (work.designedAt && resolved && !adversarial && green && !pending) {
       out.push(offer('reviewing', 'the PR is ready for a human reviewer — hand it over'))
     }
   }

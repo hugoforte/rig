@@ -498,6 +498,16 @@ test('an open PR is walked through its review: threads, then the adversarial rev
   assert.equal(rig(['pr', '--refresh', '--work', 'what-now']).code, 0)
   r = rig(['next', '--work', 'what-now'])
   assert.match(r.out, /the PR is ready for a human reviewer/)
+
+  const pr = state.repos['acme/billing'].prs.find(p => p.number === 9)
+  pr.checks = 'PENDING'
+  setGithub(state)
+  assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'not while its checks run')
+
+  pr.checks = 'SUCCESS'
+  pr.reviewUnknown = true
+  setGithub(state)
+  assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'nor while GitHub will not say what the review is')
 })
 
 test('a closed work refuses the adversarial review, and records nothing', () => {

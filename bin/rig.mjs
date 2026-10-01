@@ -2594,6 +2594,9 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed) {
     if (work.closedAt && !work.abandonedAt) die(`${id} is closed — its review is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — there is no PR left to review`)
+    // Before the design gate there is no choice it answers, and a review recorded then would
+    // silence the one the design goes on to choose.
+    if (!work.designedAt) die(`${id} has no design gate yet — the adversarial review answers its choice, so record that first`)
     work.reviewedAt = new Date().toISOString()
     ok(`${id}: adversarial review done`)
   }
@@ -3248,10 +3251,11 @@ cmds.next = ({ flags }) => {
     }).map(entry => entry.repo),
     // One more lookup per open work-branch PR, and only here: `rig next` is the one command
     // that walks a PR through its review.
-    threads: repos.flatMap((r, i) => {
+    reviews: repos.flatMap((r, i) => {
       if (r.pr?.state !== 'OPEN' || !r.pr.number) return []
       const { org, repo: name } = work.repos[i]
-      return [{ repo: r.repo, unresolved: github().unresolvedThreads(org, name, r.pr.number) }]
+      const review = github().prReview(org, name, r.pr.number)
+      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks: review?.checks ?? null }]
     }),
   })
 
@@ -4887,9 +4891,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                   re-renders its deploy order from the stack
        [--force]                   write it again over the one that exists
   rig save [-m text] [--designed] commit edits made outside rig (the context doc);
-       [--adversarial | --no-adversarial]   --designed records the "design agreed" gate
-       [--reviewed] [--learned]    and needs one of the two: does this work get an
-                                   adversarial review; --reviewed records that review,
+       [--adversarial]             --designed records the "design agreed" gate and
+       [--no-adversarial]          needs one of the two: does this work get an
+       [--reviewed] [--learned]    adversarial review; --reviewed records that review,
                                    --learned the lesson review (the rig-learn skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id

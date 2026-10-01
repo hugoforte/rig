@@ -167,6 +167,12 @@ test('a design gate dated after the close is a contradiction', () => {
   assert.match(found[0], /design gate/)
 })
 
+test('an adversarial review dated after the close is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, reviewedAt: '2026-09-20T00:00:00.000Z', closedAt: AT }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /adversarial review \(2026-09-20\) is dated after the work stopped/)
+})
+
 test('an unparseable gate date is a contradiction', () => {
   const found = contradictions(work({ designedAt: 'last tuesday' }), [])
   assert.equal(found.length, 1)

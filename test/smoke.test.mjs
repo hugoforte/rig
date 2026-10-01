@@ -448,6 +448,13 @@ test('the adversarial-review choice is refused away from the design gate, and bo
   assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).adversarial, undefined)
 })
 
+test('rig save --reviewed is refused before the design gate, whose choice it answers', () => {
+  const r = rig(['save', '--work', 't7', '-m', 'adversarial review', '--reviewed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /no design gate yet/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).reviewedAt, undefined)
+})
+
 test('rig save --designed --adversarial records the choice beside the gate', () => {
   const r = rig(['save', '--work', 't7', '--designed', '--adversarial'])
   assert.equal(r.code, 0, r.out)
