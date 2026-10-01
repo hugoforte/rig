@@ -11,6 +11,8 @@
 //   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels } newest PR, or null
 //   labels(org, name)                   every label's name
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
+//   prReview(org, name, number)         { unresolved, checks }: the PR's unresolved review threads and its
+//                                       head commit's check rollup (null where none are set up), or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
 //   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack
@@ -26,10 +28,12 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned, and every call but
-// auth() and stackTool() when gh runs and exits non-zero, carrying gh's stderr. A lookup that gh could not answer —
-// signed out, rate limited, offline — therefore throws, and never reads as "not found"
-// (DESIGN.md decision 168). Not found is said only where gh says it: exit 0 with nothing
+// auth(), stackTool() and prReview() when gh runs and exits non-zero, carrying gh's stderr.
+// A lookup that gh could not answer — signed out, rate limited, offline — therefore throws,
+// and never reads as "not found" (DESIGN.md decision 169). Not found is said only where gh says it: exit 0 with nothing
 // (prForBranch, prTimeline, prsOnto, pullsForCommit), or HTTP 404 (repo, repoExists).
+// prReview has no not-found answer, so its null only ever means GitHub would not say, and
+// its one caller reads it so.
 //
 // createIssue, commentIssue and closeIssue are the tracker operations: what rig does to
 // a ticket. bin/jira.mjs presents the same operations for Jira under its own names.
@@ -48,6 +52,14 @@ const PR_TIMELINE_JQ = [
   ', firstReviewAt: ([.reviews[] | select(.submittedAt != null) | .submittedAt] | min)',
   ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
 ].join('')
+
+// One page of a PR's review threads and its head commit's check rollup, through GraphQL because
+// neither `gh pr view --json` nor REST says whether a thread is resolved. `--paginate` walks
+// `$endCursor`, and the jq prints one `<unresolved> <rollup>` line per page: the counts are added
+// up, and the rollup, the same on every page, is read off the first. `NONE` is a head commit
+// with no checks set up.
+const REVIEW_QUERY = 'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100, after: $endCursor) { nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }'
+const REVIEW_JQ = '.data.repository.pullRequest | "\\([.reviewThreads.nodes[] | select(.isResolved | not)] | length) \\(.commits.nodes[0].commit.statusCheckRollup.state // "NONE")"'
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
@@ -140,6 +152,21 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const t = parseJson(out, 'gh pr view')
       return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
     },
+    // The review already on a PR, which `rig next` offers to work through before anything else
+    // happens to it, and whether its checks are green, which the hand-over waits for. Owner and
+    // name go as `-f`, raw strings: `-F` would send a repo called `2048` as a number, which a
+    // `String!` refuses.
+    prReview (org, name, number) {
+      const r = gh(['api', 'graphql', '--paginate', '-f', `query=${REVIEW_QUERY}`,
+        '-f', `owner=${org}`, '-f', `name=${name}`, '-F', `number=${number}`, '--jq', REVIEW_JQ])
+      if (r.code !== 0 || !r.out) return null
+      const pages = r.out.split('\n').filter(l => l.trim()).map(l => l.trim().split(' '))
+      if (pages.some(([n, checks]) => !/^\d+$/.test(n) || !checks)) return null
+      return {
+        unresolved: pages.reduce((sum, [n]) => sum + Number(n), 0),
+        checks: pages[0][1] === 'NONE' ? null : pages[0][1],
+      }
+    },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
     // the caller's, because "already open" is a thing to report rather than an error to raise).
     createPr (org, name, { branch, base, title, body }) {
@@ -182,7 +209,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
       const n = /\/issues\/(\d+)\s*$/.exec(out)?.[1]
       // gh exited 0, so the issue exists whether or not its answer can be read, and a retry
-      // makes a second one (DESIGN.md decision 171, the twin of 150).
+      // makes a second one (DESIGN.md decision 172, the twin of 150).
       if (!n) {
         fail(`gh exited 0 but rig could not read the new issue's number from its answer, so the issue may have been created. ` +
           `Search ${repo} for "${title}" before retrying, ` +
@@ -215,7 +242,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 // A repo with no `visibility` is one GitHub would not say it for; one with no `labels`, or with
 // `stacks: null`, is one gh could not list them for, so the lookup throws as the real one does.
 // `auth` mirrors the real adapter: 'missing' fails every call; 'unauthenticated' fails every
-// call but auth(), lookups included, as gh's non-zero exit does (DESIGN.md decision 168).
+// call but auth(), lookups included, as gh's non-zero exit does (DESIGN.md decision 169).
 // One lookup can fail on its own, with gh's message: a repo's `lookupFails` fails every lookup
 // on that repo, and its `branchLookupFails: { <branch>: <message> }` fails prForBranch for that
 // branch only — "the work PR answered and one stage's did not". One difference is kept on
@@ -301,6 +328,16 @@ export function githubInMemory (state, { env } = {}) {
         firstReviewAt: earliest(reviews.map(r => r.submittedAt)),
         approvedAt: earliest(reviews.filter(r => r.state === 'APPROVED').map(r => r.submittedAt)),
       }
+    },
+    // `reviewThreads` is the fixture's list of `{ resolved }`, and a PR with none has no review on
+    // it; `checks` is its rollup state, absent where no checks are set up; `reviewUnknown` is a
+    // PR GitHub lists but whose review the GraphQL call will not give.
+    // Null whenever GitHub would not say, as the real adapter answers: it has no not-found.
+    prReview (org, name, number) {
+      if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
+      if (state.auth === 'unauthenticated' || lookup(`${org}/${name}`)?.repo.lookupFails) return null
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      return pr && !pr.reviewUnknown ? { unresolved: (pr.reviewThreads || []).filter(t => !t.resolved).length, checks: pr.checks || null } : null
     },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()

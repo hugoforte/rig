@@ -445,11 +445,11 @@ export function walkthrough (work, { workRoot = 'w', dataRoot = 'rig-data' } = {
   })
 
   steps.push({
-    command: 'rig save -m "design agreed" --designed',
-    says: [`✓ ${work.id}: design agreed`, '✓ data root: committed and pushed'],
+    command: 'rig save -m "design agreed" --designed --adversarial',
+    says: [`✓ ${work.id}: design agreed, with an adversarial review`, '✓ data root: committed and pushed'],
     work: [`${work.id}/`, '  (unchanged — no prose lives here)'],
-    data: [`work/${work.id}/context.md    the Direction section`, `work/${work.id}/work.json    + designedAt`, '✓ committed and pushed'],
-    note: 'The gate, not a status field. `designedAt` is a decision on a date that nothing can observe afterwards — which is exactly what is worth storing, and why branch and PR state never are.',
+    data: [`work/${work.id}/context.md    the Direction section`, `work/${work.id}/work.json    + designedAt, adversarial`, '✓ committed and pushed'],
+    note: 'The gate, not a status field. `designedAt` is a decision on a date that nothing can observe afterwards — which is exactly what is worth storing, and why branch and PR state never are. Whether the PRs get an adversarial review is decided here too, with the design in hand.',
   })
 
   const withPr = repos.filter(r => r.pr?.number)

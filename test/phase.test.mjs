@@ -26,7 +26,7 @@ test('active phases are present participles and terminal ones past', () => {
 })
 
 test('every gate names the field it is stored in', () => {
-  assert.deepEqual(GATES, { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
+  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
 })
 
 // ---------------------------------------------------------------- deriving the phase
@@ -112,8 +112,9 @@ test('an abandoned work says so and keeps its design gate', () => {
 })
 
 test('the gates passed are listed with their dates, in lifecycle order', () => {
-  assert.deepEqual(gatesOf(work({ designedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
+  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
     { gate: 'designed', at: AT },
+    { gate: 'reviewed', at: AT },
     { gate: 'learned', at: AT },
     { gate: 'abandoned', at: AT },
     { gate: 'closed', at: AT },
@@ -164,6 +165,19 @@ test('a design gate dated after the close is a contradiction', () => {
   const found = contradictions(work({ designedAt: '2026-09-20T00:00:00.000Z', closedAt: AT }), [])
   assert.equal(found.length, 1)
   assert.match(found[0], /design gate/)
+})
+
+test('a review choice that is neither true nor false is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, adversarial: 'true' }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /`adversarial` is "true", which is neither true nor false/)
+  assert.deepEqual(contradictions(work({ designedAt: AT, adversarial: false }), []), [])
+})
+
+test('an adversarial review dated after the close is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, reviewedAt: '2026-09-20T00:00:00.000Z', closedAt: AT }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /adversarial review \(2026-09-20\) is dated after the work stopped/)
 })
 
 test('an unparseable gate date is a contradiction', () => {

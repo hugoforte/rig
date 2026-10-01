@@ -25,7 +25,7 @@ test('gh adapter: createIssue reads the issue number from the URL gh prints', ()
 
 test('gh adapter: createIssue says the issue may have been created when its answer has no issue URL', () => {
   // gh exited 0, so the issue exists whether or not its answer can be read, and a retry would
-  // make a second one (DESIGN.md decision 171, the twin of 150).
+  // make a second one (DESIGN.md decision 172, the twin of 150).
   const { github } = canned(() => 'Creating issue in acme/platform\n')
   assert.throws(() => github.createIssue('acme/platform', 'A title', 'b'),
     /gh exited 0 but rig could not read the new issue's number from its answer, so the issue may have been created\. Search acme\/platform for "A title" before retrying, then record it on this work with `rig ticket acme\/platform#<n> --work <id>`\.\ngh's answer:\nCreating issue in acme\/platform/)
@@ -106,6 +106,30 @@ test('gh adapter: prTimeline throws when gh could not answer, and is null when g
   assert.equal(canned(() => '').github.prTimeline('acme', 'platform', 12), null)
 })
 
+test('gh adapter: prReview adds up the unresolved threads on every page and reads the checks off the first', () => {
+  const { calls, github } = canned(() => '2 PENDING\n0 PENDING\n1 PENDING\n')
+  assert.deepEqual(github.prReview('acme', 'platform', 12), { unresolved: 3, checks: 'PENDING' })
+  assert.deepEqual(calls[0].slice(0, 3), ['api', 'graphql', '--paginate'])
+  assert.match(calls[0].find(a => a.startsWith('query=')), /\$endCursor: String/, 'pagination walks the cursor')
+  assert.match(calls[0].find(a => a.startsWith('query=')), /statusCheckRollup \{ state \}/)
+})
+
+test('gh adapter: prReview sends owner and name as strings, so a repo named 2048 is not a number', () => {
+  const { calls, github } = canned(() => '0 SUCCESS\n')
+  github.prReview('acme', '2048', 12)
+  const flagOf = value => calls[0][calls[0].indexOf(value) - 1]
+  assert.equal(flagOf('owner=acme'), '-f')
+  assert.equal(flagOf('name=2048'), '-f')
+  assert.equal(flagOf('number=12'), '-F', 'the number stays typed: the query takes an Int!')
+})
+
+test('gh adapter: prReview is null when gh cannot answer, and says no checks where none are set up', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'oops').github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => '3\n').github.prReview('acme', 'platform', 12), null, 'a line without its rollup is not read')
+  assert.deepEqual(canned(() => '0 NONE\n').github.prReview('acme', 'platform', 12), { unresolved: 0, checks: null })
+})
+
 test('gh adapter: prForBranch is null when there is no PR', () => {
   const { github } = canned(() => '[]')
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x'), null)
@@ -113,7 +137,7 @@ test('gh adapter: prForBranch is null when there is no PR', () => {
 
 test('gh adapter: prForBranch throws when gh exits non-zero', () => {
   // A branch with no PR is `[]` and exit 0; anything non-zero is gh failing to answer, and must
-  // never read as "no PR" (DESIGN.md decision 168).
+  // never read as "no PR" (DESIGN.md decision 169).
   for (const err of ['HTTP 401: Bad credentials (https://api.github.com/graphql)', 'Post "https://api.github.com/graphql": dial tcp: connection refused']) {
     const { github } = canned(() => ({ code: 1, err }))
     assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), e => e instanceof GithubError && e.message.includes(err))
@@ -252,6 +276,18 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
   const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, commits: ['2026-01-02T00:00:00Z'] }] } } }
   assert.deepEqual(githubInMemory(state).prTimeline('acme', 'platform', 12),
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
+})
+
+test('in-memory adapter: prReview counts the fixture threads not resolved, beside its checks', () => {
+  const state = { repos: { 'acme/platform': { prs: [
+    { branch: 'feat/x', number: 12, checks: 'FAILURE', reviewThreads: [{ resolved: false }, { resolved: true }, { resolved: false }] },
+    { branch: 'feat/y', number: 13 },
+    { branch: 'feat/z', number: 14, reviewUnknown: true },
+  ] } } }
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 12), { unresolved: 2, checks: 'FAILURE' })
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 13), { unresolved: 0, checks: null }, 'no review on it, no checks set up')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 14), null, 'GitHub would not say')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 99), null, 'no such PR')
 })
 
 test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {

@@ -61,8 +61,12 @@ The recorded decision that a work in a tracked org deliberately has no ticket. D
 _Avoid_: ticketless, none
 
 **Gate**:
-A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed, lessons reviewed, closed. Lessons reviewed is the one gate that may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
+A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed (with the adversarial-review choice), adversarial review done, lessons reviewed, closed. Lessons reviewed is the one gate that may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
 _Avoid_: step, checkpoint, phase
+
+**Adversarial review**:
+A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.
+_Avoid_: hardening, second review, audit
 
 **Phase**:
 The part of the lifecycle a work is in now: planning, designing, building, reviewing, landing, and the terminal closed or abandoned. Always derived — from the repos attached, the branches, the PRs, and the gates recorded — and never stored, so it cannot go stale. Active phases are present participles; terminal ones are past.

@@ -104,7 +104,7 @@ test('a PR state GitHub would not answer for opens nothing, rather than opening 
 
 test('an unauthenticated gh is not opened over: GitHub would not say whether a PR exists', () => {
   // A lookup gh could not answer throws, so the refusal comes before any write is tried
-  // (DESIGN.md decision 168), rather than resting on `createPr` refusing too.
+  // (DESIGN.md decision 169), rather than resting on `createPr` refusing too.
   const state = github()
   const before = state.repos['acme/billing'].prs.length
   setGithub({ ...state, auth: 'unauthenticated' })
@@ -240,7 +240,7 @@ test('rig next offers the refresh while an open PR says something the record no 
 
 test('rig next offers no refresh of a stale PR while one stage\'s lookup fails', () => {
   // The work PR answered and one stage's lookup did not: the stage table the refresh would
-  // write says "PR state unknown" for it, so the PR is no evidence of being stale (decision 170).
+  // write says "PR state unknown" for it, so the PR is no evidence of being stale (decision 171).
   const state = github()
   const stale = structuredClone(state)
   stale.repos['acme/billing'].prs.find(p => p.branch === 'feat/sliced-work').body = 'a body the record no longer says'
@@ -256,7 +256,7 @@ test('rig next offers no refresh of a stale PR while one stage\'s lookup fails',
 
 test('a withdrawn stage GitHub would not answer for does not stop the refresh, since nothing of it is asked', () => {
   // A dropped stage renders as dropped whatever GitHub says, so its unknown PR state changes
-  // nothing the refresh would write (decisions 170 and 172 agree on this).
+  // nothing the refresh would write (decisions 171 and 173 agree on this).
   const state = github()
   const failing = structuredClone(state)
   failing.repos['acme/billing'].branchLookupFails = { 'feat/sliced-three': 'HTTP 502: Bad Gateway' }
@@ -282,7 +282,7 @@ const bodyOf = branch => github().repos['acme/billing'].prs.find(pr => pr.branch
 
 test('a stage GitHub would not answer for stops a PR being opened, rather than publishing a stage table that guessed', () => {
   // GitHub keeps a body's edit history, so a stage table that guessed cannot be taken back
-  // (decision 170).
+  // (decision 171).
   pushedWork('unasked-stage', 'Unasked stage', ['stage', 'feat/unasked-stage-one', '--delivers', 'the slice'])
   const state = github()
   const before = state.repos['acme/billing'].prs.length

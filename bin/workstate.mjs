@@ -151,7 +151,7 @@ export function workState (work, states = [], { stages = [] } = {}) {
     kind: 'stage-pr-open',
     message: `${pr.repo}: stage ${st.branch} still has PR #${pr.number} open`,
   })))
-  // A slice GitHub would not answer for may be one still up for review (decision 172). A
+  // A slice GitHub would not answer for may be one still up for review (decision 173). A
   // withdrawn one is meant to land nothing, so what became of it is not asked.
   const unknown = unknownStages(stages).flatMap(st => st.prUnknown.map(repo => ({
     repo,

@@ -442,7 +442,7 @@ test('a cut stage is not withdrawn while gh cannot say whether it has a PR', () 
 
 test('a stage is not withdrawn while its own PR lookup fails, with gh signed in', () => {
   // A rate limit or a network error passes `gh auth status`, so asking it was never the
-  // answer: the lookup says it could not answer (decision 169).
+  // answer: the lookup says it could not answer (decision 170).
   assert.equal(rig(['new', 'quiet', '--title', 'Quiet work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'quiet']).code, 0)
   assert.equal(rig(['stage', 'feat/quiet-one', '--delivers', 'nothing yet', '--work', 'quiet']).code, 0)
@@ -460,7 +460,7 @@ test('a stage is not withdrawn while its own PR lookup fails, with gh signed in'
 
 test('a landed stage whose branch is gone, and whose lookup fails, reads as unknown, never not started', () => {
   // The branch is gone from here, so only GitHub can say the stage landed; a refused lookup
-  // used to drop the row and the stage read as one nobody had cut (decision 170).
+  // used to drop the row and the stage read as one nobody had cut (decision 171).
   assert.equal(rig(['new', 'vanished', '--title', 'Vanished work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'vanished']).code, 0)
   assert.equal(rig(['stage', 'feat/vanished-one', '--delivers', 'the schema', '--work', 'vanished']).code, 0)
@@ -490,7 +490,7 @@ test('a landed stage whose branch is gone, and whose lookup fails, reads as unkn
 
 test('a stage is never cut on one GitHub would not answer for, which nothing here carries', () => {
   // The unknown row of a branch gone from here is not a branch this repo carries, so the
-  // stack the cut lands on top of stops below it (decision 170).
+  // stack the cut lands on top of stops below it (decision 171).
   const state = github()
   const failing = structuredClone(state)
   failing.repos['acme/billing'].branchLookupFails = { 'feat/vanished-one': 'HTTP 502: Bad Gateway' }

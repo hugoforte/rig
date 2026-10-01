@@ -91,4 +91,4 @@ a sign the interview failed.
 
 Each `rig attach` commits and pushes the data root itself. When the design is then agreed
 and written into the context doc's Direction section, `rig save -m "design agreed"
---designed` commits that too and records the gate.
+--designed --adversarial` (or `--no-adversarial`) commits that too and records the gate.

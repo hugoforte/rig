@@ -353,7 +353,7 @@ test('--data-repo --name adds a second root rather than refusing to move the fir
 
 test('a data repo GitHub would not say exists is neither joined nor created', () => {
   // "gh could not answer" read as "does not exist" would send an existing repo down the
-  // create path, so the lookup's own refusal stops it (decision 169).
+  // create path, so the lookup's own refusal stops it (decision 170).
   const saved = fs.readFileSync(localConfig, 'utf8')
   const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
   fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'unauthenticated' }))

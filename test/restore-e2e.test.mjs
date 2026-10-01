@@ -131,7 +131,7 @@ scenario('a work is restored on a second machine from its record alone', {
   }),
 
   step('a branch whose PR GitHub would not say anything about is named so, never as never pushed', m => {
-    // A lookup gh could not answer throws, and the restore says so in its words (decision 169).
+    // A lookup gh could not answer throws, and the restore says so in its words (decision 170).
     const state = readJson(m.githubStateFile)
     const failing = structuredClone(state)
     failing.repos[`${ORG}/${CLOSED}`].lookupFails = 'HTTP 502: Bad Gateway'

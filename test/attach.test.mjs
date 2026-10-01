@@ -92,7 +92,7 @@ test('attaching a repo the catalogue has never seen drafts an entry to correct',
 
 test('a repo GitHub would not answer for is not resolved, and the refusal is named', () => {
   // A signed-out gh throws on the lookup, rather than reading as "no such repo in acme" and
-  // leaving rig to ask `gh auth status` why (decision 169).
+  // leaving rig to ask `gh auth status` why (decision 170).
   const state = readJson(githubStateFile)
   fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'unauthenticated' }))
   const r = rig(['attach', 'orders', '--work', 't1'])
@@ -104,7 +104,7 @@ test('a repo GitHub would not answer for is not resolved, and the refusal is nam
 
 test('a repo another org has is not taken while an earlier org would not say', () => {
   // "Would not answer" is not "not here": acme may have it too, and attaching the other org's
-  // repo of the same name would be a confident wrong answer (decision 168).
+  // repo of the same name would be a confident wrong answer (decision 169).
   assert.equal(rig(['init', '--orgs', 'globex']).code, 0)
   const state = readJson(githubStateFile)
   const failing = structuredClone(state)

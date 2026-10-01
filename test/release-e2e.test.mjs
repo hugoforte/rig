@@ -159,7 +159,7 @@ test('e2e: the gathering reads the range oldest first, so the notes read in orde
 
 test('e2e: a commit GitHub would not say the pull requests of stops the gather, rather than reading as one with none', () => {
   // A refused lookup used to answer [], and the release then refused for the wrong reason: a
-  // commit with no pull request (decision 168).
+  // commit with no pull request (decision 169).
   const repo = repoWith({ commits: ['add-retries'], prs: s => [{ number: 7, branch: 'feat/add-retries', base: 'main', title: 'Add retries', body: 'Why.', commits: [s['add-retries']] }] })
   const state = JSON.parse(fs.readFileSync(repo.fake, 'utf8'))
   state.repos[REPO].lookupFails = 'HTTP 502: Bad Gateway'

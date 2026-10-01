@@ -131,7 +131,7 @@ test('and a forced close is not then reported as a contradiction', () => {
 
 test("close refuses while one stage's PR lookup fails, and --force goes past it", () => {
   // The work branch landed; whether the slice did is something GitHub would not say, and a
-  // slice that may still be up for review is unfinished business (decision 172).
+  // slice that may still be up for review is unfinished business (decision 173).
   assert.equal(rig(['new', 'unasked', '--title', 'Unasked work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'unasked']).code, 0)
   seedIssue(95, 'the unasked schema')
