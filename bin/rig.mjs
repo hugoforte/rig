@@ -3793,10 +3793,11 @@ cmds.close = ({ flags }) => {
   const verdict = workState(work, states, { stages: stack })
   // Abandoning is the decision to stop a work without finishing it, so every blocker that
   // asks "did it land?" is asking the wrong question — an unmerged PR and unpushed commits
-  // are what being abandoned *looks like*, not a reason to refuse. `dirty` survives, because
-  // unsaved work in a tree is the one thing this command can destroy whatever it is called.
+  // are what being abandoned *looks like*, not a reason to refuse. `dirty` and `unbranched`
+  // survive, because what exists only in a tree is the one thing this command can destroy
+  // whatever it is called.
   const abandoned = !!flags.abandoned
-  const blockers = abandoned ? verdict.blockers.filter(b => b.kind === 'dirty') : verdict.blockers
+  const blockers = abandoned ? verdict.blockers.filter(b => IN_TREE_ONLY.has(b.kind)) : verdict.blockers
   if (blockers.length && !flags.force) {
     warn(`not ${abandoned ? 'abandoning' : 'closing'} — unfinished business:`)
     for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
@@ -3872,37 +3873,47 @@ cmds.close = ({ flags }) => {
 // Everywhere else git removes it regardless, and a run handed its cwd rather than inheriting it
 // would then start every later subprocess in a directory that is not there, which Node refuses
 // to do.
+// Each answers whether it did all it set out to.
 function removeWorktrees (cfg, work, { force }) {
   if (standingIn(workDir(cfg, work.id))) chdir(toolRoot())
+  let removedAll = true
   for (const r of work.repos) {
     if (!exists(r.path)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force })
-    if (failed) warn(`${r.repo}: ${failed}`)
+    if (failed) { warn(`${r.repo}: ${failed}`); removedAll = false }
     else step(`removed worktree ${r.repo}`)
   }
+  return removedAll
 }
 
 function removeWorkFolder (cfg, id) {
   const wd = workDir(cfg, id)
-  if (!exists(wd)) return
+  if (!exists(wd)) return true
   try {
     fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
+    return true
   } catch (e) {
     warn(`worktrees removed, but ${wd} could not be deleted: ${e.code || e.message}`)
-    warn('something still has it open (a shell, an editor). Delete it by hand.')
+    warn('something still has it open (a shell, an editor). Close it, then `rig tidy`.')
+    return false
   }
 }
 
-// A work closed on another machine whose folder is still on this one. The one test `doctor`,
-// `tidy`, `close` and `next` all ask, so the four agree about which works are left over.
+// A closed work whose folder is still on this machine: closed on another one, or closed here
+// while something held the folder open. The one test `doctor`, `tidy`, `close` and `next` all
+// ask, so the four agree about which works are left over.
 const leftHere = (cfg, work) => !!work.closedAt && exists(workDir(cfg, work.id))
 
-const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${work.closedAt.slice(0, 10)}`
+// `String`: a hand-edited date is `contradictions`' to report, not a reason to crash.
+const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${String(work.closedAt).slice(0, 10)}`
+
+// What a removed worktree takes with it, whatever its PR says.
+const IN_TREE_ONLY = new Set(['dirty', 'unbranched'])
 
 // What would lose something that exists only on this machine. A first close also refuses over
 // an open pull request and an unknown PR state, and those are questions about the work; a
 // leftover's work is settled, and its pull requests are on GitHub, not on this disk.
-const LOCAL_BLOCKERS = new Set(['dirty', 'unpushed', 'distance-unknown'])
+const LOCAL_BLOCKERS = new Set([...IN_TREE_ONLY, 'unpushed', 'distance-unknown'])
 
 // This machine's copy of a closed work, cleared: its worktrees, its folder and its mirror's
 // copies of the branches that landed. The close itself ran elsewhere and settled the record,
@@ -3916,19 +3927,30 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
   const states = work.repos.map(r => repoState(cfg, r, work.branch))
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   const verdict = workState(work, states, { stages: stack })
-  const blockers = verdict.blockers.filter(b => LOCAL_BLOCKERS.has(b.kind))
+  // Anything in the folder that is not the record's — a repo detached on the other machine
+  // before it closed, notes of your own — is nobody's copy but this one (decision 165).
+  const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
+  const strays = fs.readdirSync(workDir(cfg, work.id)).filter(e => !known.has(e))
+    .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds` }))
+  const blockers = [...verdict.blockers.filter(b => LOCAL_BLOCKERS.has(b.kind)), ...strays]
   if (dryRun || (blockers.length && !force)) return { blockers, cleared: false }
-  removeWorktrees(cfg, work, { force })
+  // A worktree git refused to remove is not deleted from under it.
+  if (!removeWorktrees(cfg, work, { force })) return { blockers, cleared: false }
   // The mirror only: the remote was the first close's to decide, and it already has.
   if (!blockers.length && verdict.done && !work.abandonedAt) dropMergedBranches(cfg, work, states, stack, { remote: false })
-  removeWorkFolder(cfg, work.id)
-  return { blockers, cleared: true }
+  return { blockers, cleared: removeWorkFolder(cfg, work.id) }
 }
 
 // `rig close` on a work that is already closed.
 function closeHere (cfg, work, flags) {
   if (!leftHere(cfg, work)) return ok(`${work.id} was already ${stoppedOn(work)} — nothing of it is on this machine`)
-  const { blockers, cleared } = clearLeftover(cfg, work, { force: !!flags.force })
+  const force = !!flags.force
+  const { blockers, cleared } = clearLeftover(cfg, work, { force })
+  if (!cleared && (force || !blockers.length)) {
+    warn(`${work.id} is not fully cleared — see above`)
+    current.exitCode = 1
+    return
+  }
   if (!cleared) {
     warn(`not clearing ${work.id} — it was ${stoppedOn(work)}, but this machine has work that is nowhere else:`)
     for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
@@ -3949,33 +3971,42 @@ cmds.tidy = ({ flags }) => {
   const cfg = load(loc)
   const dryRun = !!flags['dry-run']
   const leftovers = []
-  for (const { loc: rootLoc } of doctorRootLocations(loc)) {
+  const unreadable = []
+  // The first root to hold an id is the one whose record counts, as it is for doctor
+  // (`uniqueById`): a closed copy in a later root does not make an open work a leftover.
+  const seen = new Set()
+  for (const { name, loc: rootLoc } of doctorRootLocations(loc)) {
     if (!exists(rootLoc.dataRoot)) continue
     for (const id of listWorkIds(rootLoc.dataRoot)) {
-      if (!exists(workDir(cfg, id)) || leftovers.some(w => w.id === id)) continue
-      // A record that will not read is doctor's to report; there is nothing here to ask of it.
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (!exists(workDir(cfg, id))) continue
       let work
       try { work = loadWork(cfg, id, rootLoc.dataRoot) } catch (e) {
-        if (e instanceof RigError) continue
-        throw e
+        if (!(e instanceof RigError)) throw e
+        unreadable.push(`${id} (${(e.cause ?? e).message})`)
+        continue
       }
-      if (leftHere(cfg, work)) leftovers.push(work)
+      if (leftHere(cfg, work)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
     }
   }
+  sayUnreadable(unreadable)
   if (!leftovers.length) return ok('nothing to tidy — no closed work has a folder on this machine')
 
-  let skipped = 0
-  for (const work of leftovers) {
+  let notCleared = 0
+  for (const { work, root } of leftovers) {
     const { blockers, cleared } = clearLeftover(cfg, work, { dryRun })
     if (blockers.length) {
-      skipped++
+      notCleared++
+      const data = root ? ` --data ${root}` : ''
       warn(`${dryRun ? 'would skip' : 'skipped'} ${work.id} — ${stoppedOn(work)}, but this machine has work that is nowhere else:`)
       for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
-      say(C.dim(`    push or commit it, or \`rig close --work ${work.id} --force\` to discard it`))
+      say(C.dim(`    push or commit it, or \`rig close --work ${work.id}${data} --force\` to discard it`))
     } else if (cleared) ok(`cleared ${work.id} — ${stoppedOn(work)}`)
-    else say(`  would clear ${work.id} — ${stoppedOn(work)}`)
+    else if (dryRun) say(`  would clear ${work.id} — ${stoppedOn(work)}`)
+    else { notCleared++; warn(`${work.id} is not fully cleared — see above`) }
   }
-  if (skipped && !dryRun) current.exitCode = 1
+  if (notCleared && !dryRun) current.exitCode = 1
 }
 
 // Every branch of a finished work whose PR merged — the work branch in each repo, and each
@@ -4785,11 +4816,11 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --abandoned                 stop a work without finishing it: the did-it-land
                                    checks are dropped, uncommitted changes still refuse,
                                    the ticket is told and open PRs are left alone
-       on a work closed on another machine: clears this machine's copy and
+       on a work already closed: clears this machine's copy and
                                    nothing else — no record, ticket or remote is touched
-  rig tidy [--dry-run]            clear every work closed on another machine whose folder
-                                  is still on this one; one with uncommitted or unpushed
-                                  work is skipped and named; --dry-run changes nothing
+  rig tidy [--dry-run]            clear every closed work whose folder is still on this
+                                  machine; one with work that exists only here is skipped
+                                  and named; --dry-run changes nothing
   rig backfill [--work <id>] [--force]
                                   store each merged PR's terminal facts (number, url,
                                   openedAt, firstCommitAt, firstReviewAt, approvedAt,
