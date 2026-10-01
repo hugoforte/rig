@@ -23,7 +23,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -424,12 +424,12 @@ function repoAtCwd () {
 // `current.location`, at its top, when the data root is moving in the command that is running
 // — bin/roots.mjs owns everything else about the two files.
 //
-// `requestedData` and `requestedRepos` are what the command line said, read before anything
-// reads config. They sit on the invocation rather than being parameters of `where`, because
-// every caller of `where` wants the same answer and threading it through all of them would be
-// a second way to be wrong about which knowledge is in hand.
+// `requestedData`, `requestedWork` and `requestedRepos` are what the command line said, read
+// before anything reads config. They sit on the invocation rather than being parameters of
+// `where`, because every caller of `where` wants the same answer and threading it through all
+// of them would be a second way to be wrong about which knowledge is in hand.
 const where = () => (current.location ??= locate(toolRoot(), env(), {
-  data: current.requestedData, repos: current.requestedRepos, repoAt: repoAtCwd, cwd: current.cwd,
+  data: current.requestedData, work: current.requestedWork, repos: current.requestedRepos, repoAt: repoAtCwd, cwd: current.cwd,
 }))
 
 // `current` chose this root, and no flag, shell or work folder did. Said by the commands
@@ -762,22 +762,8 @@ function writeOrgMigrations (loc = where()) {
 // The work id is anchored by D:\w\<id>\.rig\id — a marker, not a duplicated fact.
 // The authoritative record lives in the rig repo (DESIGN.md §7.1).
 function findWorkId (cfg, explicit) {
-  if (explicit) return explicit
-  let dir = cwd()
-  for (;;) {
-    const marker = path.join(dir, WORK_FOLDER.marker, 'id')
-    if (exists(marker)) return readText(marker).trim()
-    const up = path.dirname(dir)
-    if (up === dir) break
-    dir = up
-  }
-  die('not inside a work (no .rig/id found). Pass --work <id> or cd into one.')
+  return explicit || workIdAt(cwd()) || die('not inside a work (no .rig/id found). Pass --work <id> or cd into one.')
 }
-
-// Every configured root that holds a record for this work id, by name. One, normally: a work
-// id is unique across the roots, and two holders is a split left half done.
-const rootsHolding = (id, roots = where().roots) => Object.entries(roots)
-  .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
 
 // What a record must be for every command to read it, or why it is not. Only what is iterated
 // or dereferenced whatever the work's state, and every field may be absent, so a record written
@@ -819,8 +805,8 @@ function loadWork (cfg, id, root = dataRoot()) {
   if (!exists(recordFile(id, root))) {
     // A work id is unique across every root on the machine, so the one that has it is worth
     // naming: on a second machine the work in hand is often not in the current root.
-    const holders = rootsHolding(id)
-    const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
+    const { name } = rootHoldingWork(where().roots, id)
+    const hint = name ? ` — data root "${name}" has it: add \`--data ${name}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
   const w = readRecord(id, root)
@@ -1680,16 +1666,6 @@ function regenerate (cfg, work) {
   writeText(path.join(wd, WORK_FOLDER.agents), lines.join('\n'))
   writeText(path.join(wd, WORK_FOLDER.claude), `See [${WORK_FOLDER.agents}](./${WORK_FOLDER.agents}).\n`)
   writeText(path.join(wd, WORK_FOLDER.marker, 'id'), work.id + '\n')
-  // Beside the work id, the data root that holds its record. This is what lets every command
-  // run from inside a work folder resolve without `--data`, and so what keeps `current` off
-  // the path of all but the rootless few. Written only when the root in hand is the one root
-  // holding the record: in a split left half done, a folder resolved to either copy, by
-  // `current` or `--data`, would otherwise be pinned to it. Nothing is written when the
-  // root has no name — an installation still on the fallback has nothing to anchor to.
-  const holders = rootsHolding(work.id)
-  if (where().name && holders.length === 1 && holders[0] === where().name) {
-    writeText(dataAnchorFile(wd), where().name + '\n')
-  }
 }
 
 // ------------------------------------------------------ data root commits
@@ -2187,13 +2163,14 @@ cmds.new = ({ flags, positional }) => {
   if (existing) die(`work "${id}" already exists (${recordFile(id)})`)
 
   // One work root, shared by every data root on this machine, so two roots can want the same
-  // folder. The `.rig/data` marker detects the clash but cannot fix it — renaming a folder
+  // folder. The roots' records detect the clash but cannot fix it — renaming a folder
   // another root's records point at would break that work — so the id is refused and the root
   // that owns it is named. This is the whole cost of not giving every data root a work root
   // of its own, and it is paid at the one moment a name is being chosen anyway.
   const folder = workDir(cfg, id)
   if (exists(folder)) {
-    const owner = anchoredRoot(folder)
+    const { name, holders } = rootHoldingWork(where().roots, id)
+    const owner = name ?? holders[0]?.name
     const whose = owner && owner !== where().name ? ` and belongs to data root "${owner}"` : ''
     die(`${folder} already exists${whose} — pick another id`)
   }
@@ -3940,15 +3917,17 @@ cmds.close = ({ flags }) => {
   //
   // `--work` is in the command because the work folder is gone by now, and `rig save` resolves
   // the work from the folder it is run in. Printing the bare command would hand over one that
-  // dies with "not inside a work".
+  // dies with "not inside a work". `--data` too where another root keeps a copy, since two
+  // closed copies are a pick `rig save` will not make (decision 191).
+  const save = `rig save --work ${id}${rootHoldingWork(where().roots, id).holders.length > 1 ? ` --data ${where().name}` : ''}`
   const stillDraft = draftEntries(work)
   if (stillDraft.length) {
-    say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`rig save --work ${id} -m "catalogue corrections"\``))
+    say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`${save} -m "catalogue corrections"\``))
   }
   // The lesson review, named the same way and for the same reason. An abandoned work is not
   // asked: `rig save --learned` refuses one, so naming it would hand over a command that dies.
   if (!abandoned && !work.learnedAt) {
-    say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`rig save --work ${id} -m "lessons reviewed" --learned\``))
+    say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`${save} -m "lessons reviewed" --learned\``))
   }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -3995,13 +3974,7 @@ function removeWorkFolder (cfg, id) {
 // same id makes the folder that work's, whichever copy was read: a work moved to another root
 // leaves a closed copy behind, and its folder is live.
 const leftHere = (cfg, work, roots = where().roots) =>
-  !!work.closedAt && exists(workDir(cfg, work.id)) && !rootsHoldingOpen(work.id, roots).length
-
-// The roots whose record of `id` is open. A record that will not parse counts as open, because
-// a folder is cleared only on a record that says its work is over.
-const rootsHoldingOpen = (id, roots) => rootsHolding(id, roots).filter(name => {
-  try { return !readJson(recordFile(id, roots[name].path)).closedAt } catch { return true }
-})
+  !!work.closedAt && exists(workDir(cfg, work.id)) && !rootHoldingWork(roots, work.id).holders.some(h => h.open)
 
 // `String`: a hand-edited date is `contradictions`' to report, not a reason to crash.
 const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${String(work.closedAt).slice(0, 10)}`
@@ -4048,9 +4021,9 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
 
 // `rig close` on a work that is already closed.
 function closeHere (cfg, work, flags) {
-  const open = rootsHoldingOpen(work.id, where().roots)
-  if (open.length && exists(workDir(cfg, work.id))) {
-    die(`${work.id} is ${stoppedOn(work)} here, but data root "${open[0]}" holds a record of ${work.id} that does not say it is closed, and the folder on this machine is that work's — delete the copy that is wrong`)
+  const open = rootHoldingWork(where().roots, work.id).holders.find(h => h.open)
+  if (open && exists(workDir(cfg, work.id))) {
+    die(`${work.id} is ${stoppedOn(work)} here, but data root "${open.name}" holds a record of ${work.id} that does not say it is closed, and the folder on this machine is that work's — delete the copy that is wrong`)
   }
   if (!leftHere(cfg, work)) return ok(`${work.id} was already ${stoppedOn(work)} — nothing of it is on this machine`)
   const force = !!flags.force
@@ -4584,7 +4557,7 @@ function doctorStamp (written) {
 function doctorWork (cfg, id, root, roots) {
   let work
   try { work = loadWork(cfg, id, root) } catch (e) {
-    if (e instanceof RigError) return { id, unreadable: e.message, holders: rootsHolding(id, roots) }
+    if (e instanceof RigError) return { id, unreadable: e.message, holders: rootHoldingWork(roots, id).holders.map(h => h.name) }
     throw e
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
@@ -4593,9 +4566,7 @@ function doctorWork (cfg, id, root, roots) {
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
   out.strays = fs.readdirSync(wd).filter(e => !known.has(e))
-  const marker = dataAnchorFile(wd)
-  out.marker = exists(marker) ? readText(marker).trim() || null : null
-  out.holders = rootsHolding(id, roots)
+  out.holders = rootHoldingWork(roots, id).holders.map(h => h.name)
   out.repos = work.repos.map(r => {
     const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {
@@ -4949,7 +4920,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig prompt [name]               print an agent prompt`
 
 // Flags any command may be given, said once in the prose under the usage rather than on each
-// line. A command that acts on no work ignores `--work`.
+// line. A command that acts on no work still reads its data root from the one `--work` names.
 const COMMON_FLAGS = ['data', 'work', 'help']
 
 // Flags rig passes to itself and a person never types: `rig update`'s one hop into the code
@@ -5049,6 +5020,9 @@ function invoke (argv) {
     // Before the first `where()`: the data root a command names decides every path it reads.
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
     if (typeof args.flags.data === 'string') current.requestedData = args.flags.data
+    // The work a command names is in the root that holds it, whatever folder it runs in.
+    const named = cmdName === 'restore' ? args.positional[0] || args.flags.work : args.flags.work
+    if (typeof named === 'string') current.requestedWork = named
     // `rig new --repos a,b` is the one command that names repos before there is a work folder
     // to anchor it, and it is the command whose choice of root matters most — it is the one
     // that writes the record.
@@ -5109,6 +5083,7 @@ function invocationOf ({
     jira: adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory),
     location: null,
     requestedData: null,
+    requestedWork: null,
     requestedRepos: [],
     args: null,
     pendingCommit: null,

@@ -210,8 +210,7 @@ function rootFindings (root) {
 //                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
 //                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos, marker, holders, leftover }]: `marker` is
-//                     the folder's `.rig/data`, null when it has none, `holders` the roots
+//                     folderMissing, strays, repos, holders, leftover }]: `holders` the roots
 //                     that hold the work's record, and `leftover` set only on a closed work
 //                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
 //                     a record that would not read is { id, unreadable, holders } instead,
@@ -346,20 +345,7 @@ export function doctorFindings (snap = {}) {
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
     }
-    // The marker is what a command run in the folder resolves by. Without one it falls back to
-    // `current`, which only matters when there is more than one root to fall between; one
-    // naming a root that does not hold the record sends it to the wrong root, or to none. A
-    // record in two roots is named whatever the marker says, since either copy may be the
-    // wrong one and no marker can say which.
-    const holders = w.holders || []
-    const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
-    if (holders.length > 1) {
-      sayHeldTwice(w)
-    } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
-      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
-    } else if (holders.length && w.marker && w.marker !== holders[0]) {
-      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${holders[0]}" — ${rewrite}`))
-    }
+    if ((w.holders || []).length > 1) sayHeldTwice(w)
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))
       if (r.secretsUnconfigured) {

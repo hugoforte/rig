@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { scenario, step, previousRelease, previousReleaseTag, releaseTags, readJson, strip } from './harness.mjs'
-import { dataAnchorFile, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
+import { DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 
 const ORG = 'e2e-acme'
 const machineFile = m => readJson(m.localConfig)
@@ -126,11 +126,9 @@ scenario('one root becomes three', {
     assert.match(there.stdout, /e2e-second-work/)
     assert.doesNotMatch(there.stdout, /e2e-first-work/)
 
-    const folder = path.join(m.workRoot, 'e2e-second-work')
-    assert.equal(fs.readFileSync(dataAnchorFile(folder), 'utf8').trim(), 'e2e-second')
-    const inside = m.rig(['status'], { cwd: folder })
+    const inside = m.rig(['status'], { cwd: path.join(m.workRoot, 'e2e-second-work') })
     assert.equal(inside.code, 0, inside.out)
-    assert.match(inside.out, /e2e-second-work/, 'the anchor answered, and `current` — e2e-first — was never asked')
+    assert.match(inside.out, /e2e-second-work/, 'the root holding the work answered, and `current` — e2e-first — was never asked')
   }),
 ])
 
@@ -255,13 +253,10 @@ scenario('splitting a data root', {
     assert.equal(m.rig(['use', 'e2e-one']).code, 0, 'and the first root is the one in hand again')
   }),
 
-  step('the ledger moves out: its catalogue entry, its work record, and the work folder anchor', m => {
+  step('the ledger moves out: its catalogue entry and its work record', m => {
     const move = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.renameSync(from, to) }
     move(path.join(m.dataRoot, 'catalog', ORG, 'e2e-ledger.md'), path.join(m.second, 'catalog', ORG, 'e2e-ledger.md'))
     move(path.join(m.dataRoot, 'work', 'e2e-ledger-work'), path.join(m.second, 'work', 'e2e-ledger-work'))
-    // The anchor is the work folder's half of the binding, and a move that leaves it behind
-    // points a live worktree at a root that no longer holds its record.
-    fs.writeFileSync(dataAnchorFile(path.join(m.workRoot, 'e2e-ledger-work')), 'e2e-two\n')
     for (const root of [m.dataRoot, m.second]) {
       m.gitMust(root, 'add', '-A')
       m.gitMust(root, 'commit', '-q', '-m', 'split: the ledger moves to e2e-two')
@@ -276,8 +271,8 @@ scenario('splitting a data root', {
     assert.match(two.stdout, /e2e-ledger-work/)
     assert.doesNotMatch(two.stdout, /e2e-billing-work/)
 
-    // The worktrees never moved, and the folder they are in still answers — from the root the
-    // anchor now names.
+    // The worktrees never moved, and the folder they are in still answers — from the root that
+    // now holds its record.
     const here = m.rig(['status'], { cwd: path.join(m.workRoot, 'e2e-ledger-work') })
     assert.equal(here.code, 0, here.out)
     assert.match(here.out, /e2e-ledger-work/)

@@ -29,7 +29,7 @@ The committed checkout holding the catalogue, the work records and `rig.json`. P
 _Avoid_: knowledge repo, rig-data (that is its conventional name, not the concept), profile, workspace
 
 **Current data root**:
-The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT`, the work folder the command is running in and the repo or data root checkout it is about — so it decides only for the commands that have no work to anchor them, and those say when it did.
+The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT`, the work the command names or runs in and the repo or data root checkout it is about — so it decides only for the commands that have no work to anchor them, and those say when it did.
 _Avoid_: active profile, selected root, default (that is the name of the one-root form)
 
 **Direction**:

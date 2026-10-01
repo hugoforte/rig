@@ -276,10 +276,10 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
-(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
-then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
-root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
+`RIG_DATA_ROOT`, **the work it is about** (named by `--work` or `rig restore <id>`, else the
+work folder it runs in), **the repo it is about** (named by `--repos`, then a data root's own
+checkout, then the repo checkout it runs in), then `current`. The middle two are the ones that
+matter: the root that holds a work's record is the root for that work, and a repo's catalogue entry — drafted by `rig attach` the
 first time it saw that repo — names the root that repo belongs to. A checkout's repo is
 matched by org as well as name, because same-named repos in different orgs are normal. So
 `rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
@@ -301,10 +301,10 @@ Two consequences worth holding on to:
   refusal is per data root, so migrating only the current one leaves the others to refuse the
   next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
   `current` do not stop it; the doctor checks it ends in say that selection, once.
-- **A work folder's `.rig/data` is written only where the record is**: rig writes it when the
-  root in hand is the one root holding the work's record. `rig doctor` names a folder with
-  none when more than one root is configured, one whose marker names a root that does not
-  hold the record, and a record held by two roots.
+- **A work held by two roots resolves to the one that holds it open**: a work moved between
+  roots leaves its first copy behind closed. Two open copies, or two closed and none open, is
+  a pick rig will not make — the command names the roots and asks for `--data`, and `rig
+  doctor` names a record held by two roots (DESIGN.md decisions 188–191).
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is

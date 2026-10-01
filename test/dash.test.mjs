@@ -81,8 +81,8 @@ async function produce (works, { live = true, github = 'ok' } = {}) {
   process.env.RIG_LOCAL_CONFIG = localConfig
   // The one root that machine file names, pinned. The producer runs in *this* process, whose
   // cwd is the checkout under test, and the suite is run from inside a rig work folder often
-  // enough that its `.rig/data` would otherwise anchor the producer to a root this throwaway
-  // installation does not configure.
+  // enough that its `.rig/id` would otherwise look the producer's root up by that work, in an
+  // installation that does not hold it.
   process.env.RIG_DATA_ROOT = DEFAULT_ROOT_NAME
   process.env.RIG_FAKE_GITHUB = githubState
   const { listing } = await import(`${PRODUCER}?scenario=${++scenario}`)
