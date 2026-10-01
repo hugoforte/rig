@@ -3834,10 +3834,12 @@ cmds.plan = ({ flags }) => {
   const work = openWork(cfg, flags)
   const id = work.id
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+  // A plan is committed and read back, so a deploy order that would say "PR state unknown" is
+  // neither written nor refreshed (decision 171).
+  const unknown = unknownStages(stack).map(st => st.branch)
+  if (unknown.length) die(`GitHub would not say what became of ${unknown.join(', ')} — nothing ${flags.refresh ? 'refreshed' : 'written'}`)
 
   if (flags.refresh) {
-    const unknown = unknownStages(stack).map(st => st.branch)
-    if (unknown.length) die(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
     if (!exists(planFile(id))) die(`${planFile(id)} does not exist — \`rig plan\` writes it first`)
     const before = readText(planFile(id))
     const after = refreshedPlan(before, stack)

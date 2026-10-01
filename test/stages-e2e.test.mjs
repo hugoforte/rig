@@ -248,8 +248,11 @@ test('a pull request lookup GitHub refused reads as unknown, never as no PR', ()
   setGithub({ ...github(), auth: 'ok' })
 
   assert.match(out, /PR state unknown/)
-  assert.equal(plan.code, 0, plan.out)
-  assert.match(fs.readFileSync(planFile('refused'), 'utf8'), /\| `feat\/refused-one` \|.*\| PR state unknown \|/)
+  // A plan is committed and read back later, so a deploy order that guessed is not written
+  // (decision 171).
+  assert.equal(plan.code, 1, plan.out)
+  assert.match(plan.out, /GitHub would not say what became of feat\/refused-one — nothing written/)
+  assert.equal(fs.existsSync(planFile('refused')), false)
 })
 
 test('a stage whose line contains $& is rendered as written, not as a regex replacement', () => {
@@ -477,12 +480,15 @@ test('a landed stage whose branch is gone, and whose lookup fails, reads as unkn
   const out = rig(['stage', '--work', 'vanished']).out
   const next = rig(['next', '--work', 'vanished']).out
   const refresh = rig(['plan', '--refresh', '--work', 'vanished'])
+  const forced = rig(['plan', '--force', '--work', 'vanished'])
   setGithub(state)
   assert.match(out, /^ {2}\? 1\. feat\/vanished-one( {2}← next)?\n/m, 'marked unknown, not with the not-started circle')
   assert.match(out, /PR state unknown in billing/)
   assert.doesNotMatch(out, /not cut in any repo yet/)
   assert.equal(refresh.code, 1, refresh.out)
   assert.match(refresh.out, /GitHub would not say what became of feat\/vanished-one — nothing refreshed/)
+  assert.equal(forced.code, 1, forced.out)
+  assert.match(forced.out, /GitHub would not say what became of feat\/vanished-one — nothing written/)
   assert.match(next, /feat\/vanished-one — the schema \(PR state unknown in billing\)/)
   assert.doesNotMatch(next, /not cut in any repo yet/)
   assert.doesNotMatch(next, /rig plan --refresh/, 'a refresh would write "PR state unknown" over a deploy order that may be right')
