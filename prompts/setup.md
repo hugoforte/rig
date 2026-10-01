@@ -14,7 +14,8 @@ Facts, not questions for the user:
   `rig-data` is the convention; a hit means the knowledge already exists and this machine
   should join it.
 - `git config --global user.email` — the current default identity
-- Is `dataRoot` already set in `<root>/rig.local.json`? If so, and it holds a `rig.json`
+- Is `dataRoot` already set in `~/.rig/rig.local.json` (or, on an installation made before
+  that was where it lived, in `<root>/rig.local.json`)? If so, and it holds a `rig.json`
   with orgs, this is a **change** (adding an org, fixing a tracker), not a setup: say so
   and only ask about the change.
 

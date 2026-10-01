@@ -33,6 +33,7 @@ const snap = (over = {}) => ({
   setUp: true,
   localFile: 'C:\\Users\\dev\\.rig\\rig.local.json',
   configFileExists: true,
+  legacyLocalFile: null,
   strayOrgKeys: [],
   node: 'v20.11.0',
   git: 'git version 2.47.0',
@@ -72,6 +73,23 @@ test('the exit code is the findings that count, not the findings there are', () 
   const found = doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })], gh: 'missing' }))
   assert.ok(found.length > 2)
   assert.equal(problemCount(found), 1, 'a draft entry is not a problem; an absent gh is')
+})
+
+test('a machine file still beside the tool is named, with where it belongs instead', () => {
+  const found = doctorFindings(snap({
+    localFile: 'C:\\rig\\rig.local.json',
+    legacyLocalFile: { home: 'C:\\Users\\dev\\.rig\\rig.local.json' },
+  }))
+  assert.match(only(found, /beside the tool/).says,
+    /C:\\rig\\rig\.local\.json is beside the tool — move it to C:\\Users\\dev\\\.rig\\rig\.local\.json/)
+})
+
+test('the old machine file location is a note, not a problem — it still works', () => {
+  const found = doctorFindings(snap({
+    localFile: 'C:\\rig\\rig.local.json',
+    legacyLocalFile: { home: 'C:\\Users\\dev\\.rig\\rig.local.json' },
+  }))
+  assert.equal(problemCount(found), 0)
 })
 
 test('a key of the org half left in the machine file is named, one line each', () => {

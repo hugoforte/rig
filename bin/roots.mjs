@@ -2,8 +2,10 @@
 //
 // rig reads config from two files, and they answer different questions:
 //
-//   rig.local.json  the machine half. Gitignored, beside the tool. The roots, an identity
-//                   per org, secrets sources, and a per-machine freshness override.
+//   rig.local.json  the machine half, at `~/.rig/rig.local.json`. The roots, an identity
+//                   per org, secrets sources, and a per-machine freshness override. Outside
+//                   the tool tree because an installation may own that directory and replace
+//                   it on upgrade; see `machineFile` for the order it is looked for in.
 //   rig.json        the org half. Committed in the data root, so it travels to every
 //                   machine. Orgs, the tracker per org, the freshness policy, and the
 //                   record-format stamp.
@@ -37,6 +39,50 @@ const ORG_ONLY = ORG_KEYS.filter(k => !MACHINE_KEYS.includes(k))
 // freshness and `rig update` measure the checkout the running code came from, and a tool
 // root that could lie about that would point `update` at someone else's clone.
 export const LOCAL_CONFIG_ENV = 'RIG_LOCAL_CONFIG'
+
+// The machine file's own directory, under the home directory. **Not in the tool tree**, and
+// that is the whole point: a packaged install owns the directory the code runs from and
+// replaces it wholesale on every upgrade, so a machine file living there would take the
+// roots, the identities and the secrets sources with it the first time anyone upgraded
+// (hugoforte/rig#16). The home file is the one that survives.
+//
+// One rule on every platform rather than `%APPDATA%` and `$XDG_CONFIG_HOME`: `rig doctor`
+// prints these paths, and a second rule buys nothing a user of a single tool would notice.
+const HOME_CONFIG_DIR = '.rig'
+
+// The home directory as `os.homedir()` computes it, but read from the environment this call
+// was handed rather than the process's own — so a test can place a home without moving the
+// machine it runs on. `USERPROFILE` and `HOME` are the variables `os.homedir()` itself
+// consults; `USERPROFILE` is asked first because under Git Bash on Windows `HOME` is a POSIX
+// path Node would resolve against whatever the current drive happens to be.
+const homeOf = env => env.USERPROFILE || env.HOME || os.homedir()
+
+// Where a machine file goes when rig is the one deciding. Exported because `doctor` names it
+// as the destination when it finds one still sitting in the tool tree.
+export const homeConfigFile = (env = process.env) =>
+  path.join(homeOf(env), HOME_CONFIG_DIR, 'rig.local.json')
+
+// Where the machine file is: what the environment says, then the home file, then the one
+// beside the tool — and when none of them exists yet, the home file, because that is where a
+// new one goes.
+//
+// The tool tree is a fallback **for reading only**, and it is what lets every clone install
+// made before this keep working with nothing done to it. Nothing is ever written there: a
+// first `rig init` writes the home file even on a machine that has a tool checkout, so an
+// installation cannot acquire a config in the one place an upgrade would delete it.
+export function machineFile (toolRoot, env = process.env) {
+  const override = env[LOCAL_CONFIG_ENV]
+  if (override) return path.resolve(override)
+  const home = homeConfigFile(env)
+  if (fs.existsSync(home)) return home
+  const beside = path.join(toolRoot, 'rig.local.json')
+  return fs.existsSync(beside) ? beside : home
+}
+
+// Whether the machine file in hand is the legacy one inside the tool tree. `doctor` asks, so
+// that an installation carrying the location a packaged upgrade would delete is told once,
+// by name, rather than finding out when its roots vanish.
+export const inToolTree = location => sameDir(path.dirname(location.localFile), location.toolRoot)
 
 // Pins a shell to one data root by name, for the same reason `--data` pins one command. It
 // selects among the roots the machine file already configures — it is deliberately not a
@@ -139,8 +185,7 @@ function rootsOf (machine, localFile) {
 // `rig use`, which is how a `current` naming a root that has gone gets fixed, and `rig
 // update`, which has every root to bring forward rather than one.
 export function registry (toolRoot, env = process.env) {
-  const override = env[LOCAL_CONFIG_ENV]
-  const localFile = override ? path.resolve(override) : path.join(toolRoot, 'rig.local.json')
+  const localFile = machineFile(toolRoot, env)
   const machine = readJsonFile(localFile)
   return { toolRoot, localFile, roots: rootsOf(machine, localFile), current: machine?.current ?? null }
 }
