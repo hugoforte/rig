@@ -531,6 +531,26 @@ test('no git call a mirror makes to its remote can stop to ask for credentials',
   assert.deepEqual(remote.map(c => ({ call: c.args.join(' '), env: c.env })), remote.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
 })
 
+// `ls-remote` matches a pattern by its tail, so asking for `refs/heads/feat/t1` also answers
+// with `refs/heads/a/refs/heads/feat/t1`, which sorts first. Only the exact ref is the branch.
+test('a close reads only the exact branch off the remote, never one whose name ends in it', () => {
+  publish('acme', 'tails')
+  const dest = workDir('t1', 'tails')
+  trees().cut({ org: 'acme', repo: 'tails', branch: 'feat/t1', dest })
+  const head = gitMust(dest, 'rev-parse', 'HEAD')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'elsewhere\n')
+  gitMust(dest, 'commit', '-qam', 'elsewhere')
+  gitMust(dest, 'push', '-q', 'origin', 'HEAD:refs/heads/a/refs/heads/feat/t1')
+
+  assert.equal(trees().dropMerged({ org: 'acme', repo: 'tails', branch: 'feat/t1', head, number: 1 }).remote, 'absent',
+    'the remote has no feat/t1, only a branch whose name ends in it')
+
+  gitMust(dest, 'push', '-q', 'origin', `${head}:refs/heads/feat/t1`)
+  assert.equal(trees().dropMerged({ org: 'acme', repo: 'tails', branch: 'feat/t1', head, number: 1 }).remote, 'deleted',
+    'the exact branch is at the merged head, whatever the other one is at')
+  assert.equal(git(remoteOf('acme', 'tails'), 'rev-parse', '--verify', '-q', 'refs/heads/a/refs/heads/feat/t1').code, 0, 'and the other one is left alone')
+})
+
 test('a checkout, which Git LFS may take to the remote, never stops to ask for credentials either', () => {
   publish('acme', 'lfs')
   const dest = workDir('l1', 'lfs')
@@ -550,6 +570,15 @@ test('a clone that needed credentials says so, and how to give git some', () => 
   const { t } = recorded(refused)
   assert.throws(() => t.cut({ org: 'acme', repo: 'private', branch: 'feat/p2', dest: workDir('p2', 'private') }),
     e => e instanceof RigError && /could not mirror acme\/private: git needed credentials .* and rig never waits at a prompt — sign git in \(`gh auth setup-git`\) and run this again/.test(e.message))
+})
+
+test('a clone over ssh that had no usable key says so, and how to give ssh one', () => {
+  const refused = (cmd, args, opts) => args.includes('clone')
+    ? { code: 128, out: '', err: "Cloning into bare repository 'x'...\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository." }
+    : run(cmd, args, opts)
+  const { t } = recorded(refused)
+  assert.throws(() => t.cut({ org: 'acme', repo: 'private', branch: 'feat/p3', dest: workDir('p3', 'private') }),
+    e => e instanceof RigError && /git clone --bare .* — ssh had no key it could use without asking, and rig never waits at a prompt: load the key into an agent with `ssh-add`/.test(e.message))
 })
 
 test('standing answers nothing for a base the mirror does not have, rather than a clean merge (#208)', () => {

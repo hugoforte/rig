@@ -68,6 +68,17 @@ test('an installation with no config at all says so and asks nothing else', () =
   assert.equal(problemCount(found), 1)
 })
 
+test('a work\'s copy of rig with no config says what it needs instead of sending it to setup', () => {
+  const needs = 'this is a work\'s copy of rig, in a linked worktree, and it has no machine config of its own (no C:\\x\\rig.local.json) — set RIG_LOCAL_CONFIG to the installed rig\'s rig.local.json'
+  const found = doctorFindings({ setUp: false, localFile: 'C:\\x\\rig.local.json', linkedCopyNeeds: needs })
+  assert.deepEqual(found.map(f => f.says), [needs])
+  assert.equal(problemCount(found), 1)
+})
+
+test('the config file check names the file it read', () => {
+  assert.match(only(doctorFindings(snap()), /^config file/).dim, /C:\\Users\\dev\\\.rig\\rig\.local\.json/)
+})
+
 test('the exit code is the findings that count, not the findings there are', () => {
   const found = doctorFindings(snap({ dataRoots: [root({ drafts: ['billing'] })], gh: 'missing' }))
   assert.ok(found.length > 2)
@@ -409,6 +420,26 @@ test('a marker naming the root that holds the record says nothing', () => {
 test('a record in two roots is named even when the marker names one of them', () => {
   const found = doctorFindings(snap({ ...twoRoots, works: [marked('work', ['work', 'personal'])] }))
   assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
+})
+
+// Doctor keeps every copy that will not read beside the one that does (decision 157).
+const unreadableCopy = (root, holders = ['work', 'personal']) => ({
+  id: 'w', unreadable: `work record for "w" at C:\\${root}\\work\\w\\work.json could not be read (x)`, holders,
+})
+
+test('a record in two roots, one copy unreadable, names the broken copy and says both roots hold it, in either order', () => {
+  const readable = marked('work', ['work', 'personal'])
+  for (const works of [[unreadableCopy('rig-data-personal'), readable], [readable, unreadableCopy('rig-data-personal')]]) {
+    const found = doctorFindings(snap({ ...twoRoots, works }))
+    assert.equal(only(found, /could not be read/).verdict, 'bad')
+    assert.match(only(found, /each hold its record/).says, /^w: data roots work, personal each hold its record — delete the copy that is wrong/)
+  }
+})
+
+test('a record in two roots with both copies unreadable names each, and says both roots hold it once', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [unreadableCopy('rig-data'), unreadableCopy('rig-data-personal')] }))
+  assert.equal(matching(found, /could not be read/).length, 2)
+  assert.equal(matching(found, /each hold its record/).length, 1)
 })
 
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {

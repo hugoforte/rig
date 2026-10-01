@@ -23,7 +23,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phas
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -779,6 +779,42 @@ function findWorkId (cfg, explicit) {
 const rootsHolding = (id, roots = where().roots) => Object.entries(roots)
   .filter(([, r]) => r?.path && exists(recordFile(id, r.path))).map(([name]) => name)
 
+// What a record must be for every command to read it, or why it is not. Only what is iterated
+// or dereferenced whatever the work's state, and every field may be absent, so a record written
+// before stages, before `tickets` or before the phase still reads (decision 155).
+const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
+const isList = v => v === undefined || Array.isArray(v)
+function recordShapeProblem (w) {
+  if (!isObject(w)) return 'it is not an object'
+  // The commands that read many records name and find each work by the `id` inside it.
+  if (typeof w.id !== 'string' || !w.id) return 'it has no `id`'
+  for (const field of ['repos', 'stages', 'tickets', 'jiraKeys']) {
+    if (!isList(w[field])) return `\`${field}\` is not a list`
+  }
+  for (const [i, r] of (w.repos || []).entries()) {
+    if (!isObject(r) || typeof r.repo !== 'string' || !r.repo) return `repo ${i + 1} has no \`repo\``
+    if (!isList(r.branches) || !(r.branches || []).every(isObject)) return `\`branches\` of ${r.repo} is not a list of branches`
+  }
+  for (const [i, s] of (w.stages || []).entries()) {
+    if (!isObject(s) || typeof s.branch !== 'string' || !s.branch) return `stage ${i + 1} has no \`branch\``
+    if (!isList(s.tickets)) return `\`tickets\` of stage ${s.branch} is not a list`
+  }
+  return null
+}
+
+// A work's record as it is on disk, or the sentence saying why it cannot be read: one that will
+// not parse and one of the wrong shape alike (decisions 137 and 155). The reason is the error's
+// `cause`, which is what the commands that leave a record out name it by (`readRecords`).
+function readRecord (id, root = dataRoot()) {
+  const file = recordFile(id, root)
+  const unreadable = cause => new RigError(`work record for "${id}" at ${file} could not be read (${cause.message})`, { cause })
+  let w
+  try { w = readJson(file) } catch (e) { throw unreadable(e) }
+  const shape = recordShapeProblem(w)
+  if (shape) throw unreadable(new Error(shape))
+  return w
+}
+
 function loadWork (cfg, id, root = dataRoot()) {
   if (!exists(recordFile(id, root))) {
     // A work id is unique across every root on the machine, so the one that has it is worth
@@ -787,11 +823,7 @@ function loadWork (cfg, id, root = dataRoot()) {
     const hint = holders.length ? ` — data root "${holders[0]}" has it: add \`--data ${holders[0]}\`` : ''
     die(`no work record for "${id}" at ${recordFile(id, root)}${hint}`)
   }
-  // A record that will not parse is a sentence naming it, not a stack trace (decision 137).
-  let w
-  try { w = readJson(recordFile(id, root)) } catch (e) {
-    throw new RigError(`work record for "${id}" at ${recordFile(id, root)} could not be read (${e.message})`, { cause: e })
-  }
+  const w = readRecord(id, root)
   // Records written before the field was renamed carry `jiraKeys`.
   if (w.tickets === undefined) { w.tickets = w.jiraKeys || []; delete w.jiraKeys }
   w.repos = w.repos || []
@@ -877,7 +909,7 @@ function listWorkIds (dataRootPath = dataRoot()) {
 // there would skip the commit and leave the data root half-written. So a record that will not
 // read is left out and named with the error it raised (its cause, when `loadWork` has wrapped it
 // in a sentence that already names the record), never swallowed.
-function readRecords (root, read = id => readJson(recordFile(id, root))) {
+function readRecords (root, read = id => readRecord(id, root)) {
   const works = []
   const unreadable = []
   for (const id of listWorkIds(root)) {
@@ -2131,7 +2163,10 @@ cmds.new = ({ flags, positional }) => {
   const brief = readStdin()
   // Read the real record, if one already exists, so `--dry-run` doesn't preview a ticket
   // the real run would just warn-and-skip (an id that already has one).
-  const existing = exists(recordFile(id)) ? readJson(recordFile(id)) : null
+  let existing = null
+  if (exists(recordFile(id))) {
+    try { existing = readRecord(id) } catch (e) { die(`work "${id}" already exists: ${e.message}`) }
+  }
   if (dryRun) {
     if (existing?.tickets?.length) { warn(`${id} already has a ticket (${existing.tickets.join(', ')}) — nothing to preview`); return }
     createTicket(cfg, { id, title: flags.title || existing?.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides, parent })
@@ -3985,21 +4020,20 @@ cmds.tidy = ({ flags }) => {
   const dryRun = !!flags['dry-run']
   const leftovers = []
   const unreadable = []
-  // The first root to hold an id is the one whose record is read; `leftHere` asks every root,
-  // so an open copy anywhere keeps the folder.
+  // The first root whose copy reads is the one whose record is read, as it is for doctor
+  // (`oneCopyEach`); `leftHere` asks every root, so an open copy anywhere keeps the folder.
   const seen = new Set()
   for (const { name, loc: rootLoc } of doctorRootLocations(loc)) {
     if (!exists(rootLoc.dataRoot)) continue
     for (const id of listWorkIds(rootLoc.dataRoot)) {
-      if (seen.has(id)) continue
-      seen.add(id)
-      if (!exists(workDir(cfg, id))) continue
+      if (seen.has(id) || !exists(workDir(cfg, id))) continue
       let work
       try { work = loadWork(cfg, id, rootLoc.dataRoot) } catch (e) {
         if (!(e instanceof RigError)) throw e
         unreadable.push(`${id} (${(e.cause ?? e).message})`)
         continue
       }
+      seen.add(id)
       if (leftHere(cfg, work, loc.roots)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
     }
   }
@@ -4489,7 +4523,7 @@ function doctorStamp (written) {
 function doctorWork (cfg, id, root, roots) {
   let work
   try { work = loadWork(cfg, id, root) } catch (e) {
-    if (e instanceof RigError) return { id, unreadable: e.message }
+    if (e instanceof RigError) return { id, unreadable: e.message, holders: rootsHolding(id, roots) }
     throw e
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
@@ -4668,9 +4702,16 @@ function workRootEntries (cfg) {
   return fs.readdirSync(cfg.workRoot).filter(e => !ours.has(e))
 }
 
-// One entry per id. The open copy is the one kept when a record is in two roots and only one is
-// closed, because the folder is that work's, and the closed copy would call it a leftover.
-const uniqueById = works => works.filter(w => w === (works.find(o => o.id === w.id && !o.closed) ?? works.find(o => o.id === w.id)))
+// One copy of each work whose record reads, and every copy that does not. A work in two roots
+// has one folder, and each readable copy would repeat every finding about it; but a copy that
+// will not read is its own file to fix (decision 157). The open copy is the readable one kept
+// when only one is closed, because the folder is that work's, and the closed copy would call it
+// a leftover (decision 167).
+const oneCopyEach = works => {
+  const readable = works.filter(w => !w.unreadable)
+  const kept = id => readable.find(o => o.id === id && !o.closed) ?? readable.find(o => o.id === id)
+  return works.filter(w => w.unreadable || kept(w.id) === w)
+}
 
 function doctorSnapshot () {
   // Gathers its location rather than asking for it, and carries on whether or not it got one.
@@ -4678,7 +4719,7 @@ function doctorSnapshot () {
   const localFile = loc.localFile
   // Nothing below can be asked of an installation that has no config at all, and `load` is
   // the first thing that would die trying.
-  if (!exists(localFile)) return { setUp: false, localFile }
+  if (!exists(localFile)) return { setUp: false, localFile, linkedCopyNeeds: linkedCopyNeeds() }
 
   const cfg = load(loc)
   const gv = onPath('git') ? exec('git', ['--version']) : { code: 1, out: '' }
@@ -4726,9 +4767,7 @@ function doctorSnapshot () {
     // Every root's works in one list, because the two checks made of them are made of the work
     // root, which is shared. A work id is unique across the roots, so the union needs no
     // tie-breaking and the findings need not say which root a work came from.
-    // A work whose record is in two roots is listed once: its folder is one folder, and each
-    // root's copy would otherwise repeat every finding about it.
-    works: uniqueById(roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots)))),
+    works: oneCopyEach(roots.filter(r => r.exists).flatMap(r => listWorkIds(r.path).map(id => doctorWork(cfg, id, r.path, loc.roots)))),
     disk: disk ? { label: disk.label, freeGb: Math.round(disk.bytes / 1e9) } : null,
   }
 }
@@ -4892,6 +4931,22 @@ rig record format ${MAJOR} — \`rig doctor\` names the release this checkout st
 how far it is behind its remote, \`rig update\` brings it forward.`)
 }
 
+// A work on rig itself runs the work's own copy — a linked worktree, with no machine file beside
+// it. Every default it would fall back to is some other installation's, so a command there would
+// work in data roots nobody chose, and `rig prompt setup` would write a second machine file into
+// the worktree. So it says what it needs instead (decision 158). Asked only when the machine file
+// is missing, so the git calls that tell a linked worktree cost an installation nothing.
+function linkedCopyNeeds () {
+  const localFile = registry(toolRoot(), env()).localFile
+  if (exists(localFile) || !toolState().linked) return null
+  if (env()[LOCAL_CONFIG_ENV]) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the installed rig's rig.local.json`
+  return `this is a work's copy of rig, in a linked worktree, and it has no machine config of its own (no ${localFile}) — set RIG_LOCAL_CONFIG to the installed rig's rig.local.json`
+}
+// The commands that run without one: the two that only print, `init`, which is how an
+// installation gets one, `doctor`, which reports it, and the detached refresh, which has nobody
+// to tell.
+const MACHINELESS = new Set(['help', 'prompt', 'init', 'doctor', REFRESH_COMMAND])
+
 // ----------------------------------------------------------------- one run
 
 // What one invocation does, from the argv it was handed to the exit code it earns. Split from
@@ -4936,6 +4991,10 @@ function invoke (argv) {
     // that writes the record.
     if (typeof args.flags.repos === 'string') {
       current.requestedRepos = args.flags.repos.split(',').map(s => s.trim()).filter(Boolean)
+    }
+    if (!MACHINELESS.has(cmdName)) {
+      const needs = linkedCopyNeeds()
+      if (needs) die(needs)
     }
     current.args = args
     if (MUTATING.has(cmdName)) prepared = prepareDataRoot()

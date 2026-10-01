@@ -483,6 +483,22 @@ test('no marker is written for a work whose record is in two roots, since either
   assert.equal(strip(rig(['doctor']).out).match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
 })
 
+test('a record in two roots with a copy unreadable: doctor names each broken copy and says both roots hold it, whichever is broken', (t) => {
+  const copy = path.join(second, 'work', 'only-here')
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
+  fs.cpSync(path.join(dataRoot, 'work', 'only-here'), copy, { recursive: true })
+  const saved = fs.readFileSync(path.join(copy, 'work.json'), 'utf8')
+  for (const broken of [[dataRoot], [second], [dataRoot, second]]) {
+    const files = broken.map(root => path.join(root, 'work', 'only-here', 'work.json'))
+    for (const file of files) fs.writeFileSync(file, saved.slice(0, 20))
+    try {
+      const out = strip(rig(['doctor']).out)
+      assert.equal(out.match(/only-here: work record for "only-here" at .*work\.json could not be read/g)?.length, files.length, broken.join(', '))
+      assert.equal(out.match(/only-here: data roots hugoforte, personal each hold its record — delete the copy that is wrong/g)?.length, 1, broken.join(', '))
+    } finally { for (const file of files) fs.writeFileSync(file, saved) }
+  }
+})
+
 test('doctor names a work folder with no marker, and the command that writes one', (t) => {
   const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
   fs.rmSync(marker)

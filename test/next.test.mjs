@@ -55,6 +55,38 @@ test('unpushed commits are offered a push, and not also a pull request', () => {
   assert.doesNotMatch(says(out), /no PR open/, 'one branch state, one offer')
 })
 
+test('the push it offers names the branch, since a bare push goes to the base (#259)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
+    repos: [repo('a', { unpushed: 2, on: 'feat/x' }), repo('b', { unpushed: 1, on: 'feat/x' }), repo('c', { unpushed: 1, on: 'feat/x-stage' })],
+  })
+  assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x', 'git push origin feat/x-stage'])
+})
+
+test('a worktree switched off this work\'s branches is offered no push, so the base is never pushed to by name', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: 'main' })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
+})
+
+test('a declared stage\'s branch is offered its push', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
+    repos: [repo('a', { unpushed: 1, on: 'feat/x-stage' })],
+  })
+  assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x-stage'])
+})
+
+test('a detached HEAD with unpushed commits is named, and offered no push it would not make', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: null })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
+})
+
 test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
@@ -293,7 +325,7 @@ test('once the stages are replayed here, only the push is offered, and not a pla
     replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, carriers: ['feat/two'], rebased: true, behind: ['feat/two'], sameTree: true }],
   })
   assert.ok(commands(out).some(c => String(c) === 'git push --force-with-lease origin feat/two'))
-  assert.ok(!commands(out).includes('git push'))
+  assert.ok(!out.some(o => /commits that are not pushed/.test(o.says)), 'no plain push beside it')
 })
 
 test('a squash that is not the stage as it stood is named, and no command is offered for it', () => {

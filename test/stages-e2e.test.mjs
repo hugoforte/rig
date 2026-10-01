@@ -301,7 +301,7 @@ test('a stage squashed into the work branch is named by rig next, with the rebas
   gitMust(dest, ...commands[1].split(' ').slice(1))
   const between = rig(['next', '--work', 'squash']).out
   assert.match(between, /feat\/squash-two is replayed onto the work branch here and not pushed/)
-  assert.doesNotMatch(between, /\n\s+git push\n/, 'not a plain push, which the remote would refuse')
+  assert.doesNotMatch(between, /commits that are not pushed/, 'not a plain push, which the remote would refuse')
   gitMust(dest, ...commands[2].split(' ').slice(1))
   assert.equal(gitMust(dest, 'rev-list', '--count', `origin/${work}..feat/squash-two`), '1')
   assert.doesNotMatch(rig(['next', '--work', 'squash']).out, /landed as new commits|replayed onto/)

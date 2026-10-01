@@ -179,7 +179,7 @@ test('a fetch may never stop to ask for credentials', () => {
   c((cmd, args, opts) => { asked = { cmd, args, opts }; return { code: 0, out: '', err: '' } })
     .fetch('anywhere')
   assert.deepEqual(asked.opts.env, NO_PROMPT_ENV)
-  assert.deepEqual(NO_PROMPT_ENV, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' })
+  assert.deepEqual(NO_PROMPT_ENV, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never' })
   assert.equal(asked.args.includes('fetch'), true)
 })
 
