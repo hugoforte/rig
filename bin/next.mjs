@@ -25,7 +25,7 @@
 // rung below assertable from an object literal.
 
 import { phaseOf } from './phase.mjs'
-import { backToWorkBranch, nextStage, onLandedStage } from './stages.mjs'
+import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
@@ -307,7 +307,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // what is next.
   //
   // Last, because it is the one offer that takes the worktrees away.
-  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open || (st.prUnknown && !st.withdrawn))) {
+  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open) && !unknownStages(stack).length) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
 

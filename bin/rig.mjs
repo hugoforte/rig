@@ -22,7 +22,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
-import { stackOf, stageOrder, nextStage, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
+import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, anchoredRoot, dataAnchorFile, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
@@ -1050,21 +1050,20 @@ function draftEntries (work) {
   return draft.size ? attached.filter(r => draft.has(r.repo.toLowerCase())).map(r => r.repo) : []
 }
 
-// Which org a repo belongs to: the catalogue first, then GitHub. The language comes
-// along from GitHub for the catalogue stub `rig attach` drafts on first sight. An org GitHub
-// would not answer for is named with why, since the repo may well be there.
+// Which org a repo belongs to: the catalogue first, then GitHub, org by org. The language
+// comes along from GitHub for the catalogue stub `rig attach` drafts on first sight. Only "no
+// such repo" moves on to the next org: one GitHub would not answer for may have the repo, and
+// taking a later org's repo of the same name would be a confident wrong answer.
 function resolveOrg (cfg, repo) {
   const cat = findCatalog(repo)
   if (cat) return { org: cat.org, repo: cat.repo }
-  const unanswered = []
   for (const org of cfg.orgs) {
     let found = null
     const error = trackerFailure(() => { found = github().repo(org, repo) })
-    if (error) unanswered.push(`${org} (${error})`)
+    if (error) die(`cannot resolve "${repo}": GitHub would not say whether ${org}/${repo} exists (${error})`)
     if (found) return { org, repo: found.name, language: found.language }
   }
-  const why = unanswered.length ? ` — GitHub would not say for ${unanswered.join(', ')}` : ''
-  die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}${why}`)
+  die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}`)
 }
 
 function draftCatalogEntry (org, repo, stack) {
@@ -1583,6 +1582,7 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
     let outcome
     if (closes) outcome = `${landed}, and ${ran}`
     else if (stuck?.withdrawn) outcome = `${ran} ${slice} was ${withdrawnLabel(stuck.withdrawn, b => `\`${b}\``)}. The issue stays open.`
+    else if (stuck?.prUnknown) outcome = `${ran} GitHub would not say whether ${slices.length > 1 ? `the slice \`${stuck.branch}\`` : 'this slice'} landed, so the issue stays open.`
     else if (stuck) outcome = `${ran} ${slice} did not land, so the issue stays open.`
     else if (abandoned) outcome = `${ran} The work was stopped without finishing, so the issue stays open.`
     else outcome = `${ran} ${landed}, but the work has not: ${landing.reason} The issue stays open.`
@@ -1604,7 +1604,12 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
     const [repo, n] = key.split('#')
     const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
-    if (!closes) { step(`commented on ${key} (left open: ${stuck ? `stage ${stuck.branch} did not land` : abandoned ? 'abandoned' : landing.reason})`); continue }
+    if (!closes) {
+      const why = stuck?.prUnknown && !stuck.withdrawn ? `GitHub would not say whether stage ${stuck.branch} landed`
+        : stuck ? `stage ${stuck.branch} did not land` : abandoned ? 'abandoned' : landing.reason
+      step(`commented on ${key} (left open: ${why})`)
+      continue
+    }
     const notClosed = trackerFailure(() => github().closeIssue(repo, n))
     if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
     else step(`closed ${key} (stage ${names} landed)`)
@@ -3201,12 +3206,12 @@ cmds.next = ({ flags }) => {
     planExists: exists(planFile(work.id)),
     // Never while a stage's PR is unknown: the refresh would write "PR state unknown" over a
     // deploy order that may be right.
-    planStale: !stack.some(st => st.prUnknown) && exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
+    planStale: !unknownStages(stack).length && exists(planFile(work.id)) && planIsStale(readText(planFile(work.id)), stack),
     stack,
     // The comparison `rig pr --refresh` makes, and never while a stage's PR is unknown, which
     // is when the refresh would refuse. Nor for a repo whose visibility GitHub would not say: a
     // body without the context doc is then no evidence the PR is wrong.
-    prStale: stack.some(st => st.prUnknown) ? []
+    prStale: unknownStages(stack).length ? []
       : repos.filter((r, i) => {
         if (r.pr?.state !== 'OPEN') return false
         const spec = repoSpec(work.repos[i])
@@ -3393,6 +3398,7 @@ cmds.pr = ({ flags }) => {
 
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   if (flags.refresh) return refreshPrs(work, stack)
+  const unknown = unknownStages(stack).map(st => st.branch)
 
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
@@ -3419,6 +3425,9 @@ cmds.pr = ({ flags }) => {
     const base = workBranch(entry, work)?.base || entry.base
     sayStanding(cfg, entry, work.branch, base)
     const spec = repoSpec(entry)
+    // A body is public and GitHub keeps its edit history, so a stage table that would say "PR
+    // state unknown" is not published (decision 170).
+    if (unknown.length) { warn(`${entry.repo}: GitHub would not say what became of ${unknown.join(', ')} — not opening a PR`); continue }
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
     const failed = trackerFailure(() => { made = github().createPr(entry.org, entry.repo, { branch: work.branch, base, ...text }) })
@@ -3450,7 +3459,7 @@ function sayStanding (cfg, entry, branch, base) {
 // "PR state unknown", so nothing is refreshed until it does, rather than writing that over a
 // table that was right.
 function refreshPrs (work, stack) {
-  const unknown = stack.filter(st => st.prUnknown).map(st => st.branch)
+  const unknown = unknownStages(stack).map(st => st.branch)
   if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
   for (const entry of work.repos) {
     const { pr, prError } = prAndBase(entry, work.branch)
@@ -3590,7 +3599,7 @@ cmds.stage = ({ flags, positional }) => {
   say('')
   const upNext = nextStage(stack)
   for (const [i, st] of stack.entries()) {
-    const mark = st.landed ? C.green('✓') : st.withdrawn ? C.dim('✕') : st.open ? C.cyan('·') : st.started ? C.dim('·') : C.dim('○')
+    const mark = st.landed ? C.green('✓') : st.withdrawn ? C.dim('✕') : st.open ? C.cyan('·') : st.started ? C.dim('·') : st.prUnknown ? C.yellow('?') : C.dim('○')
     say(`  ${mark} ${i + 1}. ${C.bold(st.branch)}${st === upNext ? C.dim('  ← next') : ''}`)
     if (st.delivers) say(`       ${st.delivers}`)
     if (st.tickets.length) say(`       ${C.dim(st.tickets.join(', '))}`)
@@ -3785,6 +3794,8 @@ cmds.plan = ({ flags }) => {
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
 
   if (flags.refresh) {
+    const unknown = unknownStages(stack).map(st => st.branch)
+    if (unknown.length) die(`GitHub would not say what became of ${unknown.join(', ')} — nothing refreshed`)
     if (!exists(planFile(id))) die(`${planFile(id)} does not exist — \`rig plan\` writes it first`)
     const before = readText(planFile(id))
     const after = refreshedPlan(before, stack)

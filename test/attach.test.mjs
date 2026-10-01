@@ -98,8 +98,24 @@ test('a repo GitHub would not answer for is not resolved, and the refusal is nam
   const r = rig(['attach', 'orders', '--work', 't1'])
   fs.writeFileSync(githubStateFile, JSON.stringify(state))
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /cannot resolve "orders" in any of: acme — GitHub would not say for acme \(gh is not authenticated \(in-memory GitHub\)\)/)
+  assert.match(r.out, /cannot resolve "orders": GitHub would not say whether acme\/orders exists \(gh is not authenticated \(in-memory GitHub\)\)/)
   assert.equal(attached('orders'), undefined)
+})
+
+test('a repo another org has is not taken while an earlier org would not say', () => {
+  // "Would not answer" is not "not here": acme may have it too, and attaching the other org's
+  // repo of the same name would be a confident wrong answer (decision 168).
+  assert.equal(rig(['init', '--orgs', 'globex']).code, 0)
+  const state = readJson(githubStateFile)
+  const failing = structuredClone(state)
+  failing.repos['acme/ledger'] = { language: 'Go', lookupFails: 'HTTP 502: Bad Gateway' }
+  failing.repos['globex/ledger'] = { language: 'Go' }
+  fs.writeFileSync(githubStateFile, JSON.stringify(failing))
+  const r = rig(['attach', 'ledger', '--work', 't1'])
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /cannot resolve "ledger": GitHub would not say whether acme\/ledger exists \(HTTP 502: Bad Gateway\)/)
+  assert.equal(attached('ledger'), undefined)
 })
 
 test('next offers the draft entry for correction, while the worktree is still on disk', () => {

@@ -42,6 +42,8 @@
 // `rig status` can say what git could not measure. Only the *blocker* it would raise is
 // dropped.
 
+import { unknownStages } from './stages.mjs'
+
 const MERGED = 'MERGED'
 
 // A record under `repos[].branches[].pr` exists only for a merged PR (DESIGN.md decision 60),
@@ -151,7 +153,7 @@ export function workState (work, states = [], { stages = [] } = {}) {
   })))
   // A slice GitHub would not answer for may be one still up for review (decision 172). A
   // withdrawn one is meant to land nothing, so what became of it is not asked.
-  const unknown = stages.filter(st => !st.withdrawn).flatMap(st => (st.prUnknown || []).map(repo => ({
+  const unknown = unknownStages(stages).flatMap(st => st.prUnknown.map(repo => ({
     repo,
     kind: 'stage-pr-unknown',
     message: `${repo}: stage ${st.branch} PR state unknown`,

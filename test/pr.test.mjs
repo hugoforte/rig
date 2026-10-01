@@ -254,6 +254,19 @@ test('rig next offers no refresh of a stale PR while one stage\'s lookup fails',
   assert.doesNotMatch(refused, /rig pr --refresh/)
 })
 
+test('a withdrawn stage GitHub would not answer for does not stop the refresh, since nothing of it is asked', () => {
+  // A dropped stage renders as dropped whatever GitHub says, so its unknown PR state changes
+  // nothing the refresh would write (decisions 170 and 172 agree on this).
+  const state = github()
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/sliced-three': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const r = rig(['pr', '--refresh', '--work', 'sliced'])
+  setGithub(state)
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /would not say what became of/)
+})
+
 // A work with one repo, one commit pushed and whatever `extra` commands it names, so the PR
 // `rig pr` opens for it says only what the test is about.
 const pushedWork = (id, title, ...extra) => {
@@ -266,6 +279,21 @@ const pushedWork = (id, title, ...extra) => {
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
 }
 const bodyOf = branch => github().repos['acme/billing'].prs.find(pr => pr.branch === branch).body
+
+test('a stage GitHub would not answer for stops a PR being opened, rather than publishing a stage table that guessed', () => {
+  // GitHub keeps a body's edit history, so a stage table that guessed cannot be taken back
+  // (decision 170).
+  pushedWork('unasked-stage', 'Unasked stage', ['stage', 'feat/unasked-stage-one', '--delivers', 'the slice'])
+  const state = github()
+  const before = state.repos['acme/billing'].prs.length
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/unasked-stage-one': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const r = rig(['pr', '--work', 'unasked-stage'])
+  setGithub(state)
+  assert.match(r.out, /GitHub would not say what became of feat\/unasked-stage-one — not opening a PR/)
+  assert.equal(github().repos['acme/billing'].prs.length, before)
+})
 
 // The data root's remote, for the length of `fn`. Only `rig pr` and `rig next` run inside it,
 // and neither fetches or pushes the data root, so the URL is never dialled.

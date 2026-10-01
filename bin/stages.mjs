@@ -167,6 +167,11 @@ export const withdrawnLabel = (w, mark = b => b) => (w.by ? `replaced by ${mark(
 // is available next.
 export const nextStage = stack => stack.find(s => !s.landed && !s.withdrawn) || null
 
+// The live stages whose pull request GitHub would not say anything about. A withdrawn one is
+// meant to land nothing and renders as withdrawn whatever GitHub says, so it is never asked
+// about (decisions 170 and 172).
+export const unknownStages = stack => stack.filter(s => s.prUnknown && !s.withdrawn)
+
 // Is `branch` a stage that has landed? A worktree stays on the last stage it worked on after
 // GitHub merges that stage and deletes its branch, while the work branch it merged into moves on
 // without it (hugoforte/rig#200).

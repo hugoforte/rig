@@ -218,7 +218,10 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
 // call but auth(), lookups included, as gh's non-zero exit does (DESIGN.md decision 168).
 // One lookup can fail on its own, with gh's message: a repo's `lookupFails` fails every lookup
 // on that repo, and its `branchLookupFails: { <branch>: <message> }` fails prForBranch for that
-// branch only — "the work PR answered and one stage's did not".
+// branch only — "the work PR answered and one stage's did not". One difference is kept on
+// purpose: a repo the state has no entry for answers "not found" to every lookup, where the real
+// gh exits non-zero for a PR lookup on a repo GitHub does not have, and so throws. A test that
+// wants that sets the repo's `lookupFails`.
 // `env` is the run's, for the one call below that spawns anything: a clone made under the
 // machine's real global config rather than the run's is how an isolated test starts
 // answering for the machine it happens to be on.

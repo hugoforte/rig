@@ -476,9 +476,13 @@ test('a landed stage whose branch is gone, and whose lookup fails, reads as unkn
   setGithub(failing)
   const out = rig(['stage', '--work', 'vanished']).out
   const next = rig(['next', '--work', 'vanished']).out
+  const refresh = rig(['plan', '--refresh', '--work', 'vanished'])
   setGithub(state)
-  assert.match(out, /PR state unknown/)
-  assert.doesNotMatch(out, /not started|not cut in any repo yet/)
+  assert.match(out, /^ {2}\? 1\. feat\/vanished-one( {2}← next)?\n/m, 'marked unknown, not with the not-started circle')
+  assert.match(out, /PR state unknown in billing/)
+  assert.doesNotMatch(out, /not cut in any repo yet/)
+  assert.equal(refresh.code, 1, refresh.out)
+  assert.match(refresh.out, /GitHub would not say what became of feat\/vanished-one — nothing refreshed/)
   assert.match(next, /feat\/vanished-one — the schema \(PR state unknown in billing\)/)
   assert.doesNotMatch(next, /not cut in any repo yet/)
   assert.doesNotMatch(next, /rig plan --refresh/, 'a refresh would write "PR state unknown" over a deploy order that may be right')
