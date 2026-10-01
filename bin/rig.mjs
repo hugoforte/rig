@@ -9,7 +9,7 @@ import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
-import { checkouts, unreadable } from './checkouts.mjs'
+import { checkouts, unreadable, REAL_MACHINE, LOCK_STALE_MS } from './checkouts.mjs'
 import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
@@ -337,7 +337,7 @@ const gitMust = (dir, ...args) => must('git', ['-C', dir, ...args])
 // The two checkouts an installation owns — the data root and the tool itself. Reading one
 // and moving one is `checkouts.mjs`'s; what to warn about and when to refuse is the policy
 // below, which is the only part that differs between them.
-const co = checkouts({ run: exec, env })
+const co = checkouts({ run: exec, env, machine: () => current.machine })
 
 // Asked for at the moment a command wants it rather than when the run starts: reading fd 0
 // blocks, and `rig help` must not wait on a terminal nobody is piping into.
@@ -663,28 +663,34 @@ function prepareDataRoot () {
     // empty remote that another machine has since pushed to — and only a fetch can say
     // whether it exists.
     if (before.repo === 'own' && before.branch && before.tracks && dataFetchDue()) {
-      const fetched = co.fetch(root)
-      if (!fetched.ok) {
-        stampDataFetchFailure()
-        say(C.dim(`· data root: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
-      } else {
-        clearDataFetchFailure()
-        const { outcome, state, error } = co.fastForward(root)
-        // Everything but these four is a data root with nothing to do, and a command about
-        // to run is the wrong moment to be told about it.
-        if (outcome === 'diverged') {
-          warn(`data root: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
-        } else if (outcome === 'blocked') {
-          warn(`data root: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
-        } else if (outcome === 'failed') {
-          warn(`data root: could not fast-forward (${error})`)
-        } else if (outcome === 'moved') {
-          say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
+      // Held from the fetch to the fast-forward, and refused rather than gone past: a command
+      // that has not started is the cheapest one to stop (decision 161).
+      const held = lockDataRoot(root, 'fast-forward')
+      if (held.outcome === 'busy') die(`${lockBusy(held)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
+      try {
+        const fetched = co.fetch(root)
+        if (!fetched.ok) {
+          stampDataFetchFailure()
+          say(C.dim(`· data root: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
+        } else {
+          clearDataFetchFailure()
+          const { outcome, state, error } = co.fastForward(root)
+          // Everything but these four is a data root with nothing to do, and a command about
+          // to run is the wrong moment to be told about it.
+          if (outcome === 'diverged') {
+            warn(`data root: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
+          } else if (outcome === 'blocked') {
+            warn(`data root: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
+          } else if (outcome === 'failed') {
+            warn(`data root: could not fast-forward (${error})`)
+          } else if (outcome === 'moved') {
+            say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
+          }
+          // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
+          // reading the fast-forward decided from, after the fetch, which is all the commit reads.
+          if (!before.upstream) before = state
         }
-        // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
-        // reading the fast-forward decided from, after the fetch, which is all the commit reads.
-        if (!before.upstream) before = state
-      }
+      } finally { co.unlock(held.lock) }
     }
   }
   checkWriteGate()
@@ -1677,6 +1683,43 @@ function regenerate (cfg, work) {
 
 // ------------------------------------------------------ data root commits
 
+// The work a command is about, for the lock's holder: the id `rig new` and `rig restore` are
+// given, `--work`, or the work folder it runs in. Null for a command about no work — `demo`,
+// or `init`, which locks only its commit — and for a run whose folder has gone from under it:
+// the holder's work is a label, and no answer to it is worth failing a command for.
+function workInHand () {
+  const { flags = {}, positional = [] } = current.args ?? {}
+  if (['new', 'restore'].includes(current.command) && positional[0]) return positional[0]
+  if (typeof flags.work === 'string') return flags.work
+  try { return findWorkId() } catch { return null }
+}
+
+// The data root's lock, for one of the two sections that move its git state (decisions
+// 160–162): `fast-forward` or `commit and push`, which is how a waiter is told what it waits on.
+// A lock that could not be taken at all is said and gone past, because the lock is advisory and
+// rig without it is rig as it was. Answers the lock to let go of, or the busy outcome.
+function lockDataRoot (root, section) {
+  const r = co.lock(root, { command: `rig ${current.command}`, work: workInHand(), section })
+  if (r.outcome === 'failed') warn(`data root: could not take its lock (${r.error}) — going on without it`)
+  if (r.outcome === 'taken-over') {
+    const why = {
+      gone: 'which is no longer running',
+      old: `after more than ${LOCK_STALE_MS / 60_000} minutes`,
+      unreadable: 'which could not be read',
+    }[r.stale.why]
+    say(C.dim(`· data root: took over the lock held by ${lockHolder(r.stale.holder)}, ${why}`))
+  }
+  return r
+}
+
+const lockHolder = h => h ? `\`${h.command}\`${h.work ? ` for ${h.work}` : ''} (pid ${h.pid})` : 'another rig'
+
+// The first half of a busy lock's refusal, about `subject` — `data root`, or `rig update`'s
+// label for one of several; each section says what happens next.
+const lockBusy = (r, subject = 'data root') =>
+  `${subject} busy — ${lockHolder(r.holder)} has held it for ${Math.round(r.heldFor / 1000)} s${r.holder?.section ? ` to ${r.holder.section} it` : ''}`
+const lockEscape = r => `If no rig is running, delete ${r.file}.`
+
 // Every mutating command ends here — see `main`, which runs it once the command has
 // registered what it is committing as (`commitAs`), whether the command then succeeded
 // or reported a failure, so a record written before a later step died is committed under
@@ -1700,6 +1743,18 @@ function commitDataRoot (message, loc = where(), known = null) {
   if (state.repo === 'none') { say(C.dim(`· data root ${root} is not a git checkout — nothing committed`)); return }
   if (state.repo === 'nested') { warn(`data root ${root} is a directory inside another checkout (${state.top}) — not committing, that would stage all of it`); return }
 
+  // Held from the stage to the push. A busy lock warns rather than dies, like everything here:
+  // the command's work is done and its records are written, and they wait in the tree.
+  const held = lockDataRoot(root, 'commit and push')
+  if (held.outcome === 'busy') {
+    warn(`${lockBusy(held)}; anything this command wrote waits in the tree for the next command, or \`rig save\` once it finishes. ${lockEscape(held)}`)
+    return
+  }
+  try { commitHeld(root, message, state) } finally { co.unlock(held.lock) }
+}
+
+// The commit and push `commitDataRoot` makes once it holds the lock.
+function commitHeld (root, message, state) {
   const commit = co.commitAll(root, message)
   if (commit.outcome === 'stage-failed') { warn(`data root: could not stage (${commit.error}) — commit it by hand`); return }
   if (commit.outcome === 'commit-failed') { warn(`data root: could not commit (${commit.error}) — the change waits for the next command`); return }
@@ -4128,6 +4183,19 @@ function updateCheckout (label, root) {
     warn(`${label}: ${state.modified} uncommitted change(s) — not updated${how(label, root)}`)
     return { status: 'failed', clean }
   }
+  // A data root's fetch and fast-forward are locked as a mutating command's are, and a busy
+  // lock is that root not updated, the way every other reason here is. The tool checkout is
+  // yours and nothing of rig's commits into it, so it takes no lock.
+  const held = label.startsWith('data root') ? lockDataRoot(root, 'fast-forward') : null
+  if (held?.outcome === 'busy') {
+    warn(`${lockBusy(held, label)}; not updated. ${lockEscape(held)}`)
+    return { status: 'failed', clean }
+  }
+  try { return fetchAndForward(label, root, clean) } finally { co.unlock(held?.lock) }
+}
+
+// The half of `updateCheckout` that moves the checkout, once nothing stands in its way.
+function fetchAndForward (label, root, clean) {
   const fetched = co.fetch(root)
   if (!fetched.ok) { warn(`${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — not updated`); return { status: 'failed', clean } }
   // Every outcome, named. The three that look impossible here — this checkout was read a
@@ -4778,6 +4846,7 @@ function invoke (argv) {
       const needs = linkedCopyNeeds()
       if (needs) die(needs)
     }
+    current.args = args
     if (MUTATING.has(cmdName)) prepared = prepareDataRoot()
     cmd(args)
   } catch (e) {
@@ -4811,6 +4880,8 @@ function invocationOf ({
   out = s => process.stdout.write(s),
   err = s => process.stderr.write(s),
   chdir = () => {},
+  // What the data root's lock asks of the machine: the time, a sleep, whether a pid runs.
+  machine = REAL_MACHINE,
 } = {}) {
   return {
     toolRoot,
@@ -4820,11 +4891,13 @@ function invocationOf ({
     out,
     err,
     chdir,
+    machine,
     github: adapterResolver('RIG_FAKE_GITHUB', githubViaGh, githubInMemory),
     jira: adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory),
     location: null,
     requestedData: null,
     requestedRepos: [],
+    args: null,
     pendingCommit: null,
     command: null,
     exitCode: 0,
