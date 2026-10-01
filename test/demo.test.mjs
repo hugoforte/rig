@@ -361,24 +361,27 @@ test('both record formats describe the same work the same way', () => {
 
 // ------------------------------------------------------------- the real command
 
-// The one test that touches disk. Everything above trusts a fixture to be the shape rig
-// writes; this drives the real command over a real data root, so the day `loadCatalog` or the
-// record format moves, it fails here.
+// The tests that touch disk. Everything above trusts a fixture to be the shape rig writes;
+// these drive the real command over a real data root, so the day `loadCatalog` or the record
+// format moves, they fail here.
 const temps = []
 after(() => { for (const dir of temps) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) })
 
-test('rig demo: renders a page from a data root on disk, naming its repos', () => {
+// A data root with two catalogued repos, and `rig demo` run over it in a process of its own.
+// `records` maps a work id to the text of its `work.json`, written as it stands.
+const demoOnDisk = records => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-demo-'))
   temps.push(tmp)
   const root = path.join(tmp, 'data')
   fs.mkdirSync(path.join(root, 'catalog', 'acme'), { recursive: true })
-  fs.mkdirSync(path.join(root, 'work', 'w1'), { recursive: true })
   fs.writeFileSync(path.join(root, 'catalog', 'acme', 'billing.md'),
     '---\nrepo: billing\norg: acme\nrole: Owns invoices\nstack: C#\ntalks_to:\n  - repo: orders\n    how: posts invoices\n---\nProse.\n')
   fs.writeFileSync(path.join(root, 'catalog', 'acme', 'orders.md'),
     '---\nrepo: orders\norg: acme\nrole: Owns orders\nstack: Node\ntalks_to: []\n---\nProse.\n')
-  // Written in the current record format, so this fails the day the demo stops reading it.
-  fs.writeFileSync(path.join(root, 'work', 'w1', 'work.json'), JSON.stringify(work3()))
+  for (const [id, text] of Object.entries(records)) {
+    fs.mkdirSync(path.join(root, 'work', id), { recursive: true })
+    fs.writeFileSync(path.join(root, 'work', id, 'work.json'), text)
+  }
 
   const localFile = path.join(tmp, 'rig.local.json')
   fs.writeFileSync(localFile, JSON.stringify({
@@ -393,11 +396,22 @@ test('rig demo: renders a page from a data root on disk, naming its repos', () =
   env.RIG_LOCAL_CONFIG = localFile
   const r = spawnSync(process.execPath, [path.join(SRC, 'bin', 'rig.mjs'), 'demo', '--out', out, '--no-open'],
     { encoding: 'utf8', env, cwd: tmp })
-
   assert.equal(r.status, 0, r.stderr || r.stdout)
-  const html = fs.readFileSync(out, 'utf8')
+  return { stdout: r.stdout, html: fs.readFileSync(out, 'utf8') }
+}
+
+test('rig demo: renders a page from a data root on disk, naming its repos', () => {
+  // Written in the current record format, so this fails the day the demo stops reading it.
+  const { html } = demoOnDisk({ w1: JSON.stringify(work3()) })
   assert.match(html, /data-repo="billing"/)
   assert.match(html, /posts invoices/)
+  assert.match(html, /rig attach billing/)
+})
+
+test('rig demo: a record that will not parse is named and left out, and the page still renders', () => {
+  // A write cut short is a SyntaxError.
+  const { stdout, html } = demoOnDisk({ w1: JSON.stringify(work3()), cut: '{"id": "cut", "repos": [' })
+  assert.match(stdout, /1 work record could not be read and was left out: cut/)
   assert.match(html, /rig attach billing/)
 })
 

@@ -125,6 +125,52 @@ test('the repo the current directory is in answers when nothing named one', () =
   })
 })
 
+test('a repo named with its org matches only that org\'s entry', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'hugoforte', 'rig-data')
+    const location = locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'linenmaster/rig-data' })
+    assert.equal(location.source, 'current', 'another org\'s repo of the same name is not this one')
+  })
+})
+
+test('the same org and repo still places the command in the root that catalogues it', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'acme', 'notes')
+    assert.equal(locate(toolRoot, {}, { cwd: tmp, repoAt: () => 'ACME/Notes' }).name, 'personal')
+  })
+})
+
+test('standing in a data root\'s own checkout places the command in that root', () => {
+  fixture(THREE, ({ toolRoot, machine }) => {
+    let asked = 0
+    const inside = path.join(machine.dataRoots.linenmaster.path, 'work')
+    fs.mkdirSync(inside, { recursive: true })
+    const location = locate(toolRoot, {}, { cwd: inside, repoAt: () => { asked++; return 'rig-data' } })
+    assert.equal(location.name, 'linenmaster', 'and not `current`, which is hugoforte')
+    assert.equal(location.source, 'root')
+    assert.equal(asked, 0, 'the checkout answered, so the repo it is was never asked')
+  })
+})
+
+test('a data root cloned inside another root\'s folder answers for itself', () => {
+  const nested = {
+    workRoot: '<tmp>/w',
+    dataRoots: { outer: { path: '<tmp>/outer' }, inner: { path: '<tmp>/outer/inner' } },
+    current: 'outer',
+  }
+  fixture(nested, ({ toolRoot, machine }) => {
+    assert.equal(locate(toolRoot, {}, { cwd: machine.dataRoots.inner.path }).name, 'inner')
+  })
+})
+
+test('a repo named on the command still beats the data root checkout it runs in', () => {
+  fixture(THREE, ({ toolRoot, machine }) => {
+    catalogue(machine.dataRoots.personal.path, 'acme', 'Payments')
+    const location = locate(toolRoot, {}, { cwd: machine.dataRoots.linenmaster.path, repos: ['Payments'] })
+    assert.equal(location.name, 'personal')
+  })
+})
+
 test('finding the repo the cwd is in costs a subprocess, so it is not asked when something cheaper answered', () => {
   fixture(THREE, ({ tmp, toolRoot }) => {
     let asked = 0
@@ -254,7 +300,7 @@ test('the registry is the location\'s to answer, and never the merged config\'s'
 // ------------------------------------------------------------------ the CLI
 
 const install = makeInstall({ prefix: 'dataroots-cli-', localConfig: true, github: { issues: {} }, inProcess: true })
-const { tmp, dataRoot, workRoot, localConfig, rig, gitMust, cleanup } = install
+const { tmp, dataRoot, workRoot, localConfig, githubStateFile, rig, gitMust, cleanup } = install
 const second = path.join(tmp, 'rig-data-personal')
 
 // Two data roots, each a checkout of its own with a rig.json this rig stamped, and the
@@ -303,6 +349,43 @@ test('--data-repo --name adds a second root rather than refusing to move the fir
   assert.match(machine.dataRoots.third.path, /rig-data-third$/, 'in a directory named for it, not for the repo')
   assert.notEqual(path.resolve(machine.dataRoots.third.path), path.resolve(dataRoot), 'and not on top of the first')
   fs.writeFileSync(localConfig, saved)
+})
+
+test('joining an empty data repo pushes its first commit without ever asking for credentials', () => {
+  // A server-side hook runs under the pushing git's environment on a local remote, so it
+  // sees what the push was run with. The two variables are taken out of the run's own
+  // environment first, so a shell that already sets them cannot pass this for rig.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const bare = path.join(tmp, 'empty-data.git')
+  const seen = path.join(tmp, 'push-env')
+  gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', bare)
+  fs.writeFileSync(path.join(bare, 'hooks', 'pre-receive'), `#!/bin/sh\necho "$GIT_TERMINAL_PROMPT $GCM_INTERACTIVE" >> '${seen.replaceAll('\\', '/')}'\n`, { mode: 0o755 })
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'ok', repos: { ...state.repos, 'acme/empty-data': { language: '', prs: [], issues: [], source: bare } } }))
+  const env = Object.fromEntries(Object.entries(install.env).filter(([k]) => !['GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE'].includes(k)))
+
+  const r = rig(['init', '--data-repo', 'acme/empty-data', '--name', 'joined', '--orgs', 'acme'], { env })
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 0, r.out)
+  // The first push, and then the save every mutating command ends in.
+  assert.deepEqual(fs.readFileSync(seen, 'utf8').trim().split(/\r?\n/), ['0 never', '0 never'])
+})
+
+test('a first push refused for want of credentials names the command that signs git in', () => {
+  // The remote refuses in Git Credential Manager's words for a sign-in it may not ask for.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const bare = path.join(tmp, 'signed-out.git')
+  gitMust(tmp, 'init', '-q', '--bare', '-b', 'main', bare)
+  fs.writeFileSync(path.join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "fatal: Cannot prompt because user interactivity has been disabled." >&2\nexit 1\n', { mode: 0o755 })
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'ok', repos: { ...state.repos, 'acme/signed-out': { language: '', prs: [], issues: [], source: bare } } }))
+
+  const r = rig(['init', '--data-repo', 'acme/signed-out', '--name', 'signed-out', '--orgs', 'acme'])
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /git needed credentials, and rig never waits at a prompt: sign git in with `gh auth setup-git`/)
 })
 
 test('rig use lists every root and marks the current one', () => {
@@ -376,6 +459,37 @@ test('the work folder records which root holds its record', () => {
   assert.equal(fs.readFileSync(dataAnchorFile(path.join(workRoot, 'only-here')), 'utf8').trim(), 'hugoforte')
 })
 
+test('a work folder with no marker gets one from a command that finds its record in one root', () => {
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  const r = rig(['save', '-m', 'marked again', '--data', 'hugoforte'], { cwd: path.join(workRoot, 'only-here') })
+  assert.equal(r.code, 0, r.out)
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'hugoforte')
+})
+
+test('no marker is written for a work whose record is in two roots, since either may be wrong', (t) => {
+  // A data root split half done: both roots hold a copy, and the root the command happened to
+  // resolve to is no evidence of which one is the real record.
+  const copy = path.join(second, 'work', 'only-here')
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
+  fs.cpSync(path.join(dataRoot, 'work', 'only-here'), copy, { recursive: true })
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
+  const r = rig(['save', '-m', 'which one', '--data', 'personal'], { cwd: path.join(workRoot, 'only-here') })
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(marker))
+  assert.match(strip(rig(['doctor']).out), /only-here: data roots hugoforte, personal each hold its record/)
+  assert.equal(strip(rig(['doctor']).out).match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
+})
+
+test('doctor names a work folder with no marker, and the command that writes one', (t) => {
+  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
+  fs.rmSync(marker)
+  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
+  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data, so commands run in it fall back to `current` — `rig save --data hugoforte` in it writes the right one/)
+})
+
 test('a command run inside a work folder reads that work\'s root, whatever is current', () => {
   assert.equal(rig(['use', 'personal']).code, 0)
   const r = rig(['status'], { cwd: path.join(workRoot, 'only-here') })
@@ -420,11 +534,11 @@ test('a repo belonging to another root cannot be attached to this work', () => {
 // not named for its repo, so reading the folder name cannot pass for reading the remote. Its
 // repo is ledger, which `personal` catalogues since `rig new --repos` above; current is the
 // other root.
-const checkoutAt = (where, repo) => {
+const checkoutAt = (where, repo, org = 'acme') => {
   const dir = path.join(tmp, where)
   fs.mkdirSync(dir, { recursive: true })
   gitMust(dir, 'init', '-q', '-b', 'main')
-  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/acme/${repo}.git`)
+  gitMust(dir, 'remote', 'add', 'origin', `https://github.com/${org}/${repo}.git`)
   return dir
 }
 
@@ -434,6 +548,25 @@ test('the checkout a command runs in chooses the root that catalogues its repo',
   assert.equal(rig(['use', 'hugoforte']).code, 0)
   const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/my-clone', 'ledger') })
   assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('a checkout of another org\'s repo with the same name is not placed by it', () => {
+  const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/other-org', 'ledger', 'someone-else') })
+  assert.match(r.out, /data root: hugoforte \(current\)/)
+})
+
+test('an ssh remote is matched by its org too', () => {
+  const dir = checkoutAt('somewhere/over-ssh', 'ledger')
+  gitMust(dir, 'remote', 'set-url', 'origin', 'git@github.com:someone-else/ledger.git')
+  const r = rig(['list', '--quick'], { cwd: dir })
+  assert.match(r.out, /data root: hugoforte \(current\)/)
+})
+
+test('a command run in a data root\'s own checkout reads that root, whatever is current', () => {
+  assert.equal(rig(['use', 'hugoforte']).code, 0)
+  const r = rig(['list', '--quick'], { cwd: second })
+  assert.match(r.out, /ledger-work/, 'the work that root holds')
+  assert.doesNotMatch(r.out, /only-here/, 'and not the current root\'s')
 })
 
 test('a checkout the filesystem walk hands back to git is still placed by its repo', () => {
@@ -488,6 +621,38 @@ test('rig update brings every configured root forward, not only the one in hand'
   for (const root of [dataRoot, second]) {
     assert.notEqual(JSON.parse(fs.readFileSync(path.join(root, 'rig.json'), 'utf8')).writtenBy, '1.0.0')
   }
+})
+
+test('rig update still brings every root forward when none is current', (t) => {
+  // Two roots and no pointer: every command that answers about a root's contents dies here,
+  // and `update` is not one of them. Put back afterwards, since the tests below want a root
+  // in hand.
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  t.after(() => fs.writeFileSync(localConfig, saved))
+  for (const root of [dataRoot, second]) {
+    const file = path.join(root, 'rig.json')
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), writtenBy: '1.0.0' }, null, 2) + '\n')
+    gitMust(root, 'add', '-A')
+    gitMust(root, 'commit', '-q', '-m', 'back to format 1')
+  }
+  const machine = JSON.parse(saved)
+  delete machine.current
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  const out = strip(rig(['update']).out)
+  assert.match(out, /data root hugoforte migrated/)
+  assert.match(out, /data root personal migrated/)
+})
+
+test('rig update says a selection it cannot make once, through the doctor checks it ends in', (t) => {
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  t.after(() => fs.writeFileSync(localConfig, saved))
+  const machine = JSON.parse(saved)
+  delete machine.current
+  fs.writeFileSync(localConfig, JSON.stringify(machine))
+  const r = rig(['update'])
+  assert.equal(r.code, 1, 'a machine with nothing selected has something to look at')
+  assert.match(strip(r.out), /thing\(s\) to look at/, 'the doctor checks ran')
+  assert.equal(strip(r.out).match(/none is current/g)?.length, 1, strip(r.out))
 })
 
 // ------------------------------------------------------------- doctor, over every root

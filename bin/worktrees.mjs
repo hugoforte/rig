@@ -17,7 +17,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
-import { discover, refSha, symref } from './gitfs.mjs'
+import { discover, headBranch, refSha, symref } from './gitfs.mjs'
+import { NO_PROMPT_ENV, NEEDS_CREDENTIALS } from './remote-env.mjs'
 
 export const remotesOnGitHub = () => ({ url: (org, repo) => `https://github.com/${org}/${repo}.git` })
 
@@ -30,8 +31,11 @@ export const remotesInDirectory = dir => ({ url: (org, repo) => path.join(dir, o
 // to silence, because a caller that wants nothing said should not have to pass a sink.
 export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = () => {}, env = () => process.env }) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args])
-  const must = (cmd, args) => {
-    const r = run(cmd, args)
+  // A call that may reach the remote, which may never stop to ask for credentials (decision 138):
+  // a checkout is one, because Git LFS fetches what it checks out.
+  const toRemote = (dir, ...args) => run('git', ['-C', dir, ...args], { env: NO_PROMPT_ENV })
+  const must = (cmd, args, opts) => {
+    const r = run(cmd, args, opts)
     if (r.code !== 0) throw new RigError(`${cmd} ${args.join(' ')}\n${r.err || r.out}`)
     return r.out
   }
@@ -58,15 +62,22 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     if (!fs.existsSync(mirror)) {
       step(`mirroring ${org}/${repo} (first use)`)
       fs.mkdirSync(path.dirname(mirror), { recursive: true })
-      must('git', ['clone', '--bare', remotes.url(org, repo), mirror])
+      const url = remotes.url(org, repo)
+      const clone = run('git', ['clone', '--bare', url, mirror], { env: NO_PROMPT_ENV })
+      if (clone.code !== 0) {
+        const detail = clone.err || clone.out
+        throw new RigError(NEEDS_CREDENTIALS.test(detail)
+          ? `could not mirror ${org}/${repo}: git needed credentials for ${url}, and rig never waits at a prompt — sign git in (\`gh auth setup-git\`) and run this again\n${detail}`
+          : `git clone --bare ${url} ${mirror}\n${detail}`)
+      }
       // A --bare clone has no fetch refspec; give it one so remote branches land
       // in refs/remotes/origin/* and never collide with our work branches.
       must('git', ['-C', mirror, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'])
     }
     step(`fetching ${org}/${repo}`)
-    const f = git(mirror, 'fetch', '--prune', 'origin')
+    const f = toRemote(mirror, 'fetch', '--prune', 'origin')
     if (f.code !== 0) warn(`fetch failed for ${org}/${repo}: ${f.err.split('\n')[0]}`)
-    git(mirror, 'remote', 'set-head', 'origin', '-a')
+    toRemote(mirror, 'remote', 'set-head', 'origin', '-a')
     return mirror
   }
 
@@ -83,10 +94,45 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     throw new RigError(`cannot determine the remote HEAD of ${org}/${repo} (${mirror})`)
   }
 
+  // Which branch a worktree has checked out, read from its HEAD where `gitfs` places it and
+  // asked of git where it does not.
+  const checkedOut = dir => {
+    const place = discover(dir, env())
+    if (place?.gitDir) return headBranch(place.gitDir)
+    const r = git(dir, 'symbolic-ref', '-q', 'HEAD')
+    return r.code === 0 && r.out.startsWith('refs/heads/') ? r.out.slice('refs/heads/'.length) : null
+  }
+
   const onRemote = (mirror, branch) => has(mirror, ref(branch))
   const local = branch => `refs/heads/${branch}`
   const kept = (mirror, branch) => has(mirror, local(branch))
   const isAncestor = (mirror, a, b) => git(mirror, 'merge-base', '--is-ancestor', a, b).code === 0
+
+  // Why the copy at `tip` holds something `head` does not, or null when it holds nothing else.
+  // A copy at `head` or behind it holds nothing else. One that is not may still have landed:
+  // GitHub re-makes a stacked PR's commits when it retargets it (hugoforte/rig#257), so the
+  // same patches are in `head` under other shas. Two questions, and both must answer "landed".
+  // By patch: `--cherry-pick` drops each commit whose patch-id is on the head's side, and what
+  // is left, merges aside, is named, the oldest first. By content: a patch-id ignores
+  // whitespace, and a merge has none, so merging the copy into `head` must give `head`'s tree —
+  // an amend that only re-indented, or a merge that settled a conflict by hand, fails there.
+  // A git call that fails keeps the copy, since no answer is not "landed".
+  const unlandedReason = (mirror, tip, head, number) => {
+    if (isAncestor(mirror, tip, head)) return null
+    const failed = r => `git could not compare it with PR #${number}'s head: ${(r.err || r.out).split('\n')[0]}`
+    const left = git(mirror, 'rev-list', '--reverse', '--topo-order', '--no-merges', '--right-only', '--cherry-pick', `${head}...${tip}`)
+    if (left.code !== 0) return failed(left)
+    const unlanded = left.out.split('\n').filter(Boolean)
+    if (unlanded.length) {
+      const named = git(mirror, 'log', '-1', '--format=%h "%s"', unlanded[0]).out.trim()
+      return `${named} is not in what PR #${number} merged${unlanded.length > 1 ? ` (and ${unlanded.length - 1} more)` : ''}`
+    }
+    const tree = git(mirror, 'rev-parse', `${head}^{tree}`)
+    if (tree.code !== 0) return failed(tree)
+    const merged = git(mirror, 'merge-tree', '--write-tree', head, tip)
+    return merged.code === 0 && merged.out.split('\n')[0].trim() === tree.out.trim() ? null
+      : `merging it into PR #${number}'s head would change what that PR merged`
+  }
 
   // The mirror may already hold a copy of the branch: every worktree ever cut on it left one
   // behind in `refs/heads`, because a worktree shares the mirror's ref store and removing the
@@ -103,12 +149,12 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         `  if the remote is right, remove any worktree that has it checked out, then: git -C ${mirror} branch -D ${branch}`)
     }
     if (behind) {
-      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)])
+      must('git', ['-C', mirror, 'worktree', 'add', '--track', '-B', branch, dest, ref(branch)], { env: NO_PROMPT_ENV })
       return
     }
     step(`keeping the mirror's copy of ${branch}, which is ahead of the remote`)
     must('git', ['-C', mirror, 'branch', `--set-upstream-to=origin/${branch}`, branch])
-    must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+    must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
   }
 
   // A branch that already exists somewhere this machine can see, checked out into `dest`:
@@ -126,7 +172,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     }
     if (kept(mirror, branch)) {
       warn(`branch ${branch} is not on ${org}/${repo} but the mirror kept a copy — checking it out as it is`)
-      must('git', ['-C', mirror, 'worktree', 'add', dest, branch])
+      must('git', ['-C', mirror, 'worktree', 'add', dest, branch], { env: NO_PROMPT_ENV })
       return 'mirror'
     }
     return null
@@ -148,7 +194,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       if (from === 'remote') warn(`branch ${branch} already exists on ${org}/${repo} — checking it out (not creating)`)
       if (from) return { base }
       step(`worktree ${repo} → ${branch} (base ${base})`)
-      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)])
+      must('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, ref(base)], { env: NO_PROMPT_ENV })
       return { base }
     },
 
@@ -157,6 +203,28 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // read from a mirror this machine has never fetched is no stack at all.
     fetch ({ org, repo }) {
       fetched(org, repo)
+    },
+
+    // How a pushed branch stands against the base it is about to land on, both as the remote
+    // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
+    // files a merge of the two would conflict in, found without touching any worktree
+    // (`merge-tree --write-tree`, git 2.38). Null when git cannot count, such as for a ref the
+    // mirror lacks. When git will not try the merge, as for unrelated histories, `conflicts` is
+    // null and `error` says why, since no answer is not the same as a clean one. Call `fetch`
+    // first, or the base is the one this mirror last saw.
+    standing ({ org, repo, branch, base }) {
+      const mirror = mirrorPath(org, repo)
+      const counted = git(mirror, 'rev-list', '--count', `${ref(branch)}..${ref(base)}`)
+      if (counted.code !== 0) return null
+      // Exit 1 is a merge that conflicts; the tree it wrote comes first, then one file a line,
+      // unquoted so a name with a non-ASCII character reads as itself.
+      const merged = git(mirror, '-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only', '--no-messages', ref(base), ref(branch))
+      const behind = Number(counted.out)
+      if (merged.code !== 0 && merged.code !== 1) {
+        return { behind, conflicts: null, error: (merged.err || merged.out).split('\n')[0] || `git merge-tree exited ${merged.code}` }
+      }
+      const conflicts = merged.code === 1 ? merged.out.split('\n').slice(1).map(f => f.trim()).filter(Boolean) : []
+      return { behind, conflicts }
     },
 
     // Check out a branch that already exists, and never make one: `cut` above, less its last
@@ -178,6 +246,43 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return copies(branch).some(a => copies(other).some(b => isAncestor(mirror, b, a)))
     },
 
+    // Did a stage's pull request land as new commits — a squash or a rebase — while stages
+    // stacked above it still carry the ones it replaced (decision 113)? `head` is the commit the
+    // PR carried, `merge` the one it landed as, and `above` the stages above it in this repo, in
+    // stack order.
+    //
+    // `{ unfetched: true }` when this mirror lacks `merge` or its work branch does not hold it
+    // yet, which a fetch answers. Null when the PR merged the stage's own commits, when the work
+    // branch holds them, or when nothing above carries them. Otherwise `carriers` are the stages
+    // above that do, read from the remote's copy first so a stale copy here never counts;
+    // `rebased` says every carrier's copy here has been replayed and only the push is left;
+    // `behind` names the carriers whose copy here the remote's has moved past, which a replay
+    // from here would overwrite; and `sameTree` says the merge is what merging `head` onto the
+    // work branch gave.
+    replaced ({ org, repo, work, head, merge, above = [] }) {
+      const mirror = mirrorPath(org, repo)
+      if (!fs.existsSync(mirror) || !head || !merge) return null
+      const commit = sha => git(mirror, 'cat-file', '-e', `${sha}^{commit}`).code === 0
+      if (!commit(head) || !has(mirror, ref(work))) return null
+      if (!commit(merge) || !isAncestor(mirror, merge, ref(work))) return { unfetched: true }
+      if (isAncestor(mirror, head, merge) || isAncestor(mirror, head, ref(work))) return null
+      // Carries a commit of the stage the work branch does not have. Asked through the merge
+      // base, not `head` itself: a stage fixed after the one above was cut from it is still
+      // under that one, at an earlier commit.
+      const carries = r => {
+        const base = git(mirror, 'merge-base', head, r)
+        return base.code === 0 && !isAncestor(mirror, base.out.trim(), ref(work))
+      }
+      const copy = b => [ref(b), local(b)].find(r => has(mirror, r))
+      const carriers = above.filter(b => copy(b) && carries(copy(b)))
+      if (!carriers.length) return null
+      const rebased = carriers.every(b => has(mirror, local(b)) && !carries(local(b)))
+      const behind = carriers.filter(b => has(mirror, local(b)) && has(mirror, ref(b)) && !isAncestor(mirror, ref(b), local(b)))
+      const merged = git(mirror, 'merge-tree', '--write-tree', `${merge}^1`, head)
+      const tree = git(mirror, 'rev-parse', `${merge}^{tree}`).out.trim()
+      return { carriers, rebased, behind, sameTree: merged.code === 0 && merged.out.split('\n')[0].trim() === tree }
+    },
+
     // Remove-and-prune, once. `detach` dies on the message and `close` warns with it, which
     // is the only thing the two ever disagreed about, so the message is what comes back and
     // the caller decides how loud it is. The prune runs either way: a remove that failed
@@ -194,27 +299,44 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // Delete a branch whose pull request merged, from the mirror and from the remote. `head` is
     // the commit the PR carried, and it is the whole of the safety: a copy is deleted only when
     // everything on it is in that commit, so nothing that exists nowhere else can go. The mirror's
-    // copy must be `head` or behind it; the remote's must be `head` exactly, and the push leases
-    // on it, so a commit pushed after the merge keeps the branch rather than being lost with it.
+    // copy must have landed in `head`, by sha or by patch and content (`unlandedReason`); the remote's must be
+    // `head` exactly, and the push leases on it, so a commit pushed after the merge keeps the
+    // branch rather than being lost with it.
+    //
+    // The mirror may never have seen `head`: a PR updated on GitHub — "Update branch" — carries
+    // a commit no fetch brought here, and asking whether the copy is behind a commit git does not
+    // have answers no. So that commit is fetched first, from `refs/pull/<number>/head`, which
+    // GitHub keeps after the branch is deleted (hugoforte/rig#181). A fetch that fails keeps the
+    // copy and says why.
     //
     // Answers what happened to each copy — `deleted`, `absent`, or why it was kept — and never
     // throws: a close has already torn the work down by now, and a branch left behind is a
     // thing to say, not a reason to fail.
-    dropMerged ({ org, repo, branch, head }) {
+    //
+    // `remote: false` leaves the remote unasked and answers `absent` for it. That is the leftover
+    // of a work closed on another machine: what happened on the remote was that close's to
+    // decide, and a branch it chose to keep must not get a second chance from a machine nobody
+    // asked.
+    dropMerged ({ org, repo, branch, head, number, remote = true }) {
       const mirror = mirrorPath(org, repo)
       const out = { local: 'absent', remote: 'absent' }
       if (!fs.existsSync(mirror)) return out
       if (kept(mirror, branch)) {
-        out.local = !isAncestor(mirror, local(branch), head) ? 'kept — it has commits the merged PR did not'
+        const fetch = git(mirror, 'cat-file', '-e', `${head}^{commit}`).code === 0 ? null
+          : toRemote(mirror, 'fetch', '--quiet', 'origin', `refs/pull/${number}/head`)
+        const reason = fetch && fetch.code !== 0 ? `could not fetch PR #${number}'s head: ${(fetch.err || fetch.out).split('\n')[0]}`
+          : unlandedReason(mirror, local(branch), head, number)
+        out.local = reason ? `kept — ${reason}`
           : git(mirror, 'branch', '-D', branch).code === 0 ? 'deleted'
           : 'kept — git would not delete it'
       }
-      const ls = git(mirror, 'ls-remote', '--heads', 'origin', local(branch))
+      if (!remote) return out
+      const ls = toRemote(mirror, 'ls-remote', '--heads', 'origin', local(branch))
       if (ls.code !== 0) out.remote = `kept — the remote did not answer: ${(ls.err || ls.out).split('\n')[0]}`
       else if (ls.out.trim()) {
         const tip = ls.out.trim().split(/\s+/)[0]
         const push = tip !== head ? null
-          : git(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
+          : toRemote(mirror, 'push', '--quiet', `--force-with-lease=${local(branch)}:${head}`, 'origin', '--delete', branch)
         out.remote = !push ? 'kept — it has moved since the PR merged'
           : push.code === 0 ? 'deleted'
           : `kept — the push was refused: ${(push.err || push.out).split('\n')[0]}`
@@ -238,8 +360,9 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // reason, in the shape `prError` established, rather than a confident zero: after a
     // squash merge both refs can be gone, and "0 ahead" then reads as a branch with
     // nothing outstanding, which is a different claim from "nobody could tell".
-    // `branch` is optional and answers one extra question: has this branch reached the
-    // remote? Only `rig next` asks, and only it passes one.
+    // `branch` is optional and answers three extra questions: has this branch reached the
+    // remote, how much of what is checked out has not, and which branch is checked out?
+    // `repoState` passes one.
     state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s
@@ -270,11 +393,30 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         s.ahead = s.behind = null
         s.distanceUnknown = (counts.err || counts.out).split('\n')[0].trim() ||
           `git could not measure ${dir} against ${fellBack ?? 'its upstream'}`
-        return s
+      } else {
+        const [behind, ahead] = counts.out.split(/\s+/).map(Number)
+        s.behind = behind || 0
+        s.ahead = ahead || 0
       }
-      const [behind, ahead] = counts.out.split(/\s+/).map(Number)
-      s.behind = behind || 0
-      s.ahead = ahead || 0
+      // `ahead` is not what is unpushed, for the reason `pushed` is not asked of `@{u}`: against
+      // *main* it counts every commit that has not landed, pushed or not (hugoforte/rig#192).
+      // This counts the commits on HEAD that no branch on the remote holds: the distance from
+      // `origin/<branch>` once it is pushed, and while it never was, what it has over the remote
+      // branch it was cut from. A count git could not make is a distance nobody could tell.
+      if (branch) {
+        const u = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin')
+        s.unpushed = u.code === 0 ? Number(u.out) : null
+        if (u.code !== 0) s.distanceUnknown ??= (u.err || u.out).split('\n')[0].trim() || `git could not count what ${dir} has not pushed`
+        // Null on a detached HEAD, and not always `branch` (`onLandedStage` in stages.mjs).
+        s.on = checkedOut(dir)
+        // A detached HEAD's own commits are on no branch, so removing the worktree loses them,
+        // and a merged PR says nothing about them. Asked only when detached: on a branch, the
+        // branch outlives the worktree. Null when git could not count them.
+        if (s.on === null) {
+          const d = git(dir, 'rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes')
+          s.unbranched = d.code === 0 ? Number(d.out) : null
+        }
+      }
       return s
     },
 
@@ -287,7 +429,7 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // its own stage is the ordinary way round. git decides whether that is possible, and its
     // refusal is what comes back.
     cutHere ({ dir, branch, base }) {
-      const r = git(dir, 'checkout', '-b', branch, base)
+      const r = toRemote(dir, 'checkout', '-b', branch, base)
       return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
     },
 
@@ -300,7 +442,8 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // and an answer copied into the record is wrong the first time anyone re-points a branch.
     //
     // No fetch, either: `rig stage`, `rig plan` and `rig pr` all come through here, and none
-    // of them asked for a network round trip. A branch cut in a worktree is already in the
+    // of them asked for a network round trip to read the stack. `rig pr` fetches for itself,
+    // once, just before it opens a pull request (`standing`). A branch cut in a worktree is already in the
     // mirror's `refs/heads`, because the worktree shares the mirror's ref store; a branch
     // pushed from another machine is under `refs/remotes/origin`.
     //

@@ -244,7 +244,7 @@ test('a HEAD that is a symbolic link names the ref it links to, the way git read
   }
   assert.ok(same(agreesWithGit(inner, 'a HEAD linked to an unborn branch').top, inner))
   assert.equal(headBranch(discover(inner, env).gitDir), git(inner, 'symbolic-ref', '-q', '--short', 'HEAD').out)
-  fs.rmSync(head)
+  fs.unlinkSync(head)
   fs.symlinkSync('../elsewhere', head)
   assert.ok(same(agreesWithGit(inner, 'a HEAD linked outside refs/').top, own))
 })

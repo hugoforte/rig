@@ -10,7 +10,7 @@ import fs from 'node:fs'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, github, setGithub, commitWork, cutStage, worktree, record, planFile, cleanup } = billingInstall('rig-stages-')
+const { rig, github, setGithub, gitMust, commitWork, cutStage, worktree, record, planFile, dataRoot, cleanup } = billingInstall('rig-stages-')
 
 after(cleanup)
 
@@ -265,4 +265,265 @@ test('a stage whose line contains $& is rendered as written, not as a regex repl
   const text = fs.readFileSync(planFile('dollar'), 'utf8')
   assert.match(text, /the \$& path/)
   assert.equal(text.match(/rig:deploy-order/g).length, 2, 'one region, not a region pasted inside itself')
+})
+
+test('a stage squashed into the work branch is named by rig next, with the rebase that replays the one above (#193)', () => {
+  assert.equal(rig(['new', 'squash', '--title', 'Squash work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'squash']).code, 0)
+  assert.equal(rig(['stage', 'feat/squash-one', '--delivers', 'the schema', '--work', 'squash']).code, 0)
+  assert.equal(rig(['stage', 'feat/squash-two', '--delivers', 'the endpoints', '--work', 'squash']).code, 0)
+  const work = record('squash').branch
+  const dest = worktree('squash', 'billing')
+  const opts = { work: 'squash', repo: 'billing', back: work }
+  cutStage({ ...opts, branch: 'feat/squash-one', from: work, message: 'the schema' })
+  cutStage({ ...opts, branch: 'feat/squash-two', from: 'feat/squash-one', message: 'the endpoints' })
+
+  // What the squash button does: one new commit on the work branch, the stage's own gone.
+  gitMust(dest, 'merge', '-q', '--squash', 'feat/squash-one')
+  gitMust(dest, 'commit', '-q', '-m', 'the schema (#95)')
+  gitMust(dest, 'push', '-q', 'origin', work, 'feat/squash-one', 'feat/squash-two')
+  const tip = gitMust(dest, 'rev-parse', 'feat/squash-one')
+  const state = github()
+  state.repos['acme/billing'].prs.push(
+    { branch: 'feat/squash-one', number: 95, state: 'MERGED', head: tip, merge: gitMust(dest, 'rev-parse', work), url: 'https://github.com/acme/billing/pull/95', base: work, openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] },
+    { branch: 'feat/squash-two', number: 96, state: 'OPEN', url: 'https://github.com/acme/billing/pull/96', base: work, openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] },
+  )
+  setGithub(state)
+
+  const out = rig(['next', '--work', 'squash']).out
+  assert.match(out, /feat\/squash-one landed as new commits \(a squash or a rebase\), and feat\/squash-two in billing still carries the commits it replaced/)
+  const commands = ['git switch feat/squash-two', `git rebase --onto origin/${work} ${tip}`, 'git push --force-with-lease origin feat/squash-two']
+  for (const c of commands) assert.ok(out.includes(c), `${c} in:\n${out}`)
+
+  // The commands do what they say: after the rebase only the push is offered, and after the
+  // push only the stage's own commit is left over the work branch, and nothing is said.
+  gitMust(dest, ...commands[0].split(' ').slice(1))
+  gitMust(dest, ...commands[1].split(' ').slice(1))
+  const between = rig(['next', '--work', 'squash']).out
+  assert.match(between, /feat\/squash-two is replayed onto the work branch here and not pushed/)
+  assert.doesNotMatch(between, /\n\s+git push\n/, 'not a plain push, which the remote would refuse')
+  gitMust(dest, ...commands[2].split(' ').slice(1))
+  assert.equal(gitMust(dest, 'rev-list', '--count', `origin/${work}..feat/squash-two`), '1')
+  assert.doesNotMatch(rig(['next', '--work', 'squash']).out, /landed as new commits|replayed onto/)
+})
+
+test('a declared stage can be dropped with a reason, and stays in the record with the date', () => {
+  assert.equal(rig(['new', 'replanned', '--title', 'Replanned work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'replanned']).code, 0)
+  for (const [branch, delivers] of [['feat/replanned-entry', 'an entry point'], ['feat/replanned-interface', 'an interface'], ['feat/replanned-gathering', 'the gathering']]) {
+    assert.equal(rig(['stage', branch, '--delivers', delivers, '--work', 'replanned']).code, 0)
+  }
+  const r = rig(['stage', 'feat/replanned-gathering', '--dropped', 'worth about 15%', '--work', 'replanned'])
+  assert.equal(r.code, 0, r.out)
+  const st = record('replanned').stages.find(s => s.branch === 'feat/replanned-gathering')
+  assert.deepEqual([st.delivers, st.reason, typeof st.droppedAt], ['the gathering', 'worth about 15%', 'string'])
+})
+
+test('a stage can be marked replaced by another declared stage', () => {
+  const r = rig(['stage', 'feat/replanned-entry', '--replaced-by', 'feat/replanned-interface', '--work', 'replanned'])
+  assert.equal(r.code, 0, r.out)
+  const st = record('replanned').stages.find(s => s.branch === 'feat/replanned-entry')
+  assert.deepEqual([st.replacedBy, typeof st.replacedAt], ['feat/replanned-interface', 'string'])
+})
+
+test('a stage cannot be replaced by one that was withdrawn itself', () => {
+  const r = rig(['stage', 'feat/replanned-interface', '--replaced-by', 'feat/replanned-gathering', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-gathering was withdrawn itself/)
+})
+
+test('--dropped with no stage named is refused, rather than listing the stack', () => {
+  const r = rig(['stage', '--dropped', 'why', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /name the stage/)
+})
+
+test('a reason over two lines is refused, since it goes in a table row', () => {
+  const r = rig(['stage', 'feat/replanned-interface', '--dropped', 'one\ntwo', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /in one line/)
+})
+
+test('a stage cannot be replaced by a branch that is not a stage of this work', () => {
+  const r = rig(['stage', 'feat/replanned-interface', '--replaced-by', 'feat/nowhere', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/nowhere is not a stage of replanned/)
+})
+
+test('rig stage lists a withdrawn stage as dropped or replaced, never as not started', () => {
+  const out = rig(['stage', '--work', 'replanned']).out
+  assert.match(out, /feat\/replanned-entry\n\s+an entry point\n\s+replaced by feat\/replanned-interface \(\d{4}-\d{2}-\d{2}\)/)
+  assert.match(out, /feat\/replanned-gathering\n\s+the gathering\n\s+dropped: worth about 15% \(\d{4}-\d{2}-\d{2}\)/)
+  assert.equal(out.match(/not cut in any repo yet/g).length, 1, 'only the stage still to be cut')
+})
+
+test('rig next skips a withdrawn stage and offers the one still to do', () => {
+  const out = rig(['next', '--work', 'replanned']).out
+  assert.match(out, /stage 2 of 3: feat\/replanned-interface/)
+})
+
+test('a stage that has landed cannot be dropped', () => {
+  assert.equal(rig(['stage', 'feat/replanned-late', '--delivers', 'the late part', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-late', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'the late part' })
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch: 'feat/replanned-late', number: 120, state: 'MERGED', url: 'https://github.com/acme/billing/pull/120', base: 'feat/replanned-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: '2026-09-19T12:00:00Z', commits: [] })
+  setGithub(state)
+  const r = rig(['stage', 'feat/replanned-late', '--dropped', 'changed my mind', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-late has landed in billing/)
+})
+
+test('a stage with a PR open cannot be dropped until the PR is closed', () => {
+  assert.equal(rig(['stage', 'feat/replanned-review', '--delivers', 'under review', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-review', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'under review' })
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch: 'feat/replanned-review', number: 121, state: 'OPEN', url: 'https://github.com/acme/billing/pull/121', base: 'feat/replanned-work', openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] })
+  setGithub(state)
+  const r = rig(['stage', 'feat/replanned-review', '--dropped', 'changed my mind', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /PR #121 open in billing — close it first/)
+})
+
+test('a new stage is never cut on top of a withdrawn one', () => {
+  const dest = worktree('replanned', 'billing')
+  assert.equal(rig(['stage', 'feat/replanned-spare', '--delivers', 'a spare', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-spare', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'a spare' })
+  assert.equal(rig(['stage', 'feat/replanned-spare', '--dropped', 'not needed', '--work', 'replanned']).code, 0)
+  const r = rig(['stage', 'feat/replanned-after', '--delivers', 'what comes after', '--cut', '--work', 'replanned'], { cwd: dest })
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /cut feat\/replanned-after on feat\/replanned-spare/)
+})
+
+test('a withdrawn stage is never cut', () => {
+  const r = rig(['stage', 'feat/replanned-gathering', '--cut', '--work', 'replanned'], { cwd: worktree('replanned', 'billing') })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-gathering was withdrawn from the plan \(dropped: worth about 15%\) — there is nothing to cut/)
+})
+
+test('a withdrawal that also asks for anything else is refused, and records nothing', () => {
+  const before = JSON.stringify(record('replanned').stages)
+  for (const [args, says] of [
+    [['--dropped', 'why', '--replaced-by', 'feat/replanned-entry'], /alternatives; pass one/],
+    [['--dropped', 'why', '--key', 'acme/billing#9'], /take nothing else/],
+    [['--replaced-by'], /--replaced-by needs the branch/],
+    [['--replaced-by', 'feat/replanned-interface'], /cannot replace itself/],
+  ]) {
+    const r = rig(['stage', 'feat/replanned-interface', ...args, '--work', 'replanned'])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, says)
+  }
+  assert.equal(JSON.stringify(record('replanned').stages), before)
+})
+
+test('a stage another was replaced by cannot be withdrawn, or the record would say the work went nowhere', () => {
+  const r = rig(['stage', 'feat/replanned-interface', '--dropped', 'gone', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-entry was replaced by feat\/replanned-interface/)
+})
+
+test('a stage with another cut on top of it cannot be withdrawn, since that one carries its commits', () => {
+  assert.equal(rig(['stage', 'feat/replanned-under', '--delivers', 'the lower half', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-over', '--delivers', 'the upper half', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-under', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'the lower half' })
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-over', from: 'feat/replanned-under', back: 'feat/replanned-work', message: 'the upper half' })
+  const r = rig(['stage', 'feat/replanned-under', '--dropped', 'not needed', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-over is cut on it in billing/)
+})
+
+test('a cut stage is not withdrawn while gh cannot say whether it has a PR', () => {
+  const state = github()
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['stage', 'feat/replanned-review', '--dropped', 'changed my mind', '--work', 'replanned'])
+  setGithub(state)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /GitHub would not say whether feat\/replanned-review has a PR \(gh is unauthenticated\) — nothing recorded/)
+})
+
+test('a withdrawn stage is put back with --planned, and the commit says so', () => {
+  const r = rig(['stage', 'feat/replanned-gathering', '--planned', '--work', 'replanned'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /feat\/replanned-gathering back in the plan/)
+  assert.deepEqual(record('replanned').stages.find(s => s.branch === 'feat/replanned-gathering'), { branch: 'feat/replanned-gathering', delivers: 'the gathering' })
+  assert.match(gitMust(dataRoot, 'log', '-1', '--format=%s'), /feat\/replanned-gathering back in the plan/)
+})
+
+test('a stage put back is a live stage again: listed as not started, and it can be cut', () => {
+  assert.match(rig(['stage', '--work', 'replanned']).out, /feat\/replanned-gathering\n\s+the gathering\n\s+not cut in any repo yet/)
+  const r = rig(['stage', 'feat/replanned-gathering', '--cut', '--work', 'replanned'], { cwd: worktree('replanned', 'billing') })
+  assert.equal(r.code, 0, r.out)
+})
+
+test('a replaced stage put back no longer names the stage that replaced it', () => {
+  assert.equal(rig(['stage', 'feat/replanned-entry', '--planned', '--work', 'replanned']).code, 0)
+  assert.deepEqual(record('replanned').stages.find(s => s.branch === 'feat/replanned-entry'), { branch: 'feat/replanned-entry', delivers: 'an entry point' })
+})
+
+test('--planned refuses no branch, any other flag, an unknown stage and one not withdrawn, and records nothing', () => {
+  const before = JSON.stringify(record('replanned').stages)
+  for (const [args, says] of [
+    [['--planned'], /--planned names the stage/],
+    [['feat/replanned-spare', '--planned', '--delivers', 'more'], /puts a withdrawn stage back, and takes nothing else/],
+    [['feat/replanned-spare', '--planned', '--cut'], /puts a withdrawn stage back, and takes nothing else/],
+    [['feat/replanned-spare', '--planned', '--key', 'acme/billing#9'], /puts a withdrawn stage back, and takes nothing else/],
+    [['feat/replanned-spare', '--planned', '--dropped', 'why'], /puts a withdrawn stage back, and takes nothing else/],
+    [['feat/nowhere', '--planned'], /feat\/nowhere is not a stage of replanned/],
+    [['feat/replanned-interface', '--planned'], /feat\/replanned-interface is not withdrawn — there is nothing to put back/],
+  ]) {
+    const r = rig(['stage', ...args, '--work', 'replanned'])
+    assert.equal(r.code, 1, `${args.join(' ')}\n${r.out}`)
+    assert.match(r.out, says)
+  }
+  assert.equal(JSON.stringify(record('replanned').stages), before)
+})
+
+test('what a stage delivers over two lines is refused, since it goes in a table row', () => {
+  const before = JSON.stringify(record('replanned').stages)
+  const r = rig(['stage', 'feat/replanned-two-lines', '--delivers', 'one\ntwo', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--delivers takes one line/)
+  assert.equal(JSON.stringify(record('replanned').stages), before)
+})
+
+test('a stage cut on a withdrawn one is not put back, since it carries that one\'s commits', () => {
+  assert.equal(rig(['stage', 'feat/replanned-lower', '--delivers', 'the lower part', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-upper', '--delivers', 'the upper part', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-lower', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'the lower part' })
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-upper', from: 'feat/replanned-lower', back: 'feat/replanned-work', message: 'the upper part' })
+  assert.equal(rig(['stage', 'feat/replanned-upper', '--dropped', 'not needed', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-lower', '--dropped', 'not needed', '--work', 'replanned']).code, 0)
+  const before = JSON.stringify(record('replanned').stages)
+  const r = rig(['stage', 'feat/replanned-upper', '--planned', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/replanned-upper is cut on feat\/replanned-lower in billing, which was withdrawn — put that back first, or rebase feat\/replanned-upper off it/)
+  assert.equal(JSON.stringify(record('replanned').stages), before)
+})
+
+// A pull request GitHub still reports after it was closed names the base it had then, and a
+// rebase since has moved the branch: only an open one says where a branch sits now.
+const closedPr = (branch, number, base) => {
+  const state = github()
+  state.repos['acme/billing'].prs.push({ branch, number, state: 'CLOSED', url: `https://github.com/acme/billing/pull/${number}`, base, openedAt: '2026-09-19T00:00:00Z', mergedAt: null, commits: [] })
+  setGithub(state)
+}
+
+test('a closed pull request\'s base does not let a stage cut on a withdrawn one be put back', () => {
+  closedPr('feat/replanned-upper', 130, 'feat/replanned-work')
+  const r = rig(['stage', 'feat/replanned-upper', '--planned', '--work', 'replanned'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /is cut on feat.replanned-lower in billing, which was withdrawn/)
+})
+
+test('a closed pull request\'s base does not stop a stage being withdrawn once what sat on it was rebased off', () => {
+  const dest = worktree('replanned', 'billing')
+  assert.equal(rig(['stage', 'feat/replanned-w2', '--delivers', 'a lower part', '--work', 'replanned']).code, 0)
+  assert.equal(rig(['stage', 'feat/replanned-x2', '--delivers', 'an upper part', '--work', 'replanned']).code, 0)
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-w2', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'a lower part' })
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-x2', from: 'feat/replanned-w2', back: 'feat/replanned-work', message: 'an upper part' })
+  closedPr('feat/replanned-x2', 131, 'feat/replanned-w2')
+  // Moved off it, the way a rebase would, and cut again from the work branch.
+  gitMust(dest, 'branch', '-q', '-D', 'feat/replanned-x2')
+  cutStage({ work: 'replanned', repo: 'billing', branch: 'feat/replanned-x2', from: 'feat/replanned-work', back: 'feat/replanned-work', message: 'an upper part, again' })
+  const r = rig(['stage', 'feat/replanned-w2', '--dropped', 'not needed', '--work', 'replanned'])
+  assert.equal(r.code, 0, r.out)
 })

@@ -217,6 +217,13 @@ test('a distance git could not measure is not a reason to move anything', () => 
   assert.equal(r.outcome, 'unmeasurable')
 })
 
+test('an upstream whose ref is not here is still named as the one the branch tracks', () => {
+  // A data root cloned from an empty remote has no ref for its upstream until something
+  // fetches one, and "no upstream" alone cannot tell that apart from a root nobody pushed.
+  assert.equal(c().describe(goneUpstream('tracks-gone')).tracks, 'origin/main')
+  assert.equal(c().describe(cloned('tracks-here').local).tracks, 'origin/main')
+})
+
 test('an upstream whose ref has gone is no upstream, whichever reading asks', () => {
   // There is nothing to move towards and nothing to push onto, which is what "no upstream"
   // already tells every caller: `rig save` keeps the commit local and `rig update` migrates.

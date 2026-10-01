@@ -16,6 +16,10 @@ _Avoid_: spin up, bootstrap, onboard
 Committed, hand-corrected knowledge about an org's repos, one file per repo.
 _Avoid_: inventory, registry
 
+**Org doc**:
+What an org is trying to do, in its own words: `orgs/<org>.md` in the data root, under the four headings AGENTS.md's "The org doc" names. Every work reads the docs of its repos' orgs. Absent means no constraints.
+_Avoid_: charter, mission statement, org config (it is prose, not settings)
+
 **Mirror**:
 A bare clone rig owns, from which worktrees are cut.
 _Avoid_: cache, clone
@@ -25,7 +29,7 @@ The committed checkout holding the catalogue, the work records and `rig.json`. P
 _Avoid_: knowledge repo, rig-data (that is its conventional name, not the concept), profile, workspace
 
 **Current data root**:
-The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT` and the work folder the command is running in — so it decides only for the commands that have no work to anchor them, and those say when it did.
+The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT`, the work folder the command is running in and the repo or data root checkout it is about — so it decides only for the commands that have no work to anchor them, and those say when it did.
 _Avoid_: active profile, selected root, default (that is the name of the one-root form)
 
 **Direction**:
@@ -66,10 +70,10 @@ _Avoid_: stage (that is scope), status, step, state
 
 **Abandoned**:
 The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
-_Avoid_: cancelled, dropped, dead, stale
+_Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
 
 **Stage**:
-A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. Never used for a gate.
+A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.
 _Avoid_: phase (that is lifecycle), slice, milestone, increment, child work
 
 **Work branch**:
@@ -121,8 +125,12 @@ The refusal that stops a rig writing a record format it has never seen. Mutating
 _Avoid_: write gate, lock, block, version check
 
 **Save**:
-Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly.
+Committing and pushing the data root, including edits made outside rig. `rig save` is the explicit form; every mutating command does it implicitly, unless another command holds the data root lock past the wait.
 _Avoid_: check in, sync, snapshot
+
+**Data root lock**:
+The file in the data root's git dir that a mutating command holds while it fast-forwards the data root and while it commits and pushes it, so two commands never move it at once. Advisory: taken over when its holder has gone, and gone past when it cannot be made. The one thing in rig called a lock.
+_Avoid_: mutex, semaphore
 
 **Release**:
 A version of the tool, tagged `v1.2.3` and published with notes assembled from the pull requests it contains. What a checkout is named by when it stands on one.

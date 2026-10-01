@@ -1,9 +1,11 @@
 // One installation with `acme/billing` published and `rig init` run, and every move the tests
-// that drive `close`, `abandon`, `next`, `stage`, `pr` and `plan` make against it.
+// that drive `close`, `abandon`, `next`, `stage`, `pr`, `plan` and the record corrections make
+// against it.
 //
-// Six files test them, each with an installation of its own built from here: close, abandon
-// and next in test/close.test.mjs, stage across stages-e2e, stage-cut and stage-tickets, and pr
-// and plan in files of their own. `node --test` runs files in parallel and the tests within a
+// Seven files test them, each with an installation of its own built from here: close, abandon
+// and next in test/close.test.mjs, stage across stages-e2e, stage-cut and stage-tickets, pr and
+// plan in files of their own, and the corrections to a work's record in
+// test/record-corrections.test.mjs. `node --test` runs files in parallel and the tests within a
 // file in order, so subjects in one file wait on each other. Apart, each file costs an
 // installation of extra work, and buys subjects that run without the others and a suite CI
 // can divide by file into parts of a similar size. A full run gains less than that suggests:
@@ -35,7 +37,12 @@ export function billingInstall (prefix) {
     author: 'rig close',
     email: 'close@example.invalid',
     remotes: true,
-    github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', prs: [] } } },
+    // Private, like most repos a work touches: whether the context-doc link may be written into
+    // a PR or a ticket comment depends on it (hugoforte/rig#202), and a repo whose visibility
+    // GitHub never said would have every body leave the link out.
+    github: { auth: 'ok', repos: { 'acme/billing': { language: 'JavaScript', visibility: 'private', prs: [] } } },
+    // An in-memory Jira with nothing in it, for the ticket keys that are Jira's.
+    twg: { present: true, issues: {} },
   })
   const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, gitMust } = m
 
@@ -54,6 +61,12 @@ export function billingInstall (prefix) {
   }
 
   const github = () => readJson(githubStateFile)
+  const jiraIssue = key => readJson(m.twgStateFile).issues[key]
+  const seedJiraIssue = (key, title) => {
+    const state = readJson(m.twgStateFile)
+    state.issues[key] = { title, body: '', comments: [] }
+    fs.writeFileSync(m.twgStateFile, JSON.stringify(state))
+  }
   const setGithub = state => fs.writeFileSync(githubStateFile, JSON.stringify(state))
 
   // What GitHub does when a PR lands on a repo that requires linear history: the branch's
@@ -100,13 +113,38 @@ export function billingInstall (prefix) {
     setGithub(state)
   }
 
-  publish('billing')
-  assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
-    '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
+  // Either step can fail, and the caller has not been handed `cleanup` yet to register it.
+  try {
+    publish('billing')
+    assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
+      '--orgs', 'acme', '--tracker', 'acme=none']).code, 0)
+  } catch (e) {
+    m.cleanup()
+    throw e
+  }
+
+  // What a repo's visibility on GitHub is, as the next lookup will read it; `undefined` is a
+  // repo GitHub will not say for.
+  const setVisibility = (spec, visibility) => {
+    const state = github()
+    state.repos[spec] = { prs: [], ...state.repos[spec], visibility }
+    setGithub(state)
+  }
+  // `fn`, run with a repo's visibility set, and the visibility it had put back afterwards.
+  const withVisibility = (spec, visibility, fn) => {
+    const was = github().repos[spec]?.visibility
+    setVisibility(spec, visibility)
+    try { return fn() } finally { setVisibility(spec, was) }
+  }
 
   return {
     ...m,
     bare,
+    publish,
+    jiraIssue,
+    seedJiraIssue,
+    setVisibility,
+    withVisibility,
     github,
     setGithub,
     squashMergeAndDeleteBranch,

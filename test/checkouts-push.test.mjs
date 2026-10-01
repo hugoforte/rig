@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { checkoutsFixture } from './checkouts-fixture.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 
 const f = checkoutsFixture('rig-checkouts-push-')
 const { tmp, env, run, runIn, gitMust, c, cloned, pushFromElsewhere } = f
@@ -185,4 +186,16 @@ test('a push the remote refuses keeps the commit and says whose refusal it was',
   assert.equal(r.outcome, 'push-failed')
   assert.equal(r.hash, gitMust(local, 'rev-parse', 'HEAD').slice(0, 7), 'the caller can name what is waiting')
   assert.ok(r.error)
+})
+
+test('the data root\'s push may never stop to ask for credentials', () => {
+  // Every mutating command pushes the data root, from sessions nobody is watching: a push that
+  // prompts is a command that never returns.
+  let asked = null
+  const recording = (cmd, args, opts) => {
+    if (args.includes('push')) asked = opts
+    return { code: 0, out: '', err: '' }
+  }
+  assert.equal(c(recording).pushRebasing('anywhere').outcome, 'pushed')
+  assert.deepEqual(asked?.env, NO_PROMPT_ENV)
 })

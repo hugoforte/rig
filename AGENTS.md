@@ -10,7 +10,7 @@ how to *use* it.
 | | |
 |---|---|
 | `C:\rig` (this repo) | **The tool.** Committed, generic, public. |
-| the data root | **The knowledge.** Committed, private. `catalog/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
+| the data root | **The knowledge.** Committed, private. `catalog/`, `orgs/`, `work/`, `rig.json`. A separate checkout named in `rig.local.json` — never this one. `rig doctor` prints which. An installation may know several, by name; see "More than one data root". |
 | `C:\w` (the work root) | **Disposable.** Worktrees and bare mirrors. Deleting it loses nothing. |
 
 Never put durable prose in the work root. Never put anything that names a real org, repo or
@@ -19,7 +19,8 @@ or secrets in either committed repo.
 
 ## First run
 
-Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH.
+Installing is the README's job: clone, `npm install -g` the clone, and `rig` is on PATH. rig
+needs git 2.38 or newer.
 `rig doctor` says "not set up" until there is a data root — separate from this checkout —
 with a `rig.json` in it. Run the setup interview; its first question is where the knowledge
 lives:
@@ -61,10 +62,26 @@ resolved to real ids via `rig.json`'s per-org config) and exits without creating
 <brief> | rig new refund-double-charge --title "..." --ticket             # then create
 ```
 
+A Jira ticket that belongs under an epic says so with `--parent PROJ-7`, on the preview and the
+create alike (DESIGN.md decisions 145–146).
+
 No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the decision —
 `Tickets: none (declined)`, not a silent empty list. On `rig close`, every ticket gets a
 comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets
 never auto-transition — that stays with you (`docs/adr/0001-jira-via-twg.md`).
+
+A key the record holds can turn out wrong: an issue transferred to another repo, or deleted and
+opened again, has a new number. Correct it in the record rather than by hand:
+
+```bash
+rig ticket owner/other#12 --replaces owner/repo#7   # in the old key's place, on the work or a stage
+rig ticket --remove owner/repo#7                    # off the record, wherever it is held
+```
+
+Both rewrite `work.json`, the context doc's `Tickets:` line and the generated `AGENTS.md`, and
+neither tells the tracker anything: a ticket next hears from rig at `rig close`. `--remove` says
+the record was wrong about a ticket. It is not the answer for a ticket this work only delivers
+part of, which the record is right to name; DESIGN.md decision 124 says why.
 
 Then run the repo interview and attach what it selects:
 
@@ -113,9 +130,10 @@ rig attach orders-web
 
    What the work *taught* is the same kind of knowledge, asked the same way. Once a PR is open
    `rig next` offers the lesson review: the `rig-learn` skill reads the story (the context doc,
-   review threads, failed checks, the commit log) and offers each lesson a home — the
-   catalogue, an attached repo, or an issue on rig — a machine check before prose, and never a
-   new rule. `rig save --learned` records the gate, and `rig close` names a work that never
+   review threads, failed checks, the commit log) and offers each lesson a home — an
+   attached repo, the catalogue, the org doc, an issue on rig, or rig's philosophy page — a
+   machine check before prose, and never a new rule. The org doc is the one home for prose
+   every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, and `rig close` names a work that never
    passed it. Neither refuses.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
@@ -191,6 +209,23 @@ on the process past that; a site already answering at `run.ready` is reported, n
 twice. **Stop the site before `rig close`**: it stands in the worktree, and Windows will not
 remove a folder a process is standing in.
 
+## The org doc
+
+One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so a work stops starting with the human explaining it again. Its frontmatter holds only `org`, then prose under any of these four headings, each written exactly so:
+
+```markdown
+## What we're trying to accomplish
+## What hurts now
+## What we believe
+## Whose call it is
+```
+
+**Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, from that work's next mutating command on, and `rig status` names each one, or says there is none and where it would go.
+
+**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
+
+**The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
+
 ## Writing a context doc
 
 `rig new` scaffolds four sections. Add more from `templates/context-sections.md` **only when
@@ -214,10 +249,27 @@ you, not by rig, so when the Direction section is agreed, run:
 ```bash
 rig save -m "design agreed" --designed   # records the design gate, commits, pushes
 rig save -m "refuted the sync hypothesis" # any later edit made outside rig
+rig save --title "What it turned out to be" # the title was wrong
 ```
 
 Nothing asks first, and nothing runs on a timer: knowledge is committed at the moments it
 was just agreed, with the catalogue corrections you made in passing swept up alongside.
+
+**Two sessions, one data root.** Every work on the machine shares the data root, so a mutating
+command holds a lock on it (`rig.lock`, in the data root's git dir, never committed) while it
+fast-forwards at the start and while it commits and pushes at the end — never for the rest of
+the command. A second command that finds it held waits up to 30 seconds, then says which
+command and work hold it: at the start it stops before doing anything, so run it again; at the
+end what it wrote waits in the tree for the next command, or `rig save` once the other
+finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
+Read-only commands never wait. The lock does not change the sweep: the second of two queued
+commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
+
+**The title is prose, and correctable the same way.** `rig save --title` rewrites it in
+`work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
+touches the branch, which was named from the first title and which the stack is read from, or
+the id, which names the folder and the record. An open pull request takes the new title with
+`rig pr --refresh`.
 
 ## More than one data root
 
@@ -232,13 +284,16 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**,
+`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
+(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
 then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
 root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
-first time it saw that repo — names the root that repo belongs to. So `rig new <id> --repos
-Payments` lands in Payments' root, a command run in a checkout of a catalogued repo answers
-for that repo's root, and `current` decides only for what neither can place — `new` with no
-repos, `list`, `catalog`, `dash` — which say so when it did.
+first time it saw that repo — names the root that repo belongs to. A checkout's repo is
+matched by org as well as name, because same-named repos in different orgs are normal. So
+`rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
+catalogued repo answers for that repo's root, a command run in a data root's own checkout
+answers for that root, and `current` decides only for what none of them can place — `new`
+with no repos, `list`, `catalog`, `dash` — which say so when it did.
 
 **A work lives in one data root.** One `work.json`, one `context.md`, and two roots with
 different readers, so it cannot span them: `rig new --repos a,b` refuses when a and b are
@@ -252,7 +307,12 @@ Two consequences worth holding on to:
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
-  next mutating command, mid-work.
+  next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
+  `current` do not stop it; the doctor checks it ends in say that selection, once.
+- **A work folder's `.rig/data` is written only where the record is**: rig writes it when the
+  root in hand is the one root holding the work's record. `rig doctor` names a folder with
+  none when more than one root is configured, one whose marker names a root that does not
+  hold the record, and a record held by two roots.
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
@@ -280,6 +340,10 @@ rig stage                                          # the stack, in the order the
 rig stage feat/schema --delivers "the write path"  # declare one
 rig stage feat/schema --cut                        # and make the branch, here, on this repo's stack
 rig stage feat/schema --key owner/repo#7           # give the slice its own ticket
+rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, with the reason
+rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
+rig stage feat/schema --planned                    # put a withdrawn stage back in the plan
+rig stage --link                                   # register the open stage PRs as a GitHub stack
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -302,16 +366,40 @@ keeps one commit per work in the base branch. The merge is what keeps the stack 
 squash replaces a stage's commits, so the stage above stops descending from anything and has
 to be rebased — and a rebase is what breaks the chain rig reads the order from. rig never
 merges anything, so this is a convention it relies on rather than enforces; a stage somebody
-squashes anyway falls back to the order it was declared in.
+squashes anyway falls back to the order it was declared in. `rig next` names the stages above a
+squash, which still carry the commits it replaced, and offers the commands that replay only
+their own commits and force-push them, when the squash is the stage as it stood.
+
+**A GitHub stack.** GitHub shows stacked PRs as unrelated until they are registered as a stack.
+`rig stage --link` registers, in each repo, the open stage PRs that form a chain on the work
+branch, with `gh stack link`, by PR URL and `--base <work branch>`, so it never creates or pushes
+a branch. Run again after a stage is added, it grows the same stack; `rig next` offers it while
+the open stage PRs are not one. Without the `gh stack` extension, or with one too old to `link`,
+it says so and carries on: the base branches already carry the stack. A stack records no merge
+method, so the one said where it is made is the convention: merge it with a merge commit, all at
+once (`gh stack merge <n> --merge`, which rewrites no head) or bottom-up. `rig close` never
+unstacks: GitHub keeps a merged stack as a closed record after its branches go.
 
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**
 A stage's pull request merges into the work branch, never the default branch, so a closing
 keyword never fires for it and a slice's ticket cannot close itself. `rig close` closes it when
-the slice landed, and comments and leaves it open when it did not. Everything else is derived — whether
+the slice landed, and comments and leaves it open when it did not. A ticket that is also the
+work's, or that two slices carry, gets one comment, and closes only when every role it holds
+would close it. Everything else is derived — whether
 it has started (does the branch exist), whether it is up for review (is there a PR), whether it
 landed (did it merge), which repos carry it, and where it sits in the stack (what it was cut
 from, read live). Order is **never stored**: a stored order is a second answer to a question the
 branches already answer, and the two disagree the moment anything is rebased.
+
+**A plan that changed is not a plan that stalled.** Declaring a stage is a decision rig records,
+and so is withdrawing one: `--dropped "why"` records `droppedAt` and the reason, and
+`--replaced-by <stage>` records `replacedAt` and the declared stage that did the work. Neither
+deletes the stage, for the reason a work keeps `abandonedAt`: the plan a work started from is what
+a reader wants a year later. `rig stage`, `rig next` and the stage table in the PR body and the
+rollout plan say dropped or replaced, never "not started", and `rig next` never offers one as the
+next stage. Only a stage with no pull request open or merged can be withdrawn, and a withdrawn
+stage's own ticket is told why at `rig close` and left open. A withdrawal is undone with `--planned`,
+which puts the stage back as though it had never been withdrawn; the commit says so.
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
@@ -350,7 +438,9 @@ The record is portable and the work root is not: a second machine that clones th
 
 **A restore is not an attach, and writes nothing down.** `work.json` is byte-identical afterwards and nothing is committed. **It never recreates a branch**: one that the remote and the mirror have both lost — never pushed, or deleted with its closed PR — is named with its PR's state and left alone. Branches stacked on top that the record does not know are named in order; `rig stage <branch>` records them, and `--tip` checks out the top of the stack when it is one line. rig never picks between the branches of a fork.
 
-A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it.
+**A close on one machine leaves the folder on the others.** `rig close` tears down the machine it runs on and stamps `closedAt` into the record, and that is all the other machines hear. `rig doctor` names a closed work whose folder is still here; `rig tidy` clears every one, and `rig close` on such a work clears that one, which `rig next` offers when it is asked about one. Only this machine's copy goes — the worktrees, the folder and the mirror's copies of branches that landed — and nothing leaves the machine: no record change, no ticket comment, no remote branch deleted. Work that may exist only here — uncommitted changes, commits no branch or remote holds, and files in the work folder that are not one of its repos — refuses the close and makes `tidy` skip that work and name it; `tidy` never forces, `rig close --force` does. Doctor reports and never clears, so it stays the command you can always run.
+
+A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
 ## Staying up to date
 
@@ -363,8 +453,10 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. How the check is
-measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
+before they read it, so a second machine never works from stale records. A data root whose
+branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
+another machine has since pushed to, is fetched too, rather than read as local only. How the
+check is measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
 
 ## The rollout plan
 
@@ -414,7 +506,8 @@ walkthrough that stops before the merge makes half the case.
 ## Opening the pull requests
 
 ```bash
-rig pr        # one PR per repo, work branch to the base it was cut from
+rig pr            # one PR per repo, work branch to the base it was cut from
+rig pr --refresh  # rewrite each open PR's title and body from the record as it stands
 ```
 
 The body is assembled from what the record already holds: the title, the tickets, the
@@ -422,25 +515,64 @@ The body is assembled from what the record already holds: the title, the tickets
 stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
 
+**What it says in public.** The Direction is lifted into a body anyone who can read the repo
+reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
+visible than the data root** — public above internal above private, and a data root with no
+remote counts as private — because it names the private repo, and GitHub keeps a body's edit
+history. A visibility GitHub would not say leaves the link out, with one dim line saying so, and
+a data root hosted anywhere but GitHub is never linked.
+The same rule holds for `rig close`'s comments on GitHub tickets and for the issue `rig new
+--ticket` opens; Jira comments keep the link. In a work of **one** repo, each of the work's own
+GitHub tickets in that repo gets a `Fixes` line, since merging that PR is the work landing; every
+other ticket is named on the `Tickets:` line and closed by `rig close`.
+
+**It says which release the PR asks for.** On a repo that releases the way rig does, by a bump
+each PR names (it carries a `release:` label), `rig pr` prints the bump beside the PR it opens
+or finds open, with the reason: the branch prefix, or the `release:` label that overrides it.
+`rig next` says the same beside its offer to open the PR, while a label can still change it. A
+repo with no `release:` label is told nothing, because there the prefix is not how it releases.
+
+**It says whether the base moved.** Before opening each repo's PR, `rig pr` fetches that repo
+and says how many commits the base has that the work branch lacks, and, if a merge of the two
+would conflict, in which files, with the command to merge the base in. Then it opens the PR
+anyway: a report, never a stop.
+
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
 
+**The PR is kept true.** A work's scope moves while its PR is open: a ticket folded in, the
+Direction rewritten after a trial run, the title corrected, a stage dropped. `rig pr --refresh`
+rewrites each open PR's title and body with exactly what `rig pr` would open it with now, and
+leaves one that already says it alone. A repo with no open PR is told so; a refresh never opens
+one. `rig next` compares each open PR with that text and offers the refresh when they differ,
+the way it offers `rig plan --refresh`. The whole title and body are rig's, so an edit made on
+GitHub is lost to the next refresh: put what should last in the context doc.
+
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
+
+A worktree is often still on the last stage when every stage is in, and that stage's branch is
+gone from GitHub. `rig pr` names a worktree on a landed stage, and `rig next` does once every
+stage is in, each with the commands that move it to the work branch. Neither runs them.
 
 ## Closing
 
 ```bash
 rig list                  # flags works whose PRs are merged and whose trees are clean
 rig close                 # refuses if anything is uncommitted, unpushed, or has an open PR
+rig close                 # on a work already closed elsewhere: clears this machine's copy only
 rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
 
 `rig close` removes the worktrees and keeps `context.md`. When every PR merged, it also deletes
 the work's branches — the work branch and each stage that landed — from the mirror and the
 remote, but only a copy holding nothing its PR did not merge; a branch pushed to after the
-merge is kept and named. A close forced past a blocker, or abandoned, deletes no branch. Nothing
-else is ever auto-deleted.
+merge is kept and named. When the mirror lacks the commit a PR merged, the close fetches it
+first; if that fails, the copy is kept with the reason. A stage GitHub rewrote while merging
+its stack one PR at a time holds the same patches under new shas, so a copy the PR's head does
+not contain is compared by patch and by content: it goes when everything on it landed, and is
+kept otherwise, naming the first commit that did not. A close forced past a blocker, or
+abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot
@@ -493,7 +625,7 @@ convictions, loosely held** — decide, write the reason down, and let evidence 
 Both are stated in full in DESIGN.md's "Principles".
 
 Adding a decision to DESIGN.md's log means filling its **Enforced by** cell: the test that
-would fail if the decision stopped holding — a path, then that test's own title — or `—` when
+would fail if the decision stopped holding — a path, then that test's own title, or a journey's step as `<scenario> › <step>` — or `—` when
 nothing checks it. `test/design.test.mjs` resolves what you write and fails on a reference that
 has been renamed or deleted, so a rename is caught on the pull request that made it. An empty
 cell is a legitimate answer and the gaps are meant to be visible; naming a test that merely

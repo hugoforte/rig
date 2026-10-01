@@ -1,7 +1,7 @@
 // One definition of "is this work finished", and the only place that decides it.
 //
-// `repoState` in rig.mjs gathers the facts about one attached repo — dirty, ahead, behind,
-// the PR, whether the worktree is still there. Until this module existed, four readers each
+// `repoState` in rig.mjs gathers the facts about one attached repo — dirty, unpushed, the
+// PR, whether the worktree is still there. Until this module existed, four readers each
 // turned those facts into a judgement with a different rule: `list` said done when every PR
 // was merged and nothing was dirty, `close` refused on dirty/ahead/OPEN and shrugged at a
 // repo with no PR at all, the ticket write-back counted a missing worktree as unmerged, and
@@ -16,7 +16,8 @@
 //
 //   | situation                       | blocks close          | counts as done |
 //   | uncommitted changes             | yes                   | no             |
-//   | ahead > 0                       | yes                   | no             |
+//   | commits on a detached HEAD only | yes                   | no             |
+//   | unpushed > 0                    | yes                   | no             |
 //   | distance unknown                | yes                   | no             |
 //   | PR OPEN                         | yes                   | no             |
 //   | PR state unknown                | yes                   | no             |
@@ -78,6 +79,7 @@ function repoVerdict (entry, s, branch) {
     dirty: s.dirty || 0,
     ahead: s.ahead ?? null,
     behind: s.behind ?? null,
+    unpushed: s.unpushed ?? null,
     distanceUnknown: s.distanceUnknown || null,
     pr,
     merged,
@@ -87,8 +89,11 @@ function repoVerdict (entry, s, branch) {
 
   // Unsaved work is the one thing `close` could destroy, so it blocks whatever the PR says.
   if (v.dirty) block('dirty', `${repo}: ${v.dirty} uncommitted change(s)`)
+  // So are commits on a detached HEAD: no branch holds them, so the worktree is their only copy.
+  if (s.unbranched === null) block('unbranched', `${repo}: detached HEAD, and git could not say whether its commits are on a branch`)
+  else if (s.unbranched > 0) block('unbranched', `${repo}: ${s.unbranched} commit(s) on a detached HEAD that no branch holds`)
   if (!merged) {
-    if (v.ahead) block('unpushed', `${repo}: ${v.ahead} unpushed commit(s)`)
+    if (v.unpushed) block('unpushed', `${repo}: ${v.unpushed} unpushed commit(s)`)
     if (v.distanceUnknown) block('distance-unknown', `${repo}: commits unknown (${v.distanceUnknown})`)
     if (pr && pr.state === 'OPEN') block('pr-open', `${repo}: PR #${pr.number} still open`)
     if (prUnknown) block('pr-unknown', `${repo}: PR state unknown (${prUnknown})`)
@@ -119,7 +124,7 @@ function reasonFor (repos, blockers, done) {
 //
 //   repos       per-repo facts plus `merged` and that repo's blockers
 //   blockers    every blocker, in repo order: { repo, kind, message }
-//               kind: dirty | unpushed | distance-unknown | pr-open | pr-unknown | stage-pr-open
+//               kind: dirty | unbranched | unpushed | distance-unknown | pr-open | pr-unknown | stage-pr-open
 //   safeToClose nothing is in the way of `rig close`
 //   done        safe to close *and* every attached repo landed a PR
 //   reason      one line saying why not done, empty when it is

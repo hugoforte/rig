@@ -10,7 +10,7 @@ import {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
-  spawnFailure,
+  spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
 import { makeInstall } from './harness.mjs'
 
@@ -21,6 +21,10 @@ test('parseArgs: values, booleans, and a positional after a boolean flag', () =>
   assert.equal(flags.title, 'T')
   assert.equal(flags.type, 'chore')
   assert.equal(flags.force, true)
+})
+
+test('parseArgs: a value given with = keeps any = of its own', () => {
+  assert.equal(parseArgs(['--title=E=mc2 is wrong']).flags.title, 'E=mc2 is wrong')
 })
 
 test('parseArgs: a value flag at the end is true, not undefined', () => {
@@ -39,6 +43,41 @@ test('parseArgs: -m is --message, and a short flag is never eaten as another fla
 
 test('parseArgs: an unknown short flag fails rather than swallowing a positional', () => {
   assert.throws(() => parseArgs(['detach', '-f', 'billing']), /unknown flag -f/)
+})
+
+test('webUrlOf: credentials never reach a link, whatever the host (#202)', () => {
+  assert.equal(webUrlOf('https://oauth2:SECRET@gitlab.example/acme/rig-data.git'), 'https://gitlab.example/acme/rig-data')
+  assert.equal(webUrlOf('https://x-access-token:SECRET@github.com/acme/rig-data.git'), 'https://github.com/acme/rig-data')
+})
+
+test('webUrlOf: every way git spells a GitHub remote is the page\'s URL (#202)', () => {
+  for (const remote of ['git@github.com:acme/rig-data.git', 'ssh://git@github.com/acme/rig-data.git', 'https://github.com/acme/rig-data/']) {
+    assert.equal(webUrlOf(remote), 'https://github.com/acme/rig-data', remote)
+  }
+})
+
+test('repoOfRemote: a hosted remote names its org, and a path on disk names its repo alone', () => {
+  const cases = {
+    'https://github.com/acme/ledger.git': 'acme/ledger',
+    'https://github.com/acme/ledger/': 'acme/ledger',
+    'https://github.com/acme/ledger.GIT': 'acme/ledger',
+    'ssh://git@github.com:22/acme/ledger.git': 'acme/ledger',
+    'git@github.com:acme/ledger.git': 'acme/ledger',
+    // An ssh config alias, which is how one machine uses two GitHub accounts.
+    'github-work:linenmaster/rig-data': 'linenmaster/rig-data',
+    'https://ghe.example.com/acme/ledger': 'acme/ledger',
+    // A deeper path is no `org/repo`: an Azure repo, a GitLab subgroup.
+    'https://dev.azure.com/acme/proj/_git/ledger': 'ledger',
+    'https://gitlab.com/acme/team/ledger.git': 'ledger',
+    'host:ledger': 'ledger',
+    'D:/remotes/acme/ledger.git': 'ledger',
+    'D:\\remotes\\acme\\ledger.git': 'ledger',
+    '\\\\server\\share\\ledger': 'ledger',
+    '/srv/git/ledger': 'ledger',
+    'file:///srv/git/ledger.git': 'ledger',
+    'file://localhost/srv/ledger': 'ledger',
+  }
+  for (const [url, repo] of Object.entries(cases)) assert.equal(repoOfRemote(url), repo, url)
 })
 
 test('parseFrontmatter: scalars, an empty list, and a list of objects', () => {
@@ -203,7 +242,7 @@ test('ticketsLabel: keys joined, declined, or the placeholder', () => {
 // machine — the refresh that took forty seconds under load and hung a desktop finished inside
 // its deadline when nothing else was running, so the behavioural test went green on exactly
 // the machines that were fine. A wrong option here is not a refactor; it is the regression.
-// The fetch's own option, `GIT_TERMINAL_PROMPT`, is asserted the same way in
+// The fetch's own environment, `NO_PROMPT_ENV`, is asserted the same way in
 // `test/checkouts-read.test.mjs`, where the operation it guards now lives.
 test('only the console-less run hides its spawns, because a hidden console is a whole process', () => {
   // `CREATE_NO_WINDOW` does not suppress a console, it allocates a hidden one — a

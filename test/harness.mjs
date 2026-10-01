@@ -148,6 +148,10 @@ function buildInstall (tmp, {
   // suite is itself run from inside a rig work folder often enough that inheriting would let
   // the machine decide what an isolated installation reads.
   //
+  // `machine` stands in for what the data root's lock asks of the machine — the time, a sleep,
+  // whether a pid is running — so a test of two commands meeting counts polls rather than
+  // waiting on real ones. A subprocess has its own machine, so only an in-process run takes it.
+  //
   // Two adapters behind one signature, and which a call gets is a question about what the
   // test is *for* (DESIGN.md decisions 81 and 99). `bin/rig.mjs` exports `run(argv, io)`, so an
   // invocation is a value this process can produce: the same installation, cwd, environment
@@ -169,7 +173,7 @@ function buildInstall (tmp, {
   // A call naming a different `root` is always a subprocess, whatever it asked for: what it
   // wants is the code on *that* disk — the previous release, or a copy something has edited
   // — and in this process the code is always this checkout's.
-  const rig = (args, { input = '', env: envOverride = env, root = install, cwd = tmp, inProcess: here = inProcess } = {}) => {
+  const rig = (args, { input = '', env: envOverride = env, root = install, cwd = tmp, inProcess: here = inProcess, machine } = {}) => {
     if (here && root === install) {
       let stdout = ''
       let stderr = ''
@@ -181,6 +185,7 @@ function buildInstall (tmp, {
         stdin: () => input.trim(),
         out: s => { stdout += s },
         err: s => { stderr += s },
+        machine,
       })
       const settled = code => ({ code, out: strip(stdout + stderr), stdout: strip(stdout) })
       // A command that waits on a site — `run --run`, `deploy --run` — answers with a

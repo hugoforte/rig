@@ -4,6 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { githubViaGh, githubInMemory, GithubError } from '../bin/github.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 
 // A canned `gh`: `reply(args)` returns stdout, or a { code, err } object.
 const canned = reply => {
@@ -33,12 +34,39 @@ test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
 })
 
 test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
-  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z"}]')
+  const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","mergeCommit":{"oid":"def456"},"url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z","title":"A title","body":"A body","labels":[{"id":"L1","name":"release:minor","color":"0e8a16"}]}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
-    { number: 12, state: 'MERGED', base: 'main', head: 'abc123', url: 'https://github.com/acme/platform/pull/12',
-      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z' })
+    { number: 12, state: 'MERGED', base: 'main', head: 'abc123', merge: 'def456', url: 'https://github.com/acme/platform/pull/12',
+      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z', title: 'A title', body: 'A body', labels: ['release:minor'] })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,url,createdAt,mergedAt', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels', '--limit', '1'])
+})
+
+test('gh adapter: labels lists the names of every label a repo has, across pages', () => {
+  const { calls, github } = canned(() => 'bug\nrelease:minor\n')
+  assert.deepEqual(github.labels('acme', 'platform'), ['bug', 'release:minor'])
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform/labels', '--paginate', '--jq', '.[].name'])
+})
+
+test('gh adapter: a repo with no labels has none, and one gh cannot list for is unknown', () => {
+  assert.deepEqual(canned(() => '').github.labels('acme', 'platform'), [])
+  assert.equal(canned(() => ({ code: 1, err: 'HTTP 404: Not Found' })).github.labels('acme', 'platform'), null)
+})
+
+test("gh adapter: editPr rewrites a PR's title and body by number", () => {
+  const { calls, github } = canned(() => 'https://github.com/acme/platform/pull/12\n')
+  github.editPr('acme', 'platform', 12, { title: 'New title', body: 'New body' })
+  assert.deepEqual(calls[0], ['pr', 'edit', '12', '--repo', 'acme/platform', '--title', 'New title', '--body', 'New body'])
+})
+
+test("gh adapter: editPr fails with gh's own error when gh fails", () => {
+  const { github } = canned(() => ({ code: 1, err: 'GraphQL: Resource not accessible' }))
+  assert.throws(() => github.editPr('acme', 'platform', 12, { title: 't', body: 'b' }), /Resource not accessible/)
+})
+
+test('gh adapter: an open PR has no merge commit', () => {
+  const { github } = canned(() => '[{"number":12,"state":"OPEN","mergeCommit":null,"url":"u","createdAt":"2026-01-02T00:00:00Z","mergedAt":null}]')
+  assert.equal(github.prForBranch('acme', 'platform', 'feat/x').merge, null)
 })
 
 test('gh adapter: prForBranch answers the base the PR lands on now, in the same call', () => {
@@ -90,9 +118,15 @@ test('gh adapter: prForBranch fails as a GithubError, not a TypeError, when gh p
   assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), /gh pr list.*not a list/)
 })
 
-test('gh adapter: repo returns GitHub\'s canonical name and language', () => {
+test('gh adapter: repo returns GitHub\'s canonical name, language and visibility', () => {
+  const { calls, github } = canned(() => '{"name":"Platform","language":"TypeScript","visibility":"public"}')
+  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript', visibility: 'public' })
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform', '--jq', '{name,language,visibility}'])
+})
+
+test('gh adapter: a repo GitHub names no visibility for reads as unknown, not as private', () => {
   const { github } = canned(() => '{"name":"Platform","language":"TypeScript"}')
-  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
+  assert.equal(github.repo('acme', 'platform').visibility, null)
 })
 
 test('gh adapter: repo is null when GitHub has no such repo', () => {
@@ -142,6 +176,14 @@ test('gh adapter: clone and createRepo pass the right argv and fail on error', (
   assert.throws(() => failing.createRepo('acme/rig-data', { source: '/tmp/x', description: 'd' }), /no permission/)
 })
 
+test('gh adapter: clone and createRepo never stop to ask for credentials', () => {
+  const envs = []
+  const github = githubViaGh({ exec: (args, opts = {}) => { envs.push(opts.env); return { status: 0, stdout: '', stderr: '' } } })
+  github.clone('acme/rig-data', '/tmp/rig-data')
+  github.createRepo('acme/rig-data', { source: '/tmp/rig-data', description: 'd' })
+  assert.deepEqual(envs, [NO_PROMPT_ENV, NO_PROMPT_ENV])
+})
+
 const world = () => ({
   auth: 'ok',
   repos: {
@@ -155,8 +197,14 @@ const world = () => ({
 
 test('in-memory adapter: repo matches case-insensitively and returns the canonical name', () => {
   const github = githubInMemory(world())
-  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript' })
+  assert.deepEqual(github.repo('acme', 'platform'), { name: 'Platform', language: 'TypeScript', visibility: null })
   assert.equal(github.repo('acme', 'nope'), null)
+})
+
+test('in-memory adapter: repo answers the visibility a fixture gives it', () => {
+  const state = world()
+  state.repos['acme/Platform'].visibility = 'private'
+  assert.equal(githubInMemory(state).repo('acme', 'platform').visibility, 'private')
 })
 
 test('in-memory adapter: prTimeline answers the earliest commit, first look and approval', () => {
@@ -183,10 +231,32 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
 })
 
+test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {
+  const github = githubInMemory({ repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, state: 'OPEN', title: 'Old', body: 'old' }] } } })
+  github.editPr('acme', 'platform', 12, { title: 'New', body: 'new' })
+  const pr = github.prForBranch('acme', 'platform', 'feat/x')
+  assert.deepEqual([pr.title, pr.body], ['New', 'new'])
+})
+
+test('in-memory adapter: editPr refuses a pull request that does not exist', () => {
+  const github = githubInMemory({ repos: { 'acme/platform': { prs: [] } } })
+  assert.throws(() => github.editPr('acme', 'platform', 12, { title: 't', body: 'b' }), /no such pull request/)
+})
+
 test('in-memory adapter: prForBranch finds the PR by branch', () => {
   const github = githubInMemory(world())
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x').number, 12)
   assert.equal(github.prForBranch('acme', 'platform', 'feat/other'), null)
+})
+
+test('in-memory adapter: labels answers what a fixture gives a repo and its PRs', () => {
+  const state = world()
+  state.repos['acme/Platform'].labels = ['release:patch']
+  state.repos['acme/Platform'].prs[0].labels = ['release:minor']
+  const github = githubInMemory(state)
+  assert.deepEqual(github.labels('acme', 'platform'), ['release:patch'])
+  assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x').labels, ['release:minor'])
+  assert.equal(githubInMemory(world()).labels('acme', 'platform'), null, 'a fixture that gives none is one GitHub would not list')
 })
 
 test('in-memory adapter: prForBranch carries the base a seeded PR lands on', () => {
@@ -258,4 +328,59 @@ test('in-memory adapter: createRepo makes the repo exist; clone needs it to exis
   github.createRepo('acme/rig-data', { source: '/tmp/x', description: 'd' })
   assert.equal(github.repoExists('acme/rig-data'), true)
   assert.throws(() => github.clone('acme/nope', '/tmp/y'), /acme\/nope/)
+})
+
+// ---------------------------------------------------------------- stacks (hugoforte/rig#224)
+
+test('gh adapter: stacks reads every stack a repo has from the REST answer, one per line', () => {
+  const { calls, github } = canned(() => '{"base":"feat/work","number":7,"open":true,"prs":[3,4],"openPrs":[4]}\n{"base":"main","number":2,"open":false,"prs":[1],"openPrs":[]}\n')
+  assert.deepEqual(github.stacks('acme', 'platform'), [
+    { number: 7, open: true, base: 'feat/work', prs: [3, 4], openPrs: [4] },
+    { number: 2, open: false, base: 'main', prs: [1], openPrs: [] },
+  ])
+  assert.deepEqual(calls[0], ['api', 'repos/acme/platform/stacks', '--paginate', '--jq',
+    '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'])
+})
+
+test('gh adapter: a repo with no stacks has none, and one GitHub would not list them for is unknown', () => {
+  assert.deepEqual(canned(() => '').github.stacks('acme', 'platform'), [])
+  assert.equal(canned(() => ({ code: 1, err: 'HTTP 404: Not Found' })).github.stacks('acme', 'platform'), null)
+})
+
+test('gh adapter: linkStack links pull requests by URL onto the base, for the repo it names', () => {
+  const calls = []
+  const github = githubViaGh({ exec: (args, opts) => { calls.push({ args, env: opts?.env }); return { status: 0, stdout: '', stderr: '' } } })
+  const urls = ['https://github.com/acme/platform/pull/3', 'https://github.com/acme/platform/pull/4']
+  github.linkStack('acme', 'platform', { base: 'feat/work', urls })
+  assert.deepEqual(calls, [{ args: ['stack', 'link', '--base', 'feat/work', ...urls], env: { GH_REPO: 'acme/platform' } }])
+})
+
+test('gh adapter: linkStack fails with gh stack\'s own error', () => {
+  const { github } = canned(() => ({ code: 4, err: 'failed to look up PR #3' }))
+  assert.throws(() => github.linkStack('acme', 'platform', { base: 'feat/work', urls: [] }), e => e instanceof GithubError && /failed to look up PR #3/.test(e.message))
+})
+
+test('gh adapter: stackTool tells a missing gh stack from one too old to link', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'unknown command "stack" for "gh"' })).github.stackTool(), 'missing')
+  assert.equal(canned(() => 'Stack management:\n  add  Add a branch\n  init Initialize\n').github.stackTool(), 'old')
+  const { calls, github } = canned(() => 'Remote operations:\n  link        Link PRs into a stack on GitHub\n  merge       Merge a stack\n')
+  assert.equal(github.stackTool(), 'ok')
+  assert.deepEqual(calls[0], ['stack', '--help'])
+})
+
+test('in-memory adapter: linkStack makes a stack of the PRs, grows the one that holds any of them, and stacks answers it', () => {
+  const state = world()
+  const github = githubInMemory(state)
+  const url = n => `https://github.com/acme/Platform/pull/${n}`
+  github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4)] })
+  github.linkStack('acme', 'Platform', { base: 'feat/work', urls: [url(3), url(4), url(5)] })
+  const [stack] = github.stacks('acme', 'Platform')
+  assert.deepEqual({ ...stack, number: 0 }, { number: 0, open: true, base: 'feat/work', prs: [3, 4, 5], openPrs: [] })
+  assert.equal(github.stacks('acme', 'Platform').length, 1)
+})
+
+test('in-memory adapter: stackTool answers what the state says gh stack is', () => {
+  assert.equal(githubInMemory(world()).stackTool(), 'ok')
+  assert.equal(githubInMemory({ ...world(), ghStack: 'missing' }).stackTool(), 'missing')
+  assert.equal(githubInMemory({ ...world(), ghStack: 'old' }).stackTool(), 'old')
 })

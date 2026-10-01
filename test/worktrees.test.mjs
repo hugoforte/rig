@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { remotesOnGitHub, remotesInDirectory, worktrees } from '../bin/worktrees.mjs'
 import { RigError } from '../bin/errors.mjs'
+import { NO_PROMPT_ENV } from '../bin/remote-env.mjs'
 import { worktreesFixture } from './worktrees-fixture.mjs'
 
 const f = worktreesFixture('rig-worktrees-')
@@ -98,6 +99,65 @@ test('pushed asks whether the branch reached the remote, never whether it has an
   gitMust(dest, 'push', '-q', 'origin', 'HEAD:refs/heads/feat/t1')
   gitMust(mirrorOf('acme', 'billing'), 'fetch', '-q', '--prune', 'origin')
   assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).pushed, true)
+})
+
+test('unpushed counts what the remote lacks, never what the base lacks (#192)', () => {
+  const dest = workDir('t1', 'billing')
+  const pushed = trees().state({ dir: dest, base: 'main', branch: 'feat/t1' })
+  assert.equal(pushed.ahead, 1, 'still ahead of its base')
+  assert.equal(pushed.unpushed, 0)
+
+  gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'not pushed yet')
+  try {
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).unpushed, 1)
+  } finally {
+    gitMust(dest, 'reset', '-q', '--hard', 'HEAD~1')
+  }
+})
+
+test('state names the branch the worktree is on, which need not be the one asked about (#200)', () => {
+  const dest = workDir('t1', 'billing')
+  assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/t1-stage')
+  try {
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1-stage')
+    gitMust(dest, 'checkout', '-q', '--detach')
+    assert.equal(trees().state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, null, 'a detached HEAD is on no branch')
+  } finally {
+    gitMust(dest, 'checkout', '-q', 'feat/t1')
+    gitMust(dest, 'branch', '-q', '-D', 'feat/t1-stage')
+  }
+  // A `GIT_DIR` in the run's env makes `gitfs` hand the question back, and git answers it.
+  assert.equal(trees({ GIT_DIR: dest }).state({ dir: dest, base: 'main', branch: 'feat/t1' }).on, 'feat/t1')
+})
+
+test('a branch never pushed has every commit over its base unpushed', () => {
+  const dest = workDir('t1', 'billing')
+  gitMust(dest, 'checkout', '-q', '-b', 'feat/never', 'origin/main')
+  try {
+    gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'one')
+    gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'two')
+    const s = trees().state({ dir: dest, base: 'main', branch: 'feat/never' })
+    assert.deepEqual([s.pushed, s.ahead, s.unpushed], [false, 2, 2])
+  } finally {
+    gitMust(dest, 'checkout', '-q', 'feat/t1')
+    gitMust(dest, 'branch', '-q', '-D', 'feat/never')
+  }
+})
+
+test('an unpushed count git could not make is a distance nobody could tell, never a zero', () => {
+  // A remote-tracking ref naming a commit the mirror does not have breaks the count and
+  // leaves the distance from the upstream readable, so the two fail apart.
+  const dest = workDir('t1', 'billing')
+  const broken = path.join(mirrorOf('acme', 'billing'), 'refs', 'remotes', 'origin', 'broken')
+  fs.writeFileSync(broken, `${'1'.repeat(40)}\n`)
+  try {
+    const s = trees().state({ dir: dest, base: 'main', branch: 'feat/t1' })
+    assert.equal(s.unpushed, null)
+    assert.match(s.distanceUnknown, /broken/)
+  } finally {
+    fs.rmSync(broken)
+  }
 })
 
 test('state measures against the recorded base when the branch has no upstream', () => {
@@ -366,4 +426,137 @@ test('contains asks the remote\'s copy too, when the one the mirror kept is wher
   trees().fetch({ org: 'acme', repo: 'restored' })
 
   assert.equal(trees().contains({ org: 'acme', repo: 'restored', branch: 'feat/kept', other: 'feat/landed' }), true)
+})
+
+// ------------------------------------------------- a merged branch GitHub rewrote
+
+// A stage's copy here that merged the base in, and the head GitHub merged: the stage's own
+// commit re-made on the base, the way a retargeted stack PR is (hugoforte/rig#257). `byHand`
+// puts content of its own into the merge, as resolving a conflict does.
+const mergedInThenRewritten = (repo, { byHand = false } = {}) => {
+  const seed = publish('acme', repo)
+  const dest = workDir('rewritten', repo)
+  trees().cut({ org: 'acme', repo, branch: 'feat/stage', dest })
+  fs.writeFileSync(path.join(dest, 'stage.txt'), 'the stage\n')
+  gitMust(dest, 'add', '-A')
+  gitMust(dest, 'commit', '-q', '-m', 'the stage')
+  fs.writeFileSync(path.join(seed, 'base.txt'), 'the base moves\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the base moves')
+  gitMust(seed, 'push', '-q', 'origin', 'main')
+  gitMust(dest, 'fetch', '-q', 'origin')
+  gitMust(dest, 'merge', '-q', '--no-ff', '--no-commit', 'origin/main')
+  if (byHand) {
+    fs.appendFileSync(path.join(dest, 'stage.txt'), 'settled in the merge\n')
+    gitMust(dest, 'add', '-A')
+  }
+  gitMust(dest, 'commit', '-q', '-m', 'Merge main')
+  gitMust(seed, 'checkout', '-q', '-b', 'rewritten')
+  fs.writeFileSync(path.join(seed, 'stage.txt'), 'the stage\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'push', '-q', 'origin', 'rewritten:refs/pull/9/head')
+  assert.equal(trees().remove({ org: 'acme', repo, dir: dest }), null)
+  return gitMust(seed, 'rev-parse', 'HEAD')
+}
+
+test('a merge on a rewritten copy that adds nothing of its own does not keep it (#257)', () => {
+  const head = mergedInThenRewritten('clean-merge')
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'clean-merge', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'deleted')
+})
+
+test('a merge that settled something by hand keeps the rewritten copy (#257)', () => {
+  const head = mergedInThenRewritten('hand-merge', { byHand: true })
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'hand-merge', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — merging it into PR #9\'s head would change what that PR merged')
+})
+
+test('a copy that differs from the rewritten head only in whitespace is kept, though its patch-id matches (#257)', () => {
+  const seed = publish('acme', 'reindented')
+  const dest = workDir('reindented', 'reindented')
+  trees().cut({ org: 'acme', repo: 'reindented', branch: 'feat/stage', dest })
+  fs.writeFileSync(path.join(dest, 'stage.txt'), '    the stage\n')
+  gitMust(dest, 'add', '-A')
+  gitMust(dest, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'checkout', '-q', '-b', 'rewritten')
+  fs.writeFileSync(path.join(seed, 'stage.txt'), 'the stage\n')
+  gitMust(seed, 'add', '-A')
+  gitMust(seed, 'commit', '-q', '-m', 'the stage')
+  gitMust(seed, 'push', '-q', 'origin', 'rewritten:refs/pull/9/head')
+  assert.equal(trees().remove({ org: 'acme', repo: 'reindented', dir: dest }), null)
+  const head = gitMust(seed, 'rev-parse', 'HEAD')
+
+  const { local } = trees().dropMerged({ org: 'acme', repo: 'reindented', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — merging it into PR #9\'s head would change what that PR merged')
+  assert.match(gitMust(mirrorOf('acme', 'reindented'), 'cherry', head, 'refs/heads/feat/stage'), /^- /, 'git reads the two as one patch')
+})
+
+test('a comparison git could not make keeps the rewritten copy, with git\'s reason (#257)', () => {
+  const head = mergedInThenRewritten('uncompared')
+  const failing = (cmd, args) => args.includes('--cherry-pick') ? { code: 128, out: '', err: 'fatal: bad revision' } : run(cmd, args)
+  const t = worktrees({ mirrorRoot, remotes: remotesInDirectory(remotesDir), run: failing })
+  const { local } = t.dropMerged({ org: 'acme', repo: 'uncompared', branch: 'feat/stage', head, number: 9 })
+  assert.equal(local, 'kept — git could not compare it with PR #9\'s head: fatal: bad revision')
+})
+
+// ---------------------------------------------------------------- credentials
+
+// The module built over `run`, keeping every call's options, because the guard rides on each
+// call and a constant nobody passes guards nothing.
+const recorded = (answer = run) => {
+  const calls = []
+  const t = worktrees({
+    mirrorRoot,
+    remotes: remotesInDirectory(remotesDir),
+    run: (cmd, args, opts = {}) => { calls.push({ args, env: opts.env }); return answer(cmd, args, opts) },
+  })
+  return { t, calls }
+}
+const REMOTE_VERBS = ['clone', 'fetch', 'ls-remote', 'push', 'set-head']
+
+test('no git call a mirror makes to its remote can stop to ask for credentials', () => {
+  publish('acme', 'prompts')
+  const dest = workDir('p1', 'prompts')
+  const { t, calls } = recorded()
+  t.cut({ org: 'acme', repo: 'prompts', branch: 'feat/p1', dest })
+  gitMust(dest, 'push', '-q', 'origin', 'feat/p1')
+  const head = gitMust(dest, 'rev-parse', 'HEAD')
+  // A PR head the mirror never saw is fetched; the remote's copy at that head is deleted.
+  t.dropMerged({ org: 'acme', repo: 'prompts', branch: 'feat/p1', head: '0'.repeat(40), number: 1 })
+  t.dropMerged({ org: 'acme', repo: 'prompts', branch: 'feat/p1', head, number: 1 })
+
+  const remote = calls.filter(c => REMOTE_VERBS.some(v => c.args.includes(v)))
+  assert.deepEqual(REMOTE_VERBS.filter(v => !remote.some(c => c.args.includes(v))), [], 'every kind of remote call was made')
+  assert.deepEqual(remote.map(c => ({ call: c.args.join(' '), env: c.env })), remote.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
+})
+
+test('a checkout, which Git LFS may take to the remote, never stops to ask for credentials either', () => {
+  publish('acme', 'lfs')
+  const dest = workDir('l1', 'lfs')
+  const { t, calls } = recorded()
+  t.cut({ org: 'acme', repo: 'lfs', branch: 'feat/l1', dest })
+  assert.equal(t.cutHere({ dir: dest, branch: 'feat/l1-stage', base: 'feat/l1' }), null)
+
+  const checkouts = calls.filter(c => (c.args.includes('worktree') && c.args.includes('add')) || c.args.includes('checkout'))
+  assert.equal(checkouts.length, 2, 'the worktree add and the checkout were both made')
+  assert.deepEqual(checkouts.map(c => ({ call: c.args.join(' '), env: c.env })), checkouts.map(c => ({ call: c.args.join(' '), env: NO_PROMPT_ENV })))
+})
+
+test('a clone that needed credentials says so, and how to give git some', () => {
+  const refused = (cmd, args, opts) => args.includes('clone')
+    ? { code: 128, out: '', err: "Cloning into bare repository 'x'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled" }
+    : run(cmd, args, opts)
+  const { t } = recorded(refused)
+  assert.throws(() => t.cut({ org: 'acme', repo: 'private', branch: 'feat/p2', dest: workDir('p2', 'private') }),
+    e => e instanceof RigError && /could not mirror acme\/private: git needed credentials .* and rig never waits at a prompt — sign git in \(`gh auth setup-git`\) and run this again/.test(e.message))
+})
+
+test('standing answers nothing for a base the mirror does not have, rather than a clean merge (#208)', () => {
+  publish('acme', 'standing')
+  const dest = workDir('standing', 'standing')
+  trees().cut({ org: 'acme', repo: 'standing', branch: 'feat/standing', dest })
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  assert.deepEqual(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'main' }), { behind: 0, conflicts: [] })
+  assert.equal(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'gone' }), null)
 })

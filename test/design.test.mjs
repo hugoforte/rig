@@ -96,12 +96,28 @@ function parseCell (cell) {
 // and it was too generous by half: it passed for a title that had been *added to* — the rename
 // this column exists to catch — and for one left behind in a comment. So the titles are parsed
 // out and matched whole.
+//
+// A journey (`scenario` in test/harness.mjs) is a test too, and so is each of its steps, which
+// the runner reports as subtests. A step is cited under its journey, `<scenario> › <step>`,
+// because step titles are only unique within one: a step belongs to the nearest `scenario(`
+// above it in the file.
+const DECLARED = /^[ \t]*(?:await\s+)?(test|scenario|step)\(\s*(["'`])((?:\\.|(?!\2).)*)\2/gm
 const titleCache = new Map()
 function titlesIn (file) {
   if (!titleCache.has(file)) {
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
-    const found = [...src.matchAll(/^[ \t]*(?:await\s+)?test\(\s*(["'`])((?:\\.|(?!\1).)*)\1/gm)]
-    titleCache.set(file, new Set(found.map(m => unescapeQuotes(m[2]))))
+    const titles = new Set()
+    let journey = null
+    for (const [, kind, , raw] of src.matchAll(DECLARED)) {
+      const title = unescapeQuotes(raw)
+      if (kind === 'step') {
+        if (journey) titles.add(`${journey} › ${title}`)
+        continue
+      }
+      if (kind === 'scenario') journey = title
+      titles.add(title)
+    }
+    titleCache.set(file, titles)
   }
   return titleCache.get(file)
 }

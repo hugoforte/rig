@@ -5,7 +5,7 @@ description: Cross-repo work harness. Use when a ticket or task spans more than 
 
 # rig
 
-`rig` assembles one git worktree per repo for a piece of **work**, all on one shared branch, and keeps that work's durable knowledge in a **data root** — a committed checkout holding the repo catalogue, the work records and `rig.json`.
+`rig` assembles one git worktree per repo for a piece of **work**, all on one shared branch, and keeps that work's durable knowledge in a **data root** — a committed checkout holding the repo catalogue, the org docs, the work records and `rig.json`.
 
 rig documents itself, and this skill ships with it. It finds rig and routes you inside it, and restates nothing on purpose: `rig doctor`, `rig help` and `AGENTS.md` are always the current answer, and this file is not.
 
@@ -13,7 +13,7 @@ rig documents itself, and this skill ships with it. It finds rig and routes you 
 
 `rig <command>` works in every shell on a set-up machine: the npm global install is a link to the checkout, so one `rig update` moves the command. Confirm with `command -v rig`. If it is missing, the checkout is at `RIG_ROOT`, else `C:\rig` or `~/rig`, and `node <root>/bin/rig.mjs <command>` runs it from there.
 
-**No checkout at all:** the README's one-command install — `install.sh` on a POSIX shell, `install.ps1` on PowerShell — clones the tool and installs it globally. It needs Node 18+, `git` and `npm`; `gh` must be authenticated before a private repo can be mirrored. Everything after the clone is `rig prompt setup`'s to ask; do not guess the data root, the email or the orgs.
+**No checkout at all:** the README's one-command install — `install.sh` on a POSIX shell, `install.ps1` on PowerShell — clones the tool and installs it globally. It needs Node 18.17+ on the 18 line or 20.3+, `git` and `npm`; `gh` must be authenticated before a private repo can be mirrored. Everything after the clone is `rig prompt setup`'s to ask; do not guess the data root, the email or the orgs.
 
 ## Step 2: Orient
 
@@ -39,14 +39,20 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Standing in a work, what now | `rig next` |
 | Picking up a work someone else left | `rig status`; a `handoff.md` beside its `context.md` is the previous session's account — read it first |
 | A work whose folder is not on this machine | `rig restore <id>` |
+| Closed works whose folders are still here | `rig tidy` (`--dry-run` to preview) |
 | Where has this work got to | `rig status` |
 | What is open, what can close | `rig list` |
 | Slice the work into reviewable parts | `rig stage` |
+| A planned stage was dropped, or done under another | `rig stage <branch> --dropped "why"`, `rig stage <branch> --replaced-by <stage>`; `rig stage <branch> --planned` puts it back |
+| Stage PRs show on GitHub as unrelated | `rig stage --link` |
 | Put it up for review | `rig pr` |
+| The PR says what the work used to be | `rig pr --refresh` |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified | `rig check [--run]` |
 | Context doc edited by hand | `rig save -m "…"` |
 | Design agreed with the user | `rig save -m "design agreed" --designed` |
+| The work's title turned out wrong | `rig save --title "…"` |
+| A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close` |

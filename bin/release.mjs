@@ -30,16 +30,20 @@ const BUMPS = ['minor', 'patch', 'none']
 // all: it is already there, on every PR, without anyone adopting a convention for it. The
 // prefixes that ask for nothing are listed rather than assumed: an unrecognised branch still
 // fails, because defaulting it to `none` is how a feature branched `chore/add-retry` ships
-// inside somebody else's patch release with nobody told (ADR 0004).
+// inside somebody else's patch release with nobody told (ADR 0004). `rig new --type` takes only
+// these (`BRANCH_PREFIXES`), so rig never names a branch this check refuses.
 const PREFIX_BUMPS = {
   feat: 'minor',
   fix: 'patch',
+  perf: 'patch',
   docs: 'none',
   chore: 'none',
   test: 'none',
   ci: 'none',
   refactor: 'none',
 }
+
+export const BRANCH_PREFIXES = Object.keys(PREFIX_BUMPS)
 
 // Strongest first: a release containing a feature is a minor release, whatever else is in it.
 const STRENGTH = ['minor', 'patch', 'none']
@@ -91,6 +95,11 @@ export function bumpFor ({ branch, labels = [] }) {
     reason: `\`${branch}\` names no bump: branch from ${prefixesAsking('minor')} for a minor or ${prefixesAsking('patch')} for a patch — what \`rig new --type\` writes — or from ${prefixesAsking('none')} to ask for nothing, or label the PR ${BUMPS.map(b => `\`${LABEL}${b}\``).join(', ')}`,
   }
 }
+
+// Does a repo with these labels release the way this file decides? A repo that carries any
+// `release:` label does: nothing else puts one there. Anywhere else a branch prefix means
+// nothing to the release, and a bump read from it would be false.
+export const releasesByBump = labels => labels.some(l => String(l).startsWith(LABEL))
 
 // The version a PR lands as, or null when the latest tag is ahead of the major this code
 // derives. That state is not a bump to compute over: the major only ever grows, so a higher

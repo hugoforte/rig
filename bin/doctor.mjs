@@ -89,6 +89,12 @@ function rootFindings (root) {
       if (dirty === null) out.push(warn(`data root: git could not read the working tree — \`git -C ${root.path} status\` says why`))
       else if (dirty) out.push(warn(`data root has ${dirty} uncommitted change(s) — \`rig save\` commits edits made outside rig`, { counts: false }))
       if (!state.branch) out.push(warn('data root is on a detached HEAD — rig commits there go nowhere; check out main'))
+      // Not fetched yet, never pushed, or gone from the remote: doctor does not fetch, so it
+      // cannot tell which, and names the way out of each.
+      else if (!state.upstream && state.tracks) {
+        const remote = state.tracks.split('/')[0]
+        out.push(warn(`data root tracks ${state.tracks}, which is not here — \`rig update\` fetches it; if the remote does not have it, push (\`git push -u ${remote} ${state.branch}\`) or re-point the branch (\`git branch -u\`)`, { counts: false }))
+      }
       else if (!state.upstream) out.push(note('data root has no upstream — local only; push it to a private repo when ready'))
       else if (state.ahead === null) out.push(warn(`data root: git could not measure the distance from ${state.upstream} — \`git -C ${root.path} status\` says why`))
       else if (state.ahead) out.push(warn(`data root has ${state.ahead} unpushed commit(s)`, { counts: false }))
@@ -202,7 +208,12 @@ function rootFindings (root) {
 //                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
 //                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos }]
+//                     folderMissing, strays, repos, marker, holders, leftover }]: `marker` is
+//                     the folder's `.rig/data`, null when it has none, `holders` the roots
+//                     that hold the work's record, and `leftover` set only on a closed work
+//                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
+//                     a record that would not read is { id, unreadable } instead,
+//                     `unreadable` the sentence saying why
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -307,10 +318,31 @@ export function doctorFindings (snap = {}) {
   // works at once, which is what makes the missing-folder warning below reach an unclosed work
   // whatever root holds its record.
   for (const w of snap.works || []) {
-    if (w.closed) continue
+    // A record that will not read has nothing else to ask of it.
+    if (w.unreadable) { out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`)); continue }
+    // The mirror of a missing folder: the close ran on another machine, and this one still has
+    // the copy it tore down there. Nothing else is asked of the folder, which is on its way out.
+    if (w.closed) {
+      if (w.leftover) out.push(warn(`${w.id}: ${w.leftover}, but its folder is still on this machine — \`rig tidy\` clears it`))
+      continue
+    }
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
+    }
+    // The marker is what a command run in the folder resolves by. Without one it falls back to
+    // `current`, which only matters when there is more than one root to fall between; one
+    // naming a root that does not hold the record sends it to the wrong root, or to none. A
+    // record in two roots is named whatever the marker says, since either copy may be the
+    // wrong one and no marker can say which.
+    const holders = w.holders || []
+    const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
+    if (holders.length > 1) {
+      out.push(warn(`${w.id}: data roots ${holders.join(', ')} each hold its record — delete the copy that is wrong`))
+    } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
+      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
+    } else if (holders.length && w.marker && w.marker !== holders[0]) {
+      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${holders[0]}" — ${rewrite}`))
     }
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))

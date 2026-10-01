@@ -315,6 +315,14 @@ test('a closed work keeps its contradictions and loses its stray checks — its 
   assert.equal(matching(found, /work folder missing|unmanaged entry/).length, 0)
 })
 
+test('a closed work whose folder is still on this machine is a finding that counts, and names rig tidy', () => {
+  const found = doctorFindings(snap({
+    works: [{ id: 'w', closed: true, contradictions: [], folderMissing: false, strays: ['junk'], repos: [], leftover: 'closed on 2026-09-30' }],
+  }))
+  assert.equal(only(found, /^w:/).says, 'w: closed on 2026-09-30, but its folder is still on this machine — `rig tidy` clears it')
+  assert.equal(problemCount(found), 1)
+})
+
 test('a work folder that is missing is said once, and nothing under it is guessed at', () => {
   const found = doctorFindings(snap({
     works: [{ id: 'w', closed: false, contradictions: [], folderMissing: true, strays: ['junk'], repos: [{ repo: 'billing', worktreeMissing: true }] }],
@@ -331,6 +339,22 @@ test('a missing work folder or worktree names the command that puts it back', ()
     ],
   }))
   assert.deepEqual(matching(found, /rig restore/).map(f => f.says.match(/`rig restore \S+`/)[0]), ['`rig restore gone`', '`rig restore w`'])
+})
+
+test('a work record that will not read is a problem that counts, and says which and why', () => {
+  const found = doctorFindings(snap({ works: [{ id: 'w', unreadable: 'work record for "w" at C:\\rig-data\\work\\w\\work.json could not be read (Unexpected end of JSON input)' }] }))
+  const one = only(found, /^w:/)
+  assert.equal(one.verdict, 'bad')
+  assert.match(one.says, /w: work record .* could not be read \(Unexpected end of JSON input\) — fix it, or bring it back from the data root's history/)
+  assert.equal(problemCount(found), 1)
+})
+
+test('the folder of a work whose record will not read is still accounted for, not called unmanaged', () => {
+  const found = doctorFindings(snap({
+    workRoot: { path: 'C:\\w', exists: true, entries: ['w'] },
+    works: [{ id: 'w', unreadable: 'work record for "w" could not be read (x)' }],
+  }))
+  assert.equal(matching(found, /unmanaged entry/).length, 0)
 })
 
 test('rig owns the work folder, so anything it did not put there is named', () => {
@@ -352,6 +376,39 @@ test('a work folder is accounted for by whichever root holds its record, not by 
   }))
   assert.match(only(found, /unmanaged entry/).says, /"scratch" in C:\\w — no data root has a work record for it/)
   assert.equal(problemCount(found), 1)
+})
+
+// A work folder's `.rig/data`, read beside the roots that hold the work's record.
+const marked = (marker, holders = ['work']) => ({
+  id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [], marker, holders,
+})
+const twoRoots = { dataRoots: [root({ name: 'work' }), root({ name: 'personal', path: 'C:\\rig-data-personal' })] }
+
+test('with two roots, a work folder with no marker is named, with the command that writes one', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked(null)] }))
+  const hit = only(found, /^w: work folder has no \.rig\/data/)
+  assert.match(hit.says, /`rig save --data work`/)
+  assert.equal(hit.counts, true)
+})
+
+test('with one root, a work folder with no marker resolves to it anyway, and is not named', () => {
+  assert.equal(matching(doctorFindings(snap({ works: [marked(null)] })), /\.rig\/data/).length, 0)
+})
+
+test('a marker naming a root that does not hold the record is named, whatever the number of roots', () => {
+  // A root renamed by `rig init --name` leaves every marker naming the old one.
+  const found = doctorFindings(snap({ works: [marked('default')] }))
+  assert.match(only(found, /^w:/).says, /\.rig\/data names "default", but the record is in "work" — `rig save --data work`/)
+})
+
+test('a marker naming the root that holds the record says nothing', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work')] }))
+  assert.equal(matching(found, /^w:/).length, 0)
+})
+
+test('a record in two roots is named even when the marker names one of them', () => {
+  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work', ['work', 'personal'])] }))
+  assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
 })
 
 test('an attached repo whose worktree is gone is named, and so is one whose secrets have no source', () => {
