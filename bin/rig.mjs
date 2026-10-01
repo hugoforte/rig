@@ -4030,8 +4030,14 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
   if (dryRun || (blockers.length && !force)) return { blockers, cleared: false }
   // A worktree git refused to remove is not deleted from under it.
   if (!removeWorktrees(cfg, work, { force })) return { blockers, cleared: false }
-  // The mirror only: the remote was the first close's to decide, and it already has.
-  if (!blockers.length && verdict.done && !work.abandonedAt) dropMergedBranches(cfg, work, states, stack, { remote: false })
+  // The mirror only: the remote was the first close's to decide, and it already has. A stage
+  // GitHub would not answer for may not have landed, so its work's branches are kept, and said
+  // to be, rather than dropped on a guess or kept in silence.
+  if (!blockers.length && !work.abandonedAt) {
+    const onlyUnknown = verdict.blockers.length && verdict.blockers.every(b => b.kind === 'stage-pr-unknown') && verdict.repos.every(v => v.merged)
+    if (verdict.done) dropMergedBranches(cfg, work, states, stack, { remote: false })
+    else if (onlyUnknown) warn(`kept the mirror's copies of ${work.id}'s branches — GitHub would not say whether ${unknownStages(stack).map(st => st.branch).join(', ')} landed`)
+  }
   return { blockers, cleared: removeWorkFolder(cfg, work.id) }
 }
 
