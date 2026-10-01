@@ -315,20 +315,6 @@ rig list --json > payload.json   # once
 rig dash --from payload.json --org your-org --since 30d
 ```
 
-**Explaining rig to other people.** `rig demo` renders one self-contained interactive page that makes the case for rig *on the repos of whoever is watching*: the `talks_to` graph drawn from the catalogue, clickable to see what each relationship actually is — with the repos nothing is recorded about listed underneath rather than floating in it — and then one real work from the records walked through command by command — `new`, each `attach`, the design gate, `pr`, `close` — with what appeared in the work root and what was committed to the data root beside every step. It ends on that work's own pull-request timings, which are the argument that the durable half outlives the branch.
-
-The header counts the inventory — repos, relationships, works — and what those works produced: how many landed, which means every one of their pull requests merged, the median time from first commit to last merge with the `n` it was taken over, and the median repos each. All of it is read out of the terminal pull-request facts `rig close` already stores, so it needs no network and cannot be wrong tomorrow. What the page will not do is claim a saving: rig has no record of what the same work would have cost without it, so it does not pretend to one. In the drawing, a relationship with a stated `direction` gets an arrowhead and one without stays a plain line — which makes the picture itself a map of where the catalogue is thin.
-
-Nothing in it is a mock-up. Every command, path, branch, base and PR number comes out of a record, which is the only version of this that does not start disagreeing with the tool the week after it is written. The example work is the one with the most repos that actually merged, or name another with `--example <work-id>`.
-
-Unlike `rig dash`, the page is written **into the data root** — `demo/index.html` by default, so it is committed and pushed with everything else, and `--out` puts it elsewhere. The difference is the input: the dashboard renders live PR state and is wrong by the next merge, while this reads the catalogue and the terminal facts of closed work, which cannot change again. It is a generated file, so the usual rule applies — never edit it, re-render it.
-
-```powershell
-rig demo                          # this data root, into <data root>/demo/index.html
-rig demo --data employer --no-open --out C:	mp
-ig.html
-```
-
 **Driving rig with an agent.** [AGENTS.md](./AGENTS.md) is the agent's manual, and the interviews rig expects an agent to run are printed by `rig prompt setup`, `rig prompt new-work` and `rig prompt select-repos`. The checkout also ships three agent skills under `skills/`: `rig`, which finds rig and routes a request to the command that answers it, `rig-handoff`, which commits and pushes the work's branches and then writes a handoff into the work's record for the next session to pick up, and `rig-learn`, which reviews what a work taught before it closes. rig links none of them into any agent host — symlink `skills/*` into your host's skills directory (`~/.claude/skills`, say) from whatever manages that machine.
 
 ### Staying up to date

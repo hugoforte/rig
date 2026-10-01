@@ -32,7 +32,7 @@ The game analogy has a second half: mastery at this level before the next. rig s
 
 ### 4. Attention is the budget
 
-The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A closed work never re-asks GitHub what its merged PRs did: close records the terminal facts once, and every later read uses them. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line. The demo page makes the case for rig out of a data root so nobody has to make it by hand.
+The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A closed work never re-asks GitHub what its merged PRs did: close records the terminal facts once, and every later read uses them. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line.
 
 The rule that follows: a feature that saves the agent effort but costs the human a question has the sign wrong.
 

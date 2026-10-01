@@ -55,7 +55,6 @@ export const WEIGHTS = {
   'jira.test.mjs': 0.8,
   'identity.test.mjs': 0.7,
   'release.test.mjs': 0.7,
-  'demo.test.mjs': 0.5,
 }
 const UNKNOWN = 1
 
