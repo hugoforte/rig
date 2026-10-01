@@ -102,6 +102,20 @@ test('gh adapter: prTimeline is null when gh cannot answer', () => {
   assert.equal(canned(() => '').github.prTimeline('acme', 'platform', 12), null)
 })
 
+test('gh adapter: unresolvedThreads adds up the unresolved threads on every page GraphQL returns', () => {
+  const { calls, github } = canned(() => '2\n0\n1\n')
+  assert.equal(github.unresolvedThreads('acme', 'platform', 12), 3)
+  assert.deepEqual(calls[0].slice(0, 3), ['api', 'graphql', '--paginate'])
+  assert.ok(calls[0].includes('number=12') && calls[0].includes('owner=acme') && calls[0].includes('name=platform'))
+  assert.match(calls[0].find(a => a.startsWith('query=')), /\$endCursor: String/, 'pagination walks the cursor')
+})
+
+test('gh adapter: unresolvedThreads is null when gh cannot answer, and zero when nothing is unresolved', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.unresolvedThreads('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'oops').github.unresolvedThreads('acme', 'platform', 12), null)
+  assert.equal(canned(() => '0\n').github.unresolvedThreads('acme', 'platform', 12), 0)
+})
+
 test('gh adapter: prForBranch is null when there is no PR', () => {
   const { github } = canned(() => '[]')
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x'), null)
@@ -229,6 +243,16 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
   const state = { repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, commits: ['2026-01-02T00:00:00Z'] }] } } }
   assert.deepEqual(githubInMemory(state).prTimeline('acme', 'platform', 12),
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
+})
+
+test('in-memory adapter: unresolvedThreads counts the fixture threads not resolved', () => {
+  const state = { repos: { 'acme/platform': { prs: [
+    { branch: 'feat/x', number: 12, reviewThreads: [{ resolved: false }, { resolved: true }, { resolved: false }] },
+    { branch: 'feat/y', number: 13 },
+  ] } } }
+  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 12), 2)
+  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 13), 0, 'no review on it')
+  assert.equal(githubInMemory(state).unresolvedThreads('acme', 'platform', 99), null, 'no such PR')
 })
 
 test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {

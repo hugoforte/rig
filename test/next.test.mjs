@@ -25,7 +25,8 @@ test('a work with nothing attached is pointed at the repo interview', () => {
 test('the design gate is offered while it is unrecorded, and names the Direction when it is a stub', () => {
   const out = nextFor({ work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true })
   assert.match(says(out), /Direction is still `_TODO_`/)
-  assert.ok(commands(out).includes('rig save -m "design agreed" --designed'))
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial'))
+  assert.match(says(out), /adversarial review \(`--no-adversarial` declines it\)/, 'both answers are named')
 })
 
 test('once the Direction is written the offer is only about the gate', () => {
@@ -621,4 +622,84 @@ test('open stage PRs that are not a GitHub stack are offered rig stage --link', 
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], unstacked: ['a'] })
   assert.match(says(out), /a: the open stage PRs are not a GitHub stack/)
   assert.ok(commands(out).includes('rig stage --link'))
+})
+
+// ------------------------------------------------------------- after the PR is open
+
+// The flow once a pull request is up: resolve the review already on it, then the adversarial
+// review if the design chose one, then hand the PR to a human. Threads are derived from GitHub;
+// the adversarial choice and its review are recorded, because nothing on GitHub can say either.
+const reviewing = (over = {}) => ({
+  work: work({ repos: attached('a'), designedAt: AT, ...over }),
+  repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true })],
+})
+
+test('an open PR with unresolved review threads is offered the review, with no command', () => {
+  const out = nextFor({ ...reviewing(), threads: [{ repo: 'a', unresolved: 2 }] })
+  const resolve = out.find(o => /unresolved review thread/.test(o.says))
+  assert.match(resolve.says, /a: 2 unresolved review threads/)
+  assert.equal(resolve.command, null)
+})
+
+test('a work that chose an adversarial review is offered it once no thread is unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true }), threads: [{ repo: 'a', unresolved: 0 }] })
+  assert.match(says(out), /adversarial review/)
+  assert.ok(commands(out).includes('rig save -m "adversarial review" --reviewed'))
+})
+
+test('the adversarial review waits while the review already on the PR is unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true }), threads: [{ repo: 'a', unresolved: 1 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a work that declined the adversarial review is never offered one', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), threads: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a work designed before the choice existed is not offered an adversarial review', () => {
+  const out = nextFor({ ...reviewing(), threads: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a recorded adversarial review is not offered again, and the PR is offered to a human', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true, reviewedAt: AT }), threads: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+  assert.match(says(out), /ready for a human reviewer/)
+})
+
+test('a PR is offered to a human once its threads are resolved and no adversarial review is pending', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), threads: [{ repo: 'a', unresolved: 0 }] })
+  const handover = out.find(o => /ready for a human reviewer/.test(o.says))
+  assert.equal(handover.command, null, 'who reviews is the human\'s call, and rig takes no outward-facing step')
+})
+
+test('the hand-over waits for unresolved threads, a pending adversarial review, and unpushed commits', () => {
+  for (const [why, input] of [
+    ['threads', { ...reviewing({ adversarial: false }), threads: [{ repo: 'a', unresolved: 1 }] }],
+    ['adversarial', { ...reviewing({ adversarial: true }), threads: [{ repo: 'a', unresolved: 0 }] }],
+    ['unpushed', { ...reviewing({ adversarial: false }), repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, unpushed: 1 })], threads: [{ repo: 'a', unresolved: 0 }] }],
+    ['dirty', { ...reviewing({ adversarial: false }), repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, dirty: 1 })], threads: [{ repo: 'a', unresolved: 0 }] }],
+  ]) assert.doesNotMatch(says(nextFor(input)), /ready for a human reviewer/, why)
+})
+
+test('the hand-over is not offered while GitHub would not say whether threads are unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), threads: [{ repo: 'a', unresolved: null }] })
+  assert.doesNotMatch(says(out), /ready for a human reviewer/)
+})
+
+test('nothing about the review is offered before a PR is open, or once every PR merged', () => {
+  const building = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true }), repos: [repo('a', { pushed: true })] })
+  assert.doesNotMatch(says(building), /adversarial review|human reviewer/)
+  const landing = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, adversarial: true }),
+    repos: [repo('a', { merged: true, pr: { number: 4, state: 'MERGED' } })],
+  })
+  assert.doesNotMatch(says(landing), /adversarial review|human reviewer/)
+})
+
+test('the review offers come in the order the flow runs: threads, adversarial, hand-over', () => {
+  // Never two at once for the same PR: each waits for the one before it.
+  const threads = nextFor({ ...reviewing({ adversarial: true }), threads: [{ repo: 'a', unresolved: 3 }] })
+  assert.equal(threads.filter(o => /review thread|adversarial review|human reviewer/.test(o.says)).length, 1)
 })

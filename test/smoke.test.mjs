@@ -433,11 +433,34 @@ test('rig new --key <a Jira key> fetches title and description from Jira, no pip
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /Fetched description/)
 })
 
-test('rig save --designed records the design-agreed gate and commits with the message', () => {
+test('rig save --designed refuses without the adversarial-review choice, and records nothing', () => {
   const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--adversarial or --no-adversarial/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).designedAt, undefined)
+})
+
+test('the adversarial-review choice is refused away from the design gate, and both at once', () => {
+  for (const args of [['--adversarial'], ['--no-adversarial'], ['--designed', '--adversarial', '--no-adversarial']]) {
+    const r = rig(['save', '--work', 't7', ...args])
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}`)
+  }
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).adversarial, undefined)
+})
+
+test('rig save --designed --adversarial records the choice beside the gate', () => {
+  const r = rig(['save', '--work', 't7', '--designed', '--adversarial'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).adversarial, true)
+})
+
+test('rig save --designed records the design-agreed gate and commits with the message', () => {
+  // Agreeing the design again records the choice again: the one that counts is the latest.
+  const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed', '--no-adversarial'])
   assert.equal(r.code, 0, r.out)
   const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
-  assert.ok(record.designedAt, 'the gate is stored with its date, and nothing else is')
+  assert.ok(record.designedAt, 'the gate is stored with its date')
+  assert.equal(record.adversarial, false, 'and the review choice made at it')
   assert.equal(record.status, undefined)
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /^Tickets: PROJ-2 · Status: Building \(design agreed \d{4}-\d{2}-\d{2}\)$/m)
   assert.equal(lastCommit(dataRoot), 'rig save t7: design agreed')
@@ -720,6 +743,8 @@ test('list --json carries the record plus the timestamps a consumer cannot deriv
   assert.equal(old.branch, 'feat/old')
   assert.equal(old.createdAt, '2026-01-01T00:00:00.000Z')
   assert.equal(old.learnedAt, null, 'a gate not passed is null, not missing')
+  assert.equal(old.reviewedAt, null)
+  assert.equal(old.adversarial, null, 'a review choice never made is null, not false')
   const [billing] = old.repos
   assert.equal(billing.pr.number, 12)
   assert.equal(billing.pr.openedAt, '2026-01-02T00:00:00Z')

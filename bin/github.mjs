@@ -11,6 +11,7 @@
 //   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels } newest PR, or null
 //   labels(org, name)                   every label's name, or null when gh cannot list them
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
+//   unresolvedThreads(org, name, number)  how many of the PR's review threads are unresolved, or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
 //   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack, or null
@@ -24,7 +25,7 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned at all. When gh runs
-// but exits non-zero, the lookups (repo, prForBranch, prTimeline, labels, stacks, repoExists) answer
+// but exits non-zero, the lookups (repo, prForBranch, prTimeline, unresolvedThreads, labels, stacks, repoExists) answer
 // null or false — "not found" and "gh could not answer" look the same to them — and every
 // other call throws GithubError carrying gh's stderr.
 //
@@ -45,6 +46,12 @@ const PR_TIMELINE_JQ = [
   ', firstReviewAt: ([.reviews[] | select(.submittedAt != null) | .submittedAt] | min)',
   ', approvedAt: ([.reviews[] | select(.state == "APPROVED" and .submittedAt != null) | .submittedAt] | min) }',
 ].join('')
+
+// One page of a PR's review threads, through GraphQL because neither `gh pr view --json` nor
+// REST says whether a thread is resolved. `--paginate` walks `$endCursor`, and the jq prints one
+// count per page for the caller to add up.
+const THREADS_QUERY = 'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100, after: $endCursor) { nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }'
+const THREADS_JQ = '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length'
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
@@ -129,6 +136,15 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       if (r.code !== 0 || !r.out) return null
       const t = parseJson(r.out, 'gh pr view')
       return { firstCommitAt: t.firstCommitAt, firstReviewAt: t.firstReviewAt, approvedAt: t.approvedAt }
+    },
+    // The review already on a PR, which `rig next` offers to work through before anything else
+    // happens to it.
+    unresolvedThreads (org, name, number) {
+      const r = gh(['api', 'graphql', '--paginate', '-f', `query=${THREADS_QUERY}`,
+        '-F', `owner=${org}`, '-F', `name=${name}`, '-F', `number=${number}`, '--jq', THREADS_JQ])
+      if (r.code !== 0 || !r.out) return null
+      const pages = r.out.split('\n').filter(l => l.trim()).map(Number)
+      return pages.some(Number.isNaN) ? null : pages.reduce((a, b) => a + b, 0)
     },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
     // the caller's, because "already open" is a thing to report rather than an error to raise).
@@ -273,6 +289,12 @@ export function githubInMemory (state, { env } = {}) {
         firstReviewAt: earliest(reviews.map(r => r.submittedAt)),
         approvedAt: earliest(reviews.filter(r => r.state === 'APPROVED').map(r => r.submittedAt)),
       }
+    },
+    // `reviewThreads` is the fixture's list of `{ resolved }`; a PR with none has no review on it.
+    unresolvedThreads (org, name, number) {
+      if (!answers()) return null
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      return pr ? (pr.reviewThreads || []).filter(t => !t.resolved).length : null
     },
     createPr (org, name, { branch, base, title, body }) {
       write()
