@@ -717,3 +717,37 @@ test('a root whose directory has gone is a finding, and the roots that are fine 
     assert.match(out, /hugoforte: rig\.json/, 'and the root after it was still checked')
   } finally { fs.writeFileSync(localConfig, saved) }
 })
+
+// A work id held by two roots, closed in the first and open in the second: a work that moved to
+// another root, with the copy it left behind closed. The folder is the open work's, so nothing
+// that clears leftovers may take it, whichever root's records are read first.
+const openInSecond = (t, id) => {
+  assert.equal(rig(['new', id, '--title', 'Open in personal', '--no-ticket', '--data', 'personal']).code, 0)
+  const copy = path.join(dataRoot, 'work', id)
+  fs.cpSync(path.join(second, 'work', id), copy, { recursive: true })
+  const record = path.join(copy, 'work.json')
+  fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(fs.readFileSync(record, 'utf8')), closedAt: '2026-09-29T12:00:00.000Z', abandonedAt: '2026-09-29T12:00:00.000Z' }, null, 2) + '\n')
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
+}
+
+test('a work open in one root and closed in another is named as held by both, not as a leftover', (t) => {
+  openInSecond(t, 'moved-open')
+  const out = strip(rig(['doctor']).out)
+  assert.match(out, /moved-open: data roots hugoforte, personal each hold its record — delete the copy that is wrong/)
+  assert.doesNotMatch(out, /moved-open: abandoned/)
+})
+
+test('tidy leaves the folder of a work that is open in another root', (t) => {
+  openInSecond(t, 'moved-tidy')
+  const r = rig(['tidy'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(fs.existsSync(path.join(workRoot, 'moved-tidy')), 'the open work keeps its folder')
+})
+
+test('close on the closed copy refuses, naming the root that holds the open one', (t) => {
+  openInSecond(t, 'moved-close')
+  const r = rig(['close', '--work', 'moved-close', '--data', 'hugoforte', '--force'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /data root "personal" holds a record of moved-close that does not say it is closed/)
+  assert.ok(fs.existsSync(path.join(workRoot, 'moved-close')), 'the open work keeps its folder')
+})

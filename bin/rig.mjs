@@ -3936,8 +3936,17 @@ function removeWorkFolder (cfg, id) {
 
 // A closed work whose folder is still on this machine: closed on another one, or closed here
 // while something held the folder open. The one test `doctor`, `tidy`, `close` and `next` all
-// ask, so the four agree about which works are left over.
-const leftHere = (cfg, work) => !!work.closedAt && exists(workDir(cfg, work.id))
+// ask, so the four agree about which works are left over. A root holding an open record of the
+// same id makes the folder that work's, whichever copy was read: a work moved to another root
+// leaves a closed copy behind, and its folder is live.
+const leftHere = (cfg, work, roots = where().roots) =>
+  !!work.closedAt && exists(workDir(cfg, work.id)) && !rootsHoldingOpen(work.id, roots).length
+
+// The roots whose record of `id` is open. A record that will not parse counts as open, because
+// a folder is cleared only on a record that says its work is over.
+const rootsHoldingOpen = (id, roots) => rootsHolding(id, roots).filter(name => {
+  try { return !readJson(recordFile(id, roots[name].path)).closedAt } catch { return true }
+})
 
 // `String`: a hand-edited date is `contradictions`' to report, not a reason to crash.
 const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${String(work.closedAt).slice(0, 10)}`
@@ -3978,6 +3987,10 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
 
 // `rig close` on a work that is already closed.
 function closeHere (cfg, work, flags) {
+  const open = rootsHoldingOpen(work.id, where().roots)
+  if (open.length && exists(workDir(cfg, work.id))) {
+    die(`${work.id} is ${stoppedOn(work)} here, but data root "${open[0]}" holds a record of ${work.id} that does not say it is closed, and the folder on this machine is that work's — delete the copy that is wrong`)
+  }
   if (!leftHere(cfg, work)) return ok(`${work.id} was already ${stoppedOn(work)} — nothing of it is on this machine`)
   const force = !!flags.force
   const { blockers, cleared } = clearLeftover(cfg, work, { force })
@@ -4007,8 +4020,8 @@ cmds.tidy = ({ flags }) => {
   const dryRun = !!flags['dry-run']
   const leftovers = []
   const unreadable = []
-  // The first root whose copy reads is the one whose record counts, as it is for doctor
-  // (`oneCopyEach`): a closed copy in a later root does not make an open work a leftover.
+  // The first root whose copy reads is the one whose record is read, as it is for doctor
+  // (`oneCopyEach`); `leftHere` asks every root, so an open copy anywhere keeps the folder.
   const seen = new Set()
   for (const { name, loc: rootLoc } of doctorRootLocations(loc)) {
     if (!exists(rootLoc.dataRoot)) continue
@@ -4021,7 +4034,7 @@ cmds.tidy = ({ flags }) => {
         continue
       }
       seen.add(id)
-      if (leftHere(cfg, work)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
+      if (leftHere(cfg, work, loc.roots)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
     }
   }
   sayUnreadable(unreadable)
@@ -4514,7 +4527,7 @@ function doctorWork (cfg, id, root, roots) {
     throw e
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
-  if (out.closed) return leftHere(cfg, work) ? { ...out, leftover: stoppedOn(work) } : out
+  if (out.closed) return leftHere(cfg, work, roots) ? { ...out, leftover: stoppedOn(work) } : out
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
@@ -4691,10 +4704,13 @@ function workRootEntries (cfg) {
 
 // One copy of each work whose record reads, and every copy that does not. A work in two roots
 // has one folder, and each readable copy would repeat every finding about it; but a copy that
-// will not read is its own file to fix (decision 157).
+// will not read is its own file to fix (decision 157). The open copy is the readable one kept
+// when only one is closed, because the folder is that work's, and the closed copy would call it
+// a leftover (decision 167).
 const oneCopyEach = works => {
   const readable = works.filter(w => !w.unreadable)
-  return works.filter(w => w.unreadable || readable.find(o => o.id === w.id) === w)
+  const kept = id => readable.find(o => o.id === id && !o.closed) ?? readable.find(o => o.id === id)
+  return works.filter(w => w.unreadable || kept(w.id) === w)
 }
 
 function doctorSnapshot () {
