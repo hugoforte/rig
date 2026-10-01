@@ -209,6 +209,7 @@ test('gh adapter: prsOnto and pullsForCommit throw when gh could not answer, and
   assert.throws(() => github.prsOnto('acme', 'platform', 'feat/x'), GithubError)
   assert.throws(() => github.pullsForCommit('acme', 'platform', 'abc123'), GithubError)
   assert.deepEqual(canned(() => '[]').github.prsOnto('acme', 'platform', 'feat/x'), [])
+  assert.deepEqual(canned(() => '[]').github.pullsForCommit('acme', 'platform', 'abc123'), [])
 })
 
 test('gh adapter: clone and createRepo pass the right argv and fail on error', () => {
