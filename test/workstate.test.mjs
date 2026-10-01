@@ -121,6 +121,11 @@ test('a merge settles the branch, never the working tree', () => {
   assert.equal(v.reason, 'Every PR is merged, but billing: 1 uncommitted change(s).')
 })
 
+test('commits on a detached HEAD that no branch holds block, whatever the PR says', () => {
+  const v = one(clean({ unbranched: 2, pr: mergedPr }))
+  assert.deepEqual(kinds(v), ['unbranched'], 'removing the worktree is the end of them')
+})
+
 test('a merged PR whose worktree is gone is done, with nothing in the way', () => {
   const v = one({ repo: 'billing', missing: true, dirty: 0, ahead: 0, behind: 0, pr: mergedPr })
   assert.deepEqual(v.blockers, [])

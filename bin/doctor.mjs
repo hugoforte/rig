@@ -210,12 +210,13 @@ function rootFindings (root) {
 //                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
 //                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos, marker, holders }]: `marker` is the
-//                     folder's `.rig/data`, null when it has none, and `holders` the roots
-//                     that hold the work's record; a record that would not read is
-//                     { id, unreadable, holders } instead, `unreadable` the sentence
-//                     saying why. One entry per work that reads, beside every copy that
-//                     would not
+//                     folderMissing, strays, repos, marker, holders, leftover }]: `marker` is
+//                     the folder's `.rig/data`, null when it has none, `holders` the roots
+//                     that hold the work's record, and `leftover` set only on a closed work
+//                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
+//                     a record that would not read is { id, unreadable, holders } instead,
+//                     `unreadable` the sentence saying why. One entry per work that reads,
+//                     beside every copy that would not
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -335,7 +336,12 @@ export function doctorFindings (snap = {}) {
       if ((w.holders || []).length > 1) sayHeldTwice(w)
       continue
     }
-    if (w.closed) continue
+    // The mirror of a missing folder: the close ran on another machine, and this one still has
+    // the copy it tore down there. Nothing else is asked of the folder, which is on its way out.
+    if (w.closed) {
+      if (w.leftover) out.push(warn(`${w.id}: ${w.leftover}, but its folder is still on this machine — \`rig tidy\` clears it`))
+      continue
+    }
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))

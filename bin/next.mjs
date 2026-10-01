@@ -57,16 +57,22 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //                  its PR would ask for and why; absent where the repo does not release by bump
 //   unstacked      the repos whose open stage PRs, two or more and a chain, GitHub does not
 //                  show as one stack; empty where GitHub would not list its stacks
+//   leftover       the work is closed and its folder is still on this machine — closed on
+//                  another one, whose close could not reach this disk
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [] } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
-  // Terminal first: a stopped work has no next step, and saying so is a real answer.
-  if (phase === 'closed' || phase === 'abandoned') return out
+  // Terminal first: a stopped work has no next step, and saying so is a real answer. Bar one:
+  // the copy of it still on this machine, which only this machine can clear.
+  if (phase === 'closed' || phase === 'abandoned') {
+    if (leftover) out.push(offer(phase, `this work is ${phase}, but its folder is still on this machine — clear this machine's copy`, 'rig close'))
+    return out
+  }
 
   const entries = work?.repos || []
 

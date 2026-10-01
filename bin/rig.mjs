@@ -3212,6 +3212,7 @@ cmds.next = ({ flags }) => {
         return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link }))
       }).map(r => r.repo),
     replaced: replacedStages(cfg, work, stack),
+    leftover: leftHere(cfg, work),
     // Asked of a repo with no PR, which is the only kind the offer it goes beside can name.
     bumps: work.closedAt ? [] : repos.flatMap((r, i) => {
       const release = !r.pr && !r.merged && r.pushed ? releaseAsked(work.repos[i], work.branch) : null
@@ -3814,6 +3815,9 @@ cmds.close = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const id = work.id
+  // Closed already: the close ran on another machine and this one pulled its record. What is
+  // left is this machine's copy, and nothing else about the work is this command's any more.
+  if (work.closedAt) return closeHere(cfg, work, flags)
   // What counts as unfinished business is `workState`'s to decide (decision 62); `close`
   // reads the list and refuses on it. Chiefly: a merged PR settles its branch, so the
   // commits a squash merge left looking unpushed no longer demand `--force` (#52).
@@ -3824,10 +3828,11 @@ cmds.close = ({ flags }) => {
   const verdict = workState(work, states, { stages: stack })
   // Abandoning is the decision to stop a work without finishing it, so every blocker that
   // asks "did it land?" is asking the wrong question — an unmerged PR and unpushed commits
-  // are what being abandoned *looks like*, not a reason to refuse. `dirty` survives, because
-  // unsaved work in a tree is the one thing this command can destroy whatever it is called.
+  // are what being abandoned *looks like*, not a reason to refuse. `dirty` and `unbranched`
+  // survive, because what exists only in a tree is the one thing this command can destroy
+  // whatever it is called.
   const abandoned = !!flags.abandoned
-  const blockers = abandoned ? verdict.blockers.filter(b => b.kind === 'dirty') : verdict.blockers
+  const blockers = abandoned ? verdict.blockers.filter(b => IN_TREE_ONLY.has(b.kind)) : verdict.blockers
   if (blockers.length && !flags.force) {
     warn(`not ${abandoned ? 'abandoning' : 'closing'} — unfinished business:`)
     for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
@@ -3858,31 +3863,13 @@ cmds.close = ({ flags }) => {
     // work is about to lose the worktree its first commit could have been read from.
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
   })
-  // Out of the work folder before anything in it is removed. Windows refuses to remove a
-  // directory that is some process's cwd — including ours. Everywhere else git removes it
-  // regardless, and a run handed its cwd rather than inheriting it would then start every later
-  // subprocess in a directory that is not there, which Node refuses to do.
-  const wd = workDir(cfg, id)
-  if (standingIn(wd)) chdir(toolRoot())
-  for (const r of work.repos) {
-    if (!exists(r.path)) continue
-    const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force: !!flags.force })
-    if (failed) warn(`${r.repo}: ${failed}`)
-    else step(`removed worktree ${r.repo}`)
-  }
+  removeWorktrees(cfg, work, { force: !!flags.force })
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
   // `done` is every PR merged with nothing in the way, which a forced or abandoned close is not.
   if (verdict.done && !abandoned) dropMergedBranches(cfg, work, states, stack)
   commitAs(id)
-  if (exists(wd)) {
-    try {
-      fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
-    } catch (e) {
-      warn(`worktrees removed, but ${wd} could not be deleted: ${e.code || e.message}`)
-      warn('something still has it open (a shell, an editor). Delete it by hand.')
-    }
-  }
+  removeWorkFolder(cfg, id)
   // Two dates, two facts: `closedAt` is when the teardown ran, and `abandonedAt` is the
   // decision that it ended unfinished. `phaseOf` reports the more specific one.
   work.closedAt = new Date().toISOString()
@@ -3916,10 +3903,151 @@ cmds.close = ({ flags }) => {
   }
 }
 
+// The teardown both kinds of close share. Out of the work folder before anything in it is
+// removed: Windows refuses to remove a directory that is some process's cwd — including ours.
+// Everywhere else git removes it regardless, and a run handed its cwd rather than inheriting it
+// would then start every later subprocess in a directory that is not there, which Node refuses
+// to do.
+// Each answers whether it did all it set out to.
+function removeWorktrees (cfg, work, { force }) {
+  if (standingIn(workDir(cfg, work.id))) chdir(toolRoot())
+  let removedAll = true
+  for (const r of work.repos) {
+    if (!exists(r.path)) continue
+    const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.path, force })
+    if (failed) { warn(`${r.repo}: ${failed}`); removedAll = false }
+    else step(`removed worktree ${r.repo}`)
+  }
+  return removedAll
+}
+
+function removeWorkFolder (cfg, id) {
+  const wd = workDir(cfg, id)
+  if (!exists(wd)) return true
+  try {
+    fs.rmSync(wd, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
+    return true
+  } catch (e) {
+    warn(`worktrees removed, but ${wd} could not be deleted: ${e.code || e.message}`)
+    warn('something still has it open (a shell, an editor). Close it, then `rig tidy`.')
+    return false
+  }
+}
+
+// A closed work whose folder is still on this machine: closed on another one, or closed here
+// while something held the folder open. The one test `doctor`, `tidy`, `close` and `next` all
+// ask, so the four agree about which works are left over.
+const leftHere = (cfg, work) => !!work.closedAt && exists(workDir(cfg, work.id))
+
+// `String`: a hand-edited date is `contradictions`' to report, not a reason to crash.
+const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${String(work.closedAt).slice(0, 10)}`
+
+// What a removed worktree takes with it, whatever its PR says.
+const IN_TREE_ONLY = new Set(['dirty', 'unbranched'])
+
+// What would lose something that exists only on this machine. A first close also refuses over
+// an open pull request and an unknown PR state, and those are questions about the work; a
+// leftover's work is settled, and its pull requests are on GitHub, not on this disk.
+const LOCAL_BLOCKERS = new Set([...IN_TREE_ONLY, 'unpushed', 'distance-unknown'])
+
+// This machine's copy of a closed work, cleared: its worktrees, its folder and its mirror's
+// copies of the branches that landed. The close itself ran elsewhere and settled the record,
+// the tickets and the remote, so nothing here writes to any of them (DESIGN.md decision 164).
+// It asks GitHub what merged, read-only, because a squash merge leaves commits that look
+// unpushed and only a merged PR says they are safe to lose.
+//
+// Answers the blockers it found, and whether it cleared anything: a dry run never does, and
+// neither does a run with blockers unless it was forced past them.
+function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
+  const states = work.repos.map(r => repoState(cfg, r, work.branch))
+  const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
+  const verdict = workState(work, states, { stages: stack })
+  // Anything in the folder that is not the record's — a repo detached on the other machine
+  // before it closed, notes of your own — is nobody's copy but this one (decision 165).
+  const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
+  const strays = fs.readdirSync(workDir(cfg, work.id)).filter(e => !known.has(e))
+    .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds` }))
+  const blockers = [...verdict.blockers.filter(b => LOCAL_BLOCKERS.has(b.kind)), ...strays]
+  if (dryRun || (blockers.length && !force)) return { blockers, cleared: false }
+  // A worktree git refused to remove is not deleted from under it.
+  if (!removeWorktrees(cfg, work, { force })) return { blockers, cleared: false }
+  // The mirror only: the remote was the first close's to decide, and it already has.
+  if (!blockers.length && verdict.done && !work.abandonedAt) dropMergedBranches(cfg, work, states, stack, { remote: false })
+  return { blockers, cleared: removeWorkFolder(cfg, work.id) }
+}
+
+// `rig close` on a work that is already closed.
+function closeHere (cfg, work, flags) {
+  if (!leftHere(cfg, work)) return ok(`${work.id} was already ${stoppedOn(work)} — nothing of it is on this machine`)
+  const force = !!flags.force
+  const { blockers, cleared } = clearLeftover(cfg, work, { force })
+  if (!cleared && (force || !blockers.length)) {
+    warn(`${work.id} is not fully cleared — see above`)
+    current.exitCode = 1
+    return
+  }
+  if (!cleared) {
+    warn(`not clearing ${work.id} — it was ${stoppedOn(work)}, but this machine has work that is nowhere else:`)
+    for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
+    say('')
+    say(C.dim('Push or commit it, or pass --force if you genuinely want to discard it.'))
+    current.exitCode = 1
+    return
+  }
+  ok(`cleared this machine's copy of ${work.id} — it was ${stoppedOn(work)}, and its record is unchanged`)
+}
+
+// Every leftover on this machine, cleared the way `rig close` clears one. Over every data root,
+// because the work root is shared, and over the records as they stand: `rig update` brings
+// every root forward first. A leftover that would lose something is skipped and named, never
+// forced — forcing is a decision about one work, and `rig close --force` is where it is made.
+cmds.tidy = ({ flags }) => {
+  const { loc } = selection()
+  const cfg = load(loc)
+  const dryRun = !!flags['dry-run']
+  const leftovers = []
+  const unreadable = []
+  // The first root whose copy reads is the one whose record counts, as it is for doctor
+  // (`oneCopyEach`): a closed copy in a later root does not make an open work a leftover.
+  const seen = new Set()
+  for (const { name, loc: rootLoc } of doctorRootLocations(loc)) {
+    if (!exists(rootLoc.dataRoot)) continue
+    for (const id of listWorkIds(rootLoc.dataRoot)) {
+      if (seen.has(id) || !exists(workDir(cfg, id))) continue
+      let work
+      try { work = loadWork(cfg, id, rootLoc.dataRoot) } catch (e) {
+        if (!(e instanceof RigError)) throw e
+        unreadable.push(`${id} (${(e.cause ?? e).message})`)
+        continue
+      }
+      seen.add(id)
+      if (leftHere(cfg, work)) leftovers.push({ work, root: name && name !== loc.name ? name : null })
+    }
+  }
+  sayUnreadable(unreadable)
+  if (!leftovers.length) return ok('nothing to tidy — no closed work has a folder on this machine')
+
+  let notCleared = 0
+  for (const { work, root } of leftovers) {
+    const { blockers, cleared } = clearLeftover(cfg, work, { dryRun })
+    if (blockers.length) {
+      notCleared++
+      const data = root ? ` --data ${root}` : ''
+      warn(`${dryRun ? 'would skip' : 'skipped'} ${work.id} — ${stoppedOn(work)}, but this machine has work that is nowhere else:`)
+      for (const b of blockers) say(`    ${C.red('•')} ${b.message}`)
+      say(C.dim(`    push or commit it, or \`rig close --work ${work.id}${data} --force\` to discard it`))
+    } else if (cleared) ok(`cleared ${work.id} — ${stoppedOn(work)}`)
+    else if (dryRun) say(`  would clear ${work.id} — ${stoppedOn(work)}`)
+    else { notCleared++; warn(`${work.id} is not fully cleared — see above`) }
+  }
+  if (notCleared && !dryRun) current.exitCode = 1
+}
+
 // Every branch of a finished work whose PR merged — the work branch in each repo, and each
 // stage that landed — deleted wherever its copies are safe to delete. A PR known only from
-// the record has no head to check against, so its branch is named and left.
-function dropMergedBranches (cfg, work, states, stack) {
+// the record has no head to check against, so its branch is named and left. `remote: false`
+// is a leftover's: its mirror copies only.
+function dropMergedBranches (cfg, work, states, stack, { remote = true } = {}) {
   const merged = [
     ...work.repos.map((entry, i) => ({ entry, branch: work.branch, pr: states[i].pr })),
     ...stack.flatMap(st => st.prs.map(pr => ({ entry: work.repos.find(r => r.repo === pr.repo), branch: st.branch, pr }))),
@@ -3929,10 +4057,10 @@ function dropMergedBranches (cfg, work, states, stack) {
       say(`  ${C.dim(`${entry.repo}: kept ${branch} — GitHub did not say which commit PR #${pr.number} merged`)}`)
       continue
     }
-    const { local, remote } = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head, number: pr.number })
-    const gone = [local === 'deleted' && 'mirror', remote === 'deleted' && 'remote'].filter(Boolean)
+    const copies = trees(cfg).dropMerged({ org: entry.org, repo: entry.repo, branch, head: pr.head, number: pr.number, remote })
+    const gone = [copies.local === 'deleted' && 'mirror', copies.remote === 'deleted' && 'remote'].filter(Boolean)
     if (gone.length) step(`deleted branch ${branch} from ${entry.repo} (${gone.join(' and ')})`)
-    for (const [where, what] of [['mirror', local], ['remote', remote]]) {
+    for (const [where, what] of [['mirror', copies.local], ['remote', copies.remote]]) {
       if (what.startsWith('kept')) say(`  ${C.dim(`${entry.repo}: ${where} copy of ${branch} ${what}`)}`)
     }
   }
@@ -4375,9 +4503,10 @@ function doctorStamp (written) {
 
 // One work, as doctor sees it: what the record contradicts, and what is under its folder that
 // rig did not put there. A closed work keeps its contradictions and loses the rest — its
-// worktrees are gone on purpose. The record and the catalogue entry it reads are the data
-// root's, and the work folder is the machine's, which is the whole shape of a shared work
-// root: `cfg` answers where the tree is, `root` answers who has the paperwork for it.
+// worktrees are gone on purpose — bar whether its folder is still on this machine. The record
+// and the catalogue entry it reads are the data root's, and the work folder is the machine's,
+// which is the whole shape of a shared work root: `cfg` answers where the tree is, `root`
+// answers who has the paperwork for it.
 function doctorWork (cfg, id, root, roots) {
   let work
   try { work = loadWork(cfg, id, root) } catch (e) {
@@ -4385,7 +4514,7 @@ function doctorWork (cfg, id, root, roots) {
     throw e
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [] }
-  if (out.closed) return out
+  if (out.closed) return leftHere(cfg, work) ? { ...out, leftover: stoppedOn(work) } : out
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
@@ -4725,6 +4854,11 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --abandoned                 stop a work without finishing it: the did-it-land
                                    checks are dropped, uncommitted changes still refuse,
                                    the ticket is told and open PRs are left alone
+       on a work already closed: clears this machine's copy and
+                                   nothing else — no record, ticket or remote is touched
+  rig tidy [--dry-run]            clear every closed work whose folder is still on this
+                                  machine; one with work that exists only here is skipped
+                                  and named; --dry-run changes nothing
   rig backfill [--work <id>] [--force]
                                   store each merged PR's terminal facts (number, url,
                                   openedAt, firstCommitAt, firstReviewAt, approvedAt,
