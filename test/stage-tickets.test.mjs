@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, seedPr, withVisibility, worktree, record, issueNumbered, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, seedPr, withVisibility, worktree, record, issueNumbered, github, setGithub, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -127,6 +127,43 @@ test('and a forced close is not then reported as a contradiction', () => {
   const r = rig(['status', '--work', 'forced'])
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /should not be possible/)
+})
+
+test("close refuses while one stage's PR lookup fails, and --force goes past it", () => {
+  // The work branch landed; whether the slice did is something GitHub would not say, and a
+  // slice that may still be up for review is unfinished business (decision 173).
+  assert.equal(rig(['new', 'unasked', '--title', 'Unasked work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'unasked']).code, 0)
+  seedIssue(95, 'the unasked schema')
+  const dest = worktree('unasked', 'billing')
+  assert.equal(rig(['stage', 'feat/unasked-one', '--delivers', 'the schema', '--key', 'acme/billing#95', '--cut', '--work', 'unasked'], { cwd: dest }).code, 0)
+  commitWork(dest, 'the schema')
+  gitMust(dest, 'checkout', '-q', 'feat/unasked-work')
+  gitMust(dest, 'merge', '-q', '--no-ff', '-m', 'merge the schema', 'feat/unasked-one')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+  seedPr({ branch: 'feat/unasked-one', number: 96, state: 'MERGED', base: 'feat/unasked-work', url: 'https://github.com/acme/billing/pull/96', mergedAt: '2026-09-19T10:00:00Z' })
+  seedPr({ branch: 'feat/unasked-work', number: 97, state: 'MERGED', base: 'main', url: 'https://github.com/acme/billing/pull/97', mergedAt: '2026-09-19T11:00:00Z' })
+  const failing = github()
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/unasked-one': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const n = rig(['next', '--work', 'unasked'])
+  const c = rig(['close', '--work', 'unasked'])
+  const f = rig(['close', '--force', '--work', 'unasked'])
+  // The close commented on the ticket, so the lookup failure comes off what it left behind.
+  const after = github()
+  delete after.repos['acme/billing'].branchLookupFails
+  setGithub(after)
+
+  assert.doesNotMatch(n.out, /rig close/, 'a close that would refuse is not offered')
+  assert.equal(c.code, 1, c.out)
+  assert.ok(c.out.includes('billing: stage feat/unasked-one PR state unknown'), c.out)
+  assert.equal(f.code, 0, f.out)
+  assert.ok(record('unasked').forcedAt, 'forcing past it is recorded, like any blocker')
+  // Its ticket is told what rig knows, which is not that the slice failed to land.
+  assert.equal(issueNumbered(95).state, 'OPEN')
+  assert.equal(issueNumbered(95).comments?.length, 1, f.out)
+  assert.match(issueNumbered(95).comments[0], /GitHub would not say whether this slice landed, so the issue stays open\./)
+  assert.ok(f.out.includes('left open: GitHub would not say whether stage feat/unasked-one landed'), f.out)
 })
 
 // The work branch landed and a slice of it did not — the one shape where the work's *own*

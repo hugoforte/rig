@@ -231,6 +231,18 @@ test('every stage in makes the work branch the thing that is left', () => {
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
 })
 
+test('a branch whose PR lookup failed is never said to have no PR open', () => {
+  // gh signed out over an open PR: offering `rig pr` would be a command that refuses, and "no
+  // PR open" a claim nobody checked (decision 169).
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { pushed: true, prUnknown: 'gh is not authenticated' }), repo('b', { prUnknown: 'gh is not authenticated' })],
+    bumps: [{ repo: 'a', release: 'a minor release (the branch prefix `feat/`)' }],
+  })
+  assert.doesNotMatch(says(out), /no PR open|would ask for|nothing has been written/)
+  assert.ok(!commands(out).includes('rig pr'))
+})
+
 test('which release a PR would ask for is said once, beside the offer that names its repo (#228)', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),

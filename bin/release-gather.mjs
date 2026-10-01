@@ -29,13 +29,14 @@ export function commitsInRange ({ previous, head = 'HEAD', git = spawnGit }) {
 
 // One entry per commit, each carrying every pull request GitHub associates with it. A commit
 // GitHub names none for keeps an empty list rather than being dropped: `bin/release.mjs` refuses
-// on it, and a set that quietly lost a member is how a feature ships in a patch release.
+// on it, and a set that quietly lost a member is how a feature ships in a patch release. A
+// lookup gh could not answer throws, so it is never mistaken for a commit with none.
 export function gather ({ repo, previous, head = 'HEAD', github, git = spawnGit }) {
   const [org, name] = String(repo).split('/')
   if (!org || !name) throw new Error(`\`${repo}\` is not an owner/name repository`)
   return commitsInRange({ previous, head, git }).map(sha => ({
     sha,
-    pulls: github.pullsForCommit(org, name, sha) ?? [],
+    pulls: github.pullsForCommit(org, name, sha),
   }))
 }
 

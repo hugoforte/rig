@@ -351,6 +351,20 @@ test('--data-repo --name adds a second root rather than refusing to move the fir
   fs.writeFileSync(localConfig, saved)
 })
 
+test('a data repo GitHub would not say exists is neither joined nor created', () => {
+  // "gh could not answer" read as "does not exist" would send an existing repo down the
+  // create path, so the lookup's own refusal stops it (decision 170).
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'unauthenticated' }))
+  const r = rig(['init', '--data-repo', 'acme/unasked', '--name', 'unasked', '--orgs', 'acme'])
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /could not ask GitHub whether acme\/unasked exists \(gh is not authenticated \(in-memory GitHub\)\) — joining or creating a data repo needs it/)
+  assert.doesNotMatch(r.out, /cloning to|creating it, private/, 'nothing was joined or created')
+})
+
 test('joining an empty data repo pushes its first commit without ever asking for credentials', () => {
   // A server-side hook runs under the pushing git's environment on a local remote, so it
   // sees what the push was run with. The two variables are taken out of the run's own
