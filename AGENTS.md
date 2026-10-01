@@ -224,7 +224,7 @@ Two habits worth keeping from the docs this inherits:
 - **"Key data points"** — column semantics, config keys, idempotency keys. The
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
-**End the design gate with `rig save --designed`.** Every rig command that changes a work
+**End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
 (`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
@@ -408,8 +408,9 @@ rig next        # what is available on the current work, read off live state
 ```
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
-attach something, record the design gate, push, open a PR, scaffold a rollout plan, review
-what the work taught, close.
+attach something, record the design gate, push, open a PR, work through its review threads,
+the adversarial review, hand the PR over, scaffold a rollout plan, review what the work taught,
+close.
 
 Two things it will never do, and both are the point:
 
@@ -565,13 +566,16 @@ once the one before it is done:
 
 1. **The review already on it.** While the PR has unresolved review threads, `rig next` says how
    many and offers to work through them: action what is worth actioning, reply to every thread,
-   resolve them. Read off GitHub each time, never stored.
+   resolve them. Read off GitHub each time, never stored; a count GitHub will not give holds
+   up the steps after it rather than reading as zero.
 2. **The adversarial review**, when the design chose one: a reviewer told to find what is wrong
    with the PR, fixing what it finds and pushing. GitHub cannot say one happened, so
-   `rig save -m "adversarial review" --reviewed` records `reviewedAt`.
-3. **The hand-over.** With every thread resolved, the adversarial review done or declined,
-   nothing uncommitted or unpushed, no stage still to come and the PR body matching the record,
-   `rig next` says the PR is ready for a human reviewer. It names no command: who reviews is the
+   `rig save -m "adversarial review" --reviewed` records `reviewedAt`. A design agreed again
+   after it asks for another, and `--reviewed` is refused before the design gate.
+3. **The hand-over.** With the design gate passed, every thread resolved, the adversarial
+   review done or declined, the PR's checks green (or none set up), nothing uncommitted or
+   unpushed, no stage still to come and the PR body matching the record, `rig next` says the PR
+   is ready for a human reviewer; failing checks are named on their own. It names no command: who reviews is the
    human's call, and rig takes no outward-facing step on its own.
 
 rig names each step and says nothing about how it is done; an agent host maps them to its own
