@@ -651,10 +651,14 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan'
 // With several roots, every one is brought forward before the root is chosen, because which
 // root holds a work is read from all of their records, and a work moved on another machine has
 // moved only in the records that machine pushed — and a work id is unique across them, which
-// `rig new` can only check against records this machine has (decision 192). The root the local
-// records choose is the one whose busy lock stops the command; any other is said and worked from
-// as it is, since this command never commits into it. The choice is then made again, from the
-// records as the sync left them.
+// `rig new` can only check against records this machine has (decision 192). Only the root this
+// machine's records choose waits for a busy lock; any other is tried once. Nothing dies mid-sync:
+// each root comes back fresh or stale, and the choice is made again from the records as the sync
+// left them. The chosen root busy stops the command, as one root's always has. A command about a
+// work is settled when the chosen root holds it open and is fresh; otherwise a busy root may be
+// the one holding it, and a rerun in seconds settles that, so it stops the command too, and a
+// root that is stale for any other reason — offline, blocked, diverged — is warned about and
+// worked past.
 //
 // Answers the half of the chosen root's reading `commitDataRoot` may have at the end of the
 // command, or null when there was nothing here to read.
@@ -663,38 +667,49 @@ function prepareDataRoot () {
   const { loc: guess } = selection()
   const cfg = load(guess)
   const roots = all.length > 1 ? all.map(r => ({ label: `data root ${r.name}`, loc: r.loc })) : [{ label: 'data root', loc: guess }]
-  const readings = new Map(roots.map(({ label, loc }) => [loc.dataRoot, syncDataRoot(label, loc, cfg, loc.dataRoot === guess.dataRoot)]))
+  const synced = roots.map(({ label, loc }) => ({ label, loc, ...syncDataRoot(label, loc, cfg, loc.dataRoot === guess.dataRoot) }))
   current.location = null
+  const chosen = synced.find(r => r.loc.dataRoot === dataRoot())
+  const work = synced.length > 1 && workInHand()
+  const settled = !work || (chosen && !chosen.stale &&
+    rootHoldingWork(where().roots, work).holders.some(h => h.open && h.name === where().name))
+  const stopped = chosen?.stale === 'busy' ? chosen : !settled && synced.find(r => r.stale === 'busy')
+  if (stopped) die(`${lockBusy(stopped.held, stopped.label)}; nothing was done. Run this again once it finishes. ${lockEscape(stopped.held)}`)
+  const stale = settled ? [] : synced.filter(r => r.stale)
+  if (stale.length) warn(`${stale.map(r => r.label).join(', ')} could not be brought forward, so data root "${where().name}" was chosen from this machine's records`)
   checkWriteGate()
-  const before = readings.get(dataRoot())
-  return before ? stillTrueAtTheEnd(before) : null
+  return chosen?.state ? stillTrueAtTheEnd(chosen.state) : null
 }
 
 // One root's reading, after fetching and fast-forwarding it where there is an upstream to do it
-// from, or null when it is no data root this command could commit into. `mine` is whether the
-// command expects to commit into it.
+// from, and whether it is stale: `busy`, `unfetched`, or the fast-forward's `diverged`, `blocked`
+// or `failed`. The reading is null when it is no data root this command could commit into.
+// `mine` is whether the command expects to commit into it.
 function syncDataRoot (label, loc, cfg, mine) {
   const root = loc.dataRoot
-  if (!exists(root) || !loc.split) return null
+  if (!exists(root) || !loc.split) return { state: null }
   // The full reading, for three fields: what it costs over the identity questions is one
   // `status`, whose branch header carries the distance, and the network fetch dwarfs it.
   const before = co.describe(root)
   // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
   // empty remote that another machine has since pushed to — and only a fetch can say
   // whether it exists.
-  if (before.repo !== 'own' || !before.branch || !before.tracks || !dataFetchDue(cfg, root)) return before
-  // Held from the fetch to the fast-forward, and refused rather than gone past: a command
-  // that has not started is the cheapest one to stop (decision 161).
-  const held = lockDataRoot(root, 'fast-forward', label)
-  if (held.outcome === 'busy' && mine) die(`${lockBusy(held, label)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
-  if (held.outcome === 'busy') { say(C.dim(`· ${lockBusy(held, label)} — working from what is here`)); return before }
-  const save = `rig save${mine ? '' : ` --data ${loc.name}`}`
+  if (before.repo !== 'own' || !before.branch || !before.tracks || !dataFetchDue(cfg, root)) return { state: before }
+  // Held from the fetch to the fast-forward. A busy one is for `prepareDataRoot` to stop on or
+  // go past, once it knows which root the command is about (decisions 161 and 192).
+  const held = lockDataRoot(root, 'fast-forward', label, mine ? undefined : 0)
+  if (held.outcome === 'busy') {
+    say(C.dim(`· ${lockBusy(held, label)} — working from what is here`))
+    return { state: before, stale: 'busy', held }
+  }
+  // `rig save` commits the work in hand, which is in another root when this one is not `mine`.
+  const clear = mine ? 'run `rig save`' : `commit or stash the changes in ${root}`
   try {
     const fetched = co.fetch(root)
     noteDataFetch(cfg, root, fetched.ok)
     if (!fetched.ok) {
       say(C.dim(`· ${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
-      return before
+      return { state: before, stale: 'unfetched' }
     }
     const { outcome, state, error } = co.fastForward(root)
     // Everything but these four is a data root with nothing to do, and a command about
@@ -702,7 +717,7 @@ function syncDataRoot (label, loc, cfg, mine) {
     if (outcome === 'diverged') {
       warn(`${label}: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when a command commits into it`)
     } else if (outcome === 'blocked') {
-      warn(`${label}: ${state.behind} commit(s) behind origin with uncommitted changes — run \`${save}\`, then it will fast-forward`)
+      warn(`${label}: ${state.behind} commit(s) behind origin with uncommitted changes — ${clear}, then it will fast-forward`)
     } else if (outcome === 'failed') {
       warn(`${label}: could not fast-forward (${error})`)
     } else if (outcome === 'moved') {
@@ -710,7 +725,7 @@ function syncDataRoot (label, loc, cfg, mine) {
     }
     // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
     // reading the fast-forward decided from, after the fetch, which is all the commit reads.
-    return before.upstream ? before : state
+    return { state: before.upstream ? before : state, stale: ['diverged', 'blocked', 'failed'].includes(outcome) ? outcome : null }
   } finally { co.unlock(held.lock) }
 }
 
@@ -1709,8 +1724,8 @@ function workInHand () {
 // 160–162): `fast-forward` or `commit and push`, which is how a waiter is told what it waits on.
 // A lock that could not be taken at all is said and gone past, because the lock is advisory and
 // rig without it is rig as it was. Answers the lock to let go of, or the busy outcome.
-function lockDataRoot (root, section, label = 'data root') {
-  const r = co.lock(root, { command: `rig ${current.command}`, work: workInHand(), section })
+function lockDataRoot (root, section, label = 'data root', waitMs) {
+  const r = co.lock(root, { command: `rig ${current.command}`, work: workInHand(), section }, { waitMs })
   if (r.outcome === 'failed') warn(`${label}: could not take its lock (${r.error}) — going on without it`)
   if (r.outcome === 'taken-over') {
     const why = {
