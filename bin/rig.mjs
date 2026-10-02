@@ -648,53 +648,63 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan'
 // root with commits of its own is left for `commitDataRoot`'s rebase at the end. Then the
 // gate, which holds whether or not there is a remote to sync with.
 //
-// Answers the half of that reading `commitDataRoot` may have at the end of the command, or
-// null when there was nothing here to read.
+// With several roots, every one is brought forward before the root is chosen, because which
+// root holds a work is read from all of their records, and a work moved on another machine has
+// moved only in the records that machine pushed — and a work id is unique across them, which
+// `rig new` can only check against records this machine has (decision 192).
+//
+// Answers the half of the chosen root's reading `commitDataRoot` may have at the end of the
+// command, or null when there was nothing here to read.
 function prepareDataRoot () {
-  const root = dataRoot()
-  let before = null
-  if (exists(root) && where().split) {
-    // The full reading, for three fields: what it costs over the identity questions is
-    // one `status`, whose branch header carries the distance, and the network fetch on the
-    // next line dwarfs it.
-    // The reading worth keeping cheap is the freshness one, which runs after every command.
-    before = co.describe(root)
-    // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
-    // empty remote that another machine has since pushed to — and only a fetch can say
-    // whether it exists.
-    if (before.repo === 'own' && before.branch && before.tracks && dataFetchDue()) {
-      // Held from the fetch to the fast-forward, and refused rather than gone past: a command
-      // that has not started is the cheapest one to stop (decision 161).
-      const held = lockDataRoot(root, 'fast-forward')
-      if (held.outcome === 'busy') die(`${lockBusy(held)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
-      try {
-        const fetched = co.fetch(root)
-        if (!fetched.ok) {
-          stampDataFetchFailure()
-          say(C.dim(`· data root: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
-        } else {
-          clearDataFetchFailure()
-          const { outcome, state, error } = co.fastForward(root)
-          // Everything but these four is a data root with nothing to do, and a command about
-          // to run is the wrong moment to be told about it.
-          if (outcome === 'diverged') {
-            warn(`data root: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
-          } else if (outcome === 'blocked') {
-            warn(`data root: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
-          } else if (outcome === 'failed') {
-            warn(`data root: could not fast-forward (${error})`)
-          } else if (outcome === 'moved') {
-            say(C.dim(`· data root: fast-forwarded ${state.behind} commit(s) from origin`))
-          }
-          // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
-          // reading the fast-forward decided from, after the fetch, which is all the commit reads.
-          if (!before.upstream) before = state
-        }
-      } finally { co.unlock(held.lock) }
-    }
-  }
+  const all = doctorRootLocations(null).filter(r => r.name)
+  const roots = all.length > 1 ? all.map(r => ({ label: `data root ${r.name}`, loc: r.loc })) : [{ label: 'data root', loc: where() }]
+  const readings = new Map(roots.map(({ label, loc }) => [loc.dataRoot, syncDataRoot(label, loc)]))
+  current.location = null
   checkWriteGate()
-  return before && stillTrueAtTheEnd(before)
+  const before = readings.get(dataRoot())
+  return before ? stillTrueAtTheEnd(before) : null
+}
+
+// One root's reading, after fetching and fast-forwarding it where there is an upstream to do it
+// from, or null when it is no data root this command could commit into.
+function syncDataRoot (label, loc) {
+  const root = loc.dataRoot
+  if (!exists(root) || !loc.split) return null
+  // The full reading, for three fields: what it costs over the identity questions is one
+  // `status`, whose branch header carries the distance, and the network fetch dwarfs it.
+  const before = co.describe(root)
+  // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
+  // empty remote that another machine has since pushed to — and only a fetch can say
+  // whether it exists.
+  const cfg = load(loc)
+  if (before.repo !== 'own' || !before.branch || !before.tracks || !dataFetchDue(cfg, root)) return before
+  // Held from the fetch to the fast-forward, and refused rather than gone past: a command
+  // that has not started is the cheapest one to stop (decision 161).
+  const held = lockDataRoot(root, 'fast-forward')
+  if (held.outcome === 'busy') die(`${lockBusy(held, label)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
+  try {
+    const fetched = co.fetch(root)
+    noteDataFetch(cfg, root, fetched.ok)
+    if (!fetched.ok) {
+      say(C.dim(`· ${label}: could not fetch (${fetched.error})${signIn(fetched.error)} — working from what is here`))
+      return before
+    }
+    const { outcome, state, error } = co.fastForward(root)
+    // Everything but these four is a data root with nothing to do, and a command about
+    // to run is the wrong moment to be told about it.
+    if (outcome === 'diverged') {
+      warn(`${label}: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
+    } else if (outcome === 'blocked') {
+      warn(`${label}: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
+    } else if (outcome === 'failed') {
+      warn(`${label}: could not fast-forward (${error})`)
+    } else if (outcome === 'moved') {
+      say(C.dim(`· ${label}: fast-forwarded ${state.behind} commit(s) from origin`))
+    }
+    // The upstream the fetch found is the one the commit at the end pushes to. `state` is the
+    // reading the fast-forward decided from, after the fetch, which is all the commit reads.
+    return before.upstream ? before : state
+  } finally { co.unlock(held.lock) }
 }
 
 // The half of a data root's reading that the command running between the two readings cannot
@@ -712,16 +722,20 @@ const stillTrueAtTheEnd = state => ({ ...state, head: null, behind: null, dirty:
 // An unreachable remote is retried once an interval rather than at the start of every
 // command: a fetch against a remote that is not there costs a full connect timeout — twenty
 // seconds, measured — and paying that on every `save` is what makes a tool unusable on a
-// plane. Short enough that a second machine is never working from stale records for long.
+// plane. Short enough that a second machine is never working from stale records for long. Kept
+// per root, by path: one root's remote out of reach is no reason to stop fetching another's.
 const DATA_FETCH_RETRY_MS = 15 * 60_000
-const dataFetchDue = () => {
-  const at = Date.parse(readCache(config(), 'datafetch.json')?.failedAt ?? '')
+const dataFetchDue = (cfg, root) => {
+  const at = Date.parse(readCache(cfg, 'datafetch.json')?.[root] ?? '')
   if (Number.isNaN(at)) return true
   return Date.now() - at >= DATA_FETCH_RETRY_MS || at > Date.now()
 }
-const stampDataFetchFailure = () => writeCache(config(), 'datafetch.json', { failedAt: new Date().toISOString() })
-const clearDataFetchFailure = () => {
-  try { fs.rmSync(cacheFile(config(), 'datafetch.json'), { force: true }) } catch { /* nothing to forget */ }
+const noteDataFetch = (cfg, root, ok) => {
+  const failed = readCache(cfg, 'datafetch.json') ?? {}
+  if (ok && !(root in failed)) return
+  if (ok) delete failed[root]
+  else failed[root] = new Date().toISOString()
+  writeCache(cfg, 'datafetch.json', failed)
 }
 
 // The record format the data root is in has to be readable, and not ahead of what this rig
@@ -2163,17 +2177,16 @@ cmds.new = ({ flags, positional }) => {
 
   if (existing) die(`work "${id}" already exists (${recordFile(id)})`)
 
-  // One work root, shared by every data root on this machine, so two roots can want the same
-  // folder. The roots' records detect the clash but cannot fix it — renaming a folder
-  // another root's records point at would break that work — so the id is refused and the root
-  // that owns it is named. This is the whole cost of not giving every data root a work root
-  // of its own, and it is paid at the one moment a name is being chosen anyway.
+  // One work root, shared by every data root on this machine, so a work id is unique across
+  // them: another root's record of it is refused, folder or not, since its folder is one
+  // `rig restore` away. Renaming a folder another root's records point at would break that
+  // work, so the id is refused and the root that owns it is named. This is the whole cost of
+  // not giving every data root a work root of its own, and it is paid at the one moment a name
+  // is being chosen anyway.
   const folder = workDir(cfg, id)
-  if (exists(folder)) {
-    const { name, holders } = rootHoldingWork(where().roots, id)
-    const owner = name ?? holders[0]?.name
-    const whose = owner && owner !== where().name ? ` and belongs to data root "${owner}"` : ''
-    die(`${folder} already exists${whose} — pick another id`)
+  const owner = rootHoldingWork(where().roots, id).holders.find(h => h.name !== where().name)?.name
+  if (owner || exists(folder)) {
+    die(`${owner ? `work "${id}" belongs to data root "${owner}"` : `${folder} already exists`} — pick another id`)
   }
 
   // A Jira `--key` needs no piped brief any more: rig fetches summary/description

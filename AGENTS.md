@@ -295,7 +295,7 @@ rather than drafting its entry into this one. Two works, one per root, is the an
 Two consequences worth holding on to:
 
 - **One work root, shared.** A work id is unique across every data root on the machine, and
-  `rig new` refuses one whose folder exists, naming the root that owns it. Renaming a folder
+  `rig new` refuses one another root holds or whose folder exists, naming the root that owns it. Renaming a folder
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
@@ -457,7 +457,11 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. A data root whose
+before they read it, so a second machine never works from stale records — every configured root
+when there are several, before the root is chosen, since a work moved on the other machine has
+moved only in what it pushed, and an id taken there must be seen before `rig new` takes it here.
+A root whose remote is out of reach is said and worked from as it is, and asked again after
+fifteen minutes. A data root whose
 branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
 another machine has since pushed to, is fetched too, rather than read as local only. How the
 check is measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
