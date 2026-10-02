@@ -201,7 +201,7 @@ export function rootHoldingWork (roots, id) {
   const holders = Object.entries(roots).flatMap(([name, entry]) => {
     const file = path.join(entry.path, 'work', id, 'work.json')
     if (!fs.existsSync(file)) return []
-    try { return [{ name, open: !JSON.parse(fs.readFileSync(file, 'utf8')).closedAt }] } catch { return [{ name, open: true }] }
+    try { return [{ name, open: !JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')).closedAt }] } catch { return [{ name, open: true }] }
   })
   const open = holders.filter(h => h.open)
   const candidates = open.length ? open : holders

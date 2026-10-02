@@ -80,11 +80,12 @@ test(`${DATA_ROOT_ENV} pins a shell to one root, and --data still overrides it`,
 })
 
 // A root's record of a work, reduced to what decides which root holds it: whether it is closed,
-// or that it will not parse.
+// or that it will not parse. `bom` is a closed record as PowerShell 5.1 saves it, BOM first.
 const holds = (root, id, state = 'open') => {
   fs.mkdirSync(path.join(root, 'work', id), { recursive: true })
-  const record = { open: { id }, closed: { id, closedAt: '2026-10-01' }, unreadable: null }[state]
-  fs.writeFileSync(path.join(root, 'work', id, 'work.json'), record ? JSON.stringify(record) : '{"id":')
+  const closed = JSON.stringify({ id, closedAt: '2026-10-01' })
+  const text = { open: JSON.stringify({ id }), closed, bom: `﻿${closed}`, unreadable: '{"id":' }[state]
+  fs.writeFileSync(path.join(root, 'work', id, 'work.json'), text)
 }
 // A work folder as `rig new` leaves it, reduced to its `.rig/id`.
 const folder = (tmp, id) => {
@@ -110,6 +111,8 @@ test('a work open in one root resolves there, from its folder or by name, whatev
     assert.equal(locate(toolRoot, {}, { cwd: dir, repos: ['Payments'] }).name, 'personal', 'the work beats the repo')
     assert.equal(locate(toolRoot, { [DATA_ROOT_ENV]: 'linenmaster' }, { cwd: dir }).name, 'linenmaster', 'a pinned shell beats it')
     assert.equal(locate(toolRoot, {}, { cwd: dir, data: 'hugoforte' }).name, 'hugoforte', '--data beats it')
+    holds(machine.dataRoots.hugoforte.path, 'w', 'bom')
+    assert.equal(locate(toolRoot, {}, { cwd: dir }).name, 'personal', 'a closed copy saved with a BOM is still closed')
   })
 })
 
