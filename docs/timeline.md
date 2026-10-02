@@ -1,6 +1,6 @@
 # How rig grew
 
-rig went from an initial commit to version 3.22 in ten days, 15 to 25 September 2026: 68 commits on `main`, 44 releases. This is that growth in broad strokes, as six phases, each named by the capacity it added. The numbers come from the git tags; the phases are a reading of the pull request titles.
+rig went from an initial commit to version 3.35 in sixteen days, 15 September to 1 October 2026: 90 commits on `main`, 61 releases. This is that growth in broad strokes, as eight phases, each named by the capacity it added. The numbers come from the git tags; the phases are a reading of the pull request titles.
 
 ## In numbers
 
@@ -12,8 +12,9 @@ rig went from an initial commit to version 3.22 in ten days, 15 to 25 September 
 | 19 Sep | v3.0 | 24 | 15 | 5.8k |
 | 22 Sep | v3.10 | 26 | 22 | 9.4k |
 | 25 Sep | v3.22 | 26 | 25 | 13.2k |
+| 1 Oct | v3.35 | 27 | 26 | 17.6k |
 
-The command count stops moving after day five. Everything since is depth: modules and test lines keep climbing while the surface stays where it is.
+The command count all but stops moving after the first week: the nine days after v3.10 added one command, `tidy`. Everything since is depth: modules and test lines keep climbing while the surface stays where it is.
 
 ## Phase 1, 15 to 16 September: the core loop
 
@@ -51,6 +52,18 @@ The agent skills ship with the tool: `rig`, `rig-handoff`, `rig-learn`. A lesson
 
 Capacity: an agent can pick up a work, hand it off, and learn from it, on any machine.
 
+## Phase 7, 27 to 28 September: rig says what it believes
+
+A philosophy page sets down what rig's frictions taught ([philosophy.md](./philosophy.md)). An org can say what it is trying to do, and every work reads it. The lesson review at close keeps that org doc true and grows the philosophy, which gains "Say it once". Every list of a data root's contents is checked to name all of it.
+
+Capacity: an org states its direction, and each work is steered by it.
+
+## Phase 8, 29 September to 1 October: the record stays true
+
+A work always lands in the data root that holds it, and its record can be corrected after the fact. Two rig commands never write the data root at once. A work closed on another machine is cleared from this one, by `tidy`, but never while its id is open in another data root. A stack merged through GitHub closes cleanly and is registered as a GitHub stack. What `pr` and `close` say in public is safe, single and complete. Every twg answer is checked against the shape rig reads, and a `gh` lookup that could not ask says so, rather than answering not found. Whether a work gets an adversarial review is decided at the design gate.
+
+Capacity: several machines, data roots and sessions share one record, and it does not lie to any of them.
+
 ## The arc
 
-Solo tool, then installable product, then covering the SDLC, then multi-root and team-facing, then self-steering and fast to test, then agent-native and portable. Each phase widened who could use rig or what it could hold, and none of them grew the command surface past what day five had.
+Solo tool, then installable product, then covering the SDLC, then multi-root and team-facing, then self-steering and fast to test, then agent-native and portable, then saying what it believes, then true under sharing. Each phase widened who could use rig or what it could hold, and since the first week they have grown the command surface by one command between them.

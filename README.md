@@ -101,7 +101,7 @@ Base is a relation, not a name for any particular branch. `rig status` reads eac
 - [DESIGN.md](./DESIGN.md) — why it is shaped this way, with the decision log and the post-mortem of the tool this one replaced.
 - [CONTEXT.md](./CONTEXT.md) — what the words mean: one definition each, with the synonyms it displaces.
 - [docs/adr/](./docs/adr/) — the decisions that were hard to reverse.
-- [docs/timeline.md](./docs/timeline.md) — how rig grew, in six phases, each named by the capacity it added.
+- [docs/timeline.md](./docs/timeline.md) — how rig grew, in eight phases, each named by the capacity it added.
 - [docs/philosophy.md](./docs/philosophy.md) — what the frictions behind that growth taught: the principles rig is built on, and how they grow.
 
 ## Reference
