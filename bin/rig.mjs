@@ -648,17 +648,9 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan'
 // root with commits of its own is left for `commitDataRoot`'s rebase at the end. Then the
 // gate, which holds whether or not there is a remote to sync with.
 //
-// With several roots, every one is brought forward before the root is chosen, because which
-// root holds a work is read from all of their records, and a work moved on another machine has
-// moved only in the records that machine pushed — and a work id is unique across them, which
-// `rig new` can only check against records this machine has (decision 192). Only the root this
-// machine's records choose waits for a busy lock; any other is tried once. Nothing dies mid-sync:
-// each root comes back fresh or stale, and the choice is made again from the records as the sync
-// left them. The chosen root busy stops the command, as one root's always has. A command about a
-// work is settled when the chosen root holds it open and is fresh; otherwise a busy root may be
-// the one holding it, and a rerun in seconds settles that, so it stops the command too, and a
-// root that is stale for any other reason — offline, blocked, diverged — is warned about and
-// worked past.
+// With several roots, every one is brought forward before the root is chosen, since which root
+// holds a work is read from all of their records, and the choice is made again afterwards. A
+// stale root stops the command only where it could matter (decision 192 says where).
 //
 // Answers the half of the chosen root's reading `commitDataRoot` may have at the end of the
 // command, or null when there was nothing here to read.
@@ -681,10 +673,8 @@ function prepareDataRoot () {
   return chosen?.state ? stillTrueAtTheEnd(chosen.state) : null
 }
 
-// One root's reading, after fetching and fast-forwarding it where there is an upstream to do it
-// from, and whether it is stale: `busy`, `unfetched`, or the fast-forward's `diverged`, `blocked`
-// or `failed`. The reading is null when it is no data root this command could commit into.
-// `mine` is whether the command expects to commit into it.
+// One root's reading (null for no data root this command could commit into) once it is brought
+// forward, and why it is stale if it is: `busy`, `unfetched`, `diverged`, `blocked` or `failed`.
 function syncDataRoot (label, loc, cfg, mine) {
   const root = loc.dataRoot
   if (!exists(root) || !loc.split) return { state: null }
