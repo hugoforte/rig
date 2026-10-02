@@ -651,14 +651,19 @@ const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan'
 // With several roots, every one is brought forward before the root is chosen, because which
 // root holds a work is read from all of their records, and a work moved on another machine has
 // moved only in the records that machine pushed — and a work id is unique across them, which
-// `rig new` can only check against records this machine has (decision 192).
+// `rig new` can only check against records this machine has (decision 192). The root the local
+// records choose is the one whose busy lock stops the command; any other is said and worked from
+// as it is, since this command never commits into it. The choice is then made again, from the
+// records as the sync left them.
 //
 // Answers the half of the chosen root's reading `commitDataRoot` may have at the end of the
 // command, or null when there was nothing here to read.
 function prepareDataRoot () {
   const all = doctorRootLocations(null).filter(r => r.name)
-  const roots = all.length > 1 ? all.map(r => ({ label: `data root ${r.name}`, loc: r.loc })) : [{ label: 'data root', loc: where() }]
-  const readings = new Map(roots.map(({ label, loc }) => [loc.dataRoot, syncDataRoot(label, loc)]))
+  const { loc: guess } = selection()
+  const cfg = load(guess)
+  const roots = all.length > 1 ? all.map(r => ({ label: `data root ${r.name}`, loc: r.loc })) : [{ label: 'data root', loc: guess }]
+  const readings = new Map(roots.map(({ label, loc }) => [loc.dataRoot, syncDataRoot(label, loc, cfg, loc.dataRoot === guess.dataRoot)]))
   current.location = null
   checkWriteGate()
   const before = readings.get(dataRoot())
@@ -666,8 +671,9 @@ function prepareDataRoot () {
 }
 
 // One root's reading, after fetching and fast-forwarding it where there is an upstream to do it
-// from, or null when it is no data root this command could commit into.
-function syncDataRoot (label, loc) {
+// from, or null when it is no data root this command could commit into. `mine` is whether the
+// command expects to commit into it.
+function syncDataRoot (label, loc, cfg, mine) {
   const root = loc.dataRoot
   if (!exists(root) || !loc.split) return null
   // The full reading, for three fields: what it costs over the identity questions is one
@@ -676,12 +682,13 @@ function syncDataRoot (label, loc) {
   // `tracks` without `upstream` is an upstream whose ref is not here yet — a clone of an
   // empty remote that another machine has since pushed to — and only a fetch can say
   // whether it exists.
-  const cfg = load(loc)
   if (before.repo !== 'own' || !before.branch || !before.tracks || !dataFetchDue(cfg, root)) return before
   // Held from the fetch to the fast-forward, and refused rather than gone past: a command
   // that has not started is the cheapest one to stop (decision 161).
-  const held = lockDataRoot(root, 'fast-forward')
-  if (held.outcome === 'busy') die(`${lockBusy(held, label)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
+  const held = lockDataRoot(root, 'fast-forward', label)
+  if (held.outcome === 'busy' && mine) die(`${lockBusy(held, label)}; nothing was done. Run this again once it finishes. ${lockEscape(held)}`)
+  if (held.outcome === 'busy') { say(C.dim(`· ${lockBusy(held, label)} — working from what is here`)); return before }
+  const save = `rig save${mine ? '' : ` --data ${loc.name}`}`
   try {
     const fetched = co.fetch(root)
     noteDataFetch(cfg, root, fetched.ok)
@@ -693,9 +700,9 @@ function syncDataRoot (label, loc) {
     // Everything but these four is a data root with nothing to do, and a command about
     // to run is the wrong moment to be told about it.
     if (outcome === 'diverged') {
-      warn(`${label}: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when this command commits`)
+      warn(`${label}: ${state.behind} behind and ${state.ahead} ahead of origin — left alone; it is rebased when a command commits into it`)
     } else if (outcome === 'blocked') {
-      warn(`${label}: ${state.behind} commit(s) behind origin with uncommitted changes — run \`rig save\`, then it will fast-forward`)
+      warn(`${label}: ${state.behind} commit(s) behind origin with uncommitted changes — run \`${save}\`, then it will fast-forward`)
     } else if (outcome === 'failed') {
       warn(`${label}: could not fast-forward (${error})`)
     } else if (outcome === 'moved') {
@@ -725,17 +732,19 @@ const stillTrueAtTheEnd = state => ({ ...state, head: null, behind: null, dirty:
 // plane. Short enough that a second machine is never working from stale records for long. Kept
 // per root, by path: one root's remote out of reach is no reason to stop fetching another's.
 const DATA_FETCH_RETRY_MS = 15 * 60_000
+const DATA_FETCH_CACHE = 'datafetch-roots.json'
 const dataFetchDue = (cfg, root) => {
-  const at = Date.parse(readCache(cfg, 'datafetch.json')?.[root] ?? '')
+  const at = Date.parse(readCache(cfg, DATA_FETCH_CACHE)?.[root] ?? '')
   if (Number.isNaN(at)) return true
   return Date.now() - at >= DATA_FETCH_RETRY_MS || at > Date.now()
 }
 const noteDataFetch = (cfg, root, ok) => {
-  const failed = readCache(cfg, 'datafetch.json') ?? {}
+  const cached = readCache(cfg, DATA_FETCH_CACHE)
+  const failed = isObject(cached) ? cached : {}
   if (ok && !(root in failed)) return
   if (ok) delete failed[root]
   else failed[root] = new Date().toISOString()
-  writeCache(cfg, 'datafetch.json', failed)
+  writeCache(cfg, DATA_FETCH_CACHE, failed)
 }
 
 // The record format the data root is in has to be readable, and not ahead of what this rig
@@ -1700,16 +1709,16 @@ function workInHand () {
 // 160–162): `fast-forward` or `commit and push`, which is how a waiter is told what it waits on.
 // A lock that could not be taken at all is said and gone past, because the lock is advisory and
 // rig without it is rig as it was. Answers the lock to let go of, or the busy outcome.
-function lockDataRoot (root, section) {
+function lockDataRoot (root, section, label = 'data root') {
   const r = co.lock(root, { command: `rig ${current.command}`, work: workInHand(), section })
-  if (r.outcome === 'failed') warn(`data root: could not take its lock (${r.error}) — going on without it`)
+  if (r.outcome === 'failed') warn(`${label}: could not take its lock (${r.error}) — going on without it`)
   if (r.outcome === 'taken-over') {
     const why = {
       gone: 'which is no longer running',
       old: `after more than ${LOCK_STALE_MS / 60_000} minutes`,
       unreadable: 'which could not be read',
     }[r.stale.why]
-    say(C.dim(`· data root: took over the lock held by ${lockHolder(r.stale.holder)}, ${why}`))
+    say(C.dim(`· ${label}: took over the lock held by ${lockHolder(r.stale.holder)}, ${why}`))
   }
   return r
 }
@@ -2169,6 +2178,10 @@ cmds.new = ({ flags, positional }) => {
   if (exists(recordFile(id))) {
     try { existing = readRecord(id) } catch (e) { die(`work "${id}" already exists: ${e.message}`) }
   }
+  // A work id is unique across the roots, folder or not, since another root's folder is one
+  // `rig restore` away; asked before the preview, which would otherwise preview a refusal.
+  const owner = rootHoldingWork(where().roots, id).holders.find(h => h.name !== where().name)?.name
+  if (owner) die(`work "${id}" belongs to data root "${owner}" — pick another id`)
   if (dryRun) {
     if (existing?.tickets?.length) { warn(`${id} already has a ticket (${existing.tickets.join(', ')}) — nothing to preview`); return }
     createTicket(cfg, { id, title: flags.title || existing?.title || '' }, brief, flags.org, { dryRun: true, fields: fieldOverrides, parent })
@@ -2177,17 +2190,12 @@ cmds.new = ({ flags, positional }) => {
 
   if (existing) die(`work "${id}" already exists (${recordFile(id)})`)
 
-  // One work root, shared by every data root on this machine, so a work id is unique across
-  // them: another root's record of it is refused, folder or not, since its folder is one
-  // `rig restore` away. Renaming a folder another root's records point at would break that
-  // work, so the id is refused and the root that owns it is named. This is the whole cost of
-  // not giving every data root a work root of its own, and it is paid at the one moment a name
-  // is being chosen anyway.
+  // One work root, shared by every data root on this machine, so two roots can want the same
+  // folder. Renaming a folder another root's records point at would break that work, so the
+  // id is refused. This is the whole cost of not giving every data root a work root of its
+  // own, and it is paid at the one moment a name is being chosen anyway.
   const folder = workDir(cfg, id)
-  const owner = rootHoldingWork(where().roots, id).holders.find(h => h.name !== where().name)?.name
-  if (owner || exists(folder)) {
-    die(`${owner ? `work "${id}" belongs to data root "${owner}"` : `${folder} already exists`} — pick another id`)
-  }
+  if (exists(folder)) die(`${folder} already exists — pick another id`)
 
   // A Jira `--key` needs no piped brief any more: rig fetches summary/description
   // itself, used as a default wherever `--title`/stdin didn't already supply one.
@@ -4376,7 +4384,7 @@ function updateCheckout (label, root) {
   // A data root's fetch and fast-forward are locked as a mutating command's are, and a busy
   // lock is that root not updated, the way every other reason here is. The tool checkout is
   // yours and nothing of rig's commits into it, so it takes no lock.
-  const held = label.startsWith('data root') ? lockDataRoot(root, 'fast-forward') : null
+  const held = label.startsWith('data root') ? lockDataRoot(root, 'fast-forward', label) : null
   if (held?.outcome === 'busy') {
     warn(`${lockBusy(held, label)}; not updated. ${lockEscape(held)}`)
     return { status: 'failed', clean }

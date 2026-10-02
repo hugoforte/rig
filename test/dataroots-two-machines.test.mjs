@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { makeInstall } from './harness.mjs'
 
@@ -64,10 +65,29 @@ test('a work id taken in another root on the other machine is refused before it 
 test('a root whose remote cannot be reached is said, resolved from what is here, and not asked again at once', () => {
   two.gitMust(path.join(two.tmp, roots.b), 'remote', 'set-url', 'origin', path.join(two.tmp, 'gone.git'))
   fs.appendFileSync(path.join(two.tmp, roots.b, 'work', 'w', 'context.md'), '\nWritten offline.\n')
-  const r =two.rig(['save', '--work', 'w', '-m', 'offline'])
+  const r = two.rig(['save', '--work', 'w', '-m', 'offline'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /data root b: could not fetch .* — working from what is here/)
   assert.equal(lastCommit(path.join(two.tmp, roots.b)), 'rig save w: offline')
+  // Remembered for that root, and for no other: a moves on, and is still fetched.
+  assert.equal(one.rig(['new', 'later', '--title', 'Pushed to a', '--no-ticket', '--data', 'a']).code, 0)
   const again = two.rig(['save', '--work', 'w', '-m', 'offline again'])
-  assert.doesNotMatch(again.out, /data root b: could not fetch/, 'the failure is remembered for that root')
+  assert.equal(again.code, 0, again.out)
+  assert.doesNotMatch(again.out, /data root b: could not fetch/)
+  assert.match(again.out, /data root a: fast-forwarded 1 commit\(s\) from origin/)
+})
+
+test('a root this command will not commit into, busy with another command, is said and worked from as it is', () => {
+  const lock = path.join(two.tmp, roots.a, '.git', 'rig.lock')
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), command: 'rig close', work: 'other',
+    section: 'commit and push', since: new Date().toISOString(), nonce: 'theirs' }) + '\n')
+  try {
+    fs.appendFileSync(path.join(two.tmp, roots.b, 'work', 'w', 'context.md'), '\nWhile a is busy.\n')
+    // A machine whose clock moves only when it sleeps, so the 30 s wait is a count of polls.
+    const m = { at: Date.now(), now: () => m.at, sleep: ms => { m.at += ms }, alive: () => true, hostname: os.hostname() }
+    const r = two.rig(['save', '--work', 'w', '-m', 'a is busy'], { machine: m })
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /data root a busy — `rig close` for other .* — working from what is here/)
+    assert.equal(lastCommit(path.join(two.tmp, roots.b)), 'rig save w: a is busy')
+  } finally { fs.rmSync(lock, { force: true }) }
 })
