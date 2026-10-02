@@ -251,8 +251,9 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 command holds a lock on it (`rig.lock`, in the data root's git dir, never committed) while it
 fast-forwards at the start and while it commits and pushes at the end — never for the rest of
 the command. A second command that finds it held waits up to 30 seconds, then says which
-command and work hold it: at the start it stops before doing anything, so run it again; at the
-end what it wrote waits in the tree for the next command, or `rig save` once the other
+command and work hold it: at the start it stops before doing anything, so run it again — with
+several roots, only for the root it commits into, or one that may hold the work it is about
+(DESIGN.md decision 192); at the end what it wrote waits in the tree for the next command, or `rig save` once the other
 finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
 Read-only commands never wait. The lock does not change the sweep: the second of two queued
 commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
@@ -276,10 +277,10 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
-(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
-then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
-root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
+`RIG_DATA_ROOT`, **the work it is about** (named by `--work` or `rig restore <id>`, else the
+work folder it runs in), **the repo it is about** (named by `--repos`, then a data root's own
+checkout, then the repo checkout it runs in), then `current`. The middle two are the ones that
+matter: the root that holds a work's record is the root for that work, and a repo's catalogue entry — drafted by `rig attach` the
 first time it saw that repo — names the root that repo belongs to. A checkout's repo is
 matched by org as well as name, because same-named repos in different orgs are normal. So
 `rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
@@ -295,16 +296,16 @@ rather than drafting its entry into this one. Two works, one per root, is the an
 Two consequences worth holding on to:
 
 - **One work root, shared.** A work id is unique across every data root on the machine, and
-  `rig new` refuses one whose folder exists, naming the root that owns it. Renaming a folder
+  `rig new` refuses one another root holds or whose folder exists, naming the root that owns it. Renaming a folder
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
   next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
   `current` do not stop it; the doctor checks it ends in say that selection, once.
-- **A work folder's `.rig/data` is written only where the record is**: rig writes it when the
-  root in hand is the one root holding the work's record. `rig doctor` names a folder with
-  none when more than one root is configured, one whose marker names a root that does not
-  hold the record, and a record held by two roots.
+- **A work held by two roots resolves to the one that holds it open**: a work moved between
+  roots leaves its first copy behind closed. Two open copies, or two closed and none open, is
+  a pick rig will not make — the command names the roots and asks for `--data`, and `rig
+  doctor` names a record held by two roots (DESIGN.md decisions 188–191).
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
@@ -457,7 +458,11 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. A data root whose
+before they read it, so a second machine never works from stale records — every configured root
+when there are several, before the root is chosen, since a work moved on the other machine has
+moved only in what it pushed, and an id taken there must be seen before `rig new` takes it here.
+A root whose remote is out of reach is said and worked from as it is, and asked again after
+fifteen minutes. A data root whose
 branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
 another machine has since pushed to, is fetched too, rather than read as local only. How the
 check is measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.

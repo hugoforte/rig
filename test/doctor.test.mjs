@@ -389,37 +389,18 @@ test('a work folder is accounted for by whichever root holds its record, not by 
   assert.equal(problemCount(found), 1)
 })
 
-// A work folder's `.rig/data`, read beside the roots that hold the work's record.
-const marked = (marker, holders = ['work']) => ({
-  id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [], marker, holders,
+// A work, read beside the roots that hold its record.
+const held = holders => ({
+  id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [], repos: [], holders,
 })
 const twoRoots = { dataRoots: [root({ name: 'work' }), root({ name: 'personal', path: 'C:\\rig-data-personal' })] }
 
-test('with two roots, a work folder with no marker is named, with the command that writes one', () => {
-  const found = doctorFindings(snap({ ...twoRoots, works: [marked(null)] }))
-  const hit = only(found, /^w: work folder has no \.rig\/data/)
-  assert.match(hit.says, /`rig save --data work`/)
-  assert.equal(hit.counts, true)
-})
-
-test('with one root, a work folder with no marker resolves to it anyway, and is not named', () => {
-  assert.equal(matching(doctorFindings(snap({ works: [marked(null)] })), /\.rig\/data/).length, 0)
-})
-
-test('a marker naming a root that does not hold the record is named, whatever the number of roots', () => {
-  // A root renamed by `rig init --name` leaves every marker naming the old one.
-  const found = doctorFindings(snap({ works: [marked('default')] }))
-  assert.match(only(found, /^w:/).says, /\.rig\/data names "default", but the record is in "work" — `rig save --data work`/)
-})
-
-test('a marker naming the root that holds the record says nothing', () => {
-  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work')] }))
-  assert.equal(matching(found, /^w:/).length, 0)
-})
-
-test('a record in two roots is named even when the marker names one of them', () => {
-  const found = doctorFindings(snap({ ...twoRoots, works: [marked('work', ['work', 'personal'])] }))
-  assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
+test('a record held by one root says nothing, and one held by two is named, open or closed', () => {
+  assert.equal(matching(doctorFindings(snap({ ...twoRoots, works: [held(['work'])] })), /^w:/).length, 0)
+  for (const closed of [false, true]) {
+    const found = doctorFindings(snap({ ...twoRoots, works: [{ ...held(['work', 'personal']), closed }] }))
+    assert.match(only(found, /^w:/).says, /data roots work, personal each hold its record — delete the copy that is wrong/)
+  }
 })
 
 // Doctor keeps every copy that will not read beside the one that does (decision 157).
@@ -428,7 +409,7 @@ const unreadableCopy = (root, holders = ['work', 'personal']) => ({
 })
 
 test('a record in two roots, one copy unreadable, names the broken copy and says both roots hold it, in either order', () => {
-  const readable = marked('work', ['work', 'personal'])
+  const readable = held(['work', 'personal'])
   for (const works of [[unreadableCopy('rig-data-personal'), readable], [readable, unreadableCopy('rig-data-personal')]]) {
     const found = doctorFindings(snap({ ...twoRoots, works }))
     assert.equal(only(found, /could not be read/).verdict, 'bad')

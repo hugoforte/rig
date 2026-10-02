@@ -230,7 +230,7 @@ cd D:\code\Payments; rig list          # answers for that repo's root, wherever 
 
 1. `--data <name>` on the command
 2. `RIG_DATA_ROOT` in the environment
-3. **the work folder you are standing in** — `C:\w\<work>\.rig\data` records the root that work's records live in
+3. **the work the command is about** — named by `--work` or `rig restore <id>`, else the work folder you are standing in, by its `.rig/id`. The root holding that work's record answers: the one holding it open, whatever closed copies another keeps, else the one holding it at all; with two to choose between, the command asks for `--data`
 4. **the repo the command is about** — named by `--repos`, or the checkout you are standing in, looked up in each root's catalogue. A checkout is matched by its remote's org as well as its name. A data root's own checkout answers for that root, after `--repos` and before the repo checkout
 5. `current`, moved by `rig use`
 
@@ -240,11 +240,11 @@ Rules 3 and 4 are why this stays out of your way: inside a work folder, or insid
 
 **Two things that bite, both on purpose:**
 
-- **One work root serves every data root**, so a work id is unique across all of them. `rig new` refuses an id whose folder already exists and names the root that owns it. Renaming a folder another root's records point at would break that work, so the id is what gives.
+- **One work root serves every data root**, so a work id is unique across all of them. `rig new` refuses an id another root already holds, or whose folder already exists, and names the root that owns it. Renaming a folder another root's records point at would break that work, so the id is what gives.
 - **A repo catalogued in two roots is ambiguous**, and rig asks rather than guesses: pass `--data <name>` once, and the work folder remembers it from then on.
 - **`rig update` brings every configured root forward**, not just the current one. The write refusal is per data root, so migrating one and leaving the others means the next `rig save` in another root refuses, mid-work. It needs no root in hand to do it: on a machine with two roots and none current it still updates the tool and every root, and the doctor checks it ends in report the missing selection.
 - **`rig doctor` checks every configured root**, in full and with each line named for the root it is about — a root nobody checks is a root that rots quietly. The two checks it makes of the *work* root are asked once against every root's records together, because the work root is shared: a folder the current root has no record for is usually another root's live work. A root whose directory has gone is one finding, and the rest are still checked. So is a machine that configures two roots and marks neither current: `doctor` is the command you run *because* something is broken, so it reports the selection it could not make and goes on to every check that never needed one. `list`, `status`, `catalog` and `next` die on that, and should — each answers a question about a root's *contents*, and with none in hand there is no answer to give, only a misleading empty one. `rig use` never dies on it, which is what makes the finding actionable: it reads the registry directly, so the selection you are told to fix is always fixable.
-- **A work folder's `.rig/data` is checked against the records.** With more than one root, a folder with none is named, since commands run in it fall back to `current`. So is a marker naming a root that does not hold the record, and a record held by two roots. For the first two, `rig save --data <root>` in the folder writes the right marker; rig writes one only when the root in hand is the one root holding the record, so a record in two roots needs the wrong copy deleted first.
+- **A record held by two roots is named.** A command about that work reads the one root holding it open, and asks for `--data` when two hold it open, or two hold it closed and none open; delete the copy that is wrong.
 
 **A commit identity per root.** `identities` on a root entry beats the machine-wide map, which is what you want the first time the same org name means a different person in two roots:
 
