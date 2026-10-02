@@ -68,4 +68,4 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 ## Two rules before you have read `AGENTS.md`
 
 - **Never `git worktree add` inside the work root.** `rig attach` adds repos; rig owns that tree and `rig doctor` fails on strays. Outside it, do as you like.
-- **Never edit a generated file.** Every `AGENTS.md` under the work root is rewritten on each mutating command, as is `demo/index.html`. Prose lives in the work's `context.md`, which is the only copy.
+- **Never edit a generated file.** Every `AGENTS.md` under the work root is rewritten on each mutating command. Prose lives in the work's `context.md`, which is the only copy.
