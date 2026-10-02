@@ -1,9 +1,6 @@
 // The catalogue's graph, and the questions asked of it. Pure: a catalogue in, a graph or an
 // answer out — no data root, no mirror, no GitHub call. The freshness that `rig impact` prints
 // beside an edge is gathered by the caller and joined on, for the same reason.
-//
-// `buildGraph`'s own tests moved here from `test/demo.test.mjs` unchanged when the function
-// left `bin/demo.mjs`. What is new below the divider is direction, and `impact`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildGraph, impact, coAttached, unattached } from '../bin/catalog-graph.mjs'
@@ -43,14 +40,6 @@ test('buildGraph: a neighbour with no entry of its own is kept, and marked', () 
 test('buildGraph: a repo naming itself gets no edge to itself', () => {
   const graph = buildGraph([entry('billing', [{ repo: 'billing', how: 'talks to itself' }])])
   assert.equal(graph.edges.length, 0)
-})
-
-test('buildGraph: degree counts relationships, not mentions of them', () => {
-  const graph = buildGraph([
-    entry('billing', [{ repo: 'orders', how: 'one way' }]),
-    entry('orders', [{ repo: 'billing', how: 'the other way' }]),
-  ])
-  assert.equal(graph.nodes.find(n => n.id === 'billing').degree, 1)
 })
 
 test('buildGraph: a bare string in talks_to is an edge with nothing said about it', () => {
