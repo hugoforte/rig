@@ -251,8 +251,9 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 command holds a lock on it (`rig.lock`, in the data root's git dir, never committed) while it
 fast-forwards at the start and while it commits and pushes at the end — never for the rest of
 the command. A second command that finds it held waits up to 30 seconds, then says which
-command and work hold it: at the start it stops before doing anything, so run it again; at the
-end what it wrote waits in the tree for the next command, or `rig save` once the other
+command and work hold it: at the start it stops before doing anything, so run it again — with
+several roots, only for the root it commits into, or one that may hold the work it is about
+(DESIGN.md decision 192); at the end what it wrote waits in the tree for the next command, or `rig save` once the other
 finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
 Read-only commands never wait. The lock does not change the sweep: the second of two queued
 commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
