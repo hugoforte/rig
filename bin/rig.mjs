@@ -1692,7 +1692,7 @@ function regenerate (cfg, work) {
 
 // The work a command is about, for the lock's holder: the id `rig new` and `rig restore` are
 // given, `--work`, or the work folder it runs in. Null for a command about no work — `init`,
-// which locks only its commit — and for a run whose folder has gone from under it:
+// which locks only its commit, or `backfill` over every work — and for a run whose folder has gone from under it:
 // the holder's work is a label, and no answer to it is worth failing a command for.
 function workInHand () {
   const { flags = {}, positional = [] } = current.args ?? {}

@@ -155,8 +155,8 @@ test('impact with no repo refuses and says where the names are', () => {
 
 // -------------------------------------------------- the observed graph
 
-// Work records written by hand, in the shape `rig new` and `rig attach` write. The suites that
-// drive the real commands are what keep that claim honest: they fail if the shape moves.
+// Work records written by hand, carrying only what `coAttached` reads: the work's id and its
+// repos' names.
 
 const record = (id, ...repos) => {
   fs.mkdirSync(path.join(dataRoot, 'work', id), { recursive: true })
