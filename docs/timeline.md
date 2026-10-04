@@ -1,6 +1,6 @@
 # How rig grew
 
-rig went from an initial commit to version 3.35 in sixteen days, 15 September to 1 October 2026: 90 commits on `main`, 61 releases. This is that growth in broad strokes, as eight phases, each named by the capacity it added. The numbers come from the git tags; the phases are a reading of the pull request titles.
+rig went from an initial commit to version 3.38 in nineteen days, 15 September to 4 October 2026: 96 commits on `main`, 66 releases. This is that growth in broad strokes, as ten phases, each named by the capacity it added. The numbers come from the git tags; the phases are a reading of the pull request titles.
 
 ## In numbers
 
@@ -13,8 +13,9 @@ rig went from an initial commit to version 3.35 in sixteen days, 15 September to
 | 22 Sep | v3.10 | 26 | 22 | 9.4k |
 | 25 Sep | v3.22 | 26 | 25 | 13.2k |
 | 1 Oct | v3.35 | 27 | 26 | 17.6k |
+| 4 Oct | v3.38 | 27 | 27 | 18.8k |
 
-The command count all but stops moving after the first week: the nine days after v3.10 added one command, `tidy`. Everything since is depth: modules and test lines keep climbing while the surface stays where it is.
+The command count all but stops moving after the first week: the twelve days after v3.10 added two commands, `tidy` and `note`, and took one away, `demo`. Everything since is depth: modules and test lines keep climbing while the surface stays where it is.
 
 ## Phase 1, 15 to 16 September: the core loop
 
@@ -64,6 +65,18 @@ A work always lands in the data root that holds it, and its record can be correc
 
 Capacity: several machines, data roots and sessions share one record, and it does not lie to any of them.
 
+## Phase 9, 2 to 4 October: what landed, said for people
+
+The demo page goes: nobody was using it to make the case for rig, and what it drew is cheap to build again from what stays. One rule says which data root holds a work. A work records its outcome, what changed for someone and why that is good, and `dash` says what landed, not only how much. The `rig-digest` skill explains what landed for a work, a repo, an org or a period, every claim linked to its pull request. The `rig-docs` skill keeps a product's user docs true once a work has landed, reading the QA evidence kept beside the context doc.
+
+Capacity: someone who never saw a work can learn what it did, and the product's own docs keep up.
+
+## Phase 10, 4 October: the agent runs, the human checks
+
+Eight changes, built as one work in eight stages. A work chooses which gates wait for the human, and the record says which the agent decided. `check --run` records a pass against the patch it ran at, so a stale green shows. `next` works the frontier of a stack, and names a moved base beside a failing check. The lesson review reads the sessions that did the work, and `close` names a session still at work before it takes the worktree. A pickup trusts the handoff rather than redoing it. `note` keeps every decision taken along the way with a pointer at its evidence, and a context doc is checked against its template.
+
+Capacity: an agent can carry a work with less of the human's attention, and leave a trail the human can check afterwards.
+
 ## The arc
 
-Solo tool, then installable product, then covering the SDLC, then multi-root and team-facing, then self-steering and fast to test, then agent-native and portable, then saying what it believes, then true under sharing. Each phase widened who could use rig or what it could hold, and since the first week they have grown the command surface by one command between them.
+Solo tool, then installable product, then covering the SDLC, then multi-root and team-facing, then self-steering and fast to test, then agent-native and portable, then saying what it believes, then true under sharing, then readable by people who never saw the work, then trusted to run while the human checks afterwards. Each phase widened who could use rig or what it could hold, and since the first week they have grown the command surface by one command between them.
