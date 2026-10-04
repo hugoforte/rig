@@ -351,8 +351,9 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   const documented = docs.filter(d => d.targets.length)
   if (!work?.documentedAt && documented.length && repos.length && merged.length === repos.length) {
     const where = documented.map(d => `${d.repo}: ${d.targets.map(t => `\`${t}\``).join(', ')}`).join('; ')
-    const none = docs.filter(d => !d.targets.length)
-      .map(d => `; ${d.repo} has no docs target — \`docs:\` in its catalogue entry (\`rig catalog ${d.repo}\` names the file)`).join('')
+    const none = docs.filter(d => !d.targets.length).map(d => d.missing
+      ? `; ${d.repo} has no catalogue entry — write one at \`${d.missing}\`, with \`docs:\``
+      : `; ${d.repo} has no docs target — \`docs:\` in its catalogue entry (\`rig catalog ${d.repo}\` names the file)`).join('')
     out.push(offer(phase,
       `once it is verified where it was deployed, keep the user docs true — the rig-docs skill drafts the edit (${where})${none}`,
       'rig save -m "user docs updated" --documented'))

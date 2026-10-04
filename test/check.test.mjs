@@ -157,10 +157,12 @@ check: []
 docs:
   - docs/guide.md
   - https://acme.atlassian.net/wiki/spaces/HELP/pages/42
+  - Help centre: https://help.acme.example/web
 ---
 
 Prose.
 `)
   assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
-  assert.match(generatedAgents(), /- Docs: `docs\/guide\.md` · `https:\/\/acme\.atlassian\.net\/wiki\/spaces\/HELP\/pages\/42`/)
+  assert.match(generatedAgents(), /- Docs: `docs\/guide\.md` · `https:\/\/acme\.atlassian\.net\/wiki\/spaces\/HELP\/pages\/42` · `https:\/\/help\.acme\.example\/web`/,
+    'a labelled target is read as its address, never as `[object Object]`')
 })

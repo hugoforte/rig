@@ -204,7 +204,8 @@ repo is still loaded in your head (rule 4).
 such as Confluence. rig knows a docs target and never edits one; the generated work file lists
 it beside `check`. Once every PR has merged, `rig next` offers the `rig-docs` skill for a work
 whose repos have a target, naming any attached repo with none and the file to say it in, and
-`rig save -m "user docs updated" --documented` records the gate. Nothing refuses without it.
+`rig save -m "user docs updated" --documented` records the gate. `rig close` names a work
+closing without it, as it names the lesson review. Nothing refuses without it.
 
 A work keeps its **QA evidence** in `qa.md` beside `context.md`: the steps walked on a deployed
 environment and what was seen. `rig status` names it. The user-docs edit and the digest read it,

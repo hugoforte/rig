@@ -1041,7 +1041,7 @@ function loadCatalog (dataRootPath = dataRoot()) {
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
         setup: Array.isArray(data.setup) ? data.setup : (data.setup ? [data.setup] : []),
         check: Array.isArray(data.check) ? data.check : (data.check ? [data.check] : []),
-        docs: Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : []),
+        docs: (Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : [])).map(docsAddress),
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -1062,6 +1062,17 @@ const findCatalog = (name, dataRootPath = dataRoot()) =>
 // One scan, not one per repo. `findCatalog` re-reads and re-parses every entry in the root each
 // time it is called, so asking it per attached repo paid the whole catalogue over again for each
 // one — and a work with no drafts at all paid it anyway.
+// A docs target is an address. Written with a label, `- Help centre: https://…`, the address
+// is what follows the label: a one-key object when the label is one word, a string otherwise.
+// An address's own colon is never followed by a space, so a bare one is left alone.
+const docsAddress = d => typeof d === 'string'
+  ? d.replace(/^[^:]*:\s+/, '')
+  : Object.values(d).find(v => typeof v === 'string') || ''
+
+// A work's repo in the catalogue: the same org, and the repo however its case was written.
+const catalogEntryFor = (catalog, r) =>
+  catalog.find(e => e.org === r.org && e.repo.toLowerCase() === r.repo.toLowerCase())
+
 function draftEntries (work) {
   const attached = work?.repos || []
   if (!attached.length) return []
@@ -1106,6 +1117,9 @@ talks_to: []
 setup: []
 check: []
 # Where this repo's user documentation lives: a path in the repo, or a page elsewhere.
+# docs:
+#   - docs/guide.md
+#   - https://example.atlassian.net/wiki/spaces/HELP/pages/1
 docs: []
 ---
 
@@ -1139,7 +1153,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -1666,7 +1680,7 @@ function regenerate (cfg, work) {
   lines.push('')
   if (!work.repos.length) lines.push('_None attached yet — `rig attach <repo>`._')
   for (const r of work.repos) {
-    const c = cat.find(e => e.repo === r.repo)
+    const c = catalogEntryFor(cat, r)
     lines.push(`### ${r.repo}`)
     lines.push('')
     lines.push(`- Path: \`${r.path}\``)
@@ -3208,11 +3222,14 @@ function unattachedNeighbours (work) {
   return catalog.length ? unattached(catalog, (work.repos || []).map(r => r.repo)) : []
 }
 
-// Where each attached repo's user docs live, from its catalogue entry; none for a repo with no
-// entry, which is named the same as an entry that says nothing.
+// Where each attached repo's user docs live, from its catalogue entry. A repo with no entry
+// carries the file one would go in, since `rig catalog` has nothing to name for it.
 function docsTargets (work) {
   const catalog = loadCatalog()
-  return (work.repos || []).map(r => ({ repo: r.repo, targets: catalog.find(e => e.org === r.org && e.repo === r.repo)?.docs || [] }))
+  return (work.repos || []).map(r => {
+    const entry = catalogEntryFor(catalog, r)
+    return entry ? { repo: r.repo, targets: entry.docs } : { repo: r.repo, targets: [], missing: catalogFile(r.org, r.repo) }
+  })
 }
 
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
@@ -3265,7 +3282,8 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
-    docs: docsTargets(work),
+    // Only once everything has merged, the one time the offer it feeds is made.
+    docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
     unstacked: work.repos.filter(entry => {
       const s = stageStack(stack, entry, work.branch)
@@ -3959,6 +3977,11 @@ cmds.close = ({ flags }) => {
   // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason.
   if (!abandoned && !work.outcome) {
     say(C.dim(`  no outcome recorded — what changed for someone, and why that is good: \`${save} --outcome "…"\``))
+  }
+  // And the user docs, where a repo says where they live: after the close is when a work is
+  // verified where it was deployed, and nothing else names them once the work is closed.
+  if (!abandoned && !work.documentedAt && docsTargets(work).some(d => d.targets.length)) {
+    say(C.dim(`  user docs never updated — the rig-docs skill, then \`${save} -m "user docs updated" --documented\``))
   }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -4924,7 +4947,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--no-adversarial]          needs one of the two: does this work get an
        [--reviewed] [--learned]    adversarial review; --reviewed records that review,
                                    --learned the lesson review (the rig-learn skill)
-                                   --documented the user docs updated (the rig-docs skill)
+       [--documented]              the user docs updated (the rig-docs skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id
        [--outcome "..."]           what landed and why it was worth doing, in a sentence

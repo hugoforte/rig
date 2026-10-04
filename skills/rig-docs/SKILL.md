@@ -11,13 +11,13 @@ Run it once every pull request has merged and the work was seen working where it
 
 ## 1. Find the targets
 
-Run `rig status` from the work folder, or `rig status --work <id>` once it is closed. `rig next` names each repo's docs target, from the `docs` field of its catalogue entry: a path in the repo, or a page URL.
+Run `rig status` from the work folder, or `rig status --work <id>` once it is closed, for the work's repos. Each repo's docs target is the `docs` field of its catalogue entry, which `rig catalog <repo>` prints: a path in the repo, or a page URL. While the work is open, `rig next` names them too.
 
-A repo with no target is named too, with its catalogue file. Ask the user where its docs live, if anywhere, and offer to write the answer into `docs:` in that entry: it is a catalogue correction, committed with `rig save`. A repo whose users read nothing is a fine answer; leave `docs: []`.
+A repo with no target is one whose entry says `docs: []`, or that has no entry. Ask the user where its docs live, if anywhere, and offer to write the answer into `docs:` in that entry: it is a catalogue correction, committed with `rig save`. A repo whose users read nothing is a fine answer; leave `docs: []`.
 
 ## 2. Read
 
-- **The current page, in full, first.** A path: read it at the base branch in the repo's worktree. A Confluence page: read it through the `twg` skill. You are editing what is there, so you need all of it.
+- **The current page, in full, first.** A path: read it as the base branch has it now, which the work's merge put there, with `git -C <worktree> fetch origin` and then `git -C <worktree> show origin/<base>:<path>`; once the worktree is gone, `gh api repos/<owner>/<repo>/contents/<path>?ref=<base> -H "Accept: application/vnd.github.raw"`. A Confluence page: read it through the `twg` skill. You are editing what is there, so you need all of it.
 - **The context doc**, `context.md`: the Problem says who this was for, the Direction what changed.
 - **The outcome**, which `rig status` shows: what changed for someone, in one line.
 - **The QA evidence**, `qa.md` beside the context doc when there is one, which `rig status` names: the steps walked on a deployed environment and what was seen. It is the closest thing to how a user meets the change. Without one, ask the user what they checked and where, and offer to write their answer to `qa.md` before you go on.
@@ -33,7 +33,7 @@ Show the edit as a diff, or as before-and-after for each section changed, with o
 
 ## 4. Publish on "go"
 
-- **A path in a repo**: commit it in the repo's worktree, on the work's last open stage or the work branch while a PR is open; once everything has merged, on a follow-up branch and PR of its own.
+- **A path in a repo**: everything has merged by now, so the edit is a small work of its own. Start it with `rig prompt new-work`, which asks the ticket question, and put the edit in that work's PR. Never cut a branch by hand in this work's worktree: rig owns that tree, and the merged branch is deleted at the close.
 - **A Confluence page**: update it through the `twg` skill, and give the user the page's link.
 
 Then record it:

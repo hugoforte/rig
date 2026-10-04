@@ -112,10 +112,11 @@ test('an abandoned work says so and keeps its design gate', () => {
 })
 
 test('the gates passed are listed with their dates, in lifecycle order', () => {
-  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
+  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, documentedAt: AT, abandonedAt: AT, closedAt: AT })), [
     { gate: 'designed', at: AT },
     { gate: 'reviewed', at: AT },
     { gate: 'learned', at: AT },
+    { gate: 'documented', at: AT },
     { gate: 'abandoned', at: AT },
     { gate: 'closed', at: AT },
   ])

@@ -377,6 +377,29 @@ test('status names the QA evidence beside the context doc', () => {
   assert.match(strip(rig(['status', '--work', 'told']).out), /^qa .*qa\.md/m)
 })
 
+// The offer read end to end: the docs target comes out of the repo's catalogue entry, and a
+// work closed before the docs were done is told so on its way out, as with the lesson review.
+const billingEntry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+
+test('a landed work is offered the docs edit from its catalogue entry, and closing without it is named', () => {
+  const entry = fs.readFileSync(billingEntry, 'utf8')
+  try {
+    fs.writeFileSync(billingEntry, entry.replace(/^docs: \[\]$/m, 'docs:\n  - Help centre: https://acme.example/help/billing'))
+    landedWork('docsy', 48)
+    assert.match(strip(rig(['next', '--work', 'docsy']).out), /the rig-docs skill drafts the edit \(billing: `https:\/\/acme\.example\/help\/billing`\)/)
+    const r = rig(['close', '--work', 'docsy'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(strip(r.out), /user docs never updated — the rig-docs skill, then `rig save --work docsy -m "user docs updated" --documented`/)
+  } finally {
+    fs.writeFileSync(billingEntry, entry)
+  }
+})
+
+test('a work whose repos name no docs target closes without mentioning them', () => {
+  landedWork('undocumented', 49)
+  assert.doesNotMatch(rig(['close', '--work', 'undocumented']).out, /user docs/)
+})
+
 // `close` asks the stack whether a slice is still up for review and `list` does not, because
 // a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
 // `list` has to stop at what it measured: the two works below differ only in whether a stage

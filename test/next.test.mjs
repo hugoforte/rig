@@ -675,6 +675,17 @@ test('the docs offer names an attached repo with no docs target, with where to s
   assert.match(out.find(o => o.command === DOCUMENTED).says, /b has no docs target — `docs:` in its catalogue entry \(`rig catalog b` names the file\)/)
 })
 
+test('a repo with no catalogue entry at all is pointed at where its entry would go', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [landed(), repo('b', { merged: true, pr: { number: 2, state: 'MERGED' } })],
+    docs: [{ repo: 'a', targets: ['docs/'] }, { repo: 'b', targets: [], missing: 'catalog/acme/b.md' }],
+  })
+  const says = out.find(o => o.command === DOCUMENTED).says
+  assert.match(says, /b has no catalogue entry — write one at `catalog\/acme\/b\.md`, with `docs:`/)
+  assert.doesNotMatch(says, /rig catalog b/, 'a command that would only say there is no entry')
+})
+
 test('the docs edit is offered, never demanded', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: docsAt('docs/') })
   assert.doesNotMatch(out.find(o => o.command === DOCUMENTED).says, /should|must|need to|missing/i)
