@@ -74,6 +74,30 @@ test('a work whose gates the human decided is offered no review of them', () => 
   assert.doesNotMatch(says(out), /the agent decided/)
 })
 
+// ------------------------------------------------- picking up a handoff
+
+test('a handoff left after the last commit is offered as the place to pick up from', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T11:00:00Z' })
+  const pickup = out.find(o => o.command === 'rig prompt pickup')
+  assert.match(pickup.says, /a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it/)
+  assert.equal(out[0], pickup, 'before anything the trail may already answer')
+})
+
+test('the pickup offer clears on the pickup\'s first commit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T12:30:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a work with no handoff is offered no pickup', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: null, lastCommitAt: '2026-10-04T12:30:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a handoff on a work with no commit yet is offered', () => {
+  const out = nextFor({ work: work({ repos: attached('a') }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: null })
+  assert.ok(commands(out).includes('rig prompt pickup'))
+})
+
 // ------------------------------------------------- checks pinned to the patch
 
 test('a repo with work on it and no pass at the diff it carries is offered the run', () => {

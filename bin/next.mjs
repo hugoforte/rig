@@ -74,13 +74,15 @@ const HEAVY = 3
 //   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
 //                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
 //                  --run` recorded
+//   handoffAt      when the work's `handoff.md` was last committed into the data root, or null
+//   lastCommitAt   the newest commit on any of the work's branches checked out here, or null
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -89,6 +91,13 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   if (phase === 'closed' || phase === 'abandoned') {
     if (leftover) out.push(offer(phase, `this work is ${phase}, but its folder is still on this machine — clear this machine's copy`, 'rig close'))
     return out
+  }
+
+  // A handoff newer than the last commit on any of the work's branches is a trail nobody has
+  // picked up yet, and it comes first: it may already answer everything below. It clears on the
+  // pickup's first commit, which is the pickup having started from it.
+  if (handoffAt && !(Date.parse(lastCommitAt) >= Date.parse(handoffAt))) {
+    out.push(offer(phase, 'a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it', 'rig prompt pickup'))
   }
 
   const entries = work?.repos || []

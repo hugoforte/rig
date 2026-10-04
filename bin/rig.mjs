@@ -3380,6 +3380,15 @@ cmds.check = ({ flags, positional }) => {
   }
 }
 
+// When the work's `handoff.md` was last committed into the data root, as git has it, since a
+// file's own date on a fresh clone is the clone's. Null with no handoff, or one never committed.
+function handoffAt (id) {
+  const file = path.join(recordDir(id), 'handoff.md')
+  if (!exists(file)) return null
+  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', path.relative(dataRoot(), file).split(path.sep).join('/'))
+  return r.code === 0 && r.out ? r.out : null
+}
+
 // The attached repos whose catalogue entry says how to verify them, read in one scan; a repo
 // with no `check` has nothing a run could prove.
 function checkedRepos (work) {
@@ -3524,6 +3533,10 @@ cmds.next = ({ flags }) => {
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
     verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationState(verificationOf(cfg, r, work)) })),
+    handoffAt: handoffAt(work.id),
+    lastCommitAt: work.repos.filter(r => exists(r.path))
+      .map(r => git(r.path, 'log', '-1', '--format=%cI', 'HEAD')).filter(r => r.code === 0 && r.out)
+      .map(r => r.out).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null,
     // Only once everything has merged, the one time the offer it feeds is made.
     docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.

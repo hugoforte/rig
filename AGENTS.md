@@ -533,6 +533,8 @@ The record is portable and the work root is not: a second machine that clones th
 
 A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
+**Picking one up trusts it.** `rig prompt pickup` is the other half: read the handoff, the context doc and `rig status` — its stops line says what the human chose to be asked, and its checks lines what passed at the patch each repo carries — compare what was planned with what happened, check once only what the next step stands on, and name the resume point before starting. It runs no verify-from-scratch pass on top of the trail; the trail was written so none would be needed. `rig next` offers it while the handoff was committed after the last commit on any of the work's branches here, first, since it may answer everything else, and stops on the pickup's first commit.
+
 ## Staying up to date
 
 A dim line on stderr — `rig is N commits behind … — rig update` — is addressed to you. Run
