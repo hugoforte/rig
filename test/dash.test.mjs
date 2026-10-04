@@ -106,11 +106,12 @@ function nextNumber (repos, numbers, key) {
 const record = (w, attached, branch) => ({
   id: w.id,
   title: w.title,
-  tickets: [],
+  tickets: w.tickets || [],
   type: w.type,
   branch,
   createdAt: w.createdAt,
   ...(w.closedAt ? { closedAt: w.closedAt } : {}),
+  ...(w.outcome ? { outcome: w.outcome } : {}),
   repos: attached.map(r => ({
     repo: r.repo,
     org: r.org,
@@ -411,9 +412,11 @@ test('renderDash: both cycle figures carry their own n', async () => {
 })
 
 test('renderDash: is self-contained — no network, no script', async () => {
-  const html = renderDash(await produce([work()]))
+  // A link to a pull request is something the reader may follow, not something the page
+  // fetches; what is pinned is that opening the page asks nothing of the network.
+  const html = renderDash(await produce([work({ repos: [repo({ pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })] })]))
   assert.doesNotMatch(html, /<script/i, 'nothing to execute')
-  assert.doesNotMatch(html, /https?:\/\//i, 'nothing to fetch')
+  assert.doesNotMatch(html, /\bsrc=|<link|@import|url\(/i, 'nothing to fetch')
 })
 
 test('renderDash: an id with markup in it is escaped, not rendered', async () => {
@@ -441,4 +444,86 @@ test('reduceWork: a recorded PR counts as merged, exactly as a freshly looked-up
   assert.equal(recorded.cycleHours, 48)
   const lookedUp = reduceWork(workById(p, 'looked-up'))
   assert.deepEqual({ ...recorded, id: '' }, { ...lookedUp, id: '' }, 'a record and a lookup reduce identically')
+})
+
+// ------------------------------------------------------------- what landed
+
+const said = text => ({ text, at: '2026-03-04T00:00:00Z' })
+const landedIn = (s, org) => s.orgs.find(o => o.org === org).landed
+
+test('summarize: what landed is grouped by org, then repo, newest work first', async () => {
+  const at = (id, iso, over = {}) => work({ id, repos: [repo({ pr: pr({ mergedAt: iso }), ...over })] })
+  const p = await produce([
+    at('older', '2026-03-03T09:00:00Z'),
+    at('newer', '2026-03-05T09:00:00Z'),
+    at('elsewhere', '2026-03-04T09:00:00Z', { repo: 'orders' }),
+  ])
+  const landed = landedIn(summarize(p), 'acme')
+  assert.deepEqual(landed.map(r => [r.repo, r.works.map(w => w.id)]), [
+    ['billing', ['newer', 'older']],
+    ['orders', ['elsewhere']],
+  ], 'the repo with the latest landing first, and inside it the latest work first')
+})
+
+test('summarize: a work still in flight has not landed', async () => {
+  const p = await produce([work({ id: 'flying', repos: [repo({ pr: pr({ state: 'OPEN', mergedAt: null }) })] })])
+  assert.deepEqual(landedIn(summarize(p), 'acme'), [])
+})
+
+test('summarize: --since narrows what landed as it narrows the numbers', async () => {
+  const p = await produce([
+    work({ id: 'old', repos: [repo({ pr: pr({ mergedAt: '2026-01-01T00:00:00Z' }) })] }),
+    work({ id: 'recent' }),
+  ])
+  const [billing] = landedIn(summarize(p, { since: '2026-02-01T00:00:00Z' }), 'acme')
+  assert.deepEqual(billing.works.map(w => w.id), ['recent'])
+})
+
+test('summarize: a work across two repos landed in each of them', async () => {
+  const p = await produce([work({ id: 'both', repos: [repo(), repo({ repo: 'orders' })] })])
+  assert.deepEqual(landedIn(summarize(p), 'acme').map(r => r.repo).sort(), ['billing', 'orders'])
+})
+
+test('summarize: a landed work carries its outcome, tickets, cycle time and pull requests', async () => {
+  const p = await produce([work({
+    id: 'told',
+    tickets: ['acme/billing#7'],
+    outcome: said('Invoices go out the day they are due.'),
+    repos: [repo({ pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })],
+  })])
+  const [w] = landedIn(summarize(p), 'acme')[0].works
+  assert.equal(w.outcome, 'Invoices go out the day they are due.')
+  assert.deepEqual(w.tickets, ['acme/billing#7'])
+  assert.equal(w.cycleHours, 48)
+  assert.deepEqual(w.prs, [{ name: 'billing#1', url: 'https://github.com/acme/billing/pull/1' }])
+})
+
+test('renderDash: what landed shows each outcome, folded until opened', async () => {
+  const html = renderDash(await produce([work({ id: 'told', outcome: said('Invoices go out the day they are due.') })]))
+  assert.match(html, /What landed/)
+  assert.match(html, /Invoices go out the day they are due\./)
+  assert.match(html, /<details>/, 'org, repo and work each fold')
+  assert.doesNotMatch(html, /<details[^>]*\bopen/, 'nothing is unfolded until the reader opens it')
+})
+
+test('renderDash: a landed work with no outcome shows its title, marked as having none', async () => {
+  const html = renderDash(await produce([work({ id: 'untold', title: 'Retry failed invoices' })]))
+  assert.match(html, /Retry failed invoices/)
+  assert.match(html, /no outcome recorded/)
+})
+
+test('renderDash: a pull request links to itself only when its address is a web one', async () => {
+  const html = renderDash(await produce([
+    work({ id: 'web', repos: [repo({ pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })] }),
+    work({ id: 'odd', repos: [repo({ repo: 'orders', pr: pr({ url: 'javascript:alert(1)' }) })] }),
+  ]))
+  assert.match(html, /<a href="https:\/\/github\.com\/acme\/billing\/pull\/1">billing#1<\/a>/)
+  assert.doesNotMatch(html, /javascript:/, 'an address that is not a web page is not followed, or shown')
+  assert.match(html, /orders#1/, 'the pull request is still named')
+})
+
+test('renderDash: an outcome with markup in it is escaped, not rendered', async () => {
+  const html = renderDash(await produce([work({ outcome: said('<img src=x onerror=alert(1)>') })]))
+  assert.doesNotMatch(html, /<img/)
+  assert.match(html, /&lt;img/)
 })
