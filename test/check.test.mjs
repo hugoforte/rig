@@ -137,3 +137,39 @@ test('the generated work file carries the check beside the setup', () => {
   assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
   assert.match(generatedAgents(), /- Check: `git rev-parse --abbrev-ref HEAD`/)
 })
+
+// Where a repo's user documentation lives: a path in the repo or a page elsewhere. rig never
+// edits it; the `rig-docs` skill drafts the edit, and the work's generated file says where.
+
+test('the drafted entry leaves a docs target to fill in', () => {
+  assert.match(fs.readFileSync(catalogEntry('web'), 'utf8'), /^docs: \[\]$/m)
+})
+
+test('the generated work file says where each repo\'s user docs live', () => {
+  fs.writeFileSync(catalogEntry('web'), `---
+repo: web
+org: acme
+stack: TypeScript
+role: the site
+talks_to: []
+setup: []
+check: []
+docs:
+  - docs/guide.md
+  - https://acme.atlassian.net/wiki/spaces/HELP/pages/42
+  - Help centre: https://help.acme.example/web
+---
+
+Prose.
+`)
+  assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
+  assert.match(generatedAgents(), /- Docs: `docs\/guide\.md` · `https:\/\/acme\.atlassian\.net\/wiki\/spaces\/HELP\/pages\/42` · `https:\/\/help\.acme\.example\/web`/,
+    'a labelled target is read as its address, never as `[object Object]`')
+})
+
+test('an entry whose org is written in another case is still the repo\'s entry', () => {
+  const entry = fs.readFileSync(catalogEntry('web'), 'utf8')
+  fs.writeFileSync(catalogEntry('web'), entry.replace(/^org: acme$/m, 'org: Acme'))
+  assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
+  assert.match(generatedAgents(), /- Docs: `docs\/guide\.md`/)
+})

@@ -5,7 +5,7 @@ description: Review what a rig work taught before it closes, and offer each less
 
 # rig-learn
 
-Read the story of the current work, find what it taught, and offer each lesson a home. Then record the review with `rig save --learned`.
+Read the story of the current work, find what it taught, and offer each lesson a home. Draft its outcome while the story is in hand. Then record the review with `rig save --learned`.
 
 Run it while the worktrees are still on disk, before `rig close`, because a lesson for a repo has to be committed in one. `rig next` offers it once a pull request is open. After a close, only the catalogue, the org doc and the tracker are left to write to. A late review is still worth doing.
 
@@ -42,6 +42,8 @@ For every lesson, prefer a machine check over prose, and never add a rule to an 
 2. <…>
 3. <…>
 
+Outcome: <what changed for someone, and why that is good, in a sentence or two>
+
 Say **go** for all of them, or name the numbers you want.
 
 **Repos we touched**
@@ -61,6 +63,7 @@ Say **go** for all of them, or name the numbers you want.
 ```
 
 - **The TL;DR is two or three actions, never more.** They are the lessons most worth keeping, each one a thing you would do on "go". Everything else stays in the detail, where the user can still name it.
+- **The outcome line is the work's outcome**, drafted from the story: what changed for someone and why that is good, in words a person outside the work can read, on one line, with no backticks or `$`. Leave it out when `rig status` already shows an outcome, or while a PR is still to merge. A bare "go" records it with the lessons; an answer naming numbers records it only if it also says "outcome". The user may correct it in their answer.
 - **Every detail line is one line.** What changes, where it lands, and why that home in a clause. If a line needs a paragraph, the lesson is not understood yet.
 - **Omit empty sections**, and name what was left out under **Dropped** so the user can see it was considered.
 
@@ -122,7 +125,9 @@ Later reviews fill the other headings. A skip writes nothing, and the next revie
 Once the lessons have landed, or the user says there are none:
 
 ```bash
-rig save -m "lessons reviewed" --learned
+rig save -m "lessons reviewed" --learned --outcome '…'
 ```
+
+The agreed outcome goes in single quotes in place of `…`, which rig refuses as an outcome. Leave `--outcome` off when none was offered or the user did not agree it.
 
 This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone, and `--data <root>` where `rig close` named one. `rig next` stops offering the review, and `rig close` stops naming it.

@@ -446,10 +446,11 @@ const mirrorLegacyDataRoot = machine => {
 }
 
 const CHOSE_QUIETLY = { current: 'current', repo: 'the repo it is about' }
+// Beside the answer rather than in it, so `rig list --json` piped somewhere is the payload alone.
 function sayCurrentRoot () {
   const w = where()
   if (CHOSE_QUIETLY[w.source] && Object.keys(w.roots).length > 1) {
-    say(C.dim(`· data root: ${w.name} (${CHOSE_QUIETLY[w.source]})`))
+    aside(C.dim(`· data root: ${w.name} (${CHOSE_QUIETLY[w.source]})`))
   }
 }
 const dataRoot = () => where().dataRoot
@@ -809,6 +810,10 @@ function recordShapeProblem (w) {
     if (!isObject(s) || typeof s.branch !== 'string' || !s.branch) return `stage ${i + 1} has no \`branch\``
     if (!isList(s.tickets)) return `\`tickets\` of stage ${s.branch} is not a list`
   }
+  if (w.outcome !== undefined && w.outcome !== null &&
+    !(isObject(w.outcome) && typeof w.outcome.text === 'string' && typeof w.outcome.at === 'string')) {
+    return '`outcome` is not a statement with its date'
+  }
   return null
 }
 
@@ -939,7 +944,7 @@ const sayUnreadable = (records, tell = say) => {
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
 
 // Minimal purpose-built frontmatter reader. Handles scalars and the one list
-// shape the catalogue uses (`talks_to:` / `setup:` / `check:`). Not a general YAML parser.
+// shape the catalogue uses (`talks_to:` / `setup:` / `check:` / `docs:`). Not a general YAML parser.
 function parseFrontmatter (text) {
   // PowerShell 5.1 writes UTF-8 with a byte-order mark, which would hide the opening `---`.
   text = text.replace(/^﻿/, '')
@@ -952,8 +957,10 @@ function parseFrontmatter (text) {
     if (!raw.trim() || raw.trim().startsWith('#')) continue
     const listItem = /^\s*-\s+(.*)$/.exec(raw)
     if (listItem && key) {
-      const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(listItem[1])
-      if (kv) { item = { [kv[1]]: strip(kv[2]) }; data[key].push(item) }
+      // A key is followed by a space or the end of the line, as YAML has it, so a docs target
+      // like `https://…` stays a string rather than becoming the key `https`.
+      const kv = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(listItem[1])
+      if (kv) { item = { [kv[1]]: strip(kv[2] ?? '') }; data[key].push(item) }
       else { data[key].push(strip(listItem[1])); item = null }
       continue
     }
@@ -1034,6 +1041,7 @@ function loadCatalog (dataRootPath = dataRoot()) {
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
         setup: Array.isArray(data.setup) ? data.setup : (data.setup ? [data.setup] : []),
         check: Array.isArray(data.check) ? data.check : (data.check ? [data.check] : []),
+        docs: (Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : [])).map(docsAddress),
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -1054,6 +1062,17 @@ const findCatalog = (name, dataRootPath = dataRoot()) =>
 // One scan, not one per repo. `findCatalog` re-reads and re-parses every entry in the root each
 // time it is called, so asking it per attached repo paid the whole catalogue over again for each
 // one — and a work with no drafts at all paid it anyway.
+// A docs target is an address. Written with a label, `- Help centre: https://…`, the address
+// is what follows the label: a one-key object when the label is one word, a string otherwise.
+// An address's own colon is never followed by a space, so a bare one is left alone.
+const docsAddress = d => typeof d === 'string'
+  ? d.replace(/^[^:]*:\s+/, '')
+  : Object.values(d).find(v => typeof v === 'string') || ''
+
+// A work's repo in the catalogue: the same org and repo, however the case of either was written.
+const catalogEntryFor = (catalog, r) =>
+  catalog.find(e => e.org.toLowerCase() === r.org.toLowerCase() && e.repo.toLowerCase() === r.repo.toLowerCase())
+
 function draftEntries (work) {
   const attached = work?.repos || []
   if (!attached.length) return []
@@ -1097,6 +1116,11 @@ talks_to: []
 #     direction: downstream
 setup: []
 check: []
+# Where this repo's user documentation lives: a path in the repo, or a page elsewhere.
+# docs:
+#   - docs/guide.md
+#   - https://example.atlassian.net/wiki/spaces/HELP/pages/1
+docs: []
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
@@ -1129,7 +1153,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -1656,7 +1680,7 @@ function regenerate (cfg, work) {
   lines.push('')
   if (!work.repos.length) lines.push('_None attached yet — `rig attach <repo>`._')
   for (const r of work.repos) {
-    const c = cat.find(e => e.repo === r.repo)
+    const c = catalogEntryFor(cat, r)
     lines.push(`### ${r.repo}`)
     lines.push('')
     lines.push(`- Path: \`${r.path}\``)
@@ -1667,6 +1691,7 @@ function regenerate (cfg, work) {
     lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
     if (c?.check?.length) lines.push(`- Check: ${c.check.map(s => `\`${s}\``).join(' · ')}`)
+    if (c?.docs?.length) lines.push(`- Docs: ${c.docs.map(s => `\`${s}\``).join(' · ')}`)
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc
@@ -2571,7 +2596,7 @@ function offerNeighbours (work, name) {
 // decision someone took, on a date nothing else can recover. It used to set a status.
 // `--learned` records the lesson review the same way, and `--reviewed` the adversarial review.
 // `--title` corrects the title in the record and the two headings that show it, and never the
-// branch or the id.
+// branch or the id. `--outcome` records what landed and why it was worth doing.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -2580,6 +2605,11 @@ cmds.save = ({ flags }) => {
   const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
   if (title === true || title === '') die('--title needs the title')
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
+  const outcome = typeof flags.outcome === 'string' ? flags.outcome.trim() : flags.outcome
+  // `rig next` and `rig close` offer `--outcome "…"`, and an offered command gets run as
+  // written, so the placeholder is no outcome either.
+  if (outcome === true || (typeof outcome === 'string' && /^[\s….]*$/.test(outcome))) die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
+  if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
   // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
@@ -2594,7 +2624,7 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
-  commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
+  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -2622,6 +2652,20 @@ cmds.save = ({ flags }) => {
     if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
     work.learnedAt = new Date().toISOString()
     ok(`${id}: lessons reviewed`)
+  }
+  // The user docs, edited to say how the product works now that the work has landed. Allowed
+  // after the close for the lesson review's reason: the docs outlive the work's trees.
+  if (flags.documented) {
+    if (work.abandonedAt) die(`${id} was abandoned — nothing landed for the user docs to describe`)
+    work.documentedAt = new Date().toISOString()
+    ok(`${id}: user docs updated`)
+  }
+  // What landed and why it was worth doing: a statement on a date, like a gate, and allowed on a
+  // closed work for the lesson review's reason. Recording it again replaces it.
+  if (outcome) {
+    if (work.abandonedAt) die(`${id} was abandoned — nothing landed to say the outcome of`)
+    work.outcome = { text: outcome, at: new Date().toISOString() }
+    ok(`${id}: outcome recorded`)
   }
   // After the gates, so a gate refused leaves the doc as untouched as the record.
   if (title) {
@@ -2732,6 +2776,18 @@ function prTiming (entry, pr) {
 // so there is exactly one place that decides what "terminal" means. An error here is the
 // caller's cue to store nothing (no negative caching): a rate limit is transient, and a record
 // saying "unknown forever" is worse than asking again next time.
+// The merged pull request on one branch of a work, as `rig close` and `rig backfill` store it:
+// `{ pr, base }` once it merged and its facts were read, `{}` while it has not merged, and
+// `{ error }` when GitHub or git would not say.
+function mergedPrRecord (entry, branch) {
+  let pr = null
+  const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, branch) })
+  if (prError) return { error: prError }
+  if (!pr || pr.state !== 'MERGED') return {}
+  const { record, error } = terminalPr(entry, pr)
+  return error ? { error } : { pr: record, base: pr.base || null }
+}
+
 function terminalPr (entry, pr) {
   // The one place that decides what terminal means, rather than each caller deciding again.
   if (!pr || pr.state !== 'MERGED') return { error: `${entry.repo}: PR is ${pr ? pr.state.toLowerCase() : 'absent'}, not merged` }
@@ -2787,6 +2843,8 @@ const workJson = (cfg, work, live) => ({
   adversarial: typeof work.adversarial === 'boolean' ? work.adversarial : null,
   reviewedAt: work.reviewedAt || null,
   learnedAt: work.learnedAt || null,
+  documentedAt: work.documentedAt || null,
+  outcome: work.outcome ? { text: work.outcome.text, at: work.outcome.at } : null,
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
@@ -3065,6 +3123,7 @@ cmds.status = ({ flags }) => {
   // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
   for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
   // Named, not enumerated: `rig stage` is where the stack is read, and a status that
   // reprinted it would be two places to keep saying the same thing.
   if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
@@ -3081,6 +3140,10 @@ cmds.status = ({ flags }) => {
   // (hugoforte/rig#171). This machine's path only when there is no remote, and said as such.
   const handoff = path.join(recordDir(id), 'handoff.md')
   if (exists(handoff)) say(`handoff ${recordUrl(id, 'handoff.md') || `${handoff} ${C.dim('(this machine only — the data root has no remote)')}`}`)
+  // The QA evidence — what was walked on a deployed environment and what was seen — named the
+  // same way, since the user-docs edit and the digest read it after the work has moved on.
+  const qa = path.join(recordDir(id), 'qa.md')
+  if (exists(qa)) say(`qa ${recordUrl(id, 'qa.md') || `${qa} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
@@ -3171,6 +3234,16 @@ function unattachedNeighbours (work) {
   return catalog.length ? unattached(catalog, (work.repos || []).map(r => r.repo)) : []
 }
 
+// Where each attached repo's user docs live, from its catalogue entry. A repo with no entry
+// carries the file one would go in, since `rig catalog` has nothing to name for it.
+function docsTargets (work) {
+  const catalog = loadCatalog()
+  return (work.repos || []).map(r => {
+    const entry = catalogEntryFor(catalog, r)
+    return entry ? { repo: r.repo, targets: entry.docs } : { repo: r.repo, targets: [], missing: catalogFile(r.org, r.repo) }
+  })
+}
+
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
 // off the back of another command (decision 66). The gathering lives here; every decision
 // about what is worth offering is `bin/next.mjs`'s.
@@ -3221,6 +3294,8 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
+    // Only once everything has merged, the one time the offer it feeds is made.
+    docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
     unstacked: work.repos.filter(entry => {
       const s = stageStack(stack, entry, work.branch)
@@ -3877,6 +3952,18 @@ cmds.close = ({ flags }) => {
     // work is about to lose the worktree its first commit could have been read from.
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
   })
+  // Each stage that landed is recorded too, as `rig backfill` would: a stage is reviewed on its
+  // own and its merge is as terminal as the work branch's, and `rig dash` links every PR.
+  // The declared stages are walked rather than the record's branches, because a stage cut by
+  // hand is in the stack and not yet in the record.
+  for (const s of stack.filter(s => !s.withdrawn)) {
+    for (const r of work.repos.filter(r => s.repos.includes(r.repo))) {
+      if (branchRecord(r, s.branch)?.pr) continue
+      const { pr, base, error } = mergedPrRecord(r, s.branch)
+      if (pr) ensureBranchRecord(r, s.branch, base).pr = pr
+      else if (error) warn(`${r.repo} ${s.branch}: ${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
+    }
+  }
   removeWorktrees(cfg, work, { force: !!flags.force })
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
@@ -3910,6 +3997,17 @@ cmds.close = ({ flags }) => {
   // asked: `rig save --learned` refuses one, so naming it would hand over a command that dies.
   if (!abandoned && !work.learnedAt) {
     say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`${save} -m "lessons reviewed" --learned\``))
+  }
+  // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason,
+  // and which a work that merged nothing has none of.
+  const landedAll = verdict.repos.length > 0 && verdict.repos.every(v => v.merged)
+  if (!abandoned && !work.outcome && landedAll) {
+    say(C.dim(`  no outcome recorded — what changed for someone, and why that is good: \`${save} --outcome "…"\``))
+  }
+  // And the user docs, where a repo says where they live: after the close is when a work is
+  // verified where it was deployed, and nothing else names them once the work is closed.
+  if (!abandoned && !work.documentedAt && landedAll && docsTargets(work).some(d => d.targets.length)) {
+    say(C.dim(`  user docs never updated — the rig-docs skill, then \`${save} -m "user docs updated" --documented\``))
   }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -4128,13 +4226,10 @@ cmds.backfill = ({ flags }) => {
       for (const b of entry.branches) {
         const already = !!b.pr
         if (already && !flags.force) continue
-        let pr = null
-        const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
-        if (prError) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${prError}`); continue }
-        if (!pr || pr.state !== 'MERGED') continue   // not terminal — nothing to store, nothing to report
-        const { record, error } = terminalPr(entry, pr)
+        const { pr, error } = mergedPrRecord(entry, b.branch)
         if (error) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${error}`); continue }
-        b.pr = record
+        if (!pr) continue   // not terminal — nothing to store, nothing to report
+        b.pr = pr
         changed = true
         filled++
         step(`${id}/${entry.repo} ${b.branch}: ${already ? 'refreshed' : 'recorded'} PR #${pr.number}`)
@@ -4842,7 +4937,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig list [--json] [--quick]     every work, least recently touched first
        --json                      the records plus live PR timestamps, for a consumer
        --quick                     skip the git and GitHub lookups
-  rig dash [--org o] [--since w]  render throughput and cycle time as one HTML page
+  rig dash [--org o] [--since w]  render throughput, cycle time and what landed as one page
        [--from payload.json]       render a payload captured earlier, instead of looking up
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
@@ -4875,8 +4970,11 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--no-adversarial]          needs one of the two: does this work get an
        [--reviewed] [--learned]    adversarial review; --reviewed records that review,
                                    --learned the lesson review (the rig-learn skill)
+       [--documented]              the user docs updated (the rig-docs skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id
+       [--outcome "..."]           what landed and why it was worth doing, in a sentence
+                                   or two; again replaces it
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
