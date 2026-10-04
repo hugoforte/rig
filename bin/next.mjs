@@ -157,7 +157,9 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         : up.prUnknown ? `PR state unknown in ${up.prUnknown.join(', ')}` : 'not cut in any repo yet'
       // The frontier: the lowest stage still to land is the only PR that matters until it
       // merges, so what is stacked above it is named as waiting on it rather than offered.
-      const waiting = stack.slice(stack.indexOf(up) + 1).filter(st => !st.landed && !st.withdrawn).map(st => st.branch)
+      // Not a stage whose place the order only guessed (adrift), nor one GitHub would not say
+      // about, which may have landed (decision 171): neither is known to be waiting on this one.
+      const waiting = stack.slice(stack.indexOf(up) + 1).filter(st => !st.landed && !st.withdrawn && !st.adrift && !st.prUnknown?.length).map(st => st.branch)
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})${waiting.length ? ` — waiting on it: ${waiting.join(', ')}` : ''}`))
     } else {
       const on = new Map()
@@ -290,16 +292,20 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         'the design chose an adversarial review — a reviewer told to find what is wrong with the PR, fixing what it finds and pushing',
         'rig save -m "adversarial review" --reviewed'))
     }
-    // A failing check is given its cause where rig can see one. A base that moved since the
-    // branch left it is what makes a failure outside the diff, and no commit to the PR or fresh
-    // run fixes that: merging the base in does. The rest are the PR's own to fix.
+    // A failing check is the PR's to fix. Where the base has moved past the branch, that is said
+    // beside it as a possible cause and never as the cause: a moved base is ordinary in a busy
+    // repo, and only a failure in code the diff never touched is a stale base's. The merge is a
+    // command only on the work branch, so it never lands on a stage checked out instead.
     const failing = openPrs.filter(r => ['FAILURE', 'ERROR'].includes(reviewOf(r)?.checks))
-    const staleBase = failing.filter(r => reviewOf(r).behind > 0)
-    for (const r of staleBase) {
+    const moved = failing.filter(r => reviewOf(r).behind > 0)
+    for (const r of moved) {
       const { base, behind } = reviewOf(r)
-      out.push(offer('reviewing', `${r.repo}: the PR's checks are failing, and ${base} has ${behind} commit${behind === 1 ? '' : 's'} the branch does not — a stale base: merge it in, then let the checks run again`, `git merge origin/${base}`))
+      const onWork = r.on === work.branch
+      out.push(offer('reviewing',
+        `${r.repo}: the PR's checks are failing — fix them before it is handed over; ${base} has ${behind} commit${behind === 1 ? '' : 's'} the branch does not, so a failure in code the diff never touched may be a stale base: merge it ${onWork ? 'in' : `into ${work.branch}`} first, then push`,
+        onWork ? [`git merge origin/${base}`, `git push origin ${work.branch}`] : null))
     }
-    const own = failing.filter(r => !staleBase.includes(r))
+    const own = failing.filter(r => !moved.includes(r))
     if (own.length) {
       out.push(offer('reviewing', `${own.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
     }

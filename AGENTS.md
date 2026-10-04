@@ -480,9 +480,10 @@ which puts the stage back as though it had never been withdrawn; the commit says
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
-**The frontier.** The lowest stage still to land is the only pull request that matters until it
-merges, so `rig next` leads with it and names every live stage stacked above it as waiting on
-it, rather than offering each one.
+**The frontier.** The lowest stage still to land is the only stage that matters until it lands,
+so `rig next` leads with it and names the live stages stacked above it as waiting on it, rather
+than offering each one. A stage whose place in the order is a guess, or whose PR GitHub would
+not say anything about, is not called waiting.
 
 ## What now
 
@@ -645,12 +646,14 @@ once the one before it is done:
    failing, or have not reported, are named on their own, so the wait is never silent. It names no command: who reviews is the
    human's call, and rig takes no outward-facing step on its own.
 
-   A failing check is given its cause where rig can see one. For a failing PR only, `rig next`
-   fetches the repo and asks whether the base moved past the branch, as `rig pr` does; if it
-   did, the failure is offered as a **stale base**, with `git merge origin/<base>`, since no
-   commit to the PR and no fresh run fixes a failure in code the diff never touched. The rest
-   of the triage — one fresh run for a flaky failure, the same failure twice is not flaky — is
-   the `rig` skill's.
+   A failing check is the PR's to fix, and `rig next` names the base beside it when the base has
+   moved past the branch: for a failing PR only, it fetches the repo, quietly and never as a
+   first clone, and counts against the PR's live base, as `rig pr` does. A moved base is a
+   possible cause, never the cause — a **stale base** fails code the diff never touched, which
+   no fresh run fixes and merging the base in does — so the offer says so, with
+   `git merge origin/<base>` when the worktree is on the work branch. A fetch that fails gives
+   no count, and nothing is said. The rest of the triage — one fresh run for a flaky failure,
+   the same failure twice is not flaky — is the `rig` skill's.
 
 rig names each step and says nothing about how it is done; an agent host maps them to its own
 skills. Only the work branch's PR is asked about, never a stage's.

@@ -206,6 +206,14 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       fetched(org, repo)
     },
 
+    // A fetch for a read-only question: never a first clone, never a word on the way, and an
+    // answer of whether it reached the remote, so a count read off a mirror it could not bring
+    // forward is not passed off as a fresh one.
+    refresh ({ org, repo }) {
+      const mirror = mirrorPath(org, repo)
+      return fs.existsSync(mirror) && toRemote(mirror, 'fetch', '--prune', 'origin').code === 0
+    },
+
     // How a pushed branch stands against the base it is about to land on, both as the remote
     // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
     // files a merge of the two would conflict in, found without touching any worktree

@@ -3493,13 +3493,14 @@ cmds.next = ({ flags }) => {
       const review = github().prReview(org, name, r.pr.number)
       const checks = review?.checks ?? null
       if (!['FAILURE', 'ERROR'].includes(checks)) return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks }]
-      // A failure is given its cause where the base moved: fetched now, for a failing PR only,
-      // since that is the one answer that turns on it — `rig pr`'s base check (#208).
+      // Whether the base moved past the branch: `rig pr`'s base check (#208), asked here for a
+      // failing PR only, since that is the one offer that turns on it. Against the PR's live
+      // base, which a retargeted PR has moved off the recorded one. Fetched first, quietly and
+      // never as a first clone; a count the fetch could not bring forward is no count.
       const entry = work.repos[i]
-      const base = workBranch(entry, work)?.base || entry.base
+      const base = states[i].base || workBranch(entry, work)?.base || entry.base
       const t = trees(cfg)
-      t.fetch({ org, repo: name })
-      const standing = t.standing({ org, repo: name, branch: work.branch, base })
+      const standing = t.refresh({ org, repo: name }) ? t.standing({ org, repo: name, branch: work.branch, base }) : null
       return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks, base, behind: standing ? standing.behind : null }]
     }),
   })
