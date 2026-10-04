@@ -166,3 +166,10 @@ Prose.
   assert.match(generatedAgents(), /- Docs: `docs\/guide\.md` · `https:\/\/acme\.atlassian\.net\/wiki\/spaces\/HELP\/pages\/42` · `https:\/\/help\.acme\.example\/web`/,
     'a labelled target is read as its address, never as `[object Object]`')
 })
+
+test('an entry whose org is written in another case is still the repo\'s entry', () => {
+  const entry = fs.readFileSync(catalogEntry('web'), 'utf8')
+  fs.writeFileSync(catalogEntry('web'), entry.replace(/^org: acme$/m, 'org: Acme'))
+  assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
+  assert.match(generatedAgents(), /- Docs: `docs\/guide\.md`/)
+})

@@ -208,6 +208,13 @@ test('a stage that landed goes with the work branch', () => {
   assert.equal(hasBranch(bare('billing'), 'feat/sliced-one'), false)
 })
 
+test('the close records a landed stage\'s pull request beside the work branch\'s', () => {
+  // So `rig list --json` and `rig dash` can link each slice without a `rig backfill` first.
+  const stage = record('sliced').repos[0].branches.find(b => b.branch === 'feat/sliced-one')
+  assert.equal(stage.pr?.number, 43, JSON.stringify(record('sliced').repos[0].branches))
+  assert.equal(stage.pr.url, 'https://github.com/acme/billing/pull/43')
+})
+
 // What GitHub does to a stack merged one pull request at a time (hugoforte/rig#257): the stage
 // below merges into the work branch with a merge commit, and the one above is retargeted there
 // and has its own commits re-made on that merge — same patches, new shas — before it merges in
@@ -303,6 +310,14 @@ test('a work whose lessons were reviewed closes without naming the review', () =
 // What changed for someone, and why that is good: a statement made once the work has landed,
 // which nothing can derive later. Named on the way out like the lesson review, and recordable
 // after the close for the same reason.
+
+test('a work closing with nothing merged is not asked its outcome', () => {
+  assert.equal(rig(['new', 'unmerged', '--title', 'unmerged work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'unmerged']).code, 0)
+  const r = rig(['close', '--work', 'unmerged', '--force'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
+})
 
 test('a work closing with no outcome is named, with the command that records one', () => {
   landedWork('untold', 46)

@@ -624,9 +624,12 @@ test('the outcome offer names the skill that drafts it, while the lesson review 
   assert.match(out.find(o => o.command === OUTCOME).says, /the rig-learn skill drafts it/)
 })
 
-test('once the lesson review has run, the outcome offer does not send you back to it', () => {
+test('once the lesson review has run, the outcome offer names the digest skill instead', () => {
+  // The review usually runs while a PR is still open, before there is an outcome to draft.
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
-  assert.doesNotMatch(out.find(o => o.command === OUTCOME).says, /rig-learn/)
+  const says = out.find(o => o.command === OUTCOME).says
+  assert.doesNotMatch(says, /rig-learn/)
+  assert.match(says, /the rig-digest skill drafts it/)
 })
 
 test('the outcome is offered, never demanded', () => {

@@ -1069,9 +1069,9 @@ const docsAddress = d => typeof d === 'string'
   ? d.replace(/^[^:]*:\s+/, '')
   : Object.values(d).find(v => typeof v === 'string') || ''
 
-// A work's repo in the catalogue: the same org, and the repo however its case was written.
+// A work's repo in the catalogue: the same org and repo, however the case of either was written.
 const catalogEntryFor = (catalog, r) =>
-  catalog.find(e => e.org === r.org && e.repo.toLowerCase() === r.repo.toLowerCase())
+  catalog.find(e => e.org.toLowerCase() === r.org.toLowerCase() && e.repo.toLowerCase() === r.repo.toLowerCase())
 
 function draftEntries (work) {
   const attached = work?.repos || []
@@ -2776,6 +2776,18 @@ function prTiming (entry, pr) {
 // so there is exactly one place that decides what "terminal" means. An error here is the
 // caller's cue to store nothing (no negative caching): a rate limit is transient, and a record
 // saying "unknown forever" is worse than asking again next time.
+// The merged pull request on one branch of a work, as `rig close` and `rig backfill` store it:
+// `{ pr, base }` once it merged and its facts were read, `{}` while it has not merged, and
+// `{ error }` when GitHub or git would not say.
+function mergedPrRecord (entry, branch) {
+  let pr = null
+  const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, branch) })
+  if (prError) return { error: prError }
+  if (!pr || pr.state !== 'MERGED') return {}
+  const { record, error } = terminalPr(entry, pr)
+  return error ? { error } : { pr: record, base: pr.base || null }
+}
+
 function terminalPr (entry, pr) {
   // The one place that decides what terminal means, rather than each caller deciding again.
   if (!pr || pr.state !== 'MERGED') return { error: `${entry.repo}: PR is ${pr ? pr.state.toLowerCase() : 'absent'}, not merged` }
@@ -3940,6 +3952,18 @@ cmds.close = ({ flags }) => {
     // work is about to lose the worktree its first commit could have been read from.
     else warn(`${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
   })
+  // Each stage that landed is recorded too, as `rig backfill` would: a stage is reviewed on its
+  // own and its merge is as terminal as the work branch's, and `rig dash` links every PR.
+  // The declared stages are walked rather than the record's branches, because a stage cut by
+  // hand is in the stack and not yet in the record.
+  for (const s of stack.filter(s => !s.withdrawn)) {
+    for (const r of work.repos.filter(r => s.repos.includes(r.repo))) {
+      if (branchRecord(r, s.branch)?.pr) continue
+      const { pr, base, error } = mergedPrRecord(r, s.branch)
+      if (pr) ensureBranchRecord(r, s.branch, base).pr = pr
+      else if (error) warn(`${r.repo} ${s.branch}: ${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
+    }
+  }
   removeWorktrees(cfg, work, { force: !!flags.force })
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
@@ -3974,13 +3998,15 @@ cmds.close = ({ flags }) => {
   if (!abandoned && !work.learnedAt) {
     say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`${save} -m "lessons reviewed" --learned\``))
   }
-  // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason.
-  if (!abandoned && !work.outcome) {
+  // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason,
+  // and which a work that merged nothing has none of.
+  const landedAll = verdict.repos.length > 0 && verdict.repos.every(v => v.merged)
+  if (!abandoned && !work.outcome && landedAll) {
     say(C.dim(`  no outcome recorded — what changed for someone, and why that is good: \`${save} --outcome "…"\``))
   }
   // And the user docs, where a repo says where they live: after the close is when a work is
   // verified where it was deployed, and nothing else names them once the work is closed.
-  if (!abandoned && !work.documentedAt && docsTargets(work).some(d => d.targets.length)) {
+  if (!abandoned && !work.documentedAt && landedAll && docsTargets(work).some(d => d.targets.length)) {
     say(C.dim(`  user docs never updated — the rig-docs skill, then \`${save} -m "user docs updated" --documented\``))
   }
   if (abandoned) {
@@ -4200,13 +4226,10 @@ cmds.backfill = ({ flags }) => {
       for (const b of entry.branches) {
         const already = !!b.pr
         if (already && !flags.force) continue
-        let pr = null
-        const prError = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
-        if (prError) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${prError}`); continue }
-        if (!pr || pr.state !== 'MERGED') continue   // not terminal — nothing to store, nothing to report
-        const { record, error } = terminalPr(entry, pr)
+        const { pr, error } = mergedPrRecord(entry, b.branch)
         if (error) { unresolved.push(`${id}/${entry.repo} ${b.branch}: ${error}`); continue }
-        b.pr = record
+        if (!pr) continue   // not terminal — nothing to store, nothing to report
+        b.pr = pr
         changed = true
         filled++
         step(`${id}/${entry.repo} ${b.branch}: ${already ? 'refreshed' : 'recorded'} PR #${pr.number}`)
