@@ -6,8 +6,8 @@
 //
 // The check commands below are `git` ones rather than a real test runner, so this suite
 // stays offline and spawns no npm; what is being asserted is that they run in the repo's
-// own worktree, that a failure reaches the caller, and that nothing about the outcome is
-// written down.
+// own worktree, that a failure reaches the caller, and that a pass is recorded against the
+// patch it ran at, and read back against the patch the repo carries now (hugoforte/rig#289).
 //
 // `RIG_FAKE_REMOTES` points bin/worktrees.mjs at a directory of bare repos, so the mirror
 // and the worktrees are real git, only local. GitHub is the in-memory adapter and no `gh`
@@ -44,6 +44,7 @@ const SUBPROCESS = { inProcess: false }
 const BRANCH = 'feat/check-work'
 const catalogEntry = repo => path.join(dataRoot, 'catalog', 'acme', `${repo}.md`)
 const recordFile = path.join(dataRoot, 'work', 't1', 'work.json')
+const billingBranch = () => JSON.parse(fs.readFileSync(recordFile, 'utf8')).repos.find(r => r.repo === 'billing').branches[0]
 const generatedAgents = () => fs.readFileSync(path.join(workRoot, 't1', 'AGENTS.md'), 'utf8')
 
 // A bare repo standing in for `https://github.com/acme/<repo>.git`, with one commit.
@@ -120,11 +121,98 @@ test('--run runs them, in the repo\'s own worktree, and only for the repo named'
   assert.doesNotMatch(r.out, /no-such-ref/, 'the repo that was not named was not touched')
 })
 
-test('a run records nothing — not in the catalogue, not in the work record', () => {
-  const before = [fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)]
+test('a passing run records what it proved, pinned to the patch: head, base, patch-id and date', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'the work\n')
+  gitMust(dest, 'commit', '-qam', 'the work')
   assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
-  assert.deepEqual([fs.readFileSync(catalogEntry('billing')), fs.readFileSync(recordFile)], before,
-    'the catalogue holds the command; a result is nobody\'s durable fact')
+  const { verified } = billingBranch()
+  assert.deepEqual(
+    { head: verified.head, base: verified.base },
+    { head: gitMust(dest, 'rev-parse', 'HEAD'), base: gitMust(dest, 'merge-base', 'origin/main', 'HEAD') })
+  assert.match(verified.patchId, /^[0-9a-f]{40}$/)
+  assert.ok(!Number.isNaN(Date.parse(verified.at)), 'a pass on a date')
+})
+
+test('the pass is committed into the data root, since check --run now writes a record', () => {
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig check t1: verified billing')
+})
+
+test('status says a repo is verified at the patch it has now', () => {
+  assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}verified at [0-9a-f]{7} on \d{4}-\d{2}-\d{2}\n/)
+})
+
+test('a commit that only rewords a message keeps the diff, and so the pass', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  gitMust(dest, 'commit', '-q', '--amend', '-m', 'the work, reworded')
+  assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}verified at [0-9a-f]{7}/)
+})
+
+test('a commit that changes the diff makes the pass stale', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'more work\n')
+  gitMust(dest, 'commit', '-qam', 'more work')
+  assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}stale — the diff changed since it passed at [0-9a-f]{7}/)
+})
+
+test('a repo no run has passed says so', () => {
+  assert.match(rig(['status', '--work', 't1']).out, /orders[\s\S]*?\n {2}checks {2}not verified — `rig check orders --run`/)
+})
+
+test('a pass with uncommitted changes is not recorded, and says why', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'uncommitted\n')
+  const before = fs.readFileSync(recordFile, 'utf8')
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: passed with uncommitted changes, which are in no patch — not recorded/)
+  assert.equal(fs.readFileSync(recordFile, 'utf8'), before)
+  gitMust(dest, 'checkout', '--', 'README.md')
+})
+
+test('a failed run clears the pass recorded before', () => {
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  assert.ok(billingBranch().verified, 'passed at the new patch')
+  correct('billing', ['git rev-parse --verify --quiet no-such-ref'])
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 1)
+  assert.equal(billingBranch().verified, undefined)
+  correct('billing', ['git rev-parse --abbrev-ref HEAD'])
+})
+
+test('list --json carries what each branch was verified at', () => {
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  const { works } = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  const billing = works.find(w => w.id === 't1').repos.find(r => r.repo === 'billing')
+  assert.deepEqual(billing.branches[0].verified, billingBranch().verified)
+})
+
+test('a change of whitespace alone changes the diff, so it makes the pass stale', () => {
+  // Indentation is code in Python and YAML, and `git patch-id` would not see it.
+  const dest = path.join(workRoot, 't1', 'billing')
+  const readme = path.join(dest, 'README.md')
+  fs.writeFileSync(readme, fs.readFileSync(readme, 'utf8').replace('more work', '  more work'))
+  gitMust(dest, 'commit', '-qam', 'indent')
+  assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}stale/)
+})
+
+test('a rebase onto a base that moved, leaving the diff alone, keeps the pass', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  const other = path.join(tmp, 'other-billing')
+  gitMust(tmp, 'clone', '-q', path.join(remotesDir, 'acme', 'billing.git'), other)
+  fs.writeFileSync(path.join(other, 'NOTES.md'), 'landed elsewhere\n')
+  gitMust(other, 'add', '-A')
+  gitMust(other, 'commit', '-qm', 'landed elsewhere')
+  gitMust(other, 'push', '-q', 'origin', 'main')
+  gitMust(dest, 'fetch', '-q', 'origin')
+  gitMust(dest, 'rebase', '-q', 'origin/main')
+  assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}verified at [0-9a-f]{7}/)
+})
+
+test('a run leaves the catalogue as it was: it holds the command, never a verdict', () => {
+  const before = fs.readFileSync(catalogEntry('billing'))
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  assert.deepEqual(fs.readFileSync(catalogEntry('billing')), before)
 })
 
 test('a failed check is reported, and the exit code carries the verdict', () => {

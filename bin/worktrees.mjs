@@ -14,6 +14,7 @@
 // directory of bare repos, which is what lets a test attach a real repo with no network and
 // no `gh`. rig picks the adapter from RIG_FAKE_REMOTES, as it picks the in-memory `gh` and
 // `twg` ones; see `trees()` in rig.mjs.
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
@@ -365,6 +366,31 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // `branch` is optional and answers three extra questions: has this branch reached the
     // remote, how much of what is checked out has not, and which branch is checked out?
     // `repoState` passes one.
+    // What a worktree's HEAD carries over its base, which is what a check run proves: the head,
+    // where it leaves the base (the merge-base with the base's remote-tracking ref), and a
+    // patch-id for the diff between them. A rebase that leaves the diff alone keeps the patch-id;
+    // one that changes it does not.
+    //
+    // The patch-id is a hash of the diff rather than `git patch-id`, which ignores whitespace:
+    // indentation is code in Python and YAML, and `--verbatim`, which keeps it, needs a newer
+    // git than rig does. What a rebase moves without changing the diff is left out: the blob
+    // ids on `index` lines and the line numbers in hunk headers. `--binary` puts a binary file's
+    // content in the diff. An empty diff answers ''. `error` when git could not say.
+    patch ({ dir, base }) {
+      const failed = (r, what) => ({ error: (r.err || r.out).split('\n')[0].trim() || `git could not read ${what} in ${dir}` })
+      const head = git(dir, 'rev-parse', 'HEAD')
+      if (head.code !== 0) return failed(head, 'HEAD')
+      const from = git(dir, 'merge-base', ref(base), 'HEAD')
+      if (from.code !== 0) return failed(from, `where HEAD leaves ${base}`)
+      const diff = run('git', ['-C', dir, 'diff', '--binary', '--no-color', '--no-ext-diff', '--no-textconv', from.out, 'HEAD'], { maxBuffer: 1024 * 1024 * 1024 })
+      if (diff.code !== 0) return failed(diff, 'the diff')
+      const moved = diff.out.split('\n')
+        .filter(line => !line.startsWith('index '))
+        .map(line => line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, '@@'))
+        .join('\n')
+      return { head: head.out, base: from.out, patchId: diff.out ? createHash('sha1').update(moved).digest('hex') : '' }
+    },
+
     state ({ dir, base, recordedBase = base, branch = null }) {
       const s = { missing: !fs.existsSync(dir), dirty: 0, ahead: 0, behind: 0 }
       if (s.missing) return s

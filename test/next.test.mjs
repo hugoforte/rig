@@ -74,6 +74,30 @@ test('a work whose gates the human decided is offered no review of them', () => 
   assert.doesNotMatch(says(out), /the agent decided/)
 })
 
+// ------------------------------------------------- checks pinned to the patch
+
+test('a repo with work on it and no pass at the diff it carries is offered the run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], verification: [{ repo: 'a', state: 'unverified' }] })
+  assert.ok(commands(out).includes('rig check a --run'))
+  assert.match(says(out), /a has no pass recorded at the diff it carries — run its checks, and a pass is kept against this patch/)
+})
+
+test('a pass from before the diff changed is offered the run again, saying so', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { unpushed: 1 }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] })
+  assert.ok(commands(out).includes('rig check a b --run'))
+  assert.match(says(out), /a's pass was for an earlier diff/)
+})
+
+test('a repo verified at its patch is offered no run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], verification: [{ repo: 'a', state: 'verified' }] })
+  assert.ok(!commands(out).some(c => /rig check/.test(c)))
+})
+
+test('a branch nobody has written on is offered no run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], verification: [{ repo: 'a', state: 'unverified' }] })
+  assert.ok(!commands(out).some(c => /rig check/.test(c)))
+})
+
 test('uncommitted changes are named before anything that would build on them', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
@@ -412,6 +436,7 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
     { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), stops: [] }), repos: [repo('a')] },
+    { work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { pushed: true }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] },
     { work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] },
     {

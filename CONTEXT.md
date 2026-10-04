@@ -68,6 +68,10 @@ _Avoid_: step, checkpoint, phase
 A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
 _Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
 
+**Verified**:
+A repo whose checks last passed at the diff it carries now. `rig check --run` records a pass with the patch it ran at; a diff that changed since makes it **stale**, and a repo with no pass recorded is **not verified**. A fact about a patch, not about a head: a rebase that leaves the diff alone keeps it.
+_Avoid_: green, tested, passing (that is the run, not the record)
+
 **Adversarial review**:
 A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.
 _Avoid_: hardening, second review, audit

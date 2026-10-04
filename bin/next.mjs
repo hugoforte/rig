@@ -69,13 +69,16 @@ const HEAVY = 3
 //                  many of its review threads are unresolved and its head commit's check rollup
 //                  (`SUCCESS`, `PENDING`, `FAILURE`, …, or null where none are set up); both
 //                  null where GitHub would not say
+//   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
+//                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
+//                  --run` recorded
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -205,6 +208,17 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     const ours = new Set([work.branch, ...(work.stages || []).map(s => s.branch)])
     const pushes = [...new Set(unpushed.filter(r => ours.has(r.on)).map(r => `git push origin ${r.on}`))]
     out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, pushes.length ? pushes : null))
+  }
+
+  // The checks, for a repo with work on it whose diff no recorded pass covers: never run, or
+  // run against a diff that has changed since. Only where something has been written, for the
+  // reason the PR offer below asks `pushed` too, and only before the merge.
+  const written = r => r.pushed || r.unpushed > 0
+  const unproven = verification.filter(v => (v.state === 'unverified' || v.state === 'stale') &&
+    repos.some(r => r.repo === v.repo && written(r) && !r.merged && !r.missing))
+  if (unproven.length) {
+    const said = unproven.map(v => v.state === 'stale' ? `${v.repo}'s pass was for an earlier diff` : `${v.repo} has no pass recorded at the diff it carries`)
+    out.push(offer(phase, `${said.join('; ')} — run its checks, and a pass is kept against this patch`, `rig check ${unproven.map(v => v.repo).join(' ')} --run`))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.

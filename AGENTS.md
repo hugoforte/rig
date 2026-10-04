@@ -232,12 +232,23 @@ pull request is open, adding a repo is a decision already taken. Neither blocks,
 attaches anything for you.
 
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
-lint, its build. Both are commands and never results: no pass or fail is ever stored.
+lint, its build. Both are commands, and the catalogue never holds a result.
 
 ```bash
 rig check                 # what verifies every repo in this work — printed, not run
 rig check billing --run   # run billing's, in its worktree; non-zero if one fails
 ```
+
+**A pass is recorded, pinned to the patch.** What passed at one diff cannot be seen afterwards —
+a re-run says what passes now — so `rig check --run` records each repo that passes on the work
+branch's record as `verified`: the head, where it leaves the base, a patch-id for the diff
+between them (whitespace counts), and the date. That makes `rig check --run` a mutating command: it
+commits and pushes the data root like `rig save`, and `rig check` without `--run` writes
+nothing. A failure clears the pass, and a pass with uncommitted changes is not recorded, since
+they are in no patch. `rig status` reads the pass against the diff the repo carries now:
+**verified** while the patch-id is the same, whatever happened to the head, **stale** once the
+diff changed, **not verified** with none. `rig next` offers the run for a repo with work on it
+and no pass at its diff, and `rig pr` names such a repo and opens the PR anyway.
 
 Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
 in, `rig check` prints the check commands and `--run` opts in. A command that cannot
@@ -288,7 +299,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`) ends by committing the whole
+(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:

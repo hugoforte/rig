@@ -1269,6 +1269,7 @@ const MISSHAPEN = [
   ['{"id": "broken", "stages": [{"delivers": "x"}]}', /stage 1 has no `branch`/],
   ['{"id": "broken", "outcome": "Shipped it"}', /`outcome` is not a statement with its date/],
   ['{"id": "broken", "outcome": {"text": "Shipped it"}}', /`outcome` is not a statement with its date/],
+  ['{"id": "broken", "repos": [{"repo": "a", "branches": [{"branch": "b", "verified": "yes"}]}]}', /`verified` of a is not a pass with its head, base, patch-id and date/],
   ['{"id": "broken", "stops": "design"}', /`stops` is not a list of repos and design/],
   ['{"id": "broken", "stops": ["ticket"]}', /`stops` is not a list of repos and design/],
   ['{"id": "broken", "agentDecided": ["lessons"]}', /`agentDecided` is not a list of repos and design/],
