@@ -39,6 +39,36 @@ test('a recorded design gate stops being offered', () => {
   assert.doesNotMatch(says(out), /design gate/)
 })
 
+// ------------------------------------------------- the stops a work chose
+
+test('where the design is not a stop, the agent is offered the gate to record itself, with an adversarial review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), stops: ['repos'] }), repos: [repo('a')] })
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial --by-agent'))
+  assert.match(says(out), /the design is not a stop on this work/)
+})
+
+test('a work grown to three repos waits for the human at the design all the same', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] })
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial'))
+  assert.match(says(out), /3 repos is more than a skipped stop was chosen for — the design waits for the human/)
+})
+
+test('a gate the agent decided is offered to the human for review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] })
+  assert.match(says(out), /the agent decided the repo set and the design — go over them with the human/)
+  assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --adversarial'))
+})
+
+test('the review keeps the adversarial-review choice the design made', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: false, agentDecided: ['design'] }), repos: [repo('a')] })
+  assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --no-adversarial'))
+})
+
+test('a work whose gates the human decided is offered no review of them', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true }), repos: [repo('a')] })
+  assert.doesNotMatch(says(out), /the agent decided/)
+})
+
 test('uncommitted changes are named before anything that would build on them', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b'), designedAt: AT }),
@@ -376,6 +406,9 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
     { work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true },
     { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
+    { work: work({ repos: attached('a'), stops: [] }), repos: [repo('a')] },
+    { work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] },
+    { work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] },
     {
       work: work({ repos: attached('a'), designedAt: AT }),
       repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })],

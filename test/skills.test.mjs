@@ -49,3 +49,12 @@ for (const name of skills) {
     assert.ok(name === 'rig' || name.startsWith('rig-'), 'the bare name is the entry point; everything else is rig-*')
   })
 }
+
+test('the stops are listed once, in AGENTS.md, and the skill and prompts that stop point there', () => {
+  // A work chooses which gates it stops at, so a list of stops copied into each prompt would be
+  // one more place to go wrong the day the list changes.
+  assert.match(fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'), /^## Stops$/m)
+  for (const file of ['skills/rig/SKILL.md', 'prompts/new-work.md', 'prompts/select-repos.md']) {
+    assert.match(fs.readFileSync(path.join(ROOT, file), 'utf8'), /AGENTS\.md`?'s "Stops"/, `${file} points at the list`)
+  }
+})

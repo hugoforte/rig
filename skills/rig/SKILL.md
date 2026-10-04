@@ -64,7 +64,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
 
-**Stop for the user at three points**, and `rig new` enforces the first by refusing without it: the ticket decision (`--key`, `--ticket` or `--no-ticket`), the repo set, and the design gate. Each `rig prompt` ends by stopping; do not run past it.
+**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. Each `rig prompt` ends by stopping unless the work skips that stop; do not run past it.
 
 **More than one data root is normal** — personal, public and employer knowledge have different readers. A work lives in exactly one, and `rig new --repos a,b` refuses repos catalogued in different roots. `rig use` says which is in hand.
 

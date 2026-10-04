@@ -94,6 +94,45 @@ rig attach billing
 rig attach orders-web
 ```
 
+## Stops
+
+A **stop** is a gate where the agent waits for the human. A work has four:
+
+1. **The ticket decision** — `--key`, `--ticket` or `--no-ticket` at `rig new`.
+2. **The repo set** — the repo interview ends by presenting the set and waiting.
+3. **The design gate** — the Direction agreed, with the adversarial-review choice.
+4. **The lesson review** — `rig-learn` presents its lessons and waits for "go".
+
+**Only the repo set and the design gate can stop being stops.** The ticket decision already is
+the human's, made on the command line. The lesson review stays a stop because skipping it would
+let an agent file issues on a tracker and edit the org doc unseen. A work chooses at `rig new`,
+and `rig save` changes it later:
+
+```bash
+rig new <id> --title "..." --no-ticket --stops design   # wait at the design only
+rig save --stops none                                   # wait at neither, from here on
+```
+
+Absent means both, which is how every work behaved before the choice existed, so there is nothing
+to ask: pass `--stops` only when the user said at the outset what to skip. Unlike the declared
+track decision 67 rejected, a stop is read once, just before it fires, so a choice made early has
+nothing to go stale against.
+
+**A gate that is not a stop is still a gate.** The agent decides it and says so:
+`rig attach <repo> --by-agent` (or `rig new --repos a,b --by-agent`) for the repo set, and
+`rig save -m "design agreed" --designed --adversarial --by-agent` for the design. Deciding the
+design alone, the agent chooses the adversarial review: it costs the agent effort and the human
+nothing. `rig status` marks what the agent decided, `rig list --json` carries `stops` and
+`agentDecided`, and `rig next` offers it to the human for review. The human agreeing the design
+again, without `--by-agent`, clears both marks, since the repo set is in the Direction they agreed.
+
+**A skipped stop fires anyway once the work outgrows what the human saw**: more repos than the
+human named at the start, or three repos, the weight at which `rig next` offers a rollout plan.
+`rig next` says the second; the first is the agent's to notice.
+
+Stops are kept by the prompts and skills, not by rig: no command refuses because a stop was
+skipped, and none waits. rig records the choice and what the agent decided.
+
 ## Rules that matter
 
 1. **Never `git worktree add` inside the work root.** Use `rig attach`. rig owns that tree and
@@ -107,7 +146,8 @@ rig attach orders-web
    hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
    `reviewedAt`, `learnedAt`, `documentedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing
    can observe afterwards — and, beside `designedAt`, whether the design chose an adversarial
-   review. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
+   review; and the choices about gates: which ones the work stops at (`stops`) and which ones
+   the agent decided (`agentDecided`), see "Stops". The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
    terminating in `closed` or `abandoned`) is computed from those gates and the repos,
    branches and PRs every time it is shown — see `bin/phase.mjs`. A merged PR's terminal
    facts (`number`, `url`, `openedAt`, `firstCommitAt`, `firstReviewAt`, `approvedAt`,

@@ -86,6 +86,9 @@ Present the three parts and **stop**. The user confirms or edits the set. Only a
 rig attach <repo>        # one per selected repo, or --repos a,b,c on rig new
 ```
 
+On a work that does not stop at the repo set (`AGENTS.md`'s "Stops"; `rig status` says), present
+the three parts and attach without waiting, with `--by-agent`, so the record says who chose.
+
 The repo set is mutable — attaching a fourth repo on day two is normal and expected, not
 a sign the interview failed.
 

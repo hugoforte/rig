@@ -24,7 +24,7 @@
 // no fs, no git, no gh. The gathering is the caller's job, which is what makes every ladder
 // rung below assertable from an object literal.
 
-import { phaseOf } from './phase.mjs'
+import { phaseOf, STOP_WORDS, STOPPABLE } from './phase.mjs'
 import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
@@ -34,6 +34,12 @@ import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './sta
 const offer = (phase, says, command = null) => ({ phase, says, command })
 
 const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
+
+// Three repos is where deploy order stops being obvious and starts being a thing that causes
+// incidents. Two is a pair you can hold in your head. The weight threshold, derived from the
+// repo count and nothing anybody declared: it offers the rollout plan, and it makes the design a
+// stop again on a work that chose to skip it, since the work has outgrown what the human saw.
+const HEAVY = 3
 
 // Everything `rig next` needs that it cannot work out for itself. Gathered by the caller so
 // this module stays pure:
@@ -101,11 +107,28 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // work can reach review without one and that is not an error, it is an omission. Which is
   // exactly why this lives here and not in `doctor`. The gate carries the adversarial-review
   // choice (decision 168), so the offer names both answers and the command carries one.
-  if (!work?.designedAt) {
+  //
+  // A work that chose not to stop at the design has the agent record it, and the agent's
+  // default is the adversarial review: it costs the agent effort and the human nothing. A work
+  // grown heavy since is offered the human's gate all the same, since a stop skipped for a small
+  // work was not chosen for this one.
+  const skipsDesign = work?.stops && !work.stops.includes('design')
+  if (!work?.designedAt && skipsDesign && entries.length < HEAVY) {
+    out.push(offer('designing', 'the design is not a stop on this work — agree it yourself, write it in the Direction, and record it as the agent\'s, with an adversarial review', `${DESIGNED} --by-agent`))
+  } else if (!work?.designedAt) {
     const choose = 'and decide whether its PRs get an adversarial review (`--no-adversarial` declines it)'
+    const grown = skipsDesign ? `${entries.length} repos is more than a skipped stop was chosen for — the design waits for the human; ` : ''
     out.push(directionTodo
-      ? offer('designing', `the context doc's Direction is still \`_TODO_\` — agree the approach, write it down, then record the gate ${choose}`, DESIGNED)
-      : offer('designing', `Direction is written but the design gate is not recorded — record it ${choose}`, DESIGNED))
+      ? offer('designing', `${grown}the context doc's Direction is still \`_TODO_\` — agree the approach, write it down, then record the gate ${choose}`, DESIGNED)
+      : offer('designing', `${grown}Direction is written but the design gate is not recorded — record it ${choose}`, DESIGNED))
+  }
+
+  // What the agent decided where the human chose not to stop, offered back for the human to go
+  // over. Agreeing the design again records it as theirs, with the review choice it already made.
+  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
+  if (work?.designedAt && decided.length) {
+    const choice = work.adversarial === false ? '--no-adversarial' : '--adversarial'
+    out.push(offer(phase, `the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them with the human, then record the design as theirs`, `rig save -m "design reviewed" --designed ${choice}`))
   }
 
   // Unsaved work outranks everything below it: it is the one thing every other suggestion
@@ -208,10 +231,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('reviewing', [`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, ...releases].join(' — '), 'rig pr'))
   }
 
-  // Three repos is where deploy order stops being obvious and starts being a thing that
-  // causes incidents. Two is a pair you can hold in your head; this is the weight threshold,
-  // derived from the repo count and nothing anybody declared.
-  if (entries.length >= 3 && !planExists) {
+  if (entries.length >= HEAVY && !planExists) {
     out.push(offer('landing', `${entries.length} repos means deploy order matters — a rollout plan is worth having`, 'rig plan'))
   }
 

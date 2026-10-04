@@ -18,7 +18,7 @@ import { impact, unattached } from './catalog-graph.mjs'
 import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
-import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
+import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
@@ -814,6 +814,11 @@ function recordShapeProblem (w) {
     !(isObject(w.outcome) && typeof w.outcome.text === 'string' && typeof w.outcome.at === 'string')) {
     return '`outcome` is not a statement with its date'
   }
+  for (const field of ['stops', 'agentDecided']) {
+    if (w[field] !== undefined && !(Array.isArray(w[field]) && w[field].every(n => STOPPABLE.includes(n)))) {
+      return `\`${field}\` is not a list of ${STOPPABLE.join(' and ')}`
+    }
+  }
   return null
 }
 
@@ -1153,7 +1158,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -2152,6 +2157,19 @@ cmds.use = ({ positional }) => {
   if (pending.length) warn(`${name} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
 }
 
+// `--stops design`, `--stops repos,design` or `--stops none`: the gates the agent waits at for the
+// human. Absent is undefined, which leaves the record's choice, or the default, as it was.
+function stopsFlag (flags) {
+  const v = flags.stops
+  if (v === undefined) return undefined
+  if (typeof v !== 'string' || !v.trim()) die(`--stops wants the gates to wait at: ${STOPPABLE.join(', ')}, or none`)
+  if (v.trim() === 'none') return []
+  const named = v.split(',').map(s => s.trim()).filter(Boolean)
+  const unknown = named.filter(n => !STOPPABLE.includes(n))
+  if (unknown.length) die(`--stops: ${unknown.join(', ')} cannot stop being a stop — only ${STOPPABLE.join(' and ')} (or none)`)
+  return STOPPABLE.filter(n => named.includes(n))
+}
+
 cmds.new = ({ flags, positional }) => {
   sayCurrentRoot()
   const cfg = config()
@@ -2180,6 +2198,8 @@ cmds.new = ({ flags, positional }) => {
       die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? ` — not "${parent}"` : ''}`)
     }
   }
+  const stops = stopsFlag(flags)
+  if (flags['by-agent'] && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // A parent is this one ticket's, never a field, however Jira or rig.json spells it
   // (DESIGN.md decision 146).
@@ -2246,6 +2266,7 @@ cmds.new = ({ flags, positional }) => {
     title,
     tickets: keys.length ? keys : (idKey ? [idKey] : []),
     ...(noTicket ? { ticketsDeclined: true } : {}),
+    ...(stops ? { stops } : {}),
     type,
     branch,
     repos: [],
@@ -2288,7 +2309,7 @@ cmds.new = ({ flags, positional }) => {
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
-    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup })
+    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent: !!flags['by-agent'] })
   } else {
     say('No repos attached yet. Run the selection interview:')
     say(C.dim('  rig prompt select-repos'))
@@ -2299,7 +2320,7 @@ cmds.new = ({ flags, positional }) => {
 // Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
 // Answers whether the repo joined the work, which is what decides whether its neighbours are
 // worth naming: a repo already in the record joined it some other day.
-function attachRepo (cfg, work, repoName, { setup = false } = {}) {
+function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {}) {
   const recorded = work.repos.find(r => r.repo.toLowerCase() === repoName.toLowerCase())
   if (recorded) {
     // The record is not the territory: a repo attached on another machine, or whose folder
@@ -2342,6 +2363,9 @@ function attachRepo (cfg, work, repoName, { setup = false } = {}) {
     attachedAt: new Date().toISOString(),
     branches: [{ branch: work.branch, base }],
   })
+  // The agent chose this repo where the repo set is not a stop. Only the human agreeing the
+  // design clears it, since one repo attached by hand does not confirm the rest.
+  if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'repos'])]
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
   offerSetup(cat, repo, dest, setup)
@@ -2558,7 +2582,7 @@ cmds.attach = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
   commitAs(work.id, name)
-  if (attachRepo(cfg, work, name, { setup: !!flags.setup })) offerNeighbours(work, name)
+  if (attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent: !!flags['by-agent'] })) offerNeighbours(work, name)
 }
 
 // What else this repo travels with, said once, at the moment the repo set is being chosen.
@@ -2610,6 +2634,7 @@ cmds.save = ({ flags }) => {
   // written, so the placeholder is no outcome either.
   if (outcome === true || (typeof outcome === 'string' && /^[\s….]*$/.test(outcome))) die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
   if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
+  const stops = stopsFlag(flags)
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
   // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
@@ -2624,7 +2649,8 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
-  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : undefined))
+  if (flags['by-agent'] && !flags.designed) die('--by-agent says the agent decided a gate — pass it with --designed')
+  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : stops ? `stops ${stops.join(',') || 'none'}` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -2633,6 +2659,10 @@ cmds.save = ({ flags }) => {
     // The review choice is re-recorded with it, for the same reason.
     work.designedAt = new Date().toISOString()
     work.adversarial = choice
+    // Who agreed it. The agent, where the design is not a stop; anyone else is the human, who
+    // reads the repo table in the same Direction, so their agreement settles both markers.
+    if (flags['by-agent']) work.agentDecided = [...new Set([...(work.agentDecided || []), 'design'])]
+    else delete work.agentDecided
     ok(`${id}: design agreed, ${choice ? 'with' : 'without'} an adversarial review`)
   }
   // The adversarial review. Recorded whatever the design chose, because it is a fact about what
@@ -2666,6 +2696,12 @@ cmds.save = ({ flags }) => {
     if (work.abandonedAt) die(`${id} was abandoned — nothing landed to say the outcome of`)
     work.outcome = { text: outcome, at: new Date().toISOString() }
     ok(`${id}: outcome recorded`)
+  }
+  // Which gates the agent waits at from here on. Read once, just before each stop fires, so a
+  // choice changed late has nothing it could have gone stale against.
+  if (stops) {
+    work.stops = stops
+    ok(`${id}: stops at ${stops.join(' and ') || 'nothing'}`)
   }
   // After the gates, so a gate refused leaves the doc as untouched as the record.
   if (title) {
@@ -2845,6 +2881,8 @@ const workJson = (cfg, work, live) => ({
   learnedAt: work.learnedAt || null,
   documentedAt: work.documentedAt || null,
   outcome: work.outcome ? { text: work.outcome.text, at: work.outcome.at } : null,
+  stops: work.stops || null,
+  agentDecided: work.agentDecided || [],
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
@@ -3105,6 +3143,15 @@ cmds.dash = ({ flags }) => {
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
+// The gate lines `rig status` marks as the agent's: `designed` is the design stop.
+const STOP_OF_GATE = { designed: 'design' }
+const agentDecided = (work, gate) => (work.agentDecided || []).includes(STOP_OF_GATE[gate])
+const stopsLabel = stops => {
+  const skipped = STOPPABLE.filter(n => !stops.includes(n))
+  const waits = stops.join(' and ') || 'none'
+  return skipped.length ? `${waits} — the agent decides ${skipped.map(n => STOP_WORDS[n]).join(' and ')}` : waits
+}
+
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -3122,7 +3169,9 @@ cmds.status = ({ flags }) => {
   // Gathered above rather than below, because this is the one command that looks the PRs up
   // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
-  for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}${agentDecided(work, gate) ? ' (agent decided)' : ''}`)
+  if (work.agentDecided?.includes('repos')) say('  repos chosen (agent decided)')
+  if (work.stops) say(`stops ${stopsLabel(work.stops)}`)
   if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
   // Named, not enumerated: `rig stage` is where the stack is read, and a status that
   // reprinted it would be two places to keep saying the same thing.
@@ -4921,6 +4970,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        Jira ticket under that epic; --dry-run previews and creates nothing;
        --no-ticket records a declined ticket
        [--type feat] [--slug s | --branch b] [--repos a,b] [--setup]
+       [--stops repos,design | none]  the gates the agent waits at for the human;
+                                   absent, it waits at both
+       [--by-agent]                with --repos: the agent chose them, not the human
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
@@ -4929,6 +4981,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig ticket --remove <key>       take a key off the record, wherever it is held; the
                                   tracker is not told
   rig attach <repo> [--setup]     add a repo to the current work
+       [--by-agent]                the agent chose it, where the repo set is not a stop
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
                                   on the top of its stack; a branch the remote and the
@@ -4975,6 +5028,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    heading and AGENTS.md — never the branch or the id
        [--outcome "..."]           what landed and why it was worth doing, in a sentence
                                    or two; again replaces it
+       [--stops repos,design | none]  change the gates the agent waits at for the human
+       [--by-agent]                with --designed: the agent agreed it, not the human;
+                                   agreed again without it, the human has seen it
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
