@@ -499,6 +499,7 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
     { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), stops: [] }), repos: [repo('a')] },
+    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: AT, lastCommitAt: null },
     { work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { pushed: true }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] },
     { work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] },

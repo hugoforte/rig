@@ -64,7 +64,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
 
-**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. Each `rig prompt` ends by stopping unless the work skips that stop; do not run past it.
+**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. The interviews — `rig prompt setup`, `new-work` and `select-repos` — end by stopping unless the work skips that stop; do not run past them. `rig prompt pickup` is no interview, and ends by starting.
 
 **When a PR's checks fail, find the cause before you act.** Work the frontier first: `rig next` names the lowest stage still to land and what is waiting on it.
 
