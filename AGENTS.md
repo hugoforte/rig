@@ -311,7 +311,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`, `check --run`) ends by committing the whole
+(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `note`, `close`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:
@@ -343,6 +343,21 @@ several roots, only for the root it commits into, or one that may hold the work 
 finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
 Read-only commands never wait. The lock does not change the sweep: the second of two queued
 commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
+
+**The notes are every decision taken along the way.** The context doc's sections keep what
+shaped the design, edited into the order that reads best. The smaller decisions a long or
+unattended session takes — why an approach was dropped, which check proved a step, what was
+reverted — go in the work's `notes.tsv`, one row each, with `rig note`:
+
+```bash
+rig note "Dropped the cache layer" --why "it hid a stale read" --evidence abc1234,bin/cache.mjs:40 --result reverted
+```
+
+A row is `at`, `stage`, `note`, `why`, `evidence` and `result`, one line a cell. The evidence is
+a pointer a reviewer can open — a SHA, a PR, `file:line`, a path or a URL, several split by
+commas — and never prose; `rig note` refuses a row without it. Rows are appended and never read
+to be written, so the hundredth costs what the first did, and the data root is committed.
+`rig status` names the file; the lesson review and a pickup read it.
 
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never

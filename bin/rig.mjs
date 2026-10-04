@@ -639,7 +639,7 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'close', 'backfill'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'note', 'close', 'backfill'])
 // `rig check` prints and writes nothing; `rig check --run` records what passed.
 const mutates = (name, flags) => MUTATING.has(name) || (name === 'check' && !!flags.run)
 
@@ -2643,6 +2643,40 @@ function offerNeighbours (work, name) {
 // `--learned` records the lesson review the same way, and `--reviewed` the adversarial review.
 // `--title` corrects the title in the record and the two headings that show it, and never the
 // branch or the id. `--outcome` records what landed and why it was worth doing.
+// A work's notes: one row per decision a session took along the way — what, why, and a pointer
+// at the evidence — in `notes.tsv` beside the context doc (decision 204). Appended and never
+// read to be written, so the hundredth costs what the first did. A row is the shape of the
+// file: one line a cell, tab-separated, so a cell that would break that is refused.
+const NOTE_COLUMNS = ['at', 'stage', 'note', 'why', 'evidence', 'result']
+// A SHA, a PR (`#5`, `owner/repo#5`), `file:line`, a path or a URL: no whitespace, several split
+// by commas. What a reviewer can open, which is what makes the trail checkable.
+const isPointer = s => s.split(',').every(p => p.trim() && !/\s/.test(p.trim()))
+
+cmds.note = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const cell = (name, value) => {
+    if (value === true) die(`--${name} needs its text`)
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (/[\r\n\t]/.test(text)) die(`--${name} takes one line, with no tab — a note is one row`)
+    return text
+  }
+  const note = positional.join(' ').trim()
+  if (!note) die('rig note wants the note: what was chosen or done, in one line')
+  if (/[\r\n\t]/.test(note)) die('the note takes one line, with no tab — a note is one row')
+  const why = cell('why', flags.why)
+  if (!why) die('a note needs --why: the reason, in plain words')
+  const evidence = cell('evidence', flags.evidence)
+  if (!evidence) die('a note needs --evidence: a pointer a reviewer can open — a SHA, a PR, file:line, a path or a URL')
+  if (!isPointer(evidence)) die('--evidence is a pointer — a SHA, a PR, file:line, a path or a URL, several split by commas — not prose')
+  const row = [new Date().toISOString(), cell('stage', flags.stage), note, why, evidence, cell('result', flags.result)]
+  commitAs(work.id, note)
+  const file = path.join(recordDir(work.id), 'notes.tsv')
+  if (!exists(file)) fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`)
+  fs.appendFileSync(file, `${row.join('\t')}\n`)
+  ok(`${work.id}: noted`)
+}
+
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -3289,6 +3323,9 @@ cmds.status = ({ flags }) => {
   // same way, since the user-docs edit and the digest read it after the work has moved on.
   const qa = path.join(recordDir(id), 'qa.md')
   if (exists(qa)) say(`qa ${recordUrl(id, 'qa.md') || `${qa} ${C.dim('(this machine only — the data root has no remote)')}`}`)
+  // And the notes, which the lesson review and a pickup read as part of the story.
+  const notes = path.join(recordDir(id), 'notes.tsv')
+  if (exists(notes)) say(`notes ${recordUrl(id, 'notes.tsv') || `${notes} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   const checked = checkedRepos(work)
   work.repos.forEach((r, i) => {
@@ -5265,6 +5302,10 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--stops repos,design | none]  change the gates the agent waits at for the human
        [--by-agent]                with --designed: the agent agreed it, not the human;
                                    agreed again without it, the human has seen it
+  rig note "..."                  append a row to the work's notes: a decision taken along the
+       --why "..."                 way, why, and a pointer at the evidence; commits the data root
+       --evidence <pointer,...>    a SHA, a PR, file:line, a path or a URL — never prose
+       [--stage <branch>] [--result "..."]
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land

@@ -8,6 +8,7 @@ Run `rig restore <id>` if the work's folder is not on this machine, then `rig st
 
 - `handoff.md`, at the address the `handoff` line of `rig status` gives. What the last session did, what is half-done, and what it was about to do.
 - `context.md`. The design, and the decisions that bind every next step.
+- `notes.tsv` beside it, if `rig status` names one: each decision the last session took along the way, why, and a pointer at the evidence. Open the pointer a next step depends on, rather than redoing what the row says was done.
 - `rig status` itself: the phase and gates, the **stops** line (what the human chose to be asked, and what the agent was trusted to decide), and each repo's **checks** line (whether its checks passed at the patch it carries now).
 - `rig stage` for a work with stages, and the branch log against the base in each worktree: `git -C <worktree> log --oneline <base>..HEAD`.
 

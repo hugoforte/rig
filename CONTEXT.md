@@ -72,6 +72,10 @@ _Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
 A session taking a work over from the handoff the last one left, trusting the trail rather than redoing it: read the handoff, the context doc and `rig status`, check once only what the next step stands on, and name the resume point. It has begun with its first commit.
 _Avoid_: resume (that is the point it names), onboarding, catch-up
 
+**Note**:
+One decision a session took along the way, kept as a row of a work's `notes.tsv`: when, the stage, what was chosen or done, why, a pointer at the evidence a reviewer can open, and the result. Appended by `rig note` and never edited. The context doc keeps the decisions that shaped the design; the notes keep every one.
+_Avoid_: decision (that is a gate), journal, log (a commit log is something else)
+
 **Transcript**:
 The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close` and `rig detach` tell a session may still be at work in a worktree.
 _Avoid_: log (a commit log is something else), chat, history

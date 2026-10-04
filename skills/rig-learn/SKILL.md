@@ -14,6 +14,7 @@ Run it while the worktrees are still on disk, before `rig close`, because a less
 Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with the `--data <root>` `rig close` printed, when another data root keeps a copy of the work. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
+- `notes.tsv` beside them, if there is one: every decision a session took along the way, each with why and a pointer at its evidence. A row whose result is `reverted`, or two rows about one thing, is a lesson looking for its home.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
 - Each PR's checks, including failed runs that were re-run: `gh pr checks <n> --repo <owner/repo>`.
 - The commit log on the work branch: `git -C <repo worktree> log --oneline <base>..HEAD`, or `gh pr view <n> --repo <owner/repo> --json commits` once the worktree is gone. Fixups, reverts and "try again" commits mark where something took more than one attempt.
