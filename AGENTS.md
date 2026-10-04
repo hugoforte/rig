@@ -620,7 +620,9 @@ overridden.
 ### Skills rig ships
 
 `skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
-the work's record; `skills/rig-learn` runs the lesson review before a close. All are shipped,
+the work's record; `skills/rig-learn` runs the lesson review before a close, and drafts the work's outcome;
+`skills/rig-digest` explains what landed, from `rig list --json`, at the altitude asked for, and
+drafts outcomes for landed works with none. All are shipped,
 never linked: whatever manages a machine symlinks `skills/*` into its agent hosts' skills
 directories. Every skill but the entry point is prefixed `rig-`, and `test/skills.test.mjs`
 holds the shape a host's linker relies on.

@@ -619,6 +619,11 @@ test('a recorded outcome is not offered again', () => {
   assert.ok(!commands(out).includes(OUTCOME))
 })
 
+test('the outcome offer names the skill that drafts it, while the lesson review is still to run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.match(out.find(o => o.command === OUTCOME).says, /the rig-learn skill drafts it/)
+})
+
 test('the outcome is offered, never demanded', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
   const offer = out.find(o => o.command === OUTCOME)

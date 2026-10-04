@@ -341,7 +341,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // needs goes with the trees, and `rig close` names it again on the way out.
   if (!work?.outcome && repos.length && merged.length === repos.length) {
     out.push(offer(phase,
-      'what changed for someone, and why is that good? — say it in a sentence or two',
+      `what changed for someone, and why is that good? — a sentence or two${work?.learnedAt ? '' : '; the rig-learn skill drafts it'}`,
       'rig save --outcome "…"'))
   }
 
