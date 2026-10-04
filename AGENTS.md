@@ -528,9 +528,9 @@ rig next        # what is available on the current work, read off live state
 ```
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
-attach something, record the design gate, push, open a PR, work through its review threads,
-the adversarial review, hand the PR over, scaffold a rollout plan, review what the work taught,
-close.
+pick up a handoff, attach something, record the design gate, run the checks, push, open a PR,
+work through its review threads, the adversarial review, hand the PR over, scaffold a rollout
+plan, review what the work taught, say its outcome, close.
 
 Two things it will never do, and both are the point:
 
