@@ -68,7 +68,9 @@ const HEAVY = 3
 //   reviews        one `{ repo, unresolved, checks }` per repo whose work-branch PR is open: how
 //                  many of its review threads are unresolved and its head commit's check rollup
 //                  (`SUCCESS`, `PENDING`, `FAILURE`, …, or null where none are set up); both
-//                  null where GitHub would not say
+//                  null where GitHub would not say. A failing one also carries its `base` and
+//                  `behind`, how many commits the base has that the branch does not, read off
+//                  a fresh fetch; null where git could not count them
 //   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
 //                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
 //                  --run` recorded
@@ -153,7 +155,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       const where = up.started
         ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.adrift ? ' — outside the stack' : ''}`
         : up.prUnknown ? `PR state unknown in ${up.prUnknown.join(', ')}` : 'not cut in any repo yet'
-      out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
+      // The frontier: the lowest stage still to land is the only PR that matters until it
+      // merges, so what is stacked above it is named as waiting on it rather than offered.
+      const waiting = stack.slice(stack.indexOf(up) + 1).filter(st => !st.landed && !st.withdrawn).map(st => st.branch)
+      out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})${waiting.length ? ` — waiting on it: ${waiting.join(', ')}` : ''}`))
     } else {
       const on = new Map()
       for (const r of stranded) on.set(r.on, [...(on.get(r.on) || []), r.repo])
@@ -285,9 +290,18 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
         'the design chose an adversarial review — a reviewer told to find what is wrong with the PR, fixing what it finds and pushing',
         'rig save -m "adversarial review" --reviewed'))
     }
+    // A failing check is given its cause where rig can see one. A base that moved since the
+    // branch left it is what makes a failure outside the diff, and no commit to the PR or fresh
+    // run fixes that: merging the base in does. The rest are the PR's own to fix.
     const failing = openPrs.filter(r => ['FAILURE', 'ERROR'].includes(reviewOf(r)?.checks))
-    if (failing.length) {
-      out.push(offer('reviewing', `${failing.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
+    const staleBase = failing.filter(r => reviewOf(r).behind > 0)
+    for (const r of staleBase) {
+      const { base, behind } = reviewOf(r)
+      out.push(offer('reviewing', `${r.repo}: the PR's checks are failing, and ${base} has ${behind} commit${behind === 1 ? '' : 's'} the branch does not — a stale base: merge it in, then let the checks run again`, `git merge origin/${base}`))
+    }
+    const own = failing.filter(r => !staleBase.includes(r))
+    if (own.length) {
+      out.push(offer('reviewing', `${own.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
     }
     // Neither green nor failing — running, or required and never reported. Said, because the
     // hand-over waits on it, and a wait nothing names reads as "nothing to suggest".

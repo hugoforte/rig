@@ -68,6 +68,14 @@ _Avoid_: step, checkpoint, phase
 A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
 _Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
 
+**Frontier**:
+The lowest stage of a work that has not landed and was not withdrawn: the only pull request that matters until it merges. The stages above it are **waiting** on it.
+_Avoid_: current stage, active stage, head of the stack
+
+**Stale base**:
+A pull request whose base has commits its branch does not, read as the cause of a failing check: a failure in code the diff never touched, which merging the base in fixes and a fresh run does not.
+_Avoid_: out of date, behind (that is a count), conflict (that is a merge that cannot be made)
+
 **Verified**:
 A repo whose checks last passed at the diff it carries now. `rig check --run` records a pass with the patch it ran at; a diff that changed since makes it **stale**, and a repo with no pass recorded is **not verified**. A fact about a patch, not about a head: a rebase that leaves the diff alone keeps it.
 _Avoid_: green, tested, passing (that is the run, not the record)

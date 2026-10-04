@@ -272,6 +272,31 @@ test('a work with stages is told which one is next, and what it delivers', () =>
   assert.match(says(out), /stage 2 of 2: feat\/two — the endpoints \(a — up for review\)/)
 })
 
+test('the stages above the frontier are named as waiting on it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [
+      stage('feat/one', { landed: true, started: true, repos: ['a'] }),
+      stage('feat/two', { started: true, repos: ['a'], open: true }),
+      stage('feat/three', { started: true, repos: ['a'], open: true }),
+      stage('feat/four', { withdrawn: { dropped: 'not worth it' } }),
+      stage('feat/five'),
+    ],
+  })
+  const frontier = out.find(o => /stage 2 of 5/.test(o.says))
+  assert.match(frontier.says, / — waiting on it: feat\/three, feat\/five$/)
+})
+
+test('the last stage left has nothing waiting on it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] }), stage('feat/two', { started: true, repos: ['a'], open: true })],
+  })
+  assert.doesNotMatch(says(out), /waiting on it/)
+})
+
 test('a stage nobody has cut yet says so rather than claiming progress', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
@@ -947,6 +972,20 @@ test('failing checks on an open PR are named, with no command', () => {
     assert.match(failing.says, /^a: the PR's checks are failing/, checks)
     assert.equal(failing.command, null)
   }
+})
+
+test('a failing check on a PR whose base moved is offered as a stale base, not a fix', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 3 }] })
+  const stale = out.find(o => /stale base/.test(o.says))
+  assert.match(stale.says, /^a: the PR's checks are failing, and main has 3 commits the branch does not — a stale base: merge it in, then let the checks run again/)
+  assert.equal(stale.command, 'git merge origin/main')
+  assert.doesNotMatch(says(out), /fix them before it is handed over/)
+})
+
+test('a failing check on a PR whose base has not moved is still the PR\'s to fix', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 0 }] })
+  assert.match(says(out), /a: the PR's checks are failing — fix them before it is handed over/)
+  assert.doesNotMatch(says(out), /stale base/)
 })
 
 test('checks that have not reported are named, so the wait is never silent', () => {

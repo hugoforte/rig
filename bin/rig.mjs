@@ -3451,7 +3451,16 @@ cmds.next = ({ flags }) => {
       if (r.pr?.state !== 'OPEN' || !r.pr.number) return []
       const { org, repo: name } = work.repos[i]
       const review = github().prReview(org, name, r.pr.number)
-      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks: review?.checks ?? null }]
+      const checks = review?.checks ?? null
+      if (!['FAILURE', 'ERROR'].includes(checks)) return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks }]
+      // A failure is given its cause where the base moved: fetched now, for a failing PR only,
+      // since that is the one answer that turns on it — `rig pr`'s base check (#208).
+      const entry = work.repos[i]
+      const base = workBranch(entry, work)?.base || entry.base
+      const t = trees(cfg)
+      t.fetch({ org, repo: name })
+      const standing = t.standing({ org, repo: name, branch: work.branch, base })
+      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks, base, behind: standing ? standing.behind : null }]
     }),
   })
 

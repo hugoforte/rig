@@ -642,6 +642,28 @@ test('an open PR is walked through its review: threads, then the adversarial rev
   assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'nor while GitHub will not say what the review is')
 })
 
+test('a failing check on a PR whose base moved is offered as a stale base, read off a fresh fetch', () => {
+  const state = github()
+  const pr = state.repos['acme/billing'].prs.find(p => p.number === 9)
+  Object.assign(pr, { checks: 'FAILURE', reviewUnknown: false })
+  setGithub(state)
+  assert.match(rig(['next', '--work', 'what-now']).out, /billing: the PR's checks are failing — fix them/, 'the base has not moved yet')
+
+  // Someone else lands on main, and only the remote knows.
+  const other = path.join(workRoot, '..', 'stale-base-other')
+  gitMust(path.dirname(other), 'clone', '-q', bare('billing'), other)
+  fs.writeFileSync(path.join(other, 'LANDED.md'), 'landed elsewhere\n')
+  gitMust(other, 'add', '-A')
+  gitMust(other, 'commit', '-qm', 'landed elsewhere')
+  gitMust(other, 'push', '-q', 'origin', 'HEAD:main')
+
+  const r = rig(['next', '--work', 'what-now'])
+  assert.match(r.out, /billing: the PR's checks are failing, and main has 1 commit the branch does not — a stale base/)
+  assert.match(r.out, /git merge origin\/main$/m)
+  Object.assign(pr, { checks: 'SUCCESS' })
+  setGithub(state)
+})
+
 test('a closed work refuses the adversarial review, and records nothing', () => {
   const r = rig(['save', '--work', 'squashed', '-m', 'adversarial review', '--reviewed'])
   assert.equal(r.code, 1, r.out)

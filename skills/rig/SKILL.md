@@ -66,6 +66,15 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 
 **Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. Each `rig prompt` ends by stopping unless the work skips that stop; do not run past it.
 
+**When a PR's checks fail, find the cause before you act.** Work the frontier first: `rig next` names the lowest stage still to land and what is waiting on it.
+
+- A failure outside the diff's own code is a stale base. `rig next` says so when the base moved; merge the base in, then let the checks run again.
+- A flaky or infrastructure failure gets one fresh run, no more.
+- The same failure twice is not flaky: read the logs.
+- Only a failure in the diff's own code gets a commit.
+
+rig names the cause and never re-runs, rebases or merges anything itself.
+
 **More than one data root is normal** — personal, public and employer knowledge have different readers. A work lives in exactly one, and `rig new --repos a,b` refuses repos catalogued in different roots. `rig use` says which is in hand.
 
 ## Two rules before you have read `AGENTS.md`
