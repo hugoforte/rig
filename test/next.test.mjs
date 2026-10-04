@@ -50,18 +50,23 @@ test('where the design is not a stop, the agent is offered the gate to record it
 test('a work grown to three repos waits for the human at the design all the same', () => {
   const out = nextFor({ work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] })
   assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial'))
-  assert.match(says(out), /3 repos is more than a skipped stop was chosen for — the design waits for the human/)
+  assert.match(says(out), /3 repos is the weight at which the design waits for the human/)
 })
 
 test('a gate the agent decided is offered to the human for review', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] })
-  assert.match(says(out), /the agent decided the repo set and the design — go over them with the human/)
+  assert.match(says(out), /for the human: the agent decided the repo set and the design — go over them, then record the design as theirs/)
   assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --adversarial'))
 })
 
 test('the review keeps the adversarial-review choice the design made', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: false, agentDecided: ['design'] }), repos: [repo('a')] })
   assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --no-adversarial'))
+})
+
+test('what the agent decided does not hide that the code is still to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] })
+  assert.match(says(out), /this part is yours to write/)
 })
 
 test('a work whose gates the human decided is offered no review of them', () => {

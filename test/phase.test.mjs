@@ -192,3 +192,8 @@ test('omissions are not contradictions', () => {
   // `rig next` offers the gate; `doctor` says nothing, or nobody reads `doctor`.
   assert.deepEqual(contradictions(work({ repos: [{ repo: 'r' }] }), [open(1)]), [])
 })
+
+test('a design gate the agent decided is a design gate: the stops and the marks do not move the phase', () => {
+  const by = over => phaseOf(work({ repos: [{ repo: 'r' }], designedAt: AT, ...over }), [repo()])
+  assert.equal(by({ stops: [], agentDecided: ['repos', 'design'] }), by({}))
+})

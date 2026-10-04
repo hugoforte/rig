@@ -96,16 +96,18 @@ rig attach orders-web
 
 ## Stops
 
-A **stop** is a gate where the agent waits for the human. A work has four:
+A **stop** is a gate where the agent waits for the human. A work has five:
 
 1. **The ticket decision** — `--key`, `--ticket` or `--no-ticket` at `rig new`.
 2. **The repo set** — the repo interview ends by presenting the set and waiting.
 3. **The design gate** — the Direction agreed, with the adversarial-review choice.
 4. **The lesson review** — `rig-learn` presents its lessons and waits for "go".
+5. **The user-docs edit** — `rig-docs` shows the edit and publishes only on "go".
 
 **Only the repo set and the design gate can stop being stops.** The ticket decision already is
-the human's, made on the command line. The lesson review stays a stop because skipping it would
-let an agent file issues on a tracker and edit the org doc unseen. A work chooses at `rig new`,
+the human's, made on the command line. The lesson review and the user-docs edit stay stops because both
+reach outside the work: skipping them would let an agent file issues on a tracker, edit the org
+doc and publish the product's docs unseen. A work chooses at `rig new`,
 and `rig save` changes it later:
 
 ```bash
@@ -125,6 +127,9 @@ design alone, the agent chooses the adversarial review: it costs the agent effor
 nothing. `rig status` marks what the agent decided, `rig list --json` carries `stops` and
 `agentDecided`, and `rig next` offers it to the human for review. The human agreeing the design
 again, without `--by-agent`, clears both marks, since the repo set is in the Direction they agreed.
+With the review choice the agent made, that is a confirmation: the design keeps its date, so an
+adversarial review already done still stands. `rig status` always names the stops, the default
+included.
 
 **A skipped stop fires anyway once the work outgrows what the human saw**: more repos than the
 human named at the start, or three repos, the weight at which `rig next` offers a rollout plan.

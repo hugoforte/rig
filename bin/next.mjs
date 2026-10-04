@@ -117,18 +117,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('designing', 'the design is not a stop on this work — agree it yourself, write it in the Direction, and record it as the agent\'s, with an adversarial review', `${DESIGNED} --by-agent`))
   } else if (!work?.designedAt) {
     const choose = 'and decide whether its PRs get an adversarial review (`--no-adversarial` declines it)'
-    const grown = skipsDesign ? `${entries.length} repos is more than a skipped stop was chosen for — the design waits for the human; ` : ''
+    const grown = skipsDesign ? `${entries.length} repos is the weight at which the design waits for the human; ` : ''
     out.push(directionTodo
       ? offer('designing', `${grown}the context doc's Direction is still \`_TODO_\` — agree the approach, write it down, then record the gate ${choose}`, DESIGNED)
       : offer('designing', `${grown}Direction is written but the design gate is not recorded — record it ${choose}`, DESIGNED))
-  }
-
-  // What the agent decided where the human chose not to stop, offered back for the human to go
-  // over. Agreeing the design again records it as theirs, with the review choice it already made.
-  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
-  if (work?.designedAt && decided.length) {
-    const choice = work.adversarial === false ? '--no-adversarial' : '--adversarial'
-    out.push(offer(phase, `the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them with the human, then record the design as theirs`, `rig save -m "design reviewed" --designed ${choice}`))
   }
 
   // Unsaved work outranks everything below it: it is the one thing every other suggestion
@@ -320,6 +312,16 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   const floor = !out.length && untouched.length === repos.length && !offeringNeighbours
   if (floor) {
     out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
+  }
+
+  // What the agent decided where the human chose not to stop, offered back to the human. Below
+  // the floor, like the drafts, and addressed to the human by name: to the agent reading it, it
+  // is no wait, and an unattended run goes on with the work. The human confirming it, with the
+  // review choice it already made, records it as theirs and keeps the design's date.
+  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
+  if (work?.designedAt && decided.length) {
+    const choice = work.adversarial === false ? '--no-adversarial' : '--adversarial'
+    out.push(offer(phase, `for the human: the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them, then record the design as theirs`, `rig save -m "design reviewed" --designed ${choice}`))
   }
 
   // Correcting the catalogue, offered while the worktrees still exist — which is the only span

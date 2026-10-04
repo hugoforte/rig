@@ -815,7 +815,8 @@ function recordShapeProblem (w) {
     return '`outcome` is not a statement with its date'
   }
   for (const field of ['stops', 'agentDecided']) {
-    if (w[field] !== undefined && !(Array.isArray(w[field]) && w[field].every(n => STOPPABLE.includes(n)))) {
+    // Null is absent, as it is for `outcome`, and is the shape `rig list --json` gives it.
+    if (w[field] !== undefined && w[field] !== null && !(Array.isArray(w[field]) && w[field].every(n => STOPPABLE.includes(n)))) {
       return `\`${field}\` is not a list of ${STOPPABLE.join(' and ')}`
     }
   }
@@ -2162,12 +2163,23 @@ cmds.use = ({ positional }) => {
 function stopsFlag (flags) {
   const v = flags.stops
   if (v === undefined) return undefined
-  if (typeof v !== 'string' || !v.trim()) die(`--stops wants the gates to wait at: ${STOPPABLE.join(', ')}, or none`)
-  if (v.trim() === 'none') return []
-  const named = v.split(',').map(s => s.trim()).filter(Boolean)
+  const named = typeof v === 'string' ? v.split(',').map(s => s.trim()).filter(Boolean) : []
+  if (!named.length) die(`--stops wants the gates to wait at: ${STOPPABLE.join(', ')}, or none`)
+  if (named.includes('none')) {
+    if (named.length > 1) die('--stops: none stands alone — it waits at neither gate')
+    return []
+  }
   const unknown = named.filter(n => !STOPPABLE.includes(n))
   if (unknown.length) die(`--stops: ${unknown.join(', ')} cannot stop being a stop — only ${STOPPABLE.join(' and ')} (or none)`)
   return STOPPABLE.filter(n => named.includes(n))
+}
+
+// `--by-agent`: the agent decided the gate this command records. The flag is the answer, so a
+// value on it is refused, for the reason `--adversarial` refuses one: `--by-agent=false` would
+// otherwise read as a yes.
+function byAgentFlag (flags) {
+  if (typeof flags['by-agent'] === 'string') die('--by-agent takes no value — the flag is the answer')
+  return !!flags['by-agent']
 }
 
 cmds.new = ({ flags, positional }) => {
@@ -2199,7 +2211,8 @@ cmds.new = ({ flags, positional }) => {
     }
   }
   const stops = stopsFlag(flags)
-  if (flags['by-agent'] && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
+  const byAgent = byAgentFlag(flags)
+  if (byAgent && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // A parent is this one ticket's, never a field, however Jira or rig.json spells it
   // (DESIGN.md decision 146).
@@ -2309,7 +2322,7 @@ cmds.new = ({ flags, positional }) => {
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
-    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent: !!flags['by-agent'] })
+    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent })
   } else {
     say('No repos attached yet. Run the selection interview:')
     say(C.dim('  rig prompt select-repos'))
@@ -2581,8 +2594,9 @@ cmds.attach = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
+  const byAgent = byAgentFlag(flags)
   commitAs(work.id, name)
-  if (attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent: !!flags['by-agent'] })) offerNeighbours(work, name)
+  if (attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent })) offerNeighbours(work, name)
 }
 
 // What else this repo travels with, said once, at the moment the repo set is being chosen.
@@ -2649,7 +2663,8 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
-  if (flags['by-agent'] && !flags.designed) die('--by-agent says the agent decided a gate — pass it with --designed')
+  const byAgent = byAgentFlag(flags)
+  if (byAgent && !flags.designed) die('--by-agent says the agent decided a gate — pass it with --designed')
   commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : stops ? `stops ${stops.join(',') || 'none'}` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
@@ -2657,13 +2672,16 @@ cmds.save = ({ flags }) => {
     // Re-recorded rather than refused: agreeing the design a second time is a real thing to
     // do after a rethink, and the date that matters is the one the current design was agreed.
     // The review choice is re-recorded with it, for the same reason.
-    work.designedAt = new Date().toISOString()
-    work.adversarial = choice
     // Who agreed it. The agent, where the design is not a stop; anyone else is the human, who
-    // reads the repo table in the same Direction, so their agreement settles both markers.
-    if (flags['by-agent']) work.agentDecided = [...new Set([...(work.agentDecided || []), 'design'])]
+    // reads the repo table in the same Direction, so their agreement settles both marks. The
+    // human going over what the agent decided, with the review choice it made, confirms that
+    // design rather than agreeing another, so its date stands, and a review of it with it.
+    const confirms = !byAgent && work.agentDecided?.length && work.designedAt && work.adversarial === choice
+    if (!confirms) work.designedAt = new Date().toISOString()
+    work.adversarial = choice
+    if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'design'])]
     else delete work.agentDecided
-    ok(`${id}: design agreed, ${choice ? 'with' : 'without'} an adversarial review`)
+    ok(`${id}: design ${confirms ? 'confirmed by the human' : 'agreed'}, ${choice ? 'with' : 'without'} an adversarial review`)
   }
   // The adversarial review. Recorded whatever the design chose, because it is a fact about what
   // happened; refused once the work has stopped, since its PRs are no longer in review.
@@ -2699,9 +2717,12 @@ cmds.save = ({ flags }) => {
   }
   // Which gates the agent waits at from here on. Read once, just before each stop fires, so a
   // choice changed late has nothing it could have gone stale against.
+  // Refused once the work has stopped, since it has no stop left to wait at.
   if (stops) {
+    if (work.abandonedAt) die(`${id} was abandoned — it has no stops left to wait at`)
+    if (work.closedAt) die(`${id} is closed — it has no stops left to wait at`)
     work.stops = stops
-    ok(`${id}: stops at ${stops.join(' and ') || 'nothing'}`)
+    ok(`${id}: stops ${stopsLabel(stops)}`)
   }
   // After the gates, so a gate refused leaves the doc as untouched as the record.
   if (title) {
@@ -3171,7 +3192,8 @@ cmds.status = ({ flags }) => {
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
   for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}${agentDecided(work, gate) ? ' (agent decided)' : ''}`)
   if (work.agentDecided?.includes('repos')) say('  repos chosen (agent decided)')
-  if (work.stops) say(`stops ${stopsLabel(work.stops)}`)
+  // Said whether or not the work chose, since absent is both and silence would say neither.
+  say(`stops ${stopsLabel(work.stops ?? STOPPABLE)}`)
   if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
   // Named, not enumerated: `rig stage` is where the stack is read, and a status that
   // reprinted it would be two places to keep saying the same thing.

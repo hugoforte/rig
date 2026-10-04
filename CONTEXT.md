@@ -65,7 +65,7 @@ A decision recorded at a point in a work's life: ticket decided, repos confirmed
 _Avoid_: step, checkpoint, phase
 
 **Stop**:
-A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate and the lesson review. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
+A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
 _Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
 
 **Adversarial review**:
