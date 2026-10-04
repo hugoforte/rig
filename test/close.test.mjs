@@ -319,9 +319,12 @@ test('the outcome is recorded after the close, with its date', () => {
   assert.ok(!Number.isNaN(Date.parse(outcome.at)), 'a statement made on a date')
 })
 
-test('recording it again replaces it', () => {
-  assert.equal(rig(['save', '--work', 'untold', '--outcome', 'A retried refund charges once.']).code, 0)
-  assert.equal(record('untold').outcome.text, 'A retried refund charges once.')
+test('recording it again replaces it, and dates it again', () => {
+  const first = record('untold').outcome.at
+  assert.equal(rig(['save', '--work', 'untold', '--outcome', '  A retried refund charges once.  ']).code, 0)
+  const { outcome } = record('untold')
+  assert.equal(outcome.text, 'A retried refund charges once.', 'the statement, without the padding around it')
+  assert.ok(Date.parse(outcome.at) > Date.parse(first), 'dated when it was said, not when the first one was')
 })
 
 test('list --json carries the outcome, and null for a work with none', () => {
@@ -349,6 +352,12 @@ test('--outcome needs the outcome, on one line', () => {
   r = rig(['save', '--work', 'told', '--outcome', 'One line.\nAnd another.'])
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /--outcome takes one line/)
+  // The offers print `--outcome "…"`, and an agent runs an offered command as written.
+  for (const empty of ['   ', '--outcome=', '…', '...']) {
+    r = rig(['save', '--work', 'told', ...(empty.startsWith('--') ? [empty] : ['--outcome', empty])])
+    assert.equal(r.code, 1, `${JSON.stringify(empty)}: ${r.out}`)
+    assert.match(r.out, /--outcome needs the outcome/)
+  }
   assert.equal(record('told').outcome.text, 'Invoices carry the tax line.', 'a refused outcome leaves the record alone')
 })
 
