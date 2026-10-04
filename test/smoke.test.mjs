@@ -1267,6 +1267,8 @@ const MISSHAPEN = [
   ['{"id": "broken", "repos": [{"org": "acme"}]}', /repo 1 has no `repo`/],
   ['{"id": "broken", "repos": [{"repo": "a", "branches": {}}]}', /`branches` of a is not a list/],
   ['{"id": "broken", "stages": [{"delivers": "x"}]}', /stage 1 has no `branch`/],
+  ['{"id": "broken", "outcome": "Shipped it"}', /`outcome` is not a statement with its date/],
+  ['{"id": "broken", "outcome": {"text": "Shipped it"}}', /`outcome` is not a statement with its date/],
 ]
 
 test('doctor reports a record of the wrong shape as unreadable, says why, and still checks everything else', () => {

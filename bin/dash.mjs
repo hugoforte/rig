@@ -108,23 +108,36 @@ export function reduceWork (work) {
   }
 }
 
+// Every pull request a repo of the work merged: each stage's, recorded on its own branch entry,
+// then the work branch's, which a recorded work also carries in `branches` — once each.
+function pullRequests (r) {
+  const prs = []
+  for (const p of [...(r.branches || []).map(b => b.pr), r.pr].filter(Boolean)) {
+    if (!prs.some(q => (q.url || q.number) === (p.url || p.number))) prs.push(p)
+  }
+  return prs.map(p => ({ name: p.number ? `${r.repo}#${p.number}` : r.repo, url: p.url || null }))
+}
+
 // What a work says about itself, for a reader rather than a statistic: what changed, if
 // anyone said (decision 194), and the title, tickets and pull requests that lead back to it.
 const telling = work => ({
   title: work.title || '',
   outcome: work.outcome?.text || null,
   tickets: work.tickets || [],
+  abandoned: !!work.abandonedAt,
   repos: (work.repos || []).map(r => ({ org: r.org, repo: r.repo })),
-  prs: (work.repos || []).filter(r => r.pr).map(r => ({ name: `${r.repo}#${r.pr.number}`, url: r.pr.url || null })),
+  prs: (work.repos || []).flatMap(pullRequests),
 })
 
 // The landed works of one org, under each of its repos they touched: the repo with the
 // latest landing first, and the latest work first inside it. A work across two repos landed
-// in both, so it is listed under both, as a cross-org work is counted under both orgs.
+// in both, so it is listed under both, as a cross-org work is counted under both orgs. An
+// abandoned work is left out even when a slice of it merged: `rig save --outcome` refuses it,
+// so it would be a gap nobody can close.
 function whatLanded (done, org) {
   const byRepo = new Map()
-  for (const w of done.slice().sort((a, b) => byMoment(b.mergedAt, a.mergedAt))) {
-    const { repos, ...told } = w.told
+  for (const w of done.filter(w => !w.told.abandoned).sort((a, b) => byMoment(b.mergedAt, a.mergedAt))) {
+    const { repos, abandoned: _abandoned, ...told } = w.told
     const entry = { id: w.id, ...told, mergedAt: w.mergedAt, cycleHours: w.cycleHours }
     for (const repo of new Set(repos.filter(r => r.org === org).map(r => r.repo))) {
       if (!byRepo.has(repo)) byRepo.set(repo, [])
@@ -443,9 +456,9 @@ export function renderDash (payload, opts = {}) {
 
   return `<!doctype html>
 <meta charset="utf-8">
-<title>rig — throughput and cycle time</title>
+<title>rig — throughput, cycle time and what landed</title>
 <style>${STYLE}</style>
-<h1><span class="tag">rig</span>Throughput and cycle time</h1>
+<h1><span class="tag">rig</span>Throughput, cycle time and what landed</h1>
 <header class="meta">
   <p>Generated <strong>${esc(s.generatedAt)}</strong> by rig ${esc(s.release || 'from an untagged checkout')} · scope: ${esc(scope)}${s.since ? ` · merged since ${esc(s.since)}` : ''}</p>
   <p>${stale}</p>
