@@ -112,12 +112,17 @@ const record = (w, attached, branch) => ({
   createdAt: w.createdAt,
   ...(w.closedAt ? { closedAt: w.closedAt } : {}),
   ...(w.outcome ? { outcome: w.outcome } : {}),
+  ...(w.abandonedAt ? { abandonedAt: w.abandonedAt } : {}),
   repos: attached.map(r => ({
     repo: r.repo,
     org: r.org,
     role: '',
     attachedAt: r.attachedAt,
-    branches: [{ branch, base: 'main', ...(r.recorded ? { pr: terminalFacts(r) } : {}) }],
+    // A stage that merged into the work branch keeps its PR's facts on its own branch entry.
+    branches: [
+      ...(r.stages || []).map(st => ({ branch: st.branch, base: branch, pr: { number: st.number, url: st.url, mergedAt: r.pr.mergedAt } })),
+      { branch, base: 'main', ...(r.recorded ? { pr: terminalFacts(r) } : {}) },
+    ],
   })),
 })
 
@@ -413,10 +418,10 @@ test('renderDash: both cycle figures carry their own n', async () => {
 
 test('renderDash: is self-contained — no network, no script', async () => {
   // A link to a pull request is something the reader may follow, not something the page
-  // fetches; what is pinned is that opening the page asks nothing of the network.
+  // fetches, so the links are set aside and nothing else may name an address.
   const html = renderDash(await produce([work({ repos: [repo({ pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })] })]))
   assert.doesNotMatch(html, /<script/i, 'nothing to execute')
-  assert.doesNotMatch(html, /\bsrc=|<link|@import|url\(/i, 'nothing to fetch')
+  assert.doesNotMatch(html.replace(/<a href="https:\/\/[^"]*">/g, ''), /https?:\/\//i, 'nothing to fetch')
 })
 
 test('renderDash: an id with markup in it is escaped, not rendered', async () => {
@@ -484,26 +489,66 @@ test('summarize: a work across two repos landed in each of them', async () => {
   assert.deepEqual(landedIn(summarize(p), 'acme').map(r => r.repo).sort(), ['billing', 'orders'])
 })
 
-test('summarize: a landed work carries its outcome, tickets, cycle time and pull requests', async () => {
-  const p = await produce([work({
+test('summarize: a work abandoned after a slice merged has not landed', async () => {
+  // `rig close --abandoned` keeps a merged slice's facts, and `rig save --outcome` refuses the
+  // work, so listing it would mark a gap nobody can close.
+  const p = await produce([work({ id: 'given-up', abandonedAt: '2026-03-04T00:00:00Z' })])
+  assert.deepEqual(landedIn(summarize(p), 'acme'), [])
+})
+
+test('summarize: --org lists a cross-org work under that org\'s repos only', async () => {
+  const p = await produce([work({ id: 'both', repos: [repo(), repo({ repo: 'ledger', org: 'other' })] })])
+  assert.deepEqual(landedIn(summarize(p, { org: 'acme' }), 'acme').map(r => r.repo), ['billing'])
+})
+
+test('renderDash: a landed work says its outcome, tickets and cycle time when opened', async () => {
+  const html = renderDash(await produce([work({
     id: 'told',
     tickets: ['acme/billing#7'],
     outcome: said('Invoices go out the day they are due.'),
-    repos: [repo({ pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })],
-  })])
-  const [w] = landedIn(summarize(p), 'acme')[0].works
-  assert.equal(w.outcome, 'Invoices go out the day they are due.')
-  assert.deepEqual(w.tickets, ['acme/billing#7'])
-  assert.equal(w.cycleHours, 48)
-  assert.deepEqual(w.prs, [{ name: 'billing#1', url: 'https://github.com/acme/billing/pull/1' }])
+  })]))
+  assert.match(html, /<summary>Invoices go out the day they are due\.<\/summary><p class="facts">[^<]*<strong>told<\/strong> — A work · merged 2026-03-03 · cycle 2\.0d · acme\/billing#7/)
 })
 
-test('renderDash: what landed shows each outcome, folded until opened', async () => {
+test('renderDash: what landed folds org, then repo, then work, nothing open', async () => {
   const html = renderDash(await produce([work({ id: 'told', outcome: said('Invoices go out the day they are due.') })]))
   assert.match(html, /What landed/)
-  assert.match(html, /Invoices go out the day they are due\./)
-  assert.match(html, /<details>/, 'org, repo and work each fold')
+  assert.match(html, /<details><summary>acme [\s\S]*?<details><summary>billing [\s\S]*?<details><summary>Invoices go out the day they are due\./)
   assert.doesNotMatch(html, /<details[^>]*\bopen/, 'nothing is unfolded until the reader opens it')
+})
+
+test('renderDash: a work across two repos counts once in its org', async () => {
+  const html = renderDash(await produce([work({ id: 'both', repos: [repo(), repo({ repo: 'orders' })] })]))
+  assert.match(html, /<summary>acme <span class="dim">· 1 work<\/span>/)
+})
+
+test('renderDash: an org with nothing landed says so', async () => {
+  const html = renderDash(await produce([work({ id: 'flying', repos: [repo({ pr: pr({ state: 'OPEN', mergedAt: null }) })] })]))
+  assert.match(html, /<summary>acme [^]*?Nothing has landed yet\./)
+})
+
+test('renderDash: a landed work with no title and no outcome is named by its id', async () => {
+  const html = renderDash(await produce([work({ id: 'nameless', title: '' })]))
+  assert.match(html, /<summary>nameless <span class="warn">\(no outcome recorded\)<\/span>/)
+})
+
+test('renderDash: each stage\'s pull request is linked beside the work branch\'s', async () => {
+  const stage = { branch: 'feat/w-schema', number: 5, url: 'https://github.com/acme/billing/pull/5' }
+  const html = renderDash(await produce([work({
+    id: 'staged',
+    repos: [repo({ recorded: true, stages: [stage], pr: pr({ url: 'https://github.com/acme/billing/pull/1' }) })],
+    closedAt: '2026-03-04T00:00:00Z',
+  })]))
+  assert.match(html, /<a href="https:\/\/github\.com\/acme\/billing\/pull\/5">billing#5<\/a> <a href="https:\/\/github\.com\/acme\/billing\/pull\/1">billing#1<\/a>/)
+})
+
+test('renderDash: a pull request with no address or number is still named', async () => {
+  const p = await produce([work({ id: 'bare' })])
+  delete soleWork(p).repos[0].pr.url
+  delete soleWork(p).repos[0].pr.number
+  const html = renderDash(p)
+  assert.match(html, /cycle 2\.0d · billing<\/p>/)
+  assert.doesNotMatch(html, /undefined/)
 })
 
 test('renderDash: a landed work with no outcome shows its title, marked as having none', async () => {

@@ -4864,7 +4864,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig list [--json] [--quick]     every work, least recently touched first
        --json                      the records plus live PR timestamps, for a consumer
        --quick                     skip the git and GitHub lookups
-  rig dash [--org o] [--since w]  render throughput and cycle time as one HTML page
+  rig dash [--org o] [--since w]  render throughput, cycle time and what landed as one page
        [--from payload.json]       render a payload captured earlier, instead of looking up
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
