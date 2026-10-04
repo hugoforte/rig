@@ -73,7 +73,7 @@ Capacity: someone who never saw a work can learn what it did, and the product's 
 
 ## Phase 10, 4 October: the agent runs, the human checks
 
-Eight ideas from pstack, built as one work in eight stages. A work chooses which gates wait for the human, and the record says which the agent decided. `check --run` records a pass against the patch it ran at, so a stale green shows. `next` works the frontier of a stack, and names a moved base beside a failing check. The lesson review reads the sessions that did the work, and `close` names a session still at work before it takes the worktree. A pickup trusts the handoff rather than redoing it. `note` keeps every decision taken along the way with a pointer at its evidence, and a context doc is checked against its template.
+Eight changes, built as one work in eight stages. A work chooses which gates wait for the human, and the record says which the agent decided. `check --run` records a pass against the patch it ran at, so a stale green shows. `next` works the frontier of a stack, and names a moved base beside a failing check. The lesson review reads the sessions that did the work, and `close` names a session still at work before it takes the worktree. A pickup trusts the handoff rather than redoing it. `note` keeps every decision taken along the way with a pointer at its evidence, and a context doc is checked against its template.
 
 Capacity: an agent can carry a work with less of the human's attention, and leave a trail the human can check afterwards.
 
