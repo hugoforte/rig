@@ -73,11 +73,11 @@ The record an agent host keeps of one session: what was said and done in it. A w
 _Avoid_: log (a commit log is something else), chat, history
 
 **Frontier**:
-The lowest stage of a work that has not landed and was not withdrawn: the only pull request that matters until it merges. The stages above it are **waiting** on it.
+The lowest stage of a work that has not landed and was not withdrawn: the only stage that matters until it lands. The stages stacked above it are **waiting** on it.
 _Avoid_: current stage, active stage, head of the stack
 
 **Stale base**:
-A pull request whose base has commits its branch does not, read as the cause of a failing check: a failure in code the diff never touched, which merging the base in fixes and a fresh run does not.
+A base that has moved past a pull request's branch, named beside a failing check as a possible cause: a failure in code the diff never touched may be the base's, which merging the base in fixes and a fresh run does not. A moved base alone is ordinary, and proves nothing about a failure.
 _Avoid_: out of date, behind (that is a count), conflict (that is a merge that cannot be made)
 
 **Verified**:

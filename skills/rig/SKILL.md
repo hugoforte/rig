@@ -49,7 +49,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | The PR says what the work used to be | `rig pr --refresh` |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
-| How is a repo verified | `rig check [--run]` |
+| How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |
 | Context doc edited by hand | `rig save -m "…"` |
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
@@ -68,12 +68,12 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 
 **When a PR's checks fail, find the cause before you act.** Work the frontier first: `rig next` names the lowest stage still to land and what is waiting on it.
 
-- A failure outside the diff's own code is a stale base. `rig next` says so when the base moved; merge the base in, then let the checks run again.
+- A moved base can fail code the diff never touched. `rig next` names the base when it has moved; if the failure is in code the diff did not change, merge the base in, then push.
 - A flaky or infrastructure failure gets one fresh run, no more.
 - The same failure twice is not flaky: read the logs.
 - Only a failure in the diff's own code gets a commit.
 
-rig names the cause and never re-runs, rebases or merges anything itself.
+rig names what it can see and never re-runs, rebases or merges anything itself.
 
 **More than one data root is normal** — personal, public and employer knowledge have different readers. A work lives in exactly one, and `rig new --repos a,b` refuses repos catalogued in different roots. `rig use` says which is in hand.
 
