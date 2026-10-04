@@ -476,6 +476,9 @@ ${s.orgs.length ? landedSection(s.orgs) : ''}
 <section>
   <h2>How to read this</h2>
   <ul class="caveats">
+    <li>The numbers count every work whose pull requests all merged. What landed leaves out a
+    work that was abandoned after a slice merged: the merge happened, but there is no outcome to
+    say of it.</li>
     <li>Orgs are never summed. Work on the tooling and work for an employer are different
     questions, and one number across both answers neither.</li>
     <li>These are the works recorded since rig started keeping them. There is no pre-rig

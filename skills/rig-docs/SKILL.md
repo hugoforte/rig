@@ -17,7 +17,7 @@ A repo with no target is one whose entry says `docs: []`, or that has no entry. 
 
 ## 2. Read
 
-- **The current page, in full, first.** A path: read it as the base branch has it now, which the work's merge put there, with `git -C <worktree> fetch origin` and then `git -C <worktree> show origin/<base>:<path>`; once the worktree is gone, `gh api repos/<owner>/<repo>/contents/<path>?ref=<base> -H "Accept: application/vnd.github.raw"`. A Confluence page: read it through the `twg` skill. You are editing what is there, so you need all of it.
+- **The current page, in full, first.** A path: read it as the base branch has it now, which the work's merge put there, with `git -C <worktree> fetch origin` and then `git -C <worktree> show origin/<base>:<path>`; once the worktree is gone, `gh api repos/<owner>/<repo>/contents/<path>?ref=<base> -H "Accept: application/vnd.github.raw"`. A target that is a directory holds several pages: list it with `git -C <worktree> ls-tree --name-only origin/<base> <path>` and read the ones this change touches. A Confluence page: read it through the `twg` skill. You are editing what is there, so you need all of it.
 - **The context doc**, `context.md`: the Problem says who this was for, the Direction what changed.
 - **The outcome**, which `rig status` shows: what changed for someone, in one line.
 - **The QA evidence**, `qa.md` beside the context doc when there is one, which `rig status` names: the steps walked on a deployed environment and what was seen. It is the closest thing to how a user meets the change. Without one, ask the user what they checked and where, and offer to write their answer to `qa.md` before you go on.
@@ -36,10 +36,10 @@ Show the edit as a diff, or as before-and-after for each section changed, with o
 - **A path in a repo**: everything has merged by now, so the edit is a small work of its own. Start it with `rig prompt new-work`, which asks the ticket question, and put the edit in that work's PR. Never cut a branch by hand in this work's worktree: rig owns that tree, and the merged branch is deleted at the close.
 - **A Confluence page**: update it through the `twg` skill, and give the user the page's link.
 
-Then record it:
+Then record it on the work that landed, by its id, since you may be standing in the docs work by now:
 
 ```bash
-rig save -m "user docs updated" --documented
+rig save --work <id> -m "user docs updated" --documented
 ```
 
-Add `--work <id>` once the work folder is gone. `rig next` stops offering the edit. A user who says the docs need nothing for this work records the same gate: the question was asked and answered.
+`rig next` stops offering the edit. A work whose only change is a docs edit records the gate on itself as well, once it lands: its docs are the change. A user who says the docs need nothing for this work records the same gate: the question was asked and answered.

@@ -23,7 +23,7 @@ Ask only when the request leaves the scope open and the last 30 days would plain
 rig list --json --data <name>
 ```
 
-Not `--quick`: it reads only the PRs `rig close` recorded, so a work merged but not yet closed would look unlanded, and those are the works most worth explaining. A work has **landed** when it has at least one repo, every repo's `pr.state` is `MERGED`, and `abandonedAt` is null, as `rig dash` counts it; its landing date is the latest `pr.mergedAt`. An abandoned work landed nothing to explain, even when a slice of it merged, and `rig save --outcome` refuses it. Narrow by `repos[].org`, `repos[].repo`, the landing date or the `id`.
+Not `--quick`: it reads only the PRs `rig close` recorded, so a work merged but not yet closed would look unlanded, and those are the works most worth explaining. A work has **landed** when it has at least one repo, every repo's `pr.state` is `MERGED`, and `abandonedAt` is null, as `rig dash`'s What landed counts it; its landing date is the latest `pr.mergedAt`. An abandoned work landed nothing to explain, even when a slice of it merged, and `rig save --outcome` refuses it. Narrow by `repos[].org`, `repos[].repo`, the landing date or the `id`.
 
 Per work, read `outcome.text` (null when nobody said it), `title`, `tickets`, each `repos[].pr.url`, and the PRs recorded under `repos[].branches[].pr` — each stage's, and once a work has closed the work branch's own again, so drop duplicates by URL. Then, only as far as the altitude needs:
 
