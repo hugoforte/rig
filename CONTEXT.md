@@ -68,6 +68,10 @@ _Avoid_: step, checkpoint, phase
 A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
 _Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
 
+**Transcript**:
+The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit.
+_Avoid_: log (a commit log is something else), chat, history
+
 **Frontier**:
 The lowest stage of a work that has not landed and was not withdrawn: the only pull request that matters until it merges. The stages above it are **waiting** on it.
 _Avoid_: current stage, active stage, head of the stack

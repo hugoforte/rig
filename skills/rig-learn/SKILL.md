@@ -18,6 +18,11 @@ Run `rig status` from the work folder, or `rig status --work <id>` once the work
 - Each PR's checks, including failed runs that were re-run: `gh pr checks <n> --repo <owner/repo>`.
 - The commit log on the work branch: `git -C <repo worktree> log --oneline <base>..HEAD`, or `gh pr view <n> --repo <owner/repo> --json commits` once the worktree is gone. Fixups, reverts and "try again" commits mark where something took more than one attempt.
 
+- The sessions that did the work, when this machine keeps them: `rig status --transcripts` prints their paths, one a line, and only the work folder's and its worktrees' own. By the time a correction reaches a commit or a review thread it has been smoothed away; in the session it is still there.
+  - **Read them through subagents**, a few files each, never in this thread: transcripts are large. Each subagent reports the user stepping in ("no, not like that"), a command tried more than once, and an assumption the agent made and later corrected, each with a short quote. Work from those findings, never the raw logs.
+  - **Read no transcript the command did not print.** Another workspace's sessions are other work, and often private.
+  - When it prints nothing, carry on without them. It says on stderr where this machine would name them.
+
 A lesson is usually hiding in *this took three attempts*, not in the design.
 
 ## 2. Keep only what the next person would otherwise rediscover
@@ -63,7 +68,7 @@ Say **go** for all of them, or name the numbers you want.
 ```
 
 - **The TL;DR is two or three actions, never more.** They are the lessons most worth keeping, each one a thing you would do on "go". Everything else stays in the detail, where the user can still name it.
-- **The outcome line is the work's outcome**, drafted from the story: what changed for someone and why that is good, in words a person outside the work can read, on one line, with no backticks or `$`. Leave it out when `rig status` already shows an outcome, or while a PR is still to merge. A bare "go" records it with the lessons; an answer naming numbers records it only if it also says "outcome". The user may correct it in their answer.
+- **The outcome line is the work's outcome**, drafted from the story, the sessions included: what changed for someone and why that is good, in words a person outside the work can read, on one line, with no backticks or `$`. Leave it out when `rig status` already shows an outcome, or while a PR is still to merge. A bare "go" records it with the lessons; an answer naming numbers records it only if it also says "outcome". The user may correct it in their answer.
 - **Every detail line is one line.** What changes, where it lands, and why that home in a clause. If a line needs a paragraph, the lesson is not understood yet.
 - **Omit empty sections**, and name what was left out under **Dropped** so the user can see it was considered.
 

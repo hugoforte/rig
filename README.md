@@ -49,7 +49,7 @@ flowchart LR
 
 Everything committed is worth keeping. Everything under the work root can be deleted tonight. That split is the whole design; [DESIGN.md](./DESIGN.md) says why, and its §3 has the layout path by path.
 
-rig reads its config from two files and no others: `rig.json` in the data root is the org half, committed and shared (orgs, trackers, the freshness policy, the record-format stamp); `rig.local.json` beside the tool is the machine half, gitignored (the roots, identities, secrets sources, a per-machine freshness override). The data root is never the tool's own checkout — knowledge inside a public tree is one `git add` from a leak, and `rig doctor` reports that layout as not set up.
+rig reads its config from two files and no others: `rig.json` in the data root is the org half, committed and shared (orgs, trackers, the freshness policy, the record-format stamp); `rig.local.json` beside the tool is the machine half, gitignored (the roots, identities, secrets sources, a per-machine freshness override, where the agent host keeps its session transcripts). The data root is never the tool's own checkout — knowledge inside a public tree is one `git add` from a leak, and `rig doctor` reports that layout as not set up.
 
 ### A work's life
 

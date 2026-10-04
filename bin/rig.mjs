@@ -20,6 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
+import { transcriptsFor } from './transcripts.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
@@ -3171,6 +3172,26 @@ cmds.dash = ({ flags }) => {
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
+// The work's own session transcripts, one path a line on stdout and nothing else there, for the
+// lesson review to read (decision 201). What is said about them goes to stderr beside it.
+// The workspaces are the work folder and its worktrees, so nothing of another work is found.
+function workTranscripts (cfg, work) {
+  return transcriptsFor({
+    patterns: Array.isArray(cfg.transcripts) ? cfg.transcripts : [],
+    workspaces: [workDir(cfg, work.id), ...work.repos.map(r => r.path)],
+    home: env().USERPROFILE || env().HOME || os.homedir(),
+  })
+}
+
+function sayTranscripts (cfg, work) {
+  const { found, unscoped } = workTranscripts(cfg, work)
+  for (const p of unscoped) aside(C.yellow(`! transcripts: "${p}" names no workspace — it would read every work's sessions; put {slug} where the workspace goes`))
+  if (!Array.isArray(cfg.transcripts) || !cfg.transcripts.length) {
+    aside(C.dim(`· no transcript locations on this machine — \`transcripts\` in ${localConfigFile()}, such as "~/.claude/projects/{slug}/*.jsonl"`))
+  }
+  for (const t of found) say(t.path)
+}
+
 // The gate lines `rig status` marks as the agent's: `designed` is the design stop.
 const STOP_OF_GATE = { designed: 'design' }
 const agentDecided = (work, gate) => (work.agentDecided || []).includes(STOP_OF_GATE[gate])
@@ -3183,6 +3204,7 @@ const stopsLabel = stops => {
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
+  if (flags.transcripts) return sayTranscripts(cfg, work)
   const id = work.id
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a
   // distance git could not measure says so, instead of a confident `0 ahead · 0 behind`,
@@ -5102,6 +5124,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
+       [--transcripts]             only the work's own session transcripts, a path a line,
+                                   from the patterns in rig.local.json
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record

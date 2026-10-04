@@ -46,6 +46,19 @@ keeps the global default.
 
 **E. Work root** — every path. `D:\w` (or `%USERPROFILE%\w`) unless there is a reason.
 
+**F. Session transcripts** — every path, optional. Where this machine's agent host keeps its
+sessions, so the lesson review can read the conversations that did a work. It goes in
+`rig.local.json` by hand, as a list of patterns: `{slug}` stands for a workspace's path with
+every character but a letter or digit made a dash, `~` for the home folder, and a `*` in the
+last part matches file names. Claude Code's:
+
+```json
+"transcripts": ["~/.claude/projects/{slug}/*.jsonl"]
+```
+
+A pattern without `{slug}` finds nothing, since it would read every work's sessions alike. With
+none, the lesson review carries on without them.
+
 ## Step 3: Confirm and write
 
 One command, one line. Join:

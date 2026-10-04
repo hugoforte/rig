@@ -191,6 +191,14 @@ skipped, and none waits. rig records the choice and what the agent decided.
    machine check before prose, and never a new rule. The org doc is the one home for prose
    every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, and `rig close` names a work that never
    passed it. Neither refuses.
+
+   The story includes the sessions that did the work, where this machine keeps them.
+   `rig status --transcripts` prints their paths, one a line on stdout: the sessions whose
+   workspace is the work folder or one of its worktrees, found through the patterns in
+   `rig.local.json`'s `transcripts` (`rig prompt setup` has Claude Code's). rig knows no agent
+   host. A pattern must place the workspace with `{slug}`, or it would read every work's
+   sessions, which are private; one that does not finds nothing and is named. `rig-learn`
+   reads only what the command prints, through subagents.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
 ## The catalogue
