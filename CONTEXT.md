@@ -81,7 +81,7 @@ What changed for someone once a work landed, and why that is good, in a sentence
 _Avoid_: summary, result, release note
 
 **Digest**:
-An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the work or pull request it rests on. Written from the records each time and never stored, like the dashboard.
+An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the pull request or ticket it rests on. Written from the records each time and never stored, like the dashboard.
 _Avoid_: report, changelog, release notes, summary
 
 **Stage**:
