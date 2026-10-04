@@ -49,7 +49,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | The PR says what the work used to be | `rig pr --refresh` |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
-| How is a repo verified | `rig check [--run]` |
+| How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |
 | Context doc edited by hand | `rig save -m "…"` |
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |

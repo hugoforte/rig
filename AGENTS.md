@@ -241,13 +241,17 @@ rig check billing --run   # run billing's, in its worktree; non-zero if one fail
 
 **A pass is recorded, pinned to the patch.** What passed at one diff cannot be seen afterwards —
 a re-run says what passes now — so `rig check --run` records each repo that passes on the work
-branch's record as `verified`: the head, where it leaves the base, a patch-id for the diff
-between them (whitespace counts), and the date. That makes `rig check --run` a mutating command: it
+branch's record as `verified`: the branch it ran on, the head, where it leaves the base, a
+patch-id for the diff between them (whitespace counts, and no one's diff settings shape it), and
+the date, all read before the run, so what the run itself writes is not taken for what it proved. That makes `rig check --run` a mutating command: it
 commits and pushes the data root like `rig save`, and `rig check` without `--run` writes
-nothing. A failure clears the pass, and a pass with uncommitted changes is not recorded, since
-they are in no patch. `rig status` reads the pass against the diff the repo carries now:
-**verified** while the patch-id is the same, whatever happened to the head, **stale** once the
-diff changed, **not verified** with none. `rig next` offers the run for a repo with work on it
+nothing. A failure clears the pass. A pass with uncommitted changes is not recorded, since they are in no
+patch, nor one on a detached HEAD, which is in no PR. A worktree not on this machine is not run,
+and a check that never started is no verdict: neither clears what was recorded. A stopped work
+refuses `--run`. `rig status` reads the pass against the diff the repo carries now:
+**verified** while the same branch carries the same patch-id, whatever happened to the head,
+**stale** once the diff changed, **not verified** with none or with a pass for another branch,
+and **not compared** when the worktree is not on this machine. `rig next` offers the run for a repo with work on it
 and no pass at its diff, and `rig pr` names such a repo and opens the PR anyway.
 
 Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts

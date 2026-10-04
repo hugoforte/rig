@@ -807,9 +807,10 @@ function recordShapeProblem (w) {
   for (const [i, r] of (w.repos || []).entries()) {
     if (!isObject(r) || typeof r.repo !== 'string' || !r.repo) return `repo ${i + 1} has no \`repo\``
     if (!isList(r.branches) || !(r.branches || []).every(isObject)) return `\`branches\` of ${r.repo} is not a list of branches`
-    const pass = (r.branches || []).find(b => b.verified !== undefined)?.verified
-    if (pass !== undefined && !(isObject(pass) && ['head', 'base', 'patchId', 'at'].every(k => typeof pass[k] === 'string'))) {
-      return `\`verified\` of ${r.repo} is not a pass with its head, base, patch-id and date`
+    for (const b of r.branches || []) {
+      if (b.verified !== undefined && !(isObject(b.verified) && ['branch', 'head', 'base', 'patchId', 'at'].every(k => typeof b.verified[k] === 'string'))) {
+        return `\`verified\` of ${r.repo} is not a pass with its branch, head, base, patch-id and date`
+      }
     }
   }
   for (const [i, s] of (w.stages || []).entries()) {
@@ -2939,7 +2940,7 @@ function repoEntryJson (cfg, entry, branch, live) {
     branch: br.branch,
     base: br.base,
     ...(br.pr ? { pr: { ...br.pr, state: 'MERGED', recorded: true } } : {}),
-    ...(br.verified ? { verified: { head: br.verified.head, base: br.verified.base, patchId: br.verified.patchId, at: br.verified.at } } : {}),
+    ...(br.verified ? { verified: { branch: br.verified.branch, head: br.verified.head, base: br.verified.base, patchId: br.verified.patchId, at: br.verified.at } } : {}),
   }))
   const stored = (entry.branches || []).find(br => br.branch === branch)?.pr
   if (stored) {
@@ -3231,10 +3232,11 @@ cmds.status = ({ flags }) => {
     if (!v.missing) {
       say(`  changes ${v.dirty || 'none'}`)
       say(`  commits ${v.distanceUnknown ? `unknown (${v.distanceUnknown})` : `${v.ahead} ahead · ${v.behind} behind`}`)
-      // Only for a repo the catalogue says how to verify: one with no `check` has nothing a
-      // run could prove, and `rig check` names where to write one.
-      if (checked.includes(r)) say(`  checks  ${verificationLabel(r.repo, verificationOf(cfg, r, work))}`)
     }
+    // Only for a repo the catalogue says how to verify: one with no `check` has nothing a run
+    // could prove, and `rig check` names where to write one. Said of a missing worktree too, since
+    // a pass recorded on another machine is what a pickup reads.
+    if (checked.includes(r)) say(`  checks  ${verificationLabel(r.repo, verificationOf(cfg, r, work))}`)
     say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     say('')
   })
@@ -3255,7 +3257,10 @@ function runCatalogCommands (dir, commands, label) {
     // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
     // and watching it is the point — which is also why a run this is part of has to be the
     // process for its output to reach whoever asked. The environment is still the run's.
+    // A command that never started, or was killed before it could exit, is no verdict, so the
+    // answer is null rather than a failure: a check run must not clear a pass it never tested.
     const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
+    if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
   return true
@@ -3293,24 +3298,37 @@ cmds.check = ({ flags, positional }) => {
     ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
     : work.repos
   if (!targets.length) die('no matching attached repos')
-  const changed = []
+  // A run records, so a stopped work refuses one, as `rig pr` refuses to open a PR on it.
+  if (flags.run && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to verify`)
+  const catalog = loadCatalog()
+  const changed = { verified: [], cleared: [] }
   for (const r of targets) {
-    const cat = findCatalog(r.repo)
+    const cat = catalogEntryFor(catalog, r)
     if (!cat?.check?.length) {
       warn(`${r.repo}: no check commands in the catalogue — add \`check:\` to ${catalogFile(r.org, r.repo)}`)
       continue
     }
     if (flags.run) {
-      const passed = runCatalogCommands(r.path, cat.check, 'check')
-      if (!passed) current.exitCode = 1
-      if (recordVerification(cfg, r, work, passed)) changed.push(r.repo)
+      if (!exists(r.path)) {
+        warn(`${r.repo}: not on this machine — \`rig restore ${work.id}\`, then run it; what was recorded stands`)
+        current.exitCode = 1
+        continue
+      }
+      // Read before the run, so what the run itself writes — a coverage folder, a regenerated
+      // snapshot — neither blocks the record nor is taken for what was proved.
+      const before = { uncommitted: git(r.path, 'status', '--porcelain', '--untracked-files=no').out, patch: trees(cfg).patch({ dir: r.path, base: r.base }) }
+      const result = runCatalogCommands(r.path, cat.check, 'check')
+      if (result !== true) current.exitCode = 1
+      const change = recordVerification(r, work, result, before)
+      if (change) changed[change].push(r.repo)
       continue
     }
     say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
     for (const c of cat.check) say(`  ${c}`)
   }
-  if (changed.length) {
-    commitAs(work.id, `verified ${changed.join(', ')}`)
+  const said = Object.entries(changed).filter(([, repos]) => repos.length).map(([what, repos]) => `${what} ${repos.join(', ')}`)
+  if (said.length) {
+    commitAs(work.id, said.join('; '))
     saveWork(cfg, work)
   }
 }
@@ -3323,49 +3341,71 @@ function checkedRepos (work) {
 }
 
 // Whether what a repo carries now is what its checks last passed at: `verified` while the
-// patch-id is the one recorded, whatever happened to the head (a reworded commit, a rebase that
-// left the diff alone); `stale` once the diff changed; `unverified` with no pass recorded;
-// `unknown`, with the reason, when git could not say what the repo carries now.
+// branch checked out is the one that passed and its patch-id is the one recorded, whatever
+// happened to the head (a reworded commit, a rebase that left the diff alone); `stale` once the
+// diff changed; `elsewhere` when the pass is for another branch than the one checked out;
+// `unverified` with no pass recorded; `away` when the worktree is not on this machine, so the
+// pass stands uncompared; `unknown`, with the reason, when git could not say what it carries.
 function verificationOf (cfg, entry, work) {
   const recorded = workBranch(entry, work)?.verified
   if (!recorded) return { state: 'unverified' }
+  if (!exists(entry.path)) return { state: 'away', recorded }
   const now = trees(cfg).patch({ dir: entry.path, base: entry.base })
   if (now.error) return { state: 'unknown', recorded, error: now.error }
+  if (now.branch !== recorded.branch) return { state: 'elsewhere', recorded, on: now.branch }
   return { state: now.patchId === recorded.patchId ? 'verified' : 'stale', recorded }
 }
+
+// What `rig next` is told: a pass for another branch is no pass for this one, and one it could
+// not compare is not offered a run.
+const verificationState = v => ({ elsewhere: 'unverified', away: 'unknown' })[v.state] || v.state
 
 const verificationLabel = (repo, v) => ({
   verified: () => `verified at ${v.recorded.head.slice(0, 7)} on ${v.recorded.at.slice(0, 10)}`,
   stale: () => `stale — the diff changed since it passed at ${v.recorded.head.slice(0, 7)}; \`rig check ${repo} --run\``,
+  elsewhere: () => `not verified on ${v.on || 'a detached HEAD'} — the pass recorded is for ${v.recorded.branch}; \`rig check ${repo} --run\``,
   unverified: () => `not verified — \`rig check ${repo} --run\``,
+  away: () => `verified at ${v.recorded.head.slice(0, 7)} on ${v.recorded.at.slice(0, 10)}, not compared — the worktree is not on this machine`,
   unknown: () => `unknown — ${v.error}`,
 })[v.state]()
 
-// What a run proved, kept on the work branch's record as `verified`: the head it ran at, where
-// that leaves the base, the patch-id of the diff between them, and the date. A pass is recorded
-// only for what is committed, since uncommitted changes are in no patch anyone can compare
-// with later; a failure clears what passed, which is no longer the latest word on the repo.
-// Answers whether the record changed.
-function recordVerification (cfg, entry, work, passed) {
-  const branch = workBranch(entry, work)
-  if (!passed) {
-    if (!branch?.verified) return false
-    delete branch.verified
+// What a run proved, kept on the work branch's record as `verified`: the branch it ran on, the
+// head, where that leaves the base, the patch-id of the diff between them, and the date —
+// `before` is all of that read before the run, with whatever was uncommitted then. A pass is
+// recorded only for what was committed, since uncommitted changes are in no patch anyone can
+// compare with later, and only on a branch, since a detached HEAD is in no PR. A failure clears
+// what passed, which is no longer the latest word on the repo; a run that never started is no
+// word at all. Answers `verified`, `cleared`, or null when the record is as it was.
+function recordVerification (entry, work, result, before) {
+  const record = workBranch(entry, work)
+  if (result === null) {
+    say(C.dim(`  ${entry.repo}: the checks did not run — nothing recorded or cleared`))
+    return null
+  }
+  if (result === false) {
+    if (!record?.verified) return null
+    delete record.verified
     say(C.dim(`  ${entry.repo}: the pass recorded before is cleared`))
-    return true
+    return 'cleared'
   }
-  if (git(entry.path, 'status', '--porcelain').out) {
-    say(C.dim(`  ${entry.repo}: passed with uncommitted changes, which are in no patch — not recorded; commit, then run it again`))
-    return false
+  if (before.uncommitted) {
+    // `XY path` a line; the output comes trimmed, so the status is read as a word, not columns.
+    const files = before.uncommitted.split('\n').map(l => l.trim().replace(/^\S+\s+/, '')).filter(Boolean)
+    say(C.dim(`  ${entry.repo}: passed with uncommitted changes (${files.slice(0, 3).join(', ')}${files.length > 3 ? ', …' : ''}), which are in no patch — not recorded; commit, then run it again`))
+    return null
   }
-  const patch = trees(cfg).patch({ dir: entry.path, base: entry.base })
+  const { patch } = before
   if (patch.error) {
     warn(`${entry.repo}: passed, but git could not say what it passed at (${patch.error}) — not recorded`)
-    return false
+    return null
+  }
+  if (!patch.branch) {
+    say(C.dim(`  ${entry.repo}: passed on a detached HEAD, which is in no PR — not recorded; check out a branch of this work, then run it again`))
+    return null
   }
   ensureBranchRecord(entry, work.branch, entry.base).verified = { ...patch, at: new Date().toISOString() }
-  ok(`${entry.repo}: verified at ${patch.head.slice(0, 7)}`)
-  return true
+  ok(`${entry.repo}: verified at ${patch.head.slice(0, 7)} on ${patch.branch}`)
+  return 'verified'
 }
 
 // Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
@@ -3436,9 +3476,9 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
-    verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationOf(cfg, r, work).state })),
+    verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationState(verificationOf(cfg, r, work)) })),
     // Only once everything has merged, the one time the offer it feeds is made.
-    docs:repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
+    docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
     unstacked: work.repos.filter(entry => {
       const s = stageStack(stack, entry, work.branch)
@@ -3649,7 +3689,8 @@ cmds.pr = ({ flags }) => {
     sayStanding(cfg, entry, work.branch, base)
     // Said, never stopped at, like the base: a reviewer may well want the PR before the checks.
     const verified = checked.includes(entry) && verificationOf(cfg, entry, work)
-    if (verified && verified.state !== 'verified') step(`${entry.repo}: no check has passed at this patch — \`rig check ${entry.repo} --run\``)
+    if (verified && ['stale', 'elsewhere', 'unverified'].includes(verified.state)) step(`${entry.repo}: no check has passed at this patch — \`rig check ${entry.repo} --run\``)
+    if (verified?.state === 'unknown') step(`${entry.repo}: could not tell whether a check passed at this patch (${verified.error})`)
     const spec = repoSpec(entry)
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null

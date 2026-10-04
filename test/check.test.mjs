@@ -128,8 +128,8 @@ test('a passing run records what it proved, pinned to the patch: head, base, pat
   assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
   const { verified } = billingBranch()
   assert.deepEqual(
-    { head: verified.head, base: verified.base },
-    { head: gitMust(dest, 'rev-parse', 'HEAD'), base: gitMust(dest, 'merge-base', 'origin/main', 'HEAD') })
+    { branch: verified.branch, head: verified.head, base: verified.base },
+    { branch: BRANCH, head: gitMust(dest, 'rev-parse', 'HEAD'), base: gitMust(dest, 'merge-base', 'origin/main', 'HEAD') })
   assert.match(verified.patchId, /^[0-9a-f]{40}$/)
   assert.ok(!Number.isNaN(Date.parse(verified.at)), 'a pass on a date')
 })
@@ -155,6 +155,10 @@ test('a commit that changes the diff makes the pass stale', () => {
   assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}stale — the diff changed since it passed at [0-9a-f]{7}/)
 })
 
+test('next offers the run for a repo whose pass is for an earlier diff', () => {
+  assert.match(rig(['next', '--work', 't1']).out, /billing's pass was for an earlier diff[\s\S]*rig check billing --run/)
+})
+
 test('a repo no run has passed says so', () => {
   assert.match(rig(['status', '--work', 't1']).out, /orders[\s\S]*?\n {2}checks {2}not verified — `rig check orders --run`/)
 })
@@ -165,7 +169,7 @@ test('a pass with uncommitted changes is not recorded, and says why', () => {
   const before = fs.readFileSync(recordFile, 'utf8')
   const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
   assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /billing: passed with uncommitted changes, which are in no patch — not recorded/)
+  assert.match(r.out, /billing: passed with uncommitted changes \(README\.md\), which are in no patch — not recorded/)
   assert.equal(fs.readFileSync(recordFile, 'utf8'), before)
   gitMust(dest, 'checkout', '--', 'README.md')
 })
@@ -176,6 +180,7 @@ test('a failed run clears the pass recorded before', () => {
   correct('billing', ['git rev-parse --verify --quiet no-such-ref'])
   assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 1)
   assert.equal(billingBranch().verified, undefined)
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig check t1: cleared billing')
   correct('billing', ['git rev-parse --abbrev-ref HEAD'])
 })
 
@@ -207,6 +212,113 @@ test('a rebase onto a base that moved, leaving the diff alone, keeps the pass', 
   gitMust(dest, 'fetch', '-q', 'origin')
   gitMust(dest, 'rebase', '-q', 'origin/main')
   assert.match(rig(['status', '--work', 't1']).out, /billing[\s\S]*?\n {2}checks {2}verified at [0-9a-f]{7}/)
+})
+
+// ------------------------------------------------- after the adversarial review
+
+const billingTree = () => path.join(workRoot, 't1', 'billing')
+const otherBilling = path.join(tmp, 'other-billing')
+const landOnMain = (file, text, message) => {
+  fs.writeFileSync(path.join(otherBilling, file), text)
+  gitMust(otherBilling, 'add', '-A')
+  gitMust(otherBilling, 'commit', '-qm', message)
+  gitMust(otherBilling, 'push', '-q', 'origin', 'main')
+  gitMust(billingTree(), 'fetch', '-q', 'origin')
+  gitMust(billingTree(), 'rebase', '-q', 'origin/main')
+}
+const billingChecks = () => rig(['status', '--work', 't1']).out.match(/billing[\s\S]*?\n {2}checks {2}(.*)\n/)[1]
+
+test('the patch-id is the same whatever the reader\'s own diff settings', () => {
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  const config = path.join(tmp, 'gitconfig')
+  fs.writeFileSync(config, '[diff]\n\tnoprefix = true\n\tcontext = 10\n\tmnemonicPrefix = true\n')
+  try {
+    assert.match(billingChecks(), /^verified at/)
+  } finally {
+    fs.writeFileSync(config, '')
+  }
+})
+
+test('a hunk whose function context moved, around a diff that did not, keeps the pass', () => {
+  // `Alpha` is the hunk's function context: the nearest line above it that starts a "function".
+  landOnMain('notes.txt', ['Alpha', ...Array(30).fill('  x')].join('\n') + '\n', 'notes')
+  const notes = path.join(billingTree(), 'notes.txt')
+  const lines = fs.readFileSync(notes, 'utf8').split('\n')
+  lines[25] = '  y'
+  fs.writeFileSync(notes, lines.join('\n'))
+  gitMust(billingTree(), 'commit', '-qam', 'change a line far below Alpha')
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  landOnMain('notes.txt', ['Beta', ...Array(30).fill('  x')].join('\n') + '\n', 'Alpha is Beta now')
+  assert.match(billingChecks(), /^verified at/)
+})
+
+test('what the run itself leaves untracked does not stop the pass being recorded', () => {
+  correct('billing', ['git rev-parse --abbrev-ref HEAD', 'git rev-parse HEAD > run-output.txt'])
+  const before = billingBranch().verified.at
+  assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  assert.notEqual(billingBranch().verified.at, before)
+  fs.rmSync(path.join(billingTree(), 'run-output.txt'))
+  correct('billing', ['git rev-parse --abbrev-ref HEAD'])
+})
+
+test('a pass is for the branch it ran on, and does not verify another checked out', () => {
+  gitMust(billingTree(), 'checkout', '-q', '-b', `${BRANCH}-stage`)
+  try {
+    assert.match(billingChecks(), new RegExp(`^not verified on ${BRANCH}-stage — the pass recorded is for ${BRANCH};`))
+  } finally {
+    gitMust(billingTree(), 'checkout', '-q', BRANCH)
+  }
+})
+
+test('a pass on a detached HEAD is not recorded, since it is in no PR', () => {
+  gitMust(billingTree(), 'checkout', '-q', '--detach')
+  const before = fs.readFileSync(recordFile, 'utf8')
+  try {
+    const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
+    assert.match(r.out, /billing: passed on a detached HEAD, which is in no PR — not recorded/)
+    assert.equal(fs.readFileSync(recordFile, 'utf8'), before)
+  } finally {
+    gitMust(billingTree(), 'checkout', '-q', BRANCH)
+  }
+})
+
+test('one run that passes in one repo and fails in another records the one, clears the other, in one commit', () => {
+  correct('orders', ['git rev-parse --abbrev-ref HEAD'])
+  assert.equal(rig(['check', 'orders', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+  correct('orders', ['git rev-parse --verify --quiet no-such-ref'])
+  const r = rig(['check', '--work', 't1', '--run'], SUBPROCESS)
+  assert.equal(r.code, 1, r.out)
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig check t1: verified billing; cleared orders')
+})
+
+test('check without --run writes nothing to the data root', () => {
+  const head = gitMust(dataRoot, 'rev-parse', 'HEAD')
+  assert.equal(rig(['check', '--work', 't1']).code, 0)
+  assert.equal(gitMust(dataRoot, 'rev-parse', 'HEAD'), head)
+})
+
+test('a worktree not on this machine keeps its pass: the run is refused, and status says it is not compared', () => {
+  const away = `${billingTree()}-away`
+  fs.renameSync(billingTree(), away)
+  try {
+    const before = fs.readFileSync(recordFile, 'utf8')
+    const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /billing: not on this machine — `rig restore t1`, then run it; what was recorded stands/)
+    assert.equal(fs.readFileSync(recordFile, 'utf8'), before)
+    assert.match(billingChecks(), /^verified at [0-9a-f]{7} on \d{4}-\d{2}-\d{2}, not compared — the worktree is not on this machine$/)
+  } finally {
+    fs.renameSync(away, billingTree())
+  }
+})
+
+test('a run on a stopped work is refused, since it would record into a closed record', () => {
+  assert.equal(rig(['new', 't2', '--title', 'Stopped', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'web', '--work', 't2']).code, 0)
+  assert.equal(rig(['close', '--abandoned', '--work', 't2']).code, 0)
+  const r = rig(['check', '--work', 't2', '--run'], SUBPROCESS)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /t2 is abandoned — there is nothing left to verify/)
 })
 
 test('a run leaves the catalogue as it was: it holds the command, never a verdict', () => {
