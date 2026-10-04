@@ -3441,8 +3441,21 @@ cmds.check = ({ flags, positional }) => {
 function handoffAt (id) {
   const file = path.join(recordDir(id), 'handoff.md')
   if (!exists(file)) return null
-  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', path.relative(dataRoot(), file).split(path.sep).join('/'))
+  // `icase`, since the file system found it whatever its case and git's pathspec would not.
+  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', `:(icase)${path.relative(dataRoot(), file).split(path.sep).join('/')}`)
   return r.code === 0 && r.out ? r.out : null
+}
+
+// The newest commit of the work's own on any branch checked out here: what HEAD has over the
+// base it lands on. HEAD's own date would be the base's tip on a branch with nothing of its own
+// yet, and a fast-forward of the base would read as the pickup having started. Null with none.
+function lastWorkCommitAt (work, states) {
+  return work.repos.map((r, i) => {
+    if (!exists(r.path)) return null
+    const base = states[i]?.base || r.base
+    const own = git(r.path, 'log', '-1', '--format=%cI', `refs/remotes/origin/${base}..HEAD`)
+    return own.code === 0 && own.out ? own.out : null
+  }).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null
 }
 
 // The attached repos whose catalogue entry says how to verify them, read in one scan; a repo
@@ -3557,6 +3570,7 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const handedOff = handoffAt(work.id)
   const offers = nextFor({
     work,
     repos,
@@ -3589,10 +3603,8 @@ cmds.next = ({ flags }) => {
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
     verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationState(verificationOf(cfg, r, work)) })),
-    handoffAt: handoffAt(work.id),
-    lastCommitAt: work.repos.filter(r => exists(r.path))
-      .map(r => git(r.path, 'log', '-1', '--format=%cI', 'HEAD')).filter(r => r.code === 0 && r.out)
-      .map(r => r.out).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null,
+    handoffAt: handedOff,
+    lastCommitAt: handedOff ? lastWorkCommitAt(work, states) : null,
     // Only once everything has merged, the one time the offer it feeds is made.
     docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
