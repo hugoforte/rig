@@ -824,9 +824,11 @@ function recordShapeProblem (w) {
     return '`outcome` is not a statement with its date'
   }
   for (const field of ['stops', 'agentDecided']) {
-    // Null is absent, as it is for `outcome`, and is the shape `rig list --json` gives it.
-    if (w[field] !== undefined && w[field] !== null && !(Array.isArray(w[field]) && w[field].every(n => STOPPABLE.includes(n)))) {
-      return `\`${field}\` is not a list of ${STOPPABLE.join(' and ')}`
+    // Null is absent, as it is for `outcome`, and is the shape `rig list --json` gives it. The
+    // shape and not the names: a later rig may let another gate stop being a stop, and reading
+    // its record must not need a major (ADR 0002). A name this rig does not know is passed over.
+    if (w[field] !== undefined && w[field] !== null && !(Array.isArray(w[field]) && w[field].every(n => typeof n === 'string'))) {
+      return `\`${field}\` is not a list of gate names`
     }
   }
   return null
@@ -2687,7 +2689,9 @@ cmds.save = ({ flags }) => {
     // reads the repo table in the same Direction, so their agreement settles both marks. The
     // human going over what the agent decided, with the review choice it made, confirms that
     // design rather than agreeing another, so its date stands, and a review of it with it.
-    const confirms = !byAgent && work.agentDecided?.length && work.designedAt && work.adversarial === choice
+    // Only a design the agent agreed can be confirmed: one the human already agreed, agreed
+    // again, is a rethink, whatever else the agent decided around it.
+    const confirms = !byAgent && work.agentDecided?.includes('design') && work.designedAt && work.adversarial === choice
     if (!confirms) work.designedAt = new Date().toISOString()
     work.adversarial = choice
     if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'design'])]
@@ -3272,16 +3276,19 @@ function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...wor
   })
 }
 
-// The machine's transcript patterns, or why they cannot be read: a misshapen value is a mistake
-// to name, never the same as having none.
-function transcriptPatterns (cfg) {
+// The machine's transcript patterns, and why they cannot be read when they cannot: a misshapen
+// value is a mistake to name, never the same as having none. Named, not died on, except where
+// the transcripts are the whole answer (`rig status --transcripts`): a listing or a close must
+// not stop on a machine setting it only reads in passing. `rig doctor` names it too.
+function transcriptConfig (cfg) {
   const t = cfg.transcripts
-  if (t === undefined || t === null) return []
+  if (t === undefined || t === null) return { patterns: [] }
   if (!Array.isArray(t) || !t.every(p => typeof p === 'string' && p.trim())) {
-    die(`\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]`)
+    return { patterns: [], problem: `\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]` }
   }
-  return t
+  return { patterns: t }
 }
+const transcriptPatterns = cfg => transcriptConfig(cfg).patterns
 
 // Whether this machine could look for a session at all: a pattern that is refused finds nothing.
 const looksForSessions = cfg => transcriptPatterns(cfg).some(p => !refusal(p))
@@ -3300,6 +3307,8 @@ function sayLiveSessions (cfg, work, workspaces) {
   const self = typeof cfg.transcriptSession === 'string' ? env()[cfg.transcriptSession] : null
   const since = Date.now() - LIVE_SESSION_HOURS * 3600 * 1000
   const ours = t => self && t.path.split(/[\\/]/).some(part => part === self || path.parse(part).name === self)
+  const { problem } = transcriptConfig(cfg)
+  if (problem) return warn(`${problem} — sessions not checked`)
   const { found, refused } = workTranscripts(cfg, work, workspaces)
   for (const r of refused) warn(`transcripts: "${r.pattern}" finds nothing: ${r.why}`)
   const live = found.filter(t => Date.parse(t.modifiedAt) >= since && !ours(t))
@@ -3311,6 +3320,8 @@ function sayLiveSessions (cfg, work, workspaces) {
 }
 
 function sayTranscripts (cfg, work) {
+  const { problem } = transcriptConfig(cfg)
+  if (problem) die(problem)
   const { found, refused } = workTranscripts(cfg, work)
   for (const r of refused) aside(C.yellow(`! transcripts: "${r.pattern}" finds nothing: ${r.why}`))
   if (!transcriptPatterns(cfg).length) {
@@ -3524,6 +3535,11 @@ function verificationOf (cfg, entry, work) {
   const recorded = workBranch(entry, work)?.verified
   if (!recorded) return { state: 'unverified' }
   if (!exists(entry.path)) return { state: 'away', recorded }
+  // The same head on the same branch carries the same patch, so the diff is read and hashed only
+  // when something moved: a work with a large binary in it pays for that once, not on every look.
+  const head = git(entry.path, 'rev-parse', 'HEAD')
+  const on = git(entry.path, 'symbolic-ref', '-q', '--short', 'HEAD')
+  if (head.code === 0 && head.out === recorded.head && on.code === 0 && on.out === recorded.branch) return { state: 'verified', recorded }
   const now = trees(cfg).patch({ dir: entry.path, base: entry.base })
   if (now.error) return { state: 'unknown', recorded, error: now.error }
   if (now.branch !== recorded.branch) return { state: 'elsewhere', recorded, on: now.branch }
@@ -3876,7 +3892,10 @@ cmds.pr = ({ flags }) => {
     sayStanding(cfg, entry, work.branch, base)
     // Said, never stopped at, like the base: a reviewer may well want the PR before the checks.
     const verified = checked.includes(entry) && verificationOf(cfg, entry, work)
-    if (verified && ['stale', 'elsewhere', 'unverified'].includes(verified.state)) step(`${entry.repo}: no check has passed at this patch — \`rig check ${entry.repo} --run\``)
+    // The PR is the work branch's, so a pass the worktree recorded on a stage it has checked
+    // out is no pass for it.
+    const forThisPr = verified?.state === 'verified' && verified.recorded.branch !== work.branch
+    if (verified && (forThisPr || ['stale', 'elsewhere', 'unverified'].includes(verified.state))) step(`${entry.repo}: no check has passed at this patch — \`rig check ${entry.repo} --run\``)
     if (verified?.state === 'unknown') step(`${entry.repo}: could not tell whether a check passed at this patch (${verified.error})`)
     const spec = repoSpec(entry)
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
@@ -5233,6 +5252,8 @@ function doctorSnapshot () {
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
     strayOrgKeys: strayOrgKeys(loc),
+    // A `transcripts` value that is not a list of patterns, which close and list only warn of.
+    transcriptsProblem: transcriptConfig(cfg).problem || null,
     // Why there is no root in hand, when there is not. Carried rather than reworded:
     // bin/roots.mjs writes that sentence for a person and it already names the fix.
     selection: { error: selectionError },

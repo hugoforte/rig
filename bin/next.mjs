@@ -6,7 +6,7 @@
 // decorative:
 //
 //   1. **It only ever offers.** Never warns, never blocks, never says you should have.
-//      Warnings live in `doctor`, and only for contradictions (decision 64). The moment this
+//      Warnings live in `doctor`, for contradictions and for what has drifted (decision 64). The moment this
 //      command tells you off for not having recorded a design gate, it becomes a workflow
 //      engine with a to-do list, which is the thing the whole epic exists not to build.
 //   2. **It speaks only when asked.** A command you run — not a hook, never firing off the
@@ -34,6 +34,7 @@ import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './sta
 const offer = (phase, says, command = null) => ({ phase, says, command })
 
 const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
+const PICKUP = 'rig prompt pickup'
 
 // Three repos is where deploy order stops being obvious and starts being a thing that causes
 // incidents. Two is a pair you can hold in your head. The weight threshold, derived from the
@@ -95,9 +96,11 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
 
   // A handoff newer than the last commit on any of the work's branches is a trail nobody has
   // picked up yet, and it comes first: it may already answer everything below. It clears on the
-  // pickup's first commit, which is the pickup having started from it.
-  if (handoffAt && !(Date.parse(lastCommitAt) >= Date.parse(handoffAt))) {
-    out.push(offer(phase, 'a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it', 'rig prompt pickup'))
+  // pickup's first commit, which is the pickup having started from it. Not on a work whose every
+  // PR has merged: nobody commits on it again, and there is nothing left to start.
+  const landed = repos.length > 0 && repos.every(r => r.merged)
+  if (handoffAt && !landed && !(Date.parse(lastCommitAt) >= Date.parse(handoffAt))) {
+    out.push(offer(phase, 'a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it', PICKUP))
   }
 
   const entries = work?.repos || []
@@ -352,7 +355,19 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // thing left to do and rig is not the tool that does it. Asked here, before the draft and
   // close offers below are pushed, because both are about something other than the work
   // itself: a draft entry must not silence the one line that says the code is yours to write.
-  const floor = !out.length && untouched.length === repos.length && !offeringNeighbours
+  //
+  // A work grown heavy since the agent agreed its design alone waits for the human after all,
+  // as one that grew before it would have (the re-raise above): that is said here, above the
+  // floor, since it is a wait and not a note. A pickup is no reason to hide the floor either: it
+  // reads the trail, and the code is still to write.
+  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
+  const choice = work?.adversarial === false ? '--no-adversarial' : '--adversarial'
+  const review = `rig save -m "design reviewed" --designed ${choice}`
+  const grownSinceAgreed = work?.designedAt && decided.includes('design') && entries.length >= HEAVY
+  if (grownSinceAgreed) {
+    out.push(offer(phase, `${entries.length} repos is the weight at which the design waits for the human — the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')}; go over them with the human, then record the design as theirs`, review))
+  }
+  const floor = !out.some(o => o.command !== PICKUP) && untouched.length === repos.length && !offeringNeighbours
   if (floor) {
     out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
   }
@@ -361,10 +376,8 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // the floor, like the drafts, and addressed to the human by name: to the agent reading it, it
   // is no wait, and an unattended run goes on with the work. The human confirming it, with the
   // review choice it already made, records it as theirs and keeps the design's date.
-  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
-  if (work?.designedAt && decided.length) {
-    const choice = work.adversarial === false ? '--no-adversarial' : '--adversarial'
-    out.push(offer(phase, `for the human: the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them, then record the design as theirs`, `rig save -m "design reviewed" --designed ${choice}`))
+  if (work?.designedAt && decided.length && !grownSinceAgreed) {
+    out.push(offer(phase, `for the human: the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them, then record the design as theirs`, review))
   }
 
   // Correcting the catalogue, offered while the worktrees still exist — which is the only span

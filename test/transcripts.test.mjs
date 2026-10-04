@@ -151,6 +151,20 @@ test('a transcripts value that is not a list of patterns is named as the mistake
   }
 })
 
+test('a misshapen transcripts value stops no listing or close: they say it and go on, and doctor names it', () => {
+  setPatterns('~/.host/{slug}/*.jsonl')
+  try {
+    assert.equal(m.rig(['list']).code, 0)
+    assert.equal(m.rig(['new', 'misshapen', '--title', 'Closed past a bad setting', '--no-ticket']).code, 0)
+    const closed = m.rig(['close', '--work', 'misshapen'])
+    assert.equal(closed.code, 0, closed.out)
+    assert.match(closed.out, /must be a list of patterns, .* — sessions not checked/)
+    assert.match(m.rig(['doctor']).out, /must be a list of patterns, .* — no session is found until it is/)
+  } finally {
+    setPatterns(undefined)
+  }
+})
+
 test('patterns committed into the org file are not read: where sessions live is the machine\'s', () => {
   setPatterns(undefined)
   const orgFile = path.join(m.dataRoot, 'rig.json')

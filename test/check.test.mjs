@@ -373,3 +373,18 @@ test('an entry whose org is written in another case is still the repo\'s entry',
   assert.equal(rig(['save', '-m', 'catalogue corrected', '--work', 't1']).code, 0)
   assert.match(generatedAgents(), /- Docs: `docs\/guide\.md`/)
 })
+
+test('a pass recorded on a stage checked out is no pass for the work branch\'s PR', () => {
+  const dest = path.join(workRoot, 't1', 'billing')
+  gitMust(dest, 'push', '-q', 'origin', BRANCH)
+  gitMust(dest, 'checkout', '-q', '-b', `${BRANCH}-slice`)
+  try {
+    fs.appendFileSync(path.join(dest, 'README.md'), 'a slice\n')
+    gitMust(dest, 'commit', '-qam', 'a slice')
+    assert.equal(rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS).code, 0)
+    const r = rig(['pr', '--work', 't1'])
+    assert.match(r.out, /billing: no check has passed at this patch — `rig check billing --run`/)
+  } finally {
+    gitMust(dest, 'checkout', '-q', BRANCH)
+  }
+})

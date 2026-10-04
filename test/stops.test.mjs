@@ -165,3 +165,20 @@ test('a null written by hand is read as absent, the shape list --json gives it',
   assert.equal(r.code, 0, r.out)
   assert.match(strip(r.out), /^stops repos and design$/m)
 })
+
+test('a gate name a later rig may stop at is read and shown, not refused', () => {
+  const file = path.join(dataRoot, 'work', 'stops-default', 'work.json')
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), stops: ['repos', 'lessons'] }, null, 2))
+  const r = rig(['status', '--work', 'stops-default'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /^stops repos and lessons — the agent decides the design$/m)
+})
+
+test('a design the human agreed, agreed again, moves its date though the agent chose a repo since', () => {
+  assert.equal(rig(['new', 'stops-rethink', '--title', 'A rethink', '--no-ticket', '--stops', 'design']).code, 0)
+  assert.equal(rig(['save', '-m', 'design agreed', '--designed', '--adversarial', '--work', 'stops-rethink']).code, 0)
+  const designedAt = record('stops-rethink').designedAt
+  assert.equal(rig(['attach', 'billing', '--by-agent', '--work', 'stops-rethink']).code, 0)
+  assert.equal(rig(['save', '-m', 'design rethought', '--designed', '--adversarial', '--work', 'stops-rethink']).code, 0)
+  assert.notEqual(record('stops-rethink').designedAt, designedAt)
+})

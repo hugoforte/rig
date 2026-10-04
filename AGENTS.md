@@ -133,7 +133,7 @@ included.
 
 **A skipped stop fires anyway once the work outgrows what the human saw**: more repos than the
 human named at the start, or three repos, the weight at which `rig next` offers a rollout plan.
-`rig next` says the second; the first is the agent's to notice.
+`rig next` says the second, before the design is recorded and after the agent recorded it alike; the first is the agent's to notice.
 
 Stops are kept by the prompts and skills, not by rig: no command refuses because a stop was
 skipped, and none waits. rig records the choice and what the agent decided.
@@ -260,7 +260,7 @@ refuses `--run`. `rig status` reads the pass against the diff the repo carries n
 **verified** while the same branch carries the same patch-id, whatever happened to the head,
 **stale** once the diff changed, **not verified** with none or with a pass for another branch,
 and **not compared** when the worktree is not on this machine. `rig next` offers the run for a repo with work on it
-and no pass at its diff, and `rig pr` names such a repo and opens the PR anyway.
+and no pass at its diff, and `rig pr` names such a repo, or one whose pass was recorded on a stage rather than the work branch, and opens the PR anyway. A pass is for the patch, not the base: a base that moved since is not compared, so when a PR's checks fail with `rig next` naming a moved base, the pass is a claim to run again.
 
 Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
 in, `rig check` prints the check commands and `--run` opts in. A command that cannot
@@ -322,7 +322,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `note`, `close`, `check --run`) ends by committing the whole
+(`new`, `ticket`, `attach`, `detach`, `restore`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:

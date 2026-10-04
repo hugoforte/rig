@@ -1271,9 +1271,9 @@ const MISSHAPEN = [
   ['{"id": "broken", "outcome": {"text": "Shipped it"}}', /`outcome` is not a statement with its date/],
   ['{"id": "broken", "repos": [{"repo": "a", "branches": [{"branch": "b", "verified": "yes"}]}]}', /`verified` of a is not a pass with its branch, head, base, patch-id and date/],
   ['{"id": "broken", "repos": [{"repo": "a", "branches": [{"branch": "b", "verified": {"branch": "b", "head": "h", "base": "b", "patchId": "", "at": "t"}}, {"branch": "c", "verified": "yes"}]}]}', /`verified` of a is not a pass with its branch/],
-  ['{"id": "broken", "stops": "design"}', /`stops` is not a list of repos and design/],
-  ['{"id": "broken", "stops": ["ticket"]}', /`stops` is not a list of repos and design/],
-  ['{"id": "broken", "agentDecided": ["lessons"]}', /`agentDecided` is not a list of repos and design/],
+  ['{"id": "broken", "stops": "design"}', /`stops` is not a list of gate names/],
+  ['{"id": "broken", "stops": [7]}', /`stops` is not a list of gate names/],
+  ['{"id": "broken", "agentDecided": "design"}', /`agentDecided` is not a list of gate names/],
 ]
 
 test('doctor reports a record of the wrong shape as unreadable, says why, and still checks everything else', () => {

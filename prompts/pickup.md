@@ -29,7 +29,7 @@ Name the resume point in one line.
 
 ## 3. Check what you inherit, once
 
-Check only the claims the next step stands on, against the real thing, and only once: a test the handoff says passes and the next change relies on, say. A repo whose checks line says **stale** or **not verified** is one such claim: `rig check <repo> --run` answers it and records the pass. Everything else the trail says, take as said.
+Check only the claims the next step stands on, against the real thing, and only once: a test the handoff says passes and the next change relies on, say. A repo whose checks line says **stale** or **not verified** is one such claim: `rig check <repo> --run` answers it and records the pass. So is a **verified** one whose PR's checks are failing while `rig next` names a moved base: a pass is for the patch, and the base it ran against has changed. Everything else the trail says, take as said.
 
 ## 4. Reply, then start
 

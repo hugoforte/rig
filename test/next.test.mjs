@@ -88,6 +88,26 @@ test('the pickup offer clears on the pickup\'s first commit', () => {
   assert.ok(!commands(out).includes('rig prompt pickup'))
 })
 
+test('a landed work is offered no pickup: there is nothing left to start', () => {
+  const merged = repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [merged], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T11:00:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a pickup does not hide that the code is still to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: null })
+  assert.match(says(out), /this part is yours to write/)
+})
+
+test('a work grown to three repos after the agent agreed its design waits for the human, above the floor', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, adversarial: true, stops: [], agentDecided: ['repos', 'design'] }), repos: [repo('a'), repo('b'), repo('c')] })
+  const grown = out.find(o => /3 repos is the weight at which the design waits for the human/.test(o.says))
+  assert.ok(grown, says(out))
+  assert.equal(grown.command, 'rig save -m "design reviewed" --designed --adversarial')
+  assert.ok(out.indexOf(grown) < out.findIndex(o => /yours to write/.test(o.says)) || !/yours to write/.test(says(out)))
+  assert.equal(out.filter(o => /the agent decided/.test(o.says)).length, 1, 'said once')
+})
+
 test('a work with no handoff is offered no pickup', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: null, lastCommitAt: '2026-10-04T12:30:00Z' })
   assert.ok(!commands(out).includes('rig prompt pickup'))
@@ -500,6 +520,9 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), stops: [] }), repos: [repo('a')] },
     { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: AT, lastCommitAt: null },
+    { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 3 }] },
+    { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 0 }] },
+    { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, adversarial: true, stops: [], agentDecided: ['design'] }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { pushed: true }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] },
     { work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] },
     { work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] },
