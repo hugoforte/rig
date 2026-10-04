@@ -809,6 +809,10 @@ function recordShapeProblem (w) {
     if (!isObject(s) || typeof s.branch !== 'string' || !s.branch) return `stage ${i + 1} has no \`branch\``
     if (!isList(s.tickets)) return `\`tickets\` of stage ${s.branch} is not a list`
   }
+  if (w.outcome !== undefined && w.outcome !== null &&
+    !(isObject(w.outcome) && typeof w.outcome.text === 'string' && typeof w.outcome.at === 'string')) {
+    return '`outcome` is not a statement with its date'
+  }
   return null
 }
 
@@ -2581,7 +2585,9 @@ cmds.save = ({ flags }) => {
   if (title === true || title === '') die('--title needs the title')
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
   const outcome = typeof flags.outcome === 'string' ? flags.outcome.trim() : flags.outcome
-  if (outcome === true || outcome === '') die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
+  // `rig next` and `rig close` offer `--outcome "…"`, and an offered command gets run as
+  // written, so the placeholder is no outcome either.
+  if (outcome === true || (typeof outcome === 'string' && /^[\s….]*$/.test(outcome))) die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
   if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
