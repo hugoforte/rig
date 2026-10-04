@@ -69,7 +69,7 @@ const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -334,6 +334,29 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer(phase,
       'what did this work teach? — the rig-learn skill offers each lesson a home',
       'rig save -m "lessons reviewed" --learned'))
+  }
+
+  // What landed and why it was worth doing, asked once everything has landed and the story is
+  // still in hand. Above the close offer only because it reads as part of finishing; nothing it
+  // needs goes with the trees, and `rig close` names it again on the way out.
+  if (!work?.outcome && repos.length && merged.length === repos.length) {
+    out.push(offer(phase,
+      `what changed for someone, and why is that good? — a sentence or two${work?.learnedAt ? '' : '; the rig-learn skill drafts it'}`,
+      'rig save --outcome "…"'))
+  }
+
+  // The user docs, kept true once everything has landed: offered only where a repo says where
+  // its docs live, since a nag for a repo with none would be on every work. A repo beside it
+  // with none is named, as an empty `check` is, with where to say it.
+  const documented = docs.filter(d => d.targets.length)
+  if (!work?.documentedAt && documented.length && repos.length && merged.length === repos.length) {
+    const where = documented.map(d => `${d.repo}: ${d.targets.map(t => `\`${t}\``).join(', ')}`).join('; ')
+    const none = docs.filter(d => !d.targets.length).map(d => d.missing
+      ? `; ${d.repo} has no catalogue entry — write one at \`${d.missing}\`, with \`docs:\``
+      : `; ${d.repo} has no docs target — \`docs:\` in its catalogue entry (\`rig catalog ${d.repo}\` names the file)`).join('')
+    out.push(offer(phase,
+      `once it is verified where it was deployed, keep the user docs true — the rig-docs skill drafts the edit (${where})${none}`,
+      'rig save -m "user docs updated" --documented'))
   }
 
   // Rule 5 says attaching a fourth repo on day two is normal, and §6 says the repo you forget

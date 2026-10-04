@@ -49,7 +49,8 @@ export const TERMINAL = ['closed', 'abandoned']
 // join it rather than replacing anything. `learnedAt` is the lesson review, and unlike the
 // design gate it may be passed after the close: the catalogue and rig's tracker outlive the work.
 // `reviewedAt` is the adversarial review a design chose: GitHub cannot say one happened.
-export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+// `documentedAt` is the user docs kept true once the work landed, passable after the close too.
+export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
 
 const MERGED = 'MERGED'
 

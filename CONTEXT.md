@@ -76,6 +76,22 @@ _Avoid_: stage (that is scope), status, step, state
 The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
 _Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
 
+**Outcome**:
+What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
+_Avoid_: summary, result, release note
+
+**Digest**:
+An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the pull request or ticket it rests on. Written from the records each time and never stored, like the dashboard.
+_Avoid_: report, changelog, release notes, summary
+
+**User docs**:
+How the product works now, written for its users and kept with the product — a repo's docs or a Confluence page — which a work edits once it has landed. The present, where a digest is the history. A repo's catalogue entry names where they live, its **docs target**.
+_Avoid_: documentation (too wide), release notes, help (one kind of it)
+
+**QA evidence**:
+The steps walked on a deployed environment and what was seen, kept in a work's `qa.md` beside its context doc. A record of what happened, not a plan; the rollout plan's UAT steps are the plan.
+_Avoid_: test results, UAT plan, sign-off
+
 **Stage**:
 A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.
 _Avoid_: phase (that is lifecycle), slice, milestone, increment, child work
