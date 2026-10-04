@@ -18,8 +18,10 @@ import { impact, unattached } from './catalog-graph.mjs'
 import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
-import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions } from './phase.mjs'
+import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
+import { transcriptsFor, refusal } from './transcripts.mjs'
+import { contextDocProblems } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
@@ -638,7 +640,9 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'close', 'backfill'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'note', 'close', 'backfill'])
+// `rig check` prints and writes nothing; `rig check --run` records what passed.
+const mutates = (name, flags) => MUTATING.has(name) || (name === 'check' && !!flags.run)
 
 // Before a mutating command reads anything. rig pushes the data root but never pulled it, so
 // a second machine read stale records and wrote on top of them. Fast-forward only: a data
@@ -805,6 +809,11 @@ function recordShapeProblem (w) {
   for (const [i, r] of (w.repos || []).entries()) {
     if (!isObject(r) || typeof r.repo !== 'string' || !r.repo) return `repo ${i + 1} has no \`repo\``
     if (!isList(r.branches) || !(r.branches || []).every(isObject)) return `\`branches\` of ${r.repo} is not a list of branches`
+    for (const b of r.branches || []) {
+      if (b.verified !== undefined && !(isObject(b.verified) && ['branch', 'head', 'base', 'patchId', 'at'].every(k => typeof b.verified[k] === 'string'))) {
+        return `\`verified\` of ${r.repo} is not a pass with its branch, head, base, patch-id and date`
+      }
+    }
   }
   for (const [i, s] of (w.stages || []).entries()) {
     if (!isObject(s) || typeof s.branch !== 'string' || !s.branch) return `stage ${i + 1} has no \`branch\``
@@ -813,6 +822,12 @@ function recordShapeProblem (w) {
   if (w.outcome !== undefined && w.outcome !== null &&
     !(isObject(w.outcome) && typeof w.outcome.text === 'string' && typeof w.outcome.at === 'string')) {
     return '`outcome` is not a statement with its date'
+  }
+  for (const field of ['stops', 'agentDecided']) {
+    // Null is absent, as it is for `outcome`, and is the shape `rig list --json` gives it.
+    if (w[field] !== undefined && w[field] !== null && !(Array.isArray(w[field]) && w[field].every(n => STOPPABLE.includes(n)))) {
+      return `\`${field}\` is not a list of ${STOPPABLE.join(' and ')}`
+    }
   }
   return null
 }
@@ -1153,7 +1168,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent', 'transcripts'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -1164,6 +1179,8 @@ function parseArgs (argv) {
   const positional = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
+    // `--` ends the flags, as it does for git: a note may begin with a dash.
+    if (a === '--') { positional.push(...argv.slice(i + 1)); break }
     if (!isFlag(a)) { positional.push(a); continue }
     // `--flag`, `--flag=value`, `--flag value`; `-m value` is `--message value`.
     // Split at the first `=` only: a value may carry its own, as a title or a message can.
@@ -2152,6 +2169,30 @@ cmds.use = ({ positional }) => {
   if (pending.length) warn(`${name} is at record format ${dataMajor(cfgJson)}, this rig writes ${MAJOR} — run \`rig update\` to migrate (${pending.length} pending)`)
 }
 
+// `--stops design`, `--stops repos,design` or `--stops none`: the gates the agent waits at for the
+// human. Absent is undefined, which leaves the record's choice, or the default, as it was.
+function stopsFlag (flags) {
+  const v = flags.stops
+  if (v === undefined) return undefined
+  const named = typeof v === 'string' ? v.split(',').map(s => s.trim()).filter(Boolean) : []
+  if (!named.length) die(`--stops wants the gates to wait at: ${STOPPABLE.join(', ')}, or none`)
+  if (named.includes('none')) {
+    if (named.length > 1) die('--stops: none stands alone — it waits at neither gate')
+    return []
+  }
+  const unknown = named.filter(n => !STOPPABLE.includes(n))
+  if (unknown.length) die(`--stops: ${unknown.join(', ')} cannot stop being a stop — only ${STOPPABLE.join(' and ')} (or none)`)
+  return STOPPABLE.filter(n => named.includes(n))
+}
+
+// `--by-agent`: the agent decided the gate this command records. The flag is the answer, so a
+// value on it is refused, for the reason `--adversarial` refuses one: `--by-agent=false` would
+// otherwise read as a yes.
+function byAgentFlag (flags) {
+  if (typeof flags['by-agent'] === 'string') die('--by-agent takes no value — the flag is the answer')
+  return !!flags['by-agent']
+}
+
 cmds.new = ({ flags, positional }) => {
   sayCurrentRoot()
   const cfg = config()
@@ -2180,6 +2221,9 @@ cmds.new = ({ flags, positional }) => {
       die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? ` — not "${parent}"` : ''}`)
     }
   }
+  const stops = stopsFlag(flags)
+  const byAgent = byAgentFlag(flags)
+  if (byAgent && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // A parent is this one ticket's, never a field, however Jira or rig.json spells it
   // (DESIGN.md decision 146).
@@ -2246,6 +2290,7 @@ cmds.new = ({ flags, positional }) => {
     title,
     tickets: keys.length ? keys : (idKey ? [idKey] : []),
     ...(noTicket ? { ticketsDeclined: true } : {}),
+    ...(stops ? { stops } : {}),
     type,
     branch,
     repos: [],
@@ -2288,7 +2333,7 @@ cmds.new = ({ flags, positional }) => {
 
   const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
-    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup })
+    for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent })
   } else {
     say('No repos attached yet. Run the selection interview:')
     say(C.dim('  rig prompt select-repos'))
@@ -2299,7 +2344,7 @@ cmds.new = ({ flags, positional }) => {
 // Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
 // Answers whether the repo joined the work, which is what decides whether its neighbours are
 // worth naming: a repo already in the record joined it some other day.
-function attachRepo (cfg, work, repoName, { setup = false } = {}) {
+function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {}) {
   const recorded = work.repos.find(r => r.repo.toLowerCase() === repoName.toLowerCase())
   if (recorded) {
     // The record is not the territory: a repo attached on another machine, or whose folder
@@ -2342,6 +2387,9 @@ function attachRepo (cfg, work, repoName, { setup = false } = {}) {
     attachedAt: new Date().toISOString(),
     branches: [{ branch: work.branch, base }],
   })
+  // The agent chose this repo where the repo set is not a stop. Only the human agreeing the
+  // design clears it, since one repo attached by hand does not confirm the rest.
+  if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'repos'])]
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
   offerSetup(cat, repo, dest, setup)
@@ -2557,8 +2605,9 @@ cmds.attach = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const name = positional[0] || die('usage: rig attach <repo>')
+  const byAgent = byAgentFlag(flags)
   commitAs(work.id, name)
-  if (attachRepo(cfg, work, name, { setup: !!flags.setup })) offerNeighbours(work, name)
+  if (attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent })) offerNeighbours(work, name)
 }
 
 // What else this repo travels with, said once, at the moment the repo set is being chosen.
@@ -2610,6 +2659,7 @@ cmds.save = ({ flags }) => {
   // written, so the placeholder is no outcome either.
   if (outcome === true || (typeof outcome === 'string' && /^[\s….]*$/.test(outcome))) die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
   if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
+  const stops = stopsFlag(flags)
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
   // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
@@ -2624,16 +2674,25 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
-  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : undefined))
+  const byAgent = byAgentFlag(flags)
+  if (byAgent && !flags.designed) die('--by-agent says the agent decided a gate — pass it with --designed')
+  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : stops ? `stops ${stops.join(',') || 'none'}` : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
     // Re-recorded rather than refused: agreeing the design a second time is a real thing to
     // do after a rethink, and the date that matters is the one the current design was agreed.
     // The review choice is re-recorded with it, for the same reason.
-    work.designedAt = new Date().toISOString()
+    // Who agreed it. The agent, where the design is not a stop; anyone else is the human, who
+    // reads the repo table in the same Direction, so their agreement settles both marks. The
+    // human going over what the agent decided, with the review choice it made, confirms that
+    // design rather than agreeing another, so its date stands, and a review of it with it.
+    const confirms = !byAgent && work.agentDecided?.length && work.designedAt && work.adversarial === choice
+    if (!confirms) work.designedAt = new Date().toISOString()
     work.adversarial = choice
-    ok(`${id}: design agreed, ${choice ? 'with' : 'without'} an adversarial review`)
+    if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'design'])]
+    else delete work.agentDecided
+    ok(`${id}: design ${confirms ? 'confirmed by the human' : 'agreed'}, ${choice ? 'with' : 'without'} an adversarial review`)
   }
   // The adversarial review. Recorded whatever the design chose, because it is a fact about what
   // happened; refused once the work has stopped, since its PRs are no longer in review.
@@ -2667,6 +2726,15 @@ cmds.save = ({ flags }) => {
     work.outcome = { text: outcome, at: new Date().toISOString() }
     ok(`${id}: outcome recorded`)
   }
+  // Which gates the agent waits at from here on. Read once, just before each stop fires, so a
+  // choice changed late has nothing it could have gone stale against.
+  // Refused once the work has stopped, since it has no stop left to wait at.
+  if (stops) {
+    if (work.abandonedAt) die(`${id} was abandoned — it has no stops left to wait at`)
+    if (work.closedAt) die(`${id} is closed — it has no stops left to wait at`)
+    work.stops = stops
+    ok(`${id}: stops ${stopsLabel(stops)}`)
+  }
   // After the gates, so a gate refused leaves the doc as untouched as the record.
   if (title) {
     work.title = title
@@ -2674,6 +2742,86 @@ cmds.save = ({ flags }) => {
     ok(`${id}: titled "${title}"`)
   }
   saveWork(cfg, work)
+  // The doc this save commits, checked against its template, said and never refused on.
+  for (const f of contextDocFindings(work)) warn(f.text)
+}
+
+// A work's context doc against the template it was made from, each as `path:line: problem`, so
+// an editor opens it where it is (decision 205), and whether it counts among doctor's things to
+// look at: a lost or moved heading does, a placeholder left is a chore and does not. Nothing when
+// there is no doc to check.
+function contextDocFindings (work, root = dataRoot()) {
+  const file = path.join(recordDir(work.id, root), 'context.md')
+  if (!exists(file)) return []
+  const template = readText(path.join(toolRoot(), 'templates', 'context.md'))
+  return contextDocProblems(readText(file), { template, designed: !!work.designedAt })
+    .map(p => ({ text: `${file}:${p.line}: ${p.problem}`, counts: p.kind === 'heading' }))
+}
+
+// A work's notes: one row per decision a session took along the way — what, why, and a pointer
+// at the evidence — in `notes.tsv` beside the context doc (decision 204). Appended and never
+// read to be written, so the hundredth costs what the first did. A row is the shape of the
+// file: one line a cell, tab-separated, so a cell that would break that is refused.
+const NOTE_COLUMNS = ['at', 'stage', 'note', 'why', 'evidence', 'result']
+// What a reviewer can open: a SHA, a PR (`owner/repo#5`), a URL, or a path or `file:line`, which
+// carries a `/`, a `\`, a `:` or a `.`. A word with none of those, like "done", is a claim and
+// not a pointer, and neither is anything with a space in it: a path with one is written `%20`.
+const isPointer = p => !/\s/.test(p) && (/^[0-9a-f]{7,40}$/i.test(p) || /^([\w.-]+\/[\w.-]+)?#\d+$/.test(p) || /[/\\:.]/.test(p))
+
+// The notes file, made with its header only by the command that finds it missing or empty, so
+// two sessions taking a work's first note at once cannot truncate each other's. A `.gitattributes`
+// beside it merges two machines' appends as both rows, rather than as a conflict at the end.
+function notesFile (id) {
+  const file = path.join(recordDir(id), 'notes.tsv')
+  try {
+    fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`, { flag: 'wx' })
+    fs.writeFileSync(path.join(recordDir(id), '.gitattributes'), 'notes.tsv merge=union\n', { flag: 'a' })
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e
+    if (fs.statSync(file).size === 0) fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`)
+  }
+  return file
+}
+
+// Whether a file ends in a newline, read from its last byte alone, so a row is never glued onto
+// the end of one a hand left unfinished and the file is still never read.
+function endsInNewline (file) {
+  const size = fs.statSync(file).size
+  if (!size) return true
+  const fd = fs.openSync(file, 'r')
+  try {
+    const last = Buffer.alloc(1)
+    fs.readSync(fd, last, 0, 1, size - 1)
+    return last[0] === 0x0a
+  } finally { fs.closeSync(fd) }
+}
+
+cmds.note = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const cell = (name, value) => {
+    if (value === true) die(`--${name} needs its text`)
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (/[\r\n\t]/.test(text)) die(`--${name} takes one line, with no tab — a note is one row`)
+    return text
+  }
+  const note = positional.join(' ').trim()
+  if (!note) die('rig note wants the note: what was chosen or done, in one line')
+  if (/[\r\n\t]/.test(note)) die('the note takes one line, with no tab — a note is one row')
+  const why = cell('why', flags.why)
+  if (!why) die('a note needs --why: the reason, in plain words')
+  const pointers = cell('evidence', flags.evidence).split(',').map(p => p.trim()).filter(Boolean)
+  if (!pointers.length) die('a note needs --evidence: a pointer a reviewer can open — a SHA, a PR, file:line, a path or a URL')
+  if (!pointers.every(isPointer)) die('--evidence is a pointer — a SHA, a PR, file:line, a path or a URL, several split by commas — not prose')
+  const stage = cell('stage', flags.stage)
+  // Said, never refused: a stage may be noted before it is declared.
+  if (stage && work.stages.length && !work.stages.some(s => s.branch === stage)) warn(`${stage} is not one of ${work.id}'s stages — \`rig stage\` lists them`)
+  if (work.closedAt) warn(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — this note comes after its story`)
+  const row = [new Date().toISOString(), stage, note, why, pointers.join(','), cell('result', flags.result)]
+  commitAs(work.id, note.length > 72 ? `${note.slice(0, 71)}…` : note)
+  const file = notesFile(work.id)
+  fs.appendFileSync(file, `${endsInNewline(file) ? '' : '\n'}${row.join('\t')}\n`)
+  ok(`${work.id}: noted`)
 }
 
 cmds.detach = ({ flags, positional }) => {
@@ -2686,6 +2834,7 @@ cmds.detach = ({ flags, positional }) => {
 
   const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
+  sayLiveSessions(cfg, work, [entry.path])
 
   // Out of the worktree before it goes, for the reason `close` gives.
   if (standingIn(entry.path)) chdir(toolRoot())
@@ -2845,6 +2994,8 @@ const workJson = (cfg, work, live) => ({
   learnedAt: work.learnedAt || null,
   documentedAt: work.documentedAt || null,
   outcome: work.outcome ? { text: work.outcome.text, at: work.outcome.at } : null,
+  stops: work.stops || null,
+  agentDecided: work.agentDecided || [],
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
@@ -2874,6 +3025,7 @@ function repoEntryJson (cfg, entry, branch, live) {
     branch: br.branch,
     base: br.base,
     ...(br.pr ? { pr: { ...br.pr, state: 'MERGED', recorded: true } } : {}),
+    ...(br.verified ? { verified: { branch: br.verified.branch, head: br.verified.head, base: br.verified.base, patchId: br.verified.patchId, at: br.verified.at } } : {}),
   }))
   const stored = (entry.branches || []).find(br => br.branch === branch)?.pr
   if (stored) {
@@ -3037,7 +3189,11 @@ cmds.list = ({ flags }) => {
     // listing is (decision 77). So on a work that has stages the verdict says what it
     // measured and no more — the same rule `--quick` and `prUnknown` already follow. The
     // record alone answers this, so a work with no stages costs nothing and reads unchanged.
-    const unchecked = work.stages.length ? ' (stages not checked)' : ''
+    // Nor does it look for a session still at work in a worktree, which `close` names: one
+    // transcript scan per work is not what a listing is either. Said only where this machine
+    // could have looked, since without transcript patterns `close` cannot either.
+    const notChecked = [work.stages.length && 'stages', looksForSessions(cfg) && 'sessions'].filter(Boolean)
+    const unchecked = notChecked.length ? ` (${notChecked.join(' and ')} not checked)` : ''
     if (live && verdict.done) {
       // The qualifier is dim outside the green: its job is to take the edge off the verdict,
       // and the colour the verdict is printed in is half of that edge.
@@ -3105,9 +3261,78 @@ cmds.dash = ({ flags }) => {
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
+// The work's own session transcripts, one path a line on stdout and nothing else there, for the
+// lesson review to read (decision 201). What is said about them goes to stderr beside it.
+// The workspaces are the work folder and its worktrees, so nothing of another work is found.
+function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...work.repos.map(r => r.path)]) {
+  return transcriptsFor({
+    patterns: transcriptPatterns(cfg),
+    workspaces,
+    home: env().USERPROFILE || env().HOME || os.homedir(),
+  })
+}
+
+// The machine's transcript patterns, or why they cannot be read: a misshapen value is a mistake
+// to name, never the same as having none.
+function transcriptPatterns (cfg) {
+  const t = cfg.transcripts
+  if (t === undefined || t === null) return []
+  if (!Array.isArray(t) || !t.every(p => typeof p === 'string' && p.trim())) {
+    die(`\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]`)
+  }
+  return t
+}
+
+// Whether this machine could look for a session at all: a pattern that is refused finds nothing.
+const looksForSessions = cfg => transcriptPatterns(cfg).some(p => !refusal(p))
+
+// How long a session counts as still at work after it last wrote. A constant, not a setting,
+// until someone needs it to vary.
+const LIVE_SESSION_HOURS = 2
+
+// The sessions that wrote in one of `workspaces` lately, named before `close`, `detach` or
+// `tidy` takes a worktree from under them, and never refused on (decision 66): a clean worktree
+// a session is about to write into looks exactly like an abandoned one, and only the session can
+// say which. Said at the teardown, since rig speaks unasked nowhere earlier. The session running
+// this command is left out where the machine names the variable that carries its id
+// (`transcriptSession`): a host names a session's transcript, or its folder, by it.
+function sayLiveSessions (cfg, work, workspaces) {
+  const self = typeof cfg.transcriptSession === 'string' ? env()[cfg.transcriptSession] : null
+  const since = Date.now() - LIVE_SESSION_HOURS * 3600 * 1000
+  const ours = t => self && t.path.split(/[\\/]/).some(part => part === self || path.parse(part).name === self)
+  const { found, refused } = workTranscripts(cfg, work, workspaces)
+  for (const r of refused) warn(`transcripts: "${r.pattern}" finds nothing: ${r.why}`)
+  const live = found.filter(t => Date.parse(t.modifiedAt) >= since && !ours(t))
+  for (const t of live) {
+    const where = work.repos.find(r => r.path === t.workspace)?.repo || 'the work folder'
+    warn(`${where}: a session wrote ${path.basename(t.path)} ${relativeAge(t.modifiedAt)} — it may still be working there`)
+  }
+  if (live.length && !self) say(C.dim(`  one of them may be this session — \`transcriptSession\` in ${localConfigFile()} names the variable carrying its id`))
+}
+
+function sayTranscripts (cfg, work) {
+  const { found, refused } = workTranscripts(cfg, work)
+  for (const r of refused) aside(C.yellow(`! transcripts: "${r.pattern}" finds nothing: ${r.why}`))
+  if (!transcriptPatterns(cfg).length) {
+    aside(C.dim(`· no transcript locations on this machine — \`transcripts\` in ${localConfigFile()}, such as "~/.claude/projects/{slug}/*.jsonl"`))
+  }
+  for (const t of found) say(t.path)
+}
+
+// The gate lines `rig status` marks as the agent's: `designed` is the design stop.
+const STOP_OF_GATE = { designed: 'design' }
+const agentDecided = (work, gate) => (work.agentDecided || []).includes(STOP_OF_GATE[gate])
+const stopsLabel = stops => {
+  const skipped = STOPPABLE.filter(n => !stops.includes(n))
+  const waits = stops.join(' and ') || 'none'
+  return skipped.length ? `${waits} — the agent decides ${skipped.map(n => STOP_WORDS[n]).join(' and ')}` : waits
+}
+
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
+  if (typeof flags.transcripts === 'string') die('--transcripts takes no value')
+  if (flags.transcripts) return sayTranscripts(cfg, work)
   const id = work.id
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a
   // distance git could not measure says so, instead of a confident `0 ahead · 0 behind`,
@@ -3122,7 +3347,10 @@ cmds.status = ({ flags }) => {
   // Gathered above rather than below, because this is the one command that looks the PRs up
   // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
-  for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}${agentDecided(work, gate) ? ' (agent decided)' : ''}`)
+  if (work.agentDecided?.includes('repos')) say('  repos chosen (agent decided)')
+  // Said whether or not the work chose, since absent is both and silence would say neither.
+  say(`stops ${stopsLabel(work.stops ?? STOPPABLE)}`)
   if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
   // Named, not enumerated: `rig stage` is where the stack is read, and a status that
   // reprinted it would be two places to keep saying the same thing.
@@ -3144,7 +3372,11 @@ cmds.status = ({ flags }) => {
   // same way, since the user-docs edit and the digest read it after the work has moved on.
   const qa = path.join(recordDir(id), 'qa.md')
   if (exists(qa)) say(`qa ${recordUrl(id, 'qa.md') || `${qa} ${C.dim('(this machine only — the data root has no remote)')}`}`)
+  // And the notes, which the lesson review and a pickup read as part of the story.
+  const notes = path.join(recordDir(id), 'notes.tsv')
+  if (exists(notes)) say(`notes ${recordUrl(id, 'notes.tsv') || `${notes} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
+  const checked = checkedRepos(work)
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
     say(`${C.bold(r.repo)} ${C.dim(`(${r.org}, base ${baseLabel(states[i])})`)}`)
@@ -3153,6 +3385,10 @@ cmds.status = ({ flags }) => {
       say(`  changes ${v.dirty || 'none'}`)
       say(`  commits ${v.distanceUnknown ? `unknown (${v.distanceUnknown})` : `${v.ahead} ahead · ${v.behind} behind`}`)
     }
+    // Only for a repo the catalogue says how to verify: one with no `check` has nothing a run
+    // could prove, and `rig check` names where to write one. Said of a missing worktree too, since
+    // a pass recorded on another machine is what a pickup reads.
+    if (checked.includes(r)) say(`  checks  ${verificationLabel(r.repo, verificationOf(cfg, r, work))}`)
     say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     say('')
   })
@@ -3173,7 +3409,10 @@ function runCatalogCommands (dir, commands, label) {
     // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
     // and watching it is the point — which is also why a run this is part of has to be the
     // process for its output to reach whoever asked. The environment is still the run's.
+    // A command that never started, or was killed before it could exit, is no verdict, so the
+    // answer is null rather than a failure: a check run must not clear a pass it never tested.
     const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
+    if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
   return true
@@ -3199,9 +3438,9 @@ cmds.setup = ({ flags, positional }) => {
 // suite nobody asked for is slow at exactly the wrong moment. `--run` opts in.
 //
 // A repo with an empty `check` is told where to write one: the moment you went looking is
-// the moment that knowledge is cheap (AGENTS.md rule 4). Nothing about a run is recorded
-// anywhere — the catalogue holds the command, never a verdict (decision 3), so the only
-// place a failure lands is `--run`'s exit code, where the caller that asked can read it.
+// the moment that knowledge is cheap (AGENTS.md rule 4). The catalogue holds the command,
+// never a verdict. What a run proved is the work's: a pass is recorded against the patch it
+// ran at, a failure clears it and reaches the caller as the exit code (decision 199).
 cmds.check = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -3211,19 +3450,136 @@ cmds.check = ({ flags, positional }) => {
     ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
     : work.repos
   if (!targets.length) die('no matching attached repos')
+  // A run records, so a stopped work refuses one, as `rig pr` refuses to open a PR on it.
+  if (flags.run && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to verify`)
+  const catalog = loadCatalog()
+  const changed = { verified: [], cleared: [] }
   for (const r of targets) {
-    const cat = findCatalog(r.repo)
+    const cat = catalogEntryFor(catalog, r)
     if (!cat?.check?.length) {
       warn(`${r.repo}: no check commands in the catalogue — add \`check:\` to ${catalogFile(r.org, r.repo)}`)
       continue
     }
     if (flags.run) {
-      if (!runCatalogCommands(r.path, cat.check, 'check')) current.exitCode = 1
+      if (!exists(r.path)) {
+        warn(`${r.repo}: not on this machine — \`rig restore ${work.id}\`, then run it; what was recorded stands`)
+        current.exitCode = 1
+        continue
+      }
+      // Read before the run, so what the run itself writes — a coverage folder, a regenerated
+      // snapshot — neither blocks the record nor is taken for what was proved.
+      const before = { uncommitted: git(r.path, 'status', '--porcelain', '--untracked-files=no').out, patch: trees(cfg).patch({ dir: r.path, base: r.base }) }
+      const result = runCatalogCommands(r.path, cat.check, 'check')
+      if (result !== true) current.exitCode = 1
+      const change = recordVerification(r, work, result, before)
+      if (change) changed[change].push(r.repo)
       continue
     }
     say(`${C.bold(r.repo)} ${C.dim(`(not run — \`rig check ${r.repo} --run\`)`)}`)
     for (const c of cat.check) say(`  ${c}`)
   }
+  const said = Object.entries(changed).filter(([, repos]) => repos.length).map(([what, repos]) => `${what} ${repos.join(', ')}`)
+  if (said.length) {
+    commitAs(work.id, said.join('; '))
+    saveWork(cfg, work)
+  }
+}
+
+// When the work's `handoff.md` was last committed into the data root, as git has it, since a
+// file's own date on a fresh clone is the clone's. Null with no handoff, or one never committed.
+function handoffAt (id) {
+  const file = path.join(recordDir(id), 'handoff.md')
+  if (!exists(file)) return null
+  // `icase`, since the file system found it whatever its case and git's pathspec would not.
+  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', `:(icase)${path.relative(dataRoot(), file).split(path.sep).join('/')}`)
+  return r.code === 0 && r.out ? r.out : null
+}
+
+// The newest commit of the work's own on any branch checked out here: what HEAD has over the
+// base it lands on. HEAD's own date would be the base's tip on a branch with nothing of its own
+// yet, and a fast-forward of the base would read as the pickup having started. Null with none.
+function lastWorkCommitAt (work, states) {
+  return work.repos.map((r, i) => {
+    if (!exists(r.path)) return null
+    const base = states[i]?.base || r.base
+    const own = git(r.path, 'log', '-1', '--format=%cI', `refs/remotes/origin/${base}..HEAD`)
+    return own.code === 0 && own.out ? own.out : null
+  }).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null
+}
+
+// The attached repos whose catalogue entry says how to verify them, read in one scan; a repo
+// with no `check` has nothing a run could prove.
+function checkedRepos (work) {
+  const catalog = loadCatalog()
+  return (work.repos || []).filter(r => catalogEntryFor(catalog, r)?.check?.length)
+}
+
+// Whether what a repo carries now is what its checks last passed at: `verified` while the
+// branch checked out is the one that passed and its patch-id is the one recorded, whatever
+// happened to the head (a reworded commit, a rebase that left the diff alone); `stale` once the
+// diff changed; `elsewhere` when the pass is for another branch than the one checked out;
+// `unverified` with no pass recorded; `away` when the worktree is not on this machine, so the
+// pass stands uncompared; `unknown`, with the reason, when git could not say what it carries.
+function verificationOf (cfg, entry, work) {
+  const recorded = workBranch(entry, work)?.verified
+  if (!recorded) return { state: 'unverified' }
+  if (!exists(entry.path)) return { state: 'away', recorded }
+  const now = trees(cfg).patch({ dir: entry.path, base: entry.base })
+  if (now.error) return { state: 'unknown', recorded, error: now.error }
+  if (now.branch !== recorded.branch) return { state: 'elsewhere', recorded, on: now.branch }
+  return { state: now.patchId === recorded.patchId ? 'verified' : 'stale', recorded }
+}
+
+// What `rig next` is told: a pass for another branch is no pass for this one, and one it could
+// not compare is not offered a run.
+const verificationState = v => ({ elsewhere: 'unverified', away: 'unknown' })[v.state] || v.state
+
+const verificationLabel = (repo, v) => ({
+  verified: () => `verified at ${v.recorded.head.slice(0, 7)} on ${v.recorded.at.slice(0, 10)}`,
+  stale: () => `stale — the diff changed since it passed at ${v.recorded.head.slice(0, 7)}; \`rig check ${repo} --run\``,
+  elsewhere: () => `not verified on ${v.on || 'a detached HEAD'} — the pass recorded is for ${v.recorded.branch}; \`rig check ${repo} --run\``,
+  unverified: () => `not verified — \`rig check ${repo} --run\``,
+  away: () => `verified at ${v.recorded.head.slice(0, 7)} on ${v.recorded.at.slice(0, 10)}, not compared — the worktree is not on this machine`,
+  unknown: () => `unknown — ${v.error}`,
+})[v.state]()
+
+// What a run proved, kept on the work branch's record as `verified`: the branch it ran on, the
+// head, where that leaves the base, the patch-id of the diff between them, and the date —
+// `before` is all of that read before the run, with whatever was uncommitted then. A pass is
+// recorded only for what was committed, since uncommitted changes are in no patch anyone can
+// compare with later, and only on a branch, since a detached HEAD is in no PR. A failure clears
+// what passed, which is no longer the latest word on the repo; a run that never started is no
+// word at all. Answers `verified`, `cleared`, or null when the record is as it was.
+function recordVerification (entry, work, result, before) {
+  const record = workBranch(entry, work)
+  if (result === null) {
+    say(C.dim(`  ${entry.repo}: the checks did not run — nothing recorded or cleared`))
+    return null
+  }
+  if (result === false) {
+    if (!record?.verified) return null
+    delete record.verified
+    say(C.dim(`  ${entry.repo}: the pass recorded before is cleared`))
+    return 'cleared'
+  }
+  if (before.uncommitted) {
+    // `XY path` a line; the output comes trimmed, so the status is read as a word, not columns.
+    const files = before.uncommitted.split('\n').map(l => l.trim().replace(/^\S+\s+/, '')).filter(Boolean)
+    say(C.dim(`  ${entry.repo}: passed with uncommitted changes (${files.slice(0, 3).join(', ')}${files.length > 3 ? ', …' : ''}), which are in no patch — not recorded; commit, then run it again`))
+    return null
+  }
+  const { patch } = before
+  if (patch.error) {
+    warn(`${entry.repo}: passed, but git could not say what it passed at (${patch.error}) — not recorded`)
+    return null
+  }
+  if (!patch.branch) {
+    say(C.dim(`  ${entry.repo}: passed on a detached HEAD, which is in no PR — not recorded; check out a branch of this work, then run it again`))
+    return null
+  }
+  ensureBranchRecord(entry, work.branch, entry.base).verified = { ...patch, at: new Date().toISOString() }
+  ok(`${entry.repo}: verified at ${patch.head.slice(0, 7)} on ${patch.branch}`)
+  return 'verified'
 }
 
 // Catalogue only, exactly as decision 27 has it for the interview: no code is read, so the
@@ -3263,6 +3619,7 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const handedOff = handoffAt(work.id)
   const offers = nextFor({
     work,
     repos,
@@ -3294,6 +3651,9 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
+    verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationState(verificationOf(cfg, r, work)) })),
+    handoffAt: handedOff,
+    lastCommitAt: handedOff ? lastWorkCommitAt(work, states) : null,
     // Only once everything has merged, the one time the offer it feeds is made.
     docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
@@ -3308,7 +3668,17 @@ cmds.next = ({ flags }) => {
       if (r.pr?.state !== 'OPEN' || !r.pr.number) return []
       const { org, repo: name } = work.repos[i]
       const review = github().prReview(org, name, r.pr.number)
-      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks: review?.checks ?? null }]
+      const checks = review?.checks ?? null
+      if (!['FAILURE', 'ERROR'].includes(checks)) return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks }]
+      // Whether the base moved past the branch: `rig pr`'s base check (#208), asked here for a
+      // failing PR only, since that is the one offer that turns on it. Against the PR's live
+      // base, which a retargeted PR has moved off the recorded one. Fetched first, quietly and
+      // never as a first clone; a count the fetch could not bring forward is no count.
+      const entry = work.repos[i]
+      const base = states[i].base || workBranch(entry, work)?.base || entry.base
+      const t = trees(cfg)
+      const standing = t.refresh({ org, repo: name }) ? t.standing({ org, repo: name, branch: work.branch, base }) : null
+      return [{ repo: r.repo, unresolved: review?.unresolved ?? null, checks, base, behind: standing ? standing.behind : null }]
     }),
   })
 
@@ -3479,6 +3849,7 @@ cmds.pr = ({ flags }) => {
   const unknown = unknownStages(stack).map(st => st.branch)
   if (unknown.length) return warn(`GitHub would not say what became of ${unknown.join(', ')} — not opening a PR`)
 
+  const checked = checkedRepos(work)
   for (const entry of work.repos) {
     const state = repoState(cfg, entry, work.branch)
     // Said beside the PR rather than instead of it: the PR is opened from the remote's work
@@ -3503,6 +3874,10 @@ cmds.pr = ({ flags }) => {
     // guess which of the stack you meant.
     const base = workBranch(entry, work)?.base || entry.base
     sayStanding(cfg, entry, work.branch, base)
+    // Said, never stopped at, like the base: a reviewer may well want the PR before the checks.
+    const verified = checked.includes(entry) && verificationOf(cfg, entry, work)
+    if (verified && ['stale', 'elsewhere', 'unverified'].includes(verified.state)) step(`${entry.repo}: no check has passed at this patch — \`rig check ${entry.repo} --run\``)
+    if (verified?.state === 'unknown') step(`${entry.repo}: could not tell whether a check passed at this patch (${verified.error})`)
     const spec = repoSpec(entry)
     const text = prText(work, stack, { spec, link: linkOrSay(spec) })
     let made = null
@@ -3964,6 +4339,7 @@ cmds.close = ({ flags }) => {
       else if (error) warn(`${r.repo} ${s.branch}: ${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
     }
   }
+  sayLiveSessions(cfg, work)
   removeWorktrees(cfg, work, { force: !!flags.force })
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
@@ -4086,6 +4462,8 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
     .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds` }))
   const blockers = [...verdict.blockers.filter(b => LOCAL_BLOCKERS.has(b.kind)), ...strays]
   if (dryRun || (blockers.length && !force)) return { blockers, cleared: false }
+  // A session still at work here, on the machine whose copy this is, is named as `close` names one.
+  sayLiveSessions(cfg, work)
   // A worktree git refused to remove is not deleted from under it.
   if (!removeWorktrees(cfg, work, { force })) return { blockers, cleared: false }
   // The mirror only: the remote was the first close's to decide, and it already has. A stage
@@ -4641,6 +5019,7 @@ function doctorWork (cfg, id, root, roots) {
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [], holders }
   if (out.closed) return leftHere(cfg, work, roots) ? { ...out, leftover: stoppedOn(work) } : out
+  out.contextDoc = contextDocFindings(work, root)
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
@@ -4921,6 +5300,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        Jira ticket under that epic; --dry-run previews and creates nothing;
        --no-ticket records a declined ticket
        [--type feat] [--slug s | --branch b] [--repos a,b] [--setup]
+       [--stops repos,design | none]  the gates the agent waits at for the human;
+                                   absent, it waits at both
+       [--by-agent]                with --repos: the agent chose them, not the human
   rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
@@ -4929,6 +5311,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig ticket --remove <key>       take a key off the record, wherever it is held; the
                                   tracker is not told
   rig attach <repo> [--setup]     add a repo to the current work
+       [--by-agent]                the agent chose it, where the repo set is not a stop
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
                                   on the top of its stack; a branch the remote and the
@@ -4942,6 +5325,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
+       [--transcripts]             only the work's own session transcripts, a path a line,
+                                   from the patterns in rig.local.json
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record
@@ -4957,7 +5342,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                   on the work branch, with gh stack link
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
-                                  its build; --run runs them and exits non-zero on a failure
+                                  its build; --run runs them and exits non-zero on a failure,
+                                  and records each pass against the patch it ran at
   rig catalog [repo] [--verbose]  the repo catalogue: index, or one entry
   rig impact <repo>               what else a change in that repo reaches: the repos one and
                                   two hops away in talks_to, each with what was said, which
@@ -4975,6 +5361,13 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    heading and AGENTS.md — never the branch or the id
        [--outcome "..."]           what landed and why it was worth doing, in a sentence
                                    or two; again replaces it
+       [--stops repos,design | none]  change the gates the agent waits at for the human
+       [--by-agent]                with --designed: the agent agreed it, not the human;
+                                   agreed again without it, the human has seen it
+  rig note "..."                  append a row to the work's notes: a decision taken along the
+       --why "..."                 way, why, and a pointer at the evidence; commits the data root
+       --evidence <pointer,...>    a SHA, a PR, file:line, a path or a URL — never prose
+       [--stage <branch>] [--result "..."]
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
@@ -5110,7 +5503,7 @@ function invoke (argv) {
       if (needs) die(needs)
     }
     current.args = args
-    if (MUTATING.has(cmdName)) prepared = prepareDataRoot()
+    if (mutates(cmdName, args.flags)) prepared = prepareDataRoot()
     cmd(args)
   } catch (e) {
     if (!(e instanceof RigError)) throw e   // a bug: leave the data root as it is

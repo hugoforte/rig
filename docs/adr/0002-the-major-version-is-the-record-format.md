@@ -49,7 +49,7 @@ knows how to write stops moving after migration 1 and every later major silently
 take. From it:
 
 - data root major **>** tool major → the tool is old. Mutating commands (`new`, `ticket`,
-  `attach`, `detach`, `plan`, `save`, `close`) refuse; read-only ones (`list`, `status`,
+  `attach`, `detach`, `restore`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) refuse; read-only ones (`list`, `status`,
   `catalog`, `doctor`) carry on. Reading a newer record with an older rig is harmless, and a
   stale laptop can still answer "what work is open" on a plane.
 - data root major **<** tool major → migrations are pending. `rig update` runs them, once the

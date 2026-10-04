@@ -642,6 +642,40 @@ test('an open PR is walked through its review: threads, then the adversarial rev
   assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'nor while GitHub will not say what the review is')
 })
 
+test('a failing check on a PR whose base moved names the base, read off a quiet fresh fetch', () => {
+  const state = github()
+  const pr = state.repos['acme/billing'].prs.find(p => p.number === 9)
+  Object.assign(pr, { checks: 'FAILURE', reviewUnknown: false })
+  setGithub(state)
+  const mirror = path.join(workRoot, '.mirrors', 'acme', 'billing.git')
+  try {
+    assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /stale base/, 'the base has not moved yet')
+
+    // Someone else lands on main, and only the remote knows.
+    const other = path.join(workRoot, '..', 'stale-base-other')
+    gitMust(path.dirname(other), 'clone', '-q', bare('billing'), other)
+    fs.writeFileSync(path.join(other, 'LANDED.md'), 'landed elsewhere\n')
+    gitMust(other, 'add', '-A')
+    gitMust(other, 'commit', '-qm', 'landed elsewhere')
+    gitMust(other, 'push', '-q', 'origin', 'HEAD:main')
+
+    const r = rig(['next', '--work', 'what-now'])
+    assert.match(r.out, /billing: the PR's checks are failing — fix them before it is handed over; main has 1 commit the branch does not, so a failure in code the diff never touched may be a stale base/)
+    assert.match(r.out, /git merge origin\/main$/m)
+    assert.doesNotMatch(r.out, /^(!|· fetching)/m, 'the fetch says nothing, and next never warns')
+
+    // Offline: a mirror that cannot be fetched gives no count, so no stale base, and no warning.
+    gitMust(mirror, 'remote', 'set-url', 'origin', path.join(workRoot, '..', 'nowhere.git'))
+    const offline = rig(['next', '--work', 'what-now'])
+    assert.equal(offline.code, 0, offline.out)
+    assert.doesNotMatch(offline.out, /stale base|^!/m)
+  } finally {
+    gitMust(mirror, 'remote', 'set-url', 'origin', bare('billing'))
+    Object.assign(pr, { checks: 'SUCCESS' })
+    setGithub(state)
+  }
+})
+
 test('a closed work refuses the adversarial review, and records nothing', () => {
   const r = rig(['save', '--work', 'squashed', '-m', 'adversarial review', '--reviewed'])
   assert.equal(r.code, 1, r.out)

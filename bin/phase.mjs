@@ -52,6 +52,13 @@ export const TERMINAL = ['closed', 'abandoned']
 // `documentedAt` is the user docs kept true once the work landed, passable after the close too.
 export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
 
+// The gates that may stop being stops — where the agent waits for the human — chosen per work
+// as `stops`. A record with no `stops` waits at both, as every work did before the choice
+// existed. The ticket decision is the human's at `rig new` already, and the lesson review stays a
+// stop because skipping it would let an agent file issues and edit the org doc unseen.
+export const STOP_WORDS = { repos: 'the repo set', design: 'the design' }
+export const STOPPABLE = Object.keys(STOP_WORDS)
+
 const MERGED = 'MERGED'
 
 // The gates a record has passed, each with its date, in the order they were passed: a lesson

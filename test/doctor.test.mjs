@@ -342,6 +342,21 @@ test('a work folder that is missing is said once, and nothing under it is guesse
   assert.equal(problemCount(found), 1)
 })
 
+test('a context doc is checked whether or not the work folder is here, and only a heading counts', () => {
+  const found = doctorFindings(snap({
+    works: [{
+      id: 'w', closed: false, contradictions: [], folderMissing: true, strays: [], repos: [],
+      contextDoc: [
+        { text: 'D:\\data\\work\\w\\context.md:12: no "## Problem" heading', counts: true },
+        { text: 'D:\\data\\work\\w\\context.md:30: still the template\'s placeholder "_TODO_"', counts: false },
+      ],
+    }],
+  }))
+  assert.match(says(found), /w: D:\\data\\work\\w\\context\.md:12: no "## Problem" heading/)
+  assert.match(says(found), /w: D:\\data\\work\\w\\context\.md:30: still the template's placeholder/)
+  assert.equal(problemCount(found), 2, 'the heading and the missing folder; the placeholder is a chore')
+})
+
 test('a missing work folder or worktree names the command that puts it back', () => {
   const found = doctorFindings(snap({
     works: [
