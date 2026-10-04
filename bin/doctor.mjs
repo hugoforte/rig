@@ -342,6 +342,8 @@ export function doctorFindings (snap = {}) {
       if (w.leftover) out.push(warn(`${w.id}: ${w.leftover}, but its folder is still on this machine — \`rig tidy\` clears it`))
       continue
     }
+    // The context doc lives in the data root, so it is checked whether or not the folder is here.
+    for (const line of w.contextDoc || []) out.push(warn(`${w.id}: ${line}`))
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))

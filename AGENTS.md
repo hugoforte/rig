@@ -302,6 +302,14 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 you have content for them**. Empty stubs are how the last attempt ended up with a dead
 "Cross-Repo Contracts" table containing one blank row.
 
+**The four are checked; the rest are not.** `rig save` checks the doc against
+`templates/context.md` and prints each problem as `path:line: problem`, so an editor opens it
+where it is, and `rig doctor` lists them under the work: a scaffolded heading lost or renamed, the
+four out of order, and — once the design gate has passed — a placeholder of the template's still
+standing (`_TODO_`, `_next step_`, an empty table row). Before the gate, placeholders are what a
+doc being written looks like. A section from `context-sections.md` is never required. Neither
+command refuses.
+
 Two habits worth keeping from the docs this inherits:
 
 - **Inline epistemic markers.** `✅ CONFIRMED (2026-06-12)` / `❌ REFUTED by data (2026-06-12)`

@@ -21,6 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { transcriptsFor, refusal } from './transcripts.mjs'
+import { contextDocProblems } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
@@ -2773,6 +2774,17 @@ cmds.save = ({ flags }) => {
     ok(`${id}: titled "${title}"`)
   }
   saveWork(cfg, work)
+  // The doc this save commits, checked against its template, said and never refused on.
+  for (const line of contextDocFindings(work)) warn(line)
+}
+
+// A work's context doc against the template it was made from, as `path:line: problem`, so an
+// editor opens each one where it is (decision 205). Nothing when there is no doc to check.
+function contextDocFindings (work, root = dataRoot()) {
+  const file = path.join(recordDir(work.id, root), 'context.md')
+  if (!exists(file)) return []
+  const template = readText(path.join(toolRoot(), 'templates', 'context.md'))
+  return contextDocProblems(readText(file), { template, designed: !!work.designedAt }).map(p => `${file}:${p.line}: ${p.problem}`)
 }
 
 cmds.detach = ({ flags, positional }) => {
@@ -4958,6 +4970,7 @@ function doctorWork (cfg, id, root, roots) {
   }
   const out = { id, closed: !!work.closedAt, contradictions: contradictions(work), folderMissing: false, strays: [], repos: [], holders }
   if (out.closed) return leftHere(cfg, work, roots) ? { ...out, leftover: stoppedOn(work) } : out
+  out.contextDoc = contextDocFindings(work, root)
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES])
