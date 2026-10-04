@@ -2751,6 +2751,7 @@ cmds.detach = ({ flags, positional }) => {
 
   const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
+  sayLiveSessions(cfg, work, [entry.path])
 
   // Out of the worktree before it goes, for the reason `close` gives.
   if (standingIn(entry.path)) chdir(toolRoot())
@@ -3105,7 +3106,11 @@ cmds.list = ({ flags }) => {
     // listing is (decision 77). So on a work that has stages the verdict says what it
     // measured and no more — the same rule `--quick` and `prUnknown` already follow. The
     // record alone answers this, so a work with no stages costs nothing and reads unchanged.
-    const unchecked = work.stages.length ? ' (stages not checked)' : ''
+    // Nor does it look for a session still at work in a worktree, which `close` names: one
+    // transcript scan per work is not what a listing is either. Said only where this machine
+    // could have looked, since without transcript patterns `close` cannot either.
+    const notChecked = [work.stages.length && 'stages', Array.isArray(cfg.transcripts) && cfg.transcripts.length && 'sessions'].filter(Boolean)
+    const unchecked = notChecked.length ? ` (${notChecked.join(' and ')} not checked)` : ''
     if (live && verdict.done) {
       // The qualifier is dim outside the green: its job is to take the edge off the verdict,
       // and the colour the verdict is printed in is half of that edge.
@@ -3176,12 +3181,32 @@ cmds.dash = ({ flags }) => {
 // The work's own session transcripts, one path a line on stdout and nothing else there, for the
 // lesson review to read (decision 201). What is said about them goes to stderr beside it.
 // The workspaces are the work folder and its worktrees, so nothing of another work is found.
-function workTranscripts (cfg, work) {
+function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...work.repos.map(r => r.path)]) {
   return transcriptsFor({
     patterns: Array.isArray(cfg.transcripts) ? cfg.transcripts : [],
-    workspaces: [workDir(cfg, work.id), ...work.repos.map(r => r.path)],
+    workspaces,
     home: env().USERPROFILE || env().HOME || os.homedir(),
   })
+}
+
+// How long a session counts as still at work after it last wrote. A constant, not a setting,
+// until someone needs it to vary.
+const LIVE_SESSION_HOURS = 2
+
+// The sessions that wrote in one of `workspaces` lately, named before `close` or `detach` takes
+// a worktree from under them, and never refused on (decision 66): a clean worktree a session is
+// about to write into looks exactly like an abandoned one, and only the session can say which.
+// The session running this command is left out where the machine names the variable that
+// carries its id (`transcriptSession`), since a transcript is named by it.
+function sayLiveSessions (cfg, work, workspaces) {
+  const self = typeof cfg.transcriptSession === 'string' ? env()[cfg.transcriptSession] : null
+  const since = Date.now() - LIVE_SESSION_HOURS * 3600 * 1000
+  const live = workTranscripts(cfg, work, workspaces).found
+    .filter(t => Date.parse(t.modifiedAt) >= since && !(self && path.basename(t.path).includes(self)))
+  for (const t of live) {
+    const where = work.repos.find(r => r.path === t.workspace)?.repo || 'the work folder'
+    warn(`${where}: a session wrote ${path.basename(t.path)} ${relativeAge(t.modifiedAt)} — it may still be working there`)
+  }
 }
 
 function sayTranscripts (cfg, work) {
@@ -4184,6 +4209,7 @@ cmds.close = ({ flags }) => {
       else if (error) warn(`${r.repo} ${s.branch}: ${error} — not recorded; \`rig backfill --work ${id}\` once GitHub answers again`)
     }
   }
+  sayLiveSessions(cfg, work)
   removeWorktrees(cfg, work, { force: !!flags.force })
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:

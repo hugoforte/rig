@@ -110,3 +110,49 @@ test('a pattern that names no workspace is refused by name', () => {
   assert.equal(r.stdout.trim(), '')
   assert.match(r.out, /names no workspace — it would read every work's sessions; put \{slug\} where the workspace goes/)
 })
+
+// ------------------------------------------------- a session still at work (hugoforte/rig#292)
+
+const setMachine = over => fs.writeFileSync(machineFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(machineFile, 'utf8')), ...over }, null, 2))
+const aged = (file, hours) => { const t = new Date(Date.now() - hours * 3600 * 1000); fs.utimesSync(file, t, t) }
+
+test('close names a session that wrote in a worktree lately, and closes all the same', () => {
+  setMachine({ transcripts: [hostPattern], transcriptSession: undefined })
+  assert.equal(m.rig(['new', 'busy', '--title', 'A work someone is in', '--no-ticket', '--repos', 'billing']).code, 0)
+  sessionOf(m.worktree('busy', 'billing'), 'live.jsonl')
+  const r = m.rig(['close', '--work', 'busy'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: a session wrote live\.jsonl (just now|\d+m ago) — it may still be working there/)
+  assert.ok(!fs.existsSync(m.worktree('busy', 'billing')), 'it closed anyway')
+})
+
+test('a session that last wrote longer ago than the window is not named', () => {
+  assert.equal(m.rig(['new', 'quiet', '--title', 'A work nobody is in', '--no-ticket', '--repos', 'billing']).code, 0)
+  aged(sessionOf(m.worktree('quiet', 'billing'), 'old.jsonl'), 3)
+  const r = m.rig(['close', '--work', 'quiet'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /may still be working/)
+})
+
+test('the session running the command is not named, where the machine says how to tell it', () => {
+  setMachine({ transcriptSession: 'RIG_TEST_SESSION_ID' })
+  assert.equal(m.rig(['new', 'mine', '--title', 'The work this session is in', '--no-ticket', '--repos', 'billing']).code, 0)
+  sessionOf(path.join(m.workRoot, 'mine'), 'abc-123.jsonl')
+  const r = m.rig(['close', '--work', 'mine'], { env: { ...m.env, RIG_TEST_SESSION_ID: 'abc-123' } })
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /may still be working/)
+})
+
+test('detach names a session that wrote in that worktree lately, and detaches all the same', () => {
+  assert.equal(m.rig(['new', 'shared', '--title', 'A worktree in use', '--no-ticket', '--repos', 'billing']).code, 0)
+  sessionOf(m.worktree('shared', 'billing'), 'other.jsonl')
+  const r = m.rig(['detach', 'billing', '--work', 'shared'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: a session wrote other\.jsonl (just now|\d+m ago) — it may still be working there/)
+})
+
+test('list says it did not look for sessions before calling a work safe to close', () => {
+  assert.equal(m.rig(['new', 'listed', '--title', 'Closable', '--no-ticket', '--repos', 'billing']).code, 0)
+  const r = m.rig(['list'])
+  assert.match(r.out, /listed[\s\S]*?`rig close` would not refuse \(sessions not checked\)/)
+})

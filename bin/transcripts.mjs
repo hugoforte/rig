@@ -16,8 +16,8 @@ export const slugOf = workspace => workspace.replace(/[^A-Za-z0-9]/g, '-')
 
 const fileMatcher = glob => new RegExp(`^${glob.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i')
 
-// `{ found, unscoped }`: each transcript as `{ path, modifiedAt }`, oldest first, and the
-// patterns refused for naming no workspace.
+// `{ found, unscoped }`: each transcript as `{ path, workspace, modifiedAt }`, oldest first, and
+// the patterns refused for naming no workspace.
 export function transcriptsFor ({ patterns = [], workspaces = [], home }) {
   const unscoped = patterns.filter(p => !p.includes('{slug}'))
   const found = new Map()
@@ -31,7 +31,7 @@ export function transcriptsFor ({ patterns = [], workspaces = [], home }) {
       for (const name of names.filter(n => matches.test(n))) {
         const file = path.join(dir, name)
         const stat = fs.statSync(file, { throwIfNoEntry: false })
-        if (stat?.isFile()) found.set(file, { path: file, modifiedAt: stat.mtime.toISOString() })
+        if (stat?.isFile()) found.set(file, { path: file, workspace, modifiedAt: stat.mtime.toISOString() })
       }
     }
   }

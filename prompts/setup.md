@@ -47,17 +47,21 @@ keeps the global default.
 **E. Work root** — every path. `D:\w` (or `%USERPROFILE%\w`) unless there is a reason.
 
 **F. Session transcripts** — every path, optional. Where this machine's agent host keeps its
-sessions, so the lesson review can read the conversations that did a work. It goes in
-`rig.local.json` by hand, as a list of patterns: `{slug}` stands for a workspace's path with
-every character but a letter or digit made a dash, `~` for the home folder, and a `*` in the
-last part matches file names. Claude Code's:
+sessions, so the lesson review can read the conversations that did a work, and `rig close` and
+`rig detach` can name a session still at work in a worktree. It goes in `rig.local.json` by
+hand, as a list of patterns: `{slug}` stands for a workspace's path with every character but a
+letter or digit made a dash, `~` for the home folder, and a `*` in the last part matches file
+names. `transcriptSession` names the environment variable that carries the running session's
+id, which the host names its transcript by, so a session is never warned about itself. Claude
+Code's:
 
 ```json
-"transcripts": ["~/.claude/projects/{slug}/*.jsonl"]
+"transcripts": ["~/.claude/projects/{slug}/*.jsonl"],
+"transcriptSession": "CLAUDE_CODE_SESSION_ID"
 ```
 
 A pattern without `{slug}` finds nothing, since it would read every work's sessions alike. With
-none, the lesson review carries on without them.
+none, the lesson review carries on without them, and nothing is named at a close.
 
 ## Step 3: Confirm and write
 
