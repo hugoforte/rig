@@ -619,6 +619,12 @@ test('the checkout a command runs in chooses the root that catalogues its repo',
   assert.match(r.out, /data root: personal \(the repo it is about\)/)
 })
 
+test('the root a command chose is said beside its answer, so `list --json` is JSON alone', () => {
+  const r = rig(['list', '--json', '--quick'], { cwd: checkoutAt('somewhere/piped', 'ledger') })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/, 'still said')
+  assert.doesNotThrow(() => JSON.parse(r.stdout), 'and a pipe gets the payload and nothing else')
+})
+
 test('a checkout of another org\'s repo with the same name is not placed by it', () => {
   const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/other-org', 'ledger', 'someone-else') })
   assert.match(r.out, /data root: hugoforte \(current\)/)

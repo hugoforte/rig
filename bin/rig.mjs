@@ -446,10 +446,11 @@ const mirrorLegacyDataRoot = machine => {
 }
 
 const CHOSE_QUIETLY = { current: 'current', repo: 'the repo it is about' }
+// Beside the answer rather than in it, so `rig list --json` piped somewhere is the payload alone.
 function sayCurrentRoot () {
   const w = where()
   if (CHOSE_QUIETLY[w.source] && Object.keys(w.roots).length > 1) {
-    say(C.dim(`· data root: ${w.name} (${CHOSE_QUIETLY[w.source]})`))
+    aside(C.dim(`· data root: ${w.name} (${CHOSE_QUIETLY[w.source]})`))
   }
 }
 const dataRoot = () => where().dataRoot
