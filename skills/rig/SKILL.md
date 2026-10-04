@@ -51,6 +51,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |
 | Context doc edited by hand | `rig save -m "…"` |
+| A decision taken along the way, worth a reviewer seeing | `rig note "…" --why "…" --evidence <sha,pr,file:line>` |
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
@@ -64,7 +65,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
 
-**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. Each `rig prompt` ends by stopping unless the work skips that stop; do not run past it.
+**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. The interviews — `rig prompt setup`, `new-work` and `select-repos` — end by stopping unless the work skips that stop; do not run past them. `rig prompt pickup` is no interview, and ends by starting.
 
 **When a PR's checks fail, find the cause before you act.** Work the frontier first: `rig next` names the lowest stage still to land and what is waiting on it.
 

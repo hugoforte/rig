@@ -1179,6 +1179,8 @@ function parseArgs (argv) {
   const positional = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
+    // `--` ends the flags, as it does for git: a note may begin with a dash.
+    if (a === '--') { positional.push(...argv.slice(i + 1)); break }
     if (!isFlag(a)) { positional.push(a); continue }
     // `--flag`, `--flag=value`, `--flag value`; `-m value` is `--message value`.
     // Split at the first `=` only: a value may carry its own, as a title or a message can.
@@ -2644,40 +2646,6 @@ function offerNeighbours (work, name) {
 // `--learned` records the lesson review the same way, and `--reviewed` the adversarial review.
 // `--title` corrects the title in the record and the two headings that show it, and never the
 // branch or the id. `--outcome` records what landed and why it was worth doing.
-// A work's notes: one row per decision a session took along the way — what, why, and a pointer
-// at the evidence — in `notes.tsv` beside the context doc (decision 204). Appended and never
-// read to be written, so the hundredth costs what the first did. A row is the shape of the
-// file: one line a cell, tab-separated, so a cell that would break that is refused.
-const NOTE_COLUMNS = ['at', 'stage', 'note', 'why', 'evidence', 'result']
-// A SHA, a PR (`#5`, `owner/repo#5`), `file:line`, a path or a URL: no whitespace, several split
-// by commas. What a reviewer can open, which is what makes the trail checkable.
-const isPointer = s => s.split(',').every(p => p.trim() && !/\s/.test(p.trim()))
-
-cmds.note = ({ flags, positional }) => {
-  const cfg = config()
-  const work = openWork(cfg, flags)
-  const cell = (name, value) => {
-    if (value === true) die(`--${name} needs its text`)
-    const text = typeof value === 'string' ? value.trim() : ''
-    if (/[\r\n\t]/.test(text)) die(`--${name} takes one line, with no tab — a note is one row`)
-    return text
-  }
-  const note = positional.join(' ').trim()
-  if (!note) die('rig note wants the note: what was chosen or done, in one line')
-  if (/[\r\n\t]/.test(note)) die('the note takes one line, with no tab — a note is one row')
-  const why = cell('why', flags.why)
-  if (!why) die('a note needs --why: the reason, in plain words')
-  const evidence = cell('evidence', flags.evidence)
-  if (!evidence) die('a note needs --evidence: a pointer a reviewer can open — a SHA, a PR, file:line, a path or a URL')
-  if (!isPointer(evidence)) die('--evidence is a pointer — a SHA, a PR, file:line, a path or a URL, several split by commas — not prose')
-  const row = [new Date().toISOString(), cell('stage', flags.stage), note, why, evidence, cell('result', flags.result)]
-  commitAs(work.id, note)
-  const file = path.join(recordDir(work.id), 'notes.tsv')
-  if (!exists(file)) fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`)
-  fs.appendFileSync(file, `${row.join('\t')}\n`)
-  ok(`${work.id}: noted`)
-}
-
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -2785,6 +2753,72 @@ function contextDocFindings (work, root = dataRoot()) {
   if (!exists(file)) return []
   const template = readText(path.join(toolRoot(), 'templates', 'context.md'))
   return contextDocProblems(readText(file), { template, designed: !!work.designedAt }).map(p => `${file}:${p.line}: ${p.problem}`)
+}
+
+// A work's notes: one row per decision a session took along the way — what, why, and a pointer
+// at the evidence — in `notes.tsv` beside the context doc (decision 204). Appended and never
+// read to be written, so the hundredth costs what the first did. A row is the shape of the
+// file: one line a cell, tab-separated, so a cell that would break that is refused.
+const NOTE_COLUMNS = ['at', 'stage', 'note', 'why', 'evidence', 'result']
+// What a reviewer can open: a SHA, a PR (`owner/repo#5`), a URL, or a path or `file:line`, which
+// carries a `/`, a `\`, a `:` or a `.`. A word with none of those, like "done", is a claim and
+// not a pointer, and neither is anything with a space in it: a path with one is written `%20`.
+const isPointer = p => !/\s/.test(p) && (/^[0-9a-f]{7,40}$/i.test(p) || /^([\w.-]+\/[\w.-]+)?#\d+$/.test(p) || /[/\\:.]/.test(p))
+
+// The notes file, made with its header only by the command that finds it missing or empty, so
+// two sessions taking a work's first note at once cannot truncate each other's. A `.gitattributes`
+// beside it merges two machines' appends as both rows, rather than as a conflict at the end.
+function notesFile (id) {
+  const file = path.join(recordDir(id), 'notes.tsv')
+  try {
+    fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`, { flag: 'wx' })
+    fs.writeFileSync(path.join(recordDir(id), '.gitattributes'), 'notes.tsv merge=union\n', { flag: 'a' })
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e
+    if (fs.statSync(file).size === 0) fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`)
+  }
+  return file
+}
+
+// Whether a file ends in a newline, read from its last byte alone, so a row is never glued onto
+// the end of one a hand left unfinished and the file is still never read.
+function endsInNewline (file) {
+  const size = fs.statSync(file).size
+  if (!size) return true
+  const fd = fs.openSync(file, 'r')
+  try {
+    const last = Buffer.alloc(1)
+    fs.readSync(fd, last, 0, 1, size - 1)
+    return last[0] === 0x0a
+  } finally { fs.closeSync(fd) }
+}
+
+cmds.note = ({ flags, positional }) => {
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  const cell = (name, value) => {
+    if (value === true) die(`--${name} needs its text`)
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (/[\r\n\t]/.test(text)) die(`--${name} takes one line, with no tab — a note is one row`)
+    return text
+  }
+  const note = positional.join(' ').trim()
+  if (!note) die('rig note wants the note: what was chosen or done, in one line')
+  if (/[\r\n\t]/.test(note)) die('the note takes one line, with no tab — a note is one row')
+  const why = cell('why', flags.why)
+  if (!why) die('a note needs --why: the reason, in plain words')
+  const pointers = cell('evidence', flags.evidence).split(',').map(p => p.trim()).filter(Boolean)
+  if (!pointers.length) die('a note needs --evidence: a pointer a reviewer can open — a SHA, a PR, file:line, a path or a URL')
+  if (!pointers.every(isPointer)) die('--evidence is a pointer — a SHA, a PR, file:line, a path or a URL, several split by commas — not prose')
+  const stage = cell('stage', flags.stage)
+  // Said, never refused: a stage may be noted before it is declared.
+  if (stage && work.stages.length && !work.stages.some(s => s.branch === stage)) warn(`${stage} is not one of ${work.id}'s stages — \`rig stage\` lists them`)
+  if (work.closedAt) warn(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — this note comes after its story`)
+  const row = [new Date().toISOString(), stage, note, why, pointers.join(','), cell('result', flags.result)]
+  commitAs(work.id, note.length > 72 ? `${note.slice(0, 71)}…` : note)
+  const file = notesFile(work.id)
+  fs.appendFileSync(file, `${endsInNewline(file) ? '' : '\n'}${row.join('\t')}\n`)
+  ok(`${work.id}: noted`)
 }
 
 cmds.detach = ({ flags, positional }) => {
@@ -3453,8 +3487,21 @@ cmds.check = ({ flags, positional }) => {
 function handoffAt (id) {
   const file = path.join(recordDir(id), 'handoff.md')
   if (!exists(file)) return null
-  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', path.relative(dataRoot(), file).split(path.sep).join('/'))
+  // `icase`, since the file system found it whatever its case and git's pathspec would not.
+  const r = git(dataRoot(), 'log', '-1', '--format=%cI', '--', `:(icase)${path.relative(dataRoot(), file).split(path.sep).join('/')}`)
   return r.code === 0 && r.out ? r.out : null
+}
+
+// The newest commit of the work's own on any branch checked out here: what HEAD has over the
+// base it lands on. HEAD's own date would be the base's tip on a branch with nothing of its own
+// yet, and a fast-forward of the base would read as the pickup having started. Null with none.
+function lastWorkCommitAt (work, states) {
+  return work.repos.map((r, i) => {
+    if (!exists(r.path)) return null
+    const base = states[i]?.base || r.base
+    const own = git(r.path, 'log', '-1', '--format=%cI', `refs/remotes/origin/${base}..HEAD`)
+    return own.code === 0 && own.out ? own.out : null
+  }).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null
 }
 
 // The attached repos whose catalogue entry says how to verify them, read in one scan; a repo
@@ -3569,6 +3616,7 @@ cmds.next = ({ flags }) => {
   const repos = verdict.repos.map((v, i) => ({ ...v, pushed: !!states[i].pushed, on: states[i].on ?? null }))
 
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
+  const handedOff = handoffAt(work.id)
   const offers = nextFor({
     work,
     repos,
@@ -3601,10 +3649,8 @@ cmds.next = ({ flags }) => {
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
     verification: checkedRepos(work).map(r => ({ repo: r.repo, state: verificationState(verificationOf(cfg, r, work)) })),
-    handoffAt: handoffAt(work.id),
-    lastCommitAt: work.repos.filter(r => exists(r.path))
-      .map(r => git(r.path, 'log', '-1', '--format=%cI', 'HEAD')).filter(r => r.code === 0 && r.out)
-      .map(r => r.out).sort((a, b) => Date.parse(a) - Date.parse(b)).pop() || null,
+    handoffAt: handedOff,
+    lastCommitAt: handedOff ? lastWorkCommitAt(work, states) : null,
     // Only once everything has merged, the one time the offer it feeds is made.
     docs: repos.length && repos.every(r => r.merged) ? docsTargets(work) : [],
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.

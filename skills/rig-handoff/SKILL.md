@@ -38,7 +38,7 @@ Check that the push landed before going on: the save's last line must end `and p
 ## What it says
 
 - **Suggested skills**: a section naming which skills the next agent should call the Skill tool for. Inside a work, `rig` is always one of them.
-- Do not duplicate content already captured in other artifacts — the work's `context.md`, specs, plans, ADRs, issues, commits, diffs. Reference them by path or URL instead. Inside a work, the context doc is the design; the handoff is what happened since, what is half-done, and what the next agent would otherwise have to rediscover.
+- Do not duplicate content already captured in other artifacts — the work's `context.md`, its `notes.tsv`, specs, plans, ADRs, issues, commits, diffs. A decision this session took along the way belongs in the notes, with `rig note`, rather than in the handoff. Reference them by path or URL instead. Inside a work, the context doc is the design; the handoff is what happened since, what is half-done, and what the next agent would otherwise have to rediscover.
 - Redact any sensitive information: API keys, passwords, personally identifiable information.
 - If the user passed arguments, treat them as a description of what the next session will focus on and tailor the document accordingly.
 
@@ -47,8 +47,10 @@ Check that the push landed before going on: the save's last line must end `and p
 The last thing in the reply is a prompt the user can paste into a fresh session, as one fenced block. Inside a work, run `rig status` once more after the save: its `handoff` line names the handoff on the data root's remote, which is the address every machine can read.
 
 ```text
-/rig Pick up the work <id>. Run `rig restore <id>` and work from the folder it names. Read <the handoff line of rig status> first, then continue with: <next focus>.
+/rig Pick up the work <id>. Run `rig restore <id>`, then `rig prompt pickup` and follow it. The handoff is <the handoff line of rig status>. Next focus: <next focus>.
 ```
+
+`rig prompt pickup` is the reading half: it trusts the trail, checks once only what the next step stands on, and names the resume point. If this session goes on working instead, `rig next` will offer it the pickup of its own handoff until its next commit; that offer is for the next session, not this one.
 
 Nothing in it is this machine's, and nothing needs pulling first: `rig restore` fast-forwards the data root before it reads the record. The next session may be on a machine that has the data root and no work folder, and `rig restore` rebuilds the folder from the record — on a machine that already has it, it changes nothing — and its last line names where the folder is. When the data root has no remote, `rig status` names a local path and says so; keep it, and tell the user the prompt only works on this machine.
 
