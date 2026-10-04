@@ -20,7 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { transcriptsFor } from './transcripts.mjs'
+import { transcriptsFor, refusal } from './transcripts.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
@@ -1167,7 +1167,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent', 'transcripts'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -3109,7 +3109,7 @@ cmds.list = ({ flags }) => {
     // Nor does it look for a session still at work in a worktree, which `close` names: one
     // transcript scan per work is not what a listing is either. Said only where this machine
     // could have looked, since without transcript patterns `close` cannot either.
-    const notChecked = [work.stages.length && 'stages', Array.isArray(cfg.transcripts) && cfg.transcripts.length && 'sessions'].filter(Boolean)
+    const notChecked = [work.stages.length && 'stages', looksForSessions(cfg) && 'sessions'].filter(Boolean)
     const unchecked = notChecked.length ? ` (${notChecked.join(' and ')} not checked)` : ''
     if (live && verdict.done) {
       // The qualifier is dim outside the green: its job is to take the edge off the verdict,
@@ -3183,36 +3183,54 @@ cmds.dash = ({ flags }) => {
 // The workspaces are the work folder and its worktrees, so nothing of another work is found.
 function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...work.repos.map(r => r.path)]) {
   return transcriptsFor({
-    patterns: Array.isArray(cfg.transcripts) ? cfg.transcripts : [],
+    patterns: transcriptPatterns(cfg),
     workspaces,
     home: env().USERPROFILE || env().HOME || os.homedir(),
   })
 }
 
+// The machine's transcript patterns, or why they cannot be read: a misshapen value is a mistake
+// to name, never the same as having none.
+function transcriptPatterns (cfg) {
+  const t = cfg.transcripts
+  if (t === undefined || t === null) return []
+  if (!Array.isArray(t) || !t.every(p => typeof p === 'string' && p.trim())) {
+    die(`\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]`)
+  }
+  return t
+}
+
+// Whether this machine could look for a session at all: a pattern that is refused finds nothing.
+const looksForSessions = cfg => transcriptPatterns(cfg).some(p => !refusal(p))
+
 // How long a session counts as still at work after it last wrote. A constant, not a setting,
 // until someone needs it to vary.
 const LIVE_SESSION_HOURS = 2
 
-// The sessions that wrote in one of `workspaces` lately, named before `close` or `detach` takes
-// a worktree from under them, and never refused on (decision 66): a clean worktree a session is
-// about to write into looks exactly like an abandoned one, and only the session can say which.
-// The session running this command is left out where the machine names the variable that
-// carries its id (`transcriptSession`), since a transcript is named by it.
+// The sessions that wrote in one of `workspaces` lately, named before `close`, `detach` or
+// `tidy` takes a worktree from under them, and never refused on (decision 66): a clean worktree
+// a session is about to write into looks exactly like an abandoned one, and only the session can
+// say which. Said at the teardown, since rig speaks unasked nowhere earlier. The session running
+// this command is left out where the machine names the variable that carries its id
+// (`transcriptSession`): a host names a session's transcript, or its folder, by it.
 function sayLiveSessions (cfg, work, workspaces) {
   const self = typeof cfg.transcriptSession === 'string' ? env()[cfg.transcriptSession] : null
   const since = Date.now() - LIVE_SESSION_HOURS * 3600 * 1000
-  const live = workTranscripts(cfg, work, workspaces).found
-    .filter(t => Date.parse(t.modifiedAt) >= since && !(self && path.basename(t.path).includes(self)))
+  const ours = t => self && t.path.split(/[\\/]/).some(part => part === self || path.parse(part).name === self)
+  const { found, refused } = workTranscripts(cfg, work, workspaces)
+  for (const r of refused) warn(`transcripts: "${r.pattern}" finds nothing: ${r.why}`)
+  const live = found.filter(t => Date.parse(t.modifiedAt) >= since && !ours(t))
   for (const t of live) {
     const where = work.repos.find(r => r.path === t.workspace)?.repo || 'the work folder'
     warn(`${where}: a session wrote ${path.basename(t.path)} ${relativeAge(t.modifiedAt)} — it may still be working there`)
   }
+  if (live.length && !self) say(C.dim(`  one of them may be this session — \`transcriptSession\` in ${localConfigFile()} names the variable carrying its id`))
 }
 
 function sayTranscripts (cfg, work) {
-  const { found, unscoped } = workTranscripts(cfg, work)
-  for (const p of unscoped) aside(C.yellow(`! transcripts: "${p}" names no workspace — it would read every work's sessions; put {slug} where the workspace goes`))
-  if (!Array.isArray(cfg.transcripts) || !cfg.transcripts.length) {
+  const { found, refused } = workTranscripts(cfg, work)
+  for (const r of refused) aside(C.yellow(`! transcripts: "${r.pattern}" finds nothing: ${r.why}`))
+  if (!transcriptPatterns(cfg).length) {
     aside(C.dim(`· no transcript locations on this machine — \`transcripts\` in ${localConfigFile()}, such as "~/.claude/projects/{slug}/*.jsonl"`))
   }
   for (const t of found) say(t.path)
@@ -3230,6 +3248,7 @@ const stopsLabel = stops => {
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
+  if (typeof flags.transcripts === 'string') die('--transcripts takes no value')
   if (flags.transcripts) return sayTranscripts(cfg, work)
   const id = work.id
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a
@@ -4345,6 +4364,8 @@ function clearLeftover (cfg, work, { force = false, dryRun = false } = {}) {
     .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds` }))
   const blockers = [...verdict.blockers.filter(b => LOCAL_BLOCKERS.has(b.kind)), ...strays]
   if (dryRun || (blockers.length && !force)) return { blockers, cleared: false }
+  // A session still at work here, on the machine whose copy this is, is named as `close` names one.
+  sayLiveSessions(cfg, work)
   // A worktree git refused to remove is not deleted from under it.
   if (!removeWorktrees(cfg, work, { force })) return { blockers, cleared: false }
   // The mirror only: the remote was the first close's to decide, and it already has. A stage

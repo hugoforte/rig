@@ -73,7 +73,7 @@ A session taking a work over from the handoff the last one left, trusting the tr
 _Avoid_: resume (that is the point it names), onboarding, catch-up
 
 **Transcript**:
-The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit.
+The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close` and `rig detach` tell a session may still be at work in a worktree.
 _Avoid_: log (a commit log is something else), chat, history
 
 **Frontier**:

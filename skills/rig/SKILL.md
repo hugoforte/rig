@@ -59,7 +59,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | What landed, explained to someone: a work, a repo, an org or a period | the `rig-digest` skill; `rig dash` for the numbers and the list |
 | Landed and verified where it was deployed: the user docs | the `rig-docs` skill, then `rig save -m "user docs updated" --documented` |
 | Leaving a work for another session | the `rig-handoff` skill |
-| Finished | `rig close` |
+| Finished | `rig close`; if it names a session still at work, tell the user which |
 | Stopped without finishing | `rig close --abandoned` |
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |

@@ -688,13 +688,17 @@ kept otherwise, naming the first commit that did not. A close forced past a bloc
 abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 **A session still at work is named, not refused on.** A clean worktree a live session is about
-to write into looks exactly like an abandoned one. So before `rig close` or `rig detach` takes a
-worktree away, it names each session whose transcript was written there, or in the work folder,
-in the last two hours — found the way the lesson review finds them, through `rig.local.json`'s
-`transcripts` — and carries on: only that session can say whether it is done. The session
-running the command is left out where `transcriptSession` names the variable carrying its id.
-`rig list` does not look, and says "(sessions not checked)" beside a work it would call safe to
-close, on a machine that could have.
+to write into looks exactly like an abandoned one. So before `rig close`, `rig detach` or
+`rig tidy` takes a worktree away, it names each session whose transcript was written there, or
+in the work folder, in the last two hours — found the way the lesson review finds them, through
+`rig.local.json`'s `transcripts` — and carries on: only that session can say whether it is
+done, and it is said at the teardown because rig speaks unasked nowhere earlier. Tell the user
+which session was named, in so many words. The session running the command is left out where
+`transcriptSession` names the variable carrying its id; without it, one named may be this one,
+and the close says so. A session started in a subfolder of a worktree is not found, and a pattern
+refused as too wide is named, so silence is never read as no session. `rig list` does not look,
+and says "(sessions not checked)" beside a work it would call safe to close, on a machine that
+could have.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot

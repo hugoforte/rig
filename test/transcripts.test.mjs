@@ -16,7 +16,7 @@ after(() => fs.rmSync(home, { recursive: true, force: true }))
 
 const work = path.join(home, 'w', 'refunds')
 const billing = path.join(work, 'billing')
-const other = path.join(home, 'w', 'unrelated')
+const other = path.join(home, 'w', 'refunds-old')
 const PATTERN = '~/.host/projects/{slug}/*.jsonl'
 
 const session = (workspace, name) => {
@@ -41,7 +41,7 @@ test('a work\'s transcripts are the sessions whose workspace is its folder or on
   assert.deepEqual(found.map(f => f.path).sort(), [inWork, inBilling].sort())
 })
 
-test('another work\'s sessions are never among them', () => {
+test('a work whose folder name begins the same is another work, whose sessions are never among them', () => {
   const { found } = transcriptsFor({ patterns: [PATTERN], workspaces: [work, billing], home })
   assert.ok(!found.some(f => f.path === elsewhere))
 })
@@ -57,12 +57,43 @@ test('each one carries when it was last written, which a live session is told by
 })
 
 test('nothing configured finds nothing, and says so', () => {
-  assert.deepEqual(transcriptsFor({ patterns: [], workspaces: [work], home }), { found: [], unscoped: [] })
+  assert.deepEqual(transcriptsFor({ patterns: [], workspaces: [work], home }), { found: [], refused: [] })
 })
 
 test('a pattern that does not name the workspace is refused: it would read every work\'s sessions', () => {
-  const { found, unscoped } = transcriptsFor({ patterns: ['~/.host/projects/*/*.jsonl'], workspaces: [work], home })
-  assert.deepEqual({ found, unscoped }, { found: [], unscoped: ['~/.host/projects/*/*.jsonl'] })
+  const { found, refused } = transcriptsFor({ patterns: ['~/.host/projects/*/*.jsonl'], workspaces: [work], home })
+  assert.deepEqual({ found, refused: refused.map(r => r.pattern) }, { found: [], refused: ['~/.host/projects/*/*.jsonl'] })
+})
+
+test('a pattern that climbs out of the workspace\'s folder is refused, though it names one', () => {
+  const climbing = `~/.host/projects/{slug}/../${slugOf(other)}/*.jsonl`
+  const { found, refused } = transcriptsFor({ patterns: [climbing], workspaces: [work], home })
+  assert.deepEqual({ found, refused: refused.map(r => r.pattern) }, { found: [], refused: [climbing] })
+})
+
+test('a * before the workspace\'s folder is refused, since it matches other workspaces\' folders', () => {
+  const { found, refused } = transcriptsFor({ patterns: ['~/.ho*/projects/{slug}/*.jsonl'], workspaces: [work], home })
+  assert.deepEqual({ found, refused: refused.length }, { found: [], refused: 1 })
+})
+
+test('a relative pattern is refused: a pattern names one place on this machine', () => {
+  assert.equal(transcriptsFor({ patterns: ['.host/projects/{slug}/*.jsonl'], workspaces: [work], home }).refused.length, 1)
+})
+
+test('a * in a folder below the workspace\'s reaches what a host keeps there, such as its subagents\' sessions', () => {
+  const dir = path.join(home, '.host', 'projects', slugOf(work), 'session-1', 'subagents')
+  fs.mkdirSync(dir, { recursive: true })
+  const sub = path.join(dir, 'agent-a.jsonl')
+  fs.writeFileSync(sub, '{"type":"user","message":"synthetic"}\n')
+  const { found } = transcriptsFor({ patterns: ['~/.host/projects/{slug}/*/subagents/*.jsonl'], workspaces: [work, billing], home })
+  assert.deepEqual(found.map(f => f.path), [sub])
+})
+
+test('they come oldest first', () => {
+  const t = new Date(Date.now() - 3600 * 1000)
+  fs.utimesSync(inBilling, t, t)
+  const { found } = transcriptsFor({ patterns: [PATTERN], workspaces: [work, billing], home })
+  assert.deepEqual(found.map(f => f.path), [inBilling, inWork])
 })
 
 test('a workspace with no folder of sessions finds nothing', () => {
@@ -108,7 +139,34 @@ test('a pattern that names no workspace is refused by name', () => {
   setPatterns([path.join(hostDir, '*', '*.jsonl')])
   const r = m.rig(['status', '--transcripts', '--work', 'talked'])
   assert.equal(r.stdout.trim(), '')
-  assert.match(r.out, /names no workspace — it would read every work's sessions; put \{slug\} where the workspace goes/)
+  assert.match(r.out, /finds nothing: it names no workspace — it would read every work's sessions; put \{slug\} as a folder where the workspace goes/)
+})
+
+test('a transcripts value that is not a list of patterns is named as the mistake it is', () => {
+  for (const value of ['~/.host/{slug}/*.jsonl', [null], [7]]) {
+    setPatterns(value)
+    const r = m.rig(['status', '--transcripts', '--work', 'talked'])
+    assert.equal(r.code, 1, `${JSON.stringify(value)}: ${r.out}`)
+    assert.match(r.out, /`transcripts` in .*rig\.local\.json must be a list of patterns/)
+  }
+})
+
+test('patterns committed into the org file are not read: where sessions live is the machine\'s', () => {
+  setPatterns(undefined)
+  const orgFile = path.join(m.dataRoot, 'rig.json')
+  const before = fs.readFileSync(orgFile, 'utf8')
+  fs.writeFileSync(orgFile, JSON.stringify({ ...JSON.parse(before), transcripts: [hostPattern] }, null, 2))
+  try {
+    assert.equal(m.rig(['status', '--transcripts', '--work', 'talked']).stdout.trim(), '')
+  } finally {
+    fs.writeFileSync(orgFile, before)
+  }
+})
+
+test('~ is the home of the run that asks', () => {
+  setPatterns(['~/host/{slug}/*.jsonl'])
+  const r = m.rig(['status', '--transcripts', '--work', 'talked'], { env: { ...m.env, USERPROFILE: m.tmp, HOME: m.tmp } })
+  assert.equal(r.stdout.trim().split(/\r?\n/).length, 2, r.out)
 })
 
 // ------------------------------------------------- a session still at work (hugoforte/rig#292)
@@ -138,9 +196,38 @@ test('the session running the command is not named, where the machine says how t
   setMachine({ transcriptSession: 'RIG_TEST_SESSION_ID' })
   assert.equal(m.rig(['new', 'mine', '--title', 'The work this session is in', '--no-ticket', '--repos', 'billing']).code, 0)
   sessionOf(path.join(m.workRoot, 'mine'), 'abc-123.jsonl')
+  sessionOf(path.join(m.workRoot, 'mine'), 'abc-1234.jsonl')
   const r = m.rig(['close', '--work', 'mine'], { env: { ...m.env, RIG_TEST_SESSION_ID: 'abc-123' } })
   assert.equal(r.code, 0, r.out)
-  assert.doesNotMatch(r.out, /may still be working/)
+  assert.doesNotMatch(r.out, /abc-123\.jsonl/)
+  assert.match(r.out, /the work folder: a session wrote abc-1234\.jsonl .* — it may still be working there/, 'by its id, whole, and the work folder is looked in')
+})
+
+test('without a way to tell this session, a close that names one says it may be this one', () => {
+  setMachine({ transcriptSession: undefined })
+  assert.equal(m.rig(['new', 'unsure', '--title', 'Which session', '--no-ticket', '--repos', 'billing']).code, 0)
+  sessionOf(path.join(m.workRoot, 'unsure'), 'any.jsonl')
+  const r = m.rig(['close', '--work', 'unsure'])
+  assert.match(r.out, /one of them may be this session — `transcriptSession` in .*rig\.local\.json/)
+})
+
+test('a close says a pattern that cannot look finds nothing, so its silence is not read as no session', () => {
+  setMachine({ transcripts: [hostPattern, path.join(hostDir, '*', '*.jsonl')] })
+  assert.equal(m.rig(['new', 'misset', '--title', 'A pattern refused', '--no-ticket', '--repos', 'billing']).code, 0)
+  const r = m.rig(['close', '--work', 'misset'])
+  assert.match(r.out, /transcripts: ".*" finds nothing: it names no workspace/)
+  setMachine({ transcripts: [hostPattern] })
+})
+
+test('a close of a work already closed on another machine names a session here, as tidy does', () => {
+  for (const [id, cmd] of [['elsewhere', ['close', '--work', 'elsewhere']], ['tidied', ['tidy']]]) {
+    assert.equal(m.rig(['new', id, '--title', 'Closed on the other machine', '--no-ticket', '--repos', 'billing']).code, 0)
+    sessionOf(m.worktree(id, 'billing'), `${id}.jsonl`)
+    const file = path.join(m.dataRoot, 'work', id, 'work.json')
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), closedAt: new Date().toISOString() }, null, 2))
+    const r = m.rig(cmd)
+    assert.match(r.out, new RegExp(`billing: a session wrote ${id}\\.jsonl`), `${cmd.join(' ')}: ${r.out}`)
+  }
 })
 
 test('detach names a session that wrote in that worktree lately, and detaches all the same', () => {
@@ -155,4 +242,9 @@ test('list says it did not look for sessions before calling a work safe to close
   assert.equal(m.rig(['new', 'listed', '--title', 'Closable', '--no-ticket', '--repos', 'billing']).code, 0)
   const r = m.rig(['list'])
   assert.match(r.out, /listed[\s\S]*?`rig close` would not refuse \(sessions not checked\)/)
+})
+
+test('list says both when it looked at neither the stages nor the sessions', () => {
+  assert.equal(m.rig(['stage', 'feat/listed-one', '--delivers', 'a slice', '--work', 'listed']).code, 0)
+  assert.match(m.rig(['list']).out, /listed[\s\S]*?`rig close` would not refuse \(stages and sessions not checked\)/)
 })
