@@ -26,7 +26,7 @@ test('active phases are present participles and terminal ones past', () => {
 })
 
 test('every gate names the field it is stored in', () => {
-  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
+  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
 })
 
 // ---------------------------------------------------------------- deriving the phase

@@ -943,7 +943,7 @@ const sayUnreadable = (records, tell = say) => {
 const catalogFile = (org, repo) => path.join(dataRoot(),'catalog', org, `${repo}.md`)
 
 // Minimal purpose-built frontmatter reader. Handles scalars and the one list
-// shape the catalogue uses (`talks_to:` / `setup:` / `check:`). Not a general YAML parser.
+// shape the catalogue uses (`talks_to:` / `setup:` / `check:` / `docs:`). Not a general YAML parser.
 function parseFrontmatter (text) {
   // PowerShell 5.1 writes UTF-8 with a byte-order mark, which would hide the opening `---`.
   text = text.replace(/^﻿/, '')
@@ -956,8 +956,10 @@ function parseFrontmatter (text) {
     if (!raw.trim() || raw.trim().startsWith('#')) continue
     const listItem = /^\s*-\s+(.*)$/.exec(raw)
     if (listItem && key) {
-      const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(listItem[1])
-      if (kv) { item = { [kv[1]]: strip(kv[2]) }; data[key].push(item) }
+      // A key is followed by a space or the end of the line, as YAML has it, so a docs target
+      // like `https://…` stays a string rather than becoming the key `https`.
+      const kv = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(listItem[1])
+      if (kv) { item = { [kv[1]]: strip(kv[2] ?? '') }; data[key].push(item) }
       else { data[key].push(strip(listItem[1])); item = null }
       continue
     }
@@ -1038,6 +1040,7 @@ function loadCatalog (dataRootPath = dataRoot()) {
         talks_to: Array.isArray(data.talks_to) ? data.talks_to : [],
         setup: Array.isArray(data.setup) ? data.setup : (data.setup ? [data.setup] : []),
         check: Array.isArray(data.check) ? data.check : (data.check ? [data.check] : []),
+        docs: Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : []),
         draft: /DRAFT: unreviewed/.test(body),
         body: body.trim(),
         file: path.join(dir, f),
@@ -1101,6 +1104,8 @@ talks_to: []
 #     direction: downstream
 setup: []
 check: []
+# Where this repo's user documentation lives: a path in the repo, or a page elsewhere.
+docs: []
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
@@ -1671,6 +1676,7 @@ function regenerate (cfg, work) {
     lines.push(`- Base: \`${baseLabel(prAndBase(r, work.branch))}\`${c?.stack ? ` · Stack: ${c.stack}` : ''}`)
     if (c?.setup?.length) lines.push(`- Setup: ${c.setup.map(s => `\`${s}\``).join(' · ')}`)
     if (c?.check?.length) lines.push(`- Check: ${c.check.map(s => `\`${s}\``).join(' · ')}`)
+    if (c?.docs?.length) lines.push(`- Docs: ${c.docs.map(s => `\`${s}\``).join(' · ')}`)
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc
@@ -2632,6 +2638,13 @@ cmds.save = ({ flags }) => {
     work.learnedAt = new Date().toISOString()
     ok(`${id}: lessons reviewed`)
   }
+  // The user docs, edited to say how the product works now that the work has landed. Allowed
+  // after the close for the lesson review's reason: the docs outlive the work's trees.
+  if (flags.documented) {
+    if (work.abandonedAt) die(`${id} was abandoned — nothing landed for the user docs to describe`)
+    work.documentedAt = new Date().toISOString()
+    ok(`${id}: user docs updated`)
+  }
   // What landed and why it was worth doing: a statement on a date, like a gate, and allowed on a
   // closed work for the lesson review's reason. Recording it again replaces it.
   if (outcome) {
@@ -2803,6 +2816,7 @@ const workJson = (cfg, work, live) => ({
   adversarial: typeof work.adversarial === 'boolean' ? work.adversarial : null,
   reviewedAt: work.reviewedAt || null,
   learnedAt: work.learnedAt || null,
+  documentedAt: work.documentedAt || null,
   outcome: work.outcome ? { text: work.outcome.text, at: work.outcome.at } : null,
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
@@ -3099,6 +3113,10 @@ cmds.status = ({ flags }) => {
   // (hugoforte/rig#171). This machine's path only when there is no remote, and said as such.
   const handoff = path.join(recordDir(id), 'handoff.md')
   if (exists(handoff)) say(`handoff ${recordUrl(id, 'handoff.md') || `${handoff} ${C.dim('(this machine only — the data root has no remote)')}`}`)
+  // The QA evidence — what was walked on a deployed environment and what was seen — named the
+  // same way, since the user-docs edit and the digest read it after the work has moved on.
+  const qa = path.join(recordDir(id), 'qa.md')
+  if (exists(qa)) say(`qa ${recordUrl(id, 'qa.md') || `${qa} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   work.repos.forEach((r, i) => {
     const v = verdict.repos[i]
@@ -3189,6 +3207,13 @@ function unattachedNeighbours (work) {
   return catalog.length ? unattached(catalog, (work.repos || []).map(r => r.repo)) : []
 }
 
+// Where each attached repo's user docs live, from its catalogue entry; none for a repo with no
+// entry, which is named the same as an entry that says nothing.
+function docsTargets (work) {
+  const catalog = loadCatalog()
+  return (work.repos || []).map(r => ({ repo: r.repo, targets: catalog.find(e => e.org === r.org && e.repo === r.repo)?.docs || [] }))
+}
+
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
 // off the back of another command (decision 66). The gathering lives here; every decision
 // about what is worth offering is `bin/next.mjs`'s.
@@ -3239,6 +3264,7 @@ cmds.next = ({ flags }) => {
     // root, and the question here is what is available on the work in hand.
     drafts: draftEntries(work),
     neighbours: unattachedNeighbours(work),
+    docs: docsTargets(work),
     // Only what `rig stage --link` would link: an answer GitHub will not give offers nothing.
     unstacked: work.repos.filter(entry => {
       const s = stageStack(stack, entry, work.branch)
@@ -4897,6 +4923,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--no-adversarial]          needs one of the two: does this work get an
        [--reviewed] [--learned]    adversarial review; --reviewed records that review,
                                    --learned the lesson review (the rig-learn skill)
+                                   --documented the user docs updated (the rig-docs skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id
        [--outcome "..."]           what landed and why it was worth doing, in a sentence

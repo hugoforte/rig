@@ -57,6 +57,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
 | Every PR merged: what changed for someone, and why that is good | `rig save --outcome "…"`; the `rig-learn` skill drafts it |
 | What landed, explained to someone: a work, a repo, an org or a period | the `rig-digest` skill; `rig dash` for the numbers and the list |
+| Landed and verified where it was deployed: the user docs | the `rig-docs` skill, then `rig save -m "user docs updated" --documented` |
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close` |
 | Stopped without finishing | `rig close --abandoned` |

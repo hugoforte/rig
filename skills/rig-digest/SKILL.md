@@ -31,6 +31,7 @@ Per work, read `outcome.text` (null when nobody said it), `title`, `tickets`, ea
 - **A ticket's parent**, when tickets in scope share an epic: `gh issue view` on GitHub, the `twg` skill on Jira.
 - **A work's context doc**, at `<data root>/work/<id>/context.md`, for a work the reader needs depth on: its Problem and Direction say why it was done.
 - **A PR's body**, `gh pr view <url> --json body`, for what changed in one repo.
+- **A work's QA evidence**, `qa.md` beside its context doc when there is one: what was seen working on a deployed environment, the closest account of how a user meets the change.
 
 ## 3. Group by theme
 

@@ -361,6 +361,22 @@ test('--outcome needs the outcome, on one line', () => {
   assert.equal(record('told').outcome.text, 'Invoices carry the tax line.', 'a refused outcome leaves the record alone')
 })
 
+// ------------------------------------------------- the user docs
+
+test('the user-docs edit is recorded after the close, with its date, and listed', () => {
+  const r = rig(['save', '--work', 'told', '-m', 'user docs updated', '--documented'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!Number.isNaN(Date.parse(record('told').documentedAt)), 'a gate, with its date')
+  const { works } = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  assert.equal(works.find(w => w.id === 'told').documentedAt, record('told').documentedAt)
+  assert.equal(works.find(w => w.id === 'tidy').documentedAt, null, 'null, not missing, for a work without it')
+})
+
+test('status names the QA evidence beside the context doc', () => {
+  fs.writeFileSync(path.join(dataRoot, 'work', 'told', 'qa.md'), '# QA\n')
+  assert.match(strip(rig(['status', '--work', 'told']).out), /^qa .*qa\.md/m)
+})
+
 // `close` asks the stack whether a slice is still up for review and `list` does not, because
 // a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
 // `list` has to stop at what it measured: the two works below differ only in whether a stage
@@ -441,6 +457,13 @@ test('an abandoned work refuses the lesson review, and records nothing', () => {
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /given-up was abandoned/)
   assert.equal(record('given-up').learnedAt, undefined)
+})
+
+test('an abandoned work refuses the user-docs edit, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '-m', 'user docs updated', '--documented'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').documentedAt, undefined)
 })
 
 test('an abandoned work refuses the adversarial review, and records nothing', () => {

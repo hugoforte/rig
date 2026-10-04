@@ -105,7 +105,7 @@ rig attach orders-web
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
    **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
    hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
-   `reviewedAt`, `learnedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing
+   `reviewedAt`, `learnedAt`, `documentedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing
    can observe afterwards — and, beside `designedAt`, whether the design chose an adversarial
    review. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
    terminating in `closed` or `abandoned`) is computed from those gates and the repos,
@@ -151,7 +151,7 @@ rig attach orders-web
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `docs`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -199,6 +199,16 @@ in, `rig check` prints the check commands and `--run` opts in. A command that ca
 succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
 repo whose `check` is empty is named, with the file to write one in; write it while the
 repo is still loaded in your head (rule 4).
+
+`docs` is where the repo's user documentation lives: a path in the repo, or a page elsewhere
+such as Confluence. rig knows a docs target and never edits one; the generated work file lists
+it beside `check`. Once every PR has merged, `rig next` offers the `rig-docs` skill for a work
+whose repos have a target, naming any attached repo with none and the file to say it in, and
+`rig save -m "user docs updated" --documented` records the gate. Nothing refuses without it.
+
+A work keeps its **QA evidence** in `qa.md` beside `context.md`: the steps walked on a deployed
+environment and what was seen. `rig status` names it. The user-docs edit and the digest read it,
+because it is the nearest record of how a user meets the change.
 
 ## The org doc
 
@@ -622,7 +632,8 @@ overridden.
 `skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
 the work's record; `skills/rig-learn` runs the lesson review before a close, and drafts the work's outcome;
 `skills/rig-digest` explains what landed, from `rig list --json`, at the altitude asked for, and
-drafts outcomes for landed works with none. All are shipped,
+drafts outcomes for landed works with none; `skills/rig-docs` keeps the user docs true once a
+work has landed. All are shipped,
 never linked: whatever manages a machine symlinks `skills/*` into its agent hosts' skills
 directories. Every skill but the entry point is prefixed `rig-`, and `test/skills.test.mjs`
 holds the shape a host's linker relies on.

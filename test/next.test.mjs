@@ -630,6 +630,51 @@ test('the outcome is offered, never demanded', () => {
   assert.doesNotMatch(offer.says, /should|must|need to|missing/i)
 })
 
+// ------------------------------------------------------------- the user docs
+
+// Kept true once the work has landed and been seen working where it was deployed: offered for
+// a work whose repos say where their user docs live, and recorded like the lesson review.
+
+const DOCUMENTED = 'rig save -m "user docs updated" --documented'
+const docsAt = (...targets) => [{ repo: 'a', targets }]
+
+test('a landed work whose repo has a docs target is offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: docsAt('docs/guide.md') })
+  const offer = out.find(o => o.command === DOCUMENTED)
+  assert.ok(offer, commands(out).join(', '))
+  assert.match(offer.says, /the rig-docs skill drafts the edit/)
+  assert.match(offer.says, /a: `docs\/guide\.md`/, 'and says where the docs live')
+})
+
+test('a work with a PR still to merge is not offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [landed(), repo('b', { pr: { number: 2, state: 'OPEN' } })], docs: docsAt('docs/') })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('recorded docs are not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, documentedAt: AT }), repos: [landed()], docs: docsAt('docs/') })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('a work none of whose repos has a docs target is not offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: [{ repo: 'a', targets: [] }] })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('the docs offer names an attached repo with no docs target, with where to say it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [landed(), repo('b', { merged: true, pr: { number: 2, state: 'MERGED' } })],
+    docs: [{ repo: 'a', targets: ['docs/'] }, { repo: 'b', targets: [] }],
+  })
+  assert.match(out.find(o => o.command === DOCUMENTED).says, /b has no docs target — `docs:` in its catalogue entry \(`rig catalog b` names the file\)/)
+})
+
+test('the docs edit is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: docsAt('docs/') })
+  assert.doesNotMatch(out.find(o => o.command === DOCUMENTED).says, /should|must|need to|missing/i)
+})
+
 test('a worktree not on this machine is offered the restore, before anything else', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b') }),

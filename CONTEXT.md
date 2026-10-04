@@ -84,6 +84,14 @@ _Avoid_: summary, result, release note
 An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the work or pull request it rests on. Written from the records each time and never stored, like the dashboard.
 _Avoid_: report, changelog, release notes, summary
 
+**User docs**:
+How the product works now, written for its users and kept with the product — a repo's docs or a Confluence page — which a work edits once it has landed. The present, where a digest is the history. A repo's catalogue entry names where they live, its **docs target**.
+_Avoid_: documentation (too wide), release notes, help (one kind of it)
+
+**QA evidence**:
+The steps walked on a deployed environment and what was seen, kept in a work's `qa.md` beside its context doc. A record of what happened, not a plan; the rollout plan's UAT steps are the plan.
+_Avoid_: test results, UAT plan, sign-off
+
 **Stage**:
 A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.
 _Avoid_: phase (that is lifecycle), slice, milestone, increment, child work
