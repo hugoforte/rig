@@ -23,9 +23,9 @@ Ask only when the request leaves the scope open and the last 30 days would plain
 rig list --json --quick
 ```
 
-`--quick` is enough for landed work: `rig close` stores each merged PR's terminal facts, and the payload reads them back. A work has **landed** when every repo's `pr.state` is `MERGED`; its landing date is the latest `pr.mergedAt`. Narrow by `repos[].org`, `repos[].repo`, the landing date or the `id`.
+`--quick` is enough for landed work: `rig close` stores each merged PR's terminal facts, and the payload reads them back. A work has **landed** when every repo's `pr.state` is `MERGED` and `abandonedAt` is null; its landing date is the latest `pr.mergedAt`. An abandoned work landed nothing to explain, even when a slice of it merged, and `rig save --outcome` refuses it. Narrow by `repos[].org`, `repos[].repo`, the landing date or the `id`.
 
-Per work, read `outcome.text` (null when nobody said it), `title`, `tickets` and each `repos[].pr.url`. Then, only as far as the altitude needs:
+Per work, read `outcome.text` (null when nobody said it), `title`, `tickets`, each `repos[].pr.url`, and each stage's PR under `repos[].branches[].pr`. Then, only as far as the altitude needs:
 
 - **The org doc** of each org in scope, at `<data root>/orgs/<org>.md` (`rig doctor` names the data root). Its goals and the problems it names are the themes, already written down.
 - **A ticket's parent**, when tickets in scope share an epic: `gh issue view` on GitHub, the `twg` skill on Jira.
