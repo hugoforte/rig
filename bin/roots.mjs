@@ -24,12 +24,15 @@ import { DEFAULT_FRESHNESS } from './freshness.mjs'
 // is made here and nowhere else. `freshness` is in both on purpose: the policy travels in
 // the org half, and a machine that wants to handle updates its own way overrides one key
 // locally rather than the whole object.
-const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness']
+const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness', 'transcripts']
 const ORG_KEYS = ['orgs', 'tracker', 'writtenBy', 'freshness']
 // The keys the org half owns outright. A copy in the machine file — `orgs` and `tracker`
 // were both written there by older versions of `init` — is dropped before the merge rather
 // than allowed to shadow the committed answer, and `rig doctor` says so.
 const ORG_ONLY = ORG_KEYS.filter(k => !MACHINE_KEYS.includes(k))
+// The keys only the machine half may set, so a copy committed into the org half is never read:
+// where one machine's agent host keeps its sessions is no other machine's business.
+const MACHINE_ONLY = ['transcripts']
 
 // Relocates the machine half without relocating the tool. rig is driven as a subprocess, so
 // an environment variable is the way a test — or a second installation sharing one checkout
@@ -297,7 +300,7 @@ export function load (location) {
   const machine = readJsonFile(location.localFile) ?? {}
   const org = readJsonFile(location.orgFile) ?? {}
   const cfg = { workRoot: defaultWorkRoot(), orgs: [], tracker: {}, identities: {}, secrets: {} }
-  Object.assign(cfg, org)
+  for (const [key, value] of Object.entries(org)) if (!MACHINE_ONLY.includes(key)) cfg[key] = value
   for (const [key, value] of Object.entries(machine)) if (!ORG_ONLY.includes(key)) cfg[key] = value
   // The registry is the location's to answer, never the merged config's: two copies of
   // "which roots are there" is one more than can be kept true.

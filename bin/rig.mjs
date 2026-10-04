@@ -1167,7 +1167,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent', 'transcripts'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -3178,16 +3178,27 @@ cmds.dash = ({ flags }) => {
 // The workspaces are the work folder and its worktrees, so nothing of another work is found.
 function workTranscripts (cfg, work) {
   return transcriptsFor({
-    patterns: Array.isArray(cfg.transcripts) ? cfg.transcripts : [],
+    patterns: transcriptPatterns(cfg),
     workspaces: [workDir(cfg, work.id), ...work.repos.map(r => r.path)],
     home: env().USERPROFILE || env().HOME || os.homedir(),
   })
 }
 
+// The machine's transcript patterns, or why they cannot be read: a misshapen value is a mistake
+// to name, never the same as having none.
+function transcriptPatterns (cfg) {
+  const t = cfg.transcripts
+  if (t === undefined || t === null) return []
+  if (!Array.isArray(t) || !t.every(p => typeof p === 'string' && p.trim())) {
+    die(`\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]`)
+  }
+  return t
+}
+
 function sayTranscripts (cfg, work) {
-  const { found, unscoped } = workTranscripts(cfg, work)
-  for (const p of unscoped) aside(C.yellow(`! transcripts: "${p}" names no workspace — it would read every work's sessions; put {slug} where the workspace goes`))
-  if (!Array.isArray(cfg.transcripts) || !cfg.transcripts.length) {
+  const { found, refused } = workTranscripts(cfg, work)
+  for (const r of refused) aside(C.yellow(`! transcripts: "${r.pattern}" finds nothing: ${r.why}`))
+  if (!transcriptPatterns(cfg).length) {
     aside(C.dim(`· no transcript locations on this machine — \`transcripts\` in ${localConfigFile()}, such as "~/.claude/projects/{slug}/*.jsonl"`))
   }
   for (const t of found) say(t.path)
@@ -3205,6 +3216,7 @@ const stopsLabel = stops => {
 cmds.status = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
+  if (typeof flags.transcripts === 'string') die('--transcripts takes no value')
   if (flags.transcripts) return sayTranscripts(cfg, work)
   const id = work.id
   // The same verdict `list` and `close` read, printed as facts rather than acted on: a

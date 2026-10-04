@@ -21,6 +21,8 @@ Run `rig status` from the work folder, or `rig status --work <id>` once the work
 - The sessions that did the work, when this machine keeps them: `rig status --transcripts` prints their paths, one a line, and only the work folder's and its worktrees' own. By the time a correction reaches a commit or a review thread it has been smoothed away; in the session it is still there.
   - **Read them through subagents**, a few files each, never in this thread: transcripts are large. Each subagent reports the user stepping in ("no, not like that"), a command tried more than once, and an assumption the agent made and later corrected, each with a short quote. Work from those findings, never the raw logs.
   - **Read no transcript the command did not print.** Another workspace's sessions are other work, and often private.
+  - **Check each session is this work's.** A host names a session's folder by its workspace with every character but a letter or digit made a dash, so two works can share one, such as `D:\w\a\b` and `D:\w\a-b`. Each subagent first reads the working directory the transcript itself records, and drops a session that is not the work folder or one of its worktrees.
+  - Sessions started in a subfolder of a worktree are not among them.
   - When it prints nothing, carry on without them. It says on stderr where this machine would name them.
 
 A lesson is usually hiding in *this took three attempts*, not in the design.
