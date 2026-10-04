@@ -2743,16 +2743,19 @@ cmds.save = ({ flags }) => {
   }
   saveWork(cfg, work)
   // The doc this save commits, checked against its template, said and never refused on.
-  for (const line of contextDocFindings(work)) warn(line)
+  for (const f of contextDocFindings(work)) warn(f.text)
 }
 
-// A work's context doc against the template it was made from, as `path:line: problem`, so an
-// editor opens each one where it is (decision 205). Nothing when there is no doc to check.
+// A work's context doc against the template it was made from, each as `path:line: problem`, so
+// an editor opens it where it is (decision 205), and whether it counts among doctor's things to
+// look at: a lost or moved heading does, a placeholder left is a chore and does not. Nothing when
+// there is no doc to check.
 function contextDocFindings (work, root = dataRoot()) {
   const file = path.join(recordDir(work.id, root), 'context.md')
   if (!exists(file)) return []
   const template = readText(path.join(toolRoot(), 'templates', 'context.md'))
-  return contextDocProblems(readText(file), { template, designed: !!work.designedAt }).map(p => `${file}:${p.line}: ${p.problem}`)
+  return contextDocProblems(readText(file), { template, designed: !!work.designedAt })
+    .map(p => ({ text: `${file}:${p.line}: ${p.problem}`, counts: p.kind === 'heading' }))
 }
 
 // A work's notes: one row per decision a session took along the way — what, why, and a pointer

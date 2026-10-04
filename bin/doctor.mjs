@@ -343,7 +343,8 @@ export function doctorFindings (snap = {}) {
       continue
     }
     // The context doc lives in the data root, so it is checked whether or not the folder is here.
-    for (const line of w.contextDoc || []) out.push(warn(`${w.id}: ${line}`))
+    // A lost or moved heading counts; a placeholder left is a chore, said and not counted.
+    for (const f of w.contextDoc || []) out.push(warn(`${w.id}: ${f.text}`, { counts: f.counts }))
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))

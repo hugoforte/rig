@@ -24,7 +24,16 @@ test('a context doc made from the current template has nothing to report before 
 
 test('a heading the template scaffolds and the doc lost is reported, at the line it belongs', () => {
   const lost = fresh.replace('## Problem\n', '')
-  assert.deepEqual(problems(lost), [{ line: lineOf(lost, '## Direction'), problem: 'no "## Problem" heading — every context doc keeps the four templates/context.md scaffolds' }])
+  assert.deepEqual(problems(lost), [{ line: lineOf(lost, '## Direction'), kind: 'heading', problem: 'no "## Problem" heading — every context doc keeps the headings templates/context.md scaffolds' }])
+})
+
+test('a heading lost from the end is reported on the doc\'s last line, not one past it', () => {
+  const lost = fresh.slice(0, fresh.indexOf('## Status / Next steps')).trimEnd() + '\n'
+  assert.equal(problems(lost)[0].line, lost.trimEnd().split('\n').length)
+})
+
+test('the headings the template scaffolds are these four, so renaming one is a change to every open doc', () => {
+  assert.deepEqual(template.split('\n').filter(l => l.startsWith('## ')), ['## Repos', '## Problem', '## Direction', '## Status / Next steps'])
 })
 
 test('a renamed heading is a lost one', () => {
@@ -34,7 +43,29 @@ test('a renamed heading is a lost one', () => {
 
 test('headings out of the template\'s order are reported', () => {
   const swapped = fresh.replace('## Problem', '## TEMP').replace('## Direction', '## Problem').replace('## TEMP', '## Direction')
-  assert.deepEqual(problems(swapped), [{ line: lineOf(swapped, '## Problem'), problem: '"## Problem" comes after "## Direction" — the template has it before' }])
+  assert.deepEqual(problems(swapped).map(p => p.kind), ['heading'])
+  assert.match(problems(swapped)[0].problem, /is out of the template's order — there it comes (before|after) "## (Problem|Direction)"/)
+})
+
+test('one heading moved is one problem, however many it jumped', () => {
+  const status = fresh.slice(fresh.indexOf('## Status / Next steps'))
+  const movedUp = fresh.replace(status, '').replace('## Repos', `${status.trimEnd()}\n\n## Repos`)
+  assert.deepEqual(problems(movedUp), [{ line: lineOf(movedUp, '## Status / Next steps'), kind: 'heading', problem: '"## Status / Next steps" is out of the template\'s order — there it comes after "## Direction"' }])
+})
+
+test('code is not the doc speaking: a heading or a placeholder in a fence or a code span is neither', () => {
+  const coded = fresh
+    .replace('## Repos', '```md\n## Problem\n_TODO_\n```\n\n## Repos')
+    .replace('## Direction\n', '## Direction\n\nThe Direction was still `_TODO_` when we started, and `{{NAME}}` is a field.\n')
+    .replace('_TODO_\n\n## Status', 'The approach.\n\n## Status')
+    .replace('| | | |', '| rig | owner/rig | the tool |').replace('_TODO: one line, then the narrative. State scope explicitly._', 'The brief.')
+    .replace('- [ ] _next step_', '- [ ] Ship it, and keep MY_TODO_LIST short')
+  assert.deepEqual(problems(coded, true), [])
+})
+
+test('an unfilled field is a placeholder once the design is agreed', () => {
+  const unfilled = fresh.replace('A work', '{{TITLE}}')
+  assert.ok(problems(unfilled, true).some(p => p.problem.includes('"{{TITLE}}"')))
 })
 
 test('a section from context-sections.md is never required, and may sit anywhere', () => {

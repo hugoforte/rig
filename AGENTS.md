@@ -306,9 +306,12 @@ you have content for them**. Empty stubs are how the last attempt ended up with 
 `templates/context.md` and prints each problem as `path:line: problem`, so an editor opens it
 where it is, and `rig doctor` lists them under the work: a scaffolded heading lost or renamed, the
 four out of order, and — once the design gate has passed — a placeholder of the template's still
-standing (`_TODO_`, `_next step_`, an empty table row). Before the gate, placeholders are what a
-doc being written looks like. A section from `context-sections.md` is never required. Neither
-command refuses.
+standing (`_TODO_`, `_next step_`, an unfilled `{{FIELD}}`, an empty table row). Before the gate,
+placeholders are what a doc being written looks like. Code — a fenced block, an inline span — and
+comments are not read as either. A section from `context-sections.md` is never required. Neither
+command refuses; in doctor a lost or moved heading counts among the things to look at, and a
+placeholder is a chore it says without counting. The headings are the template's, so renaming one
+in `templates/context.md` is a change to every open doc.
 
 Two habits worth keeping from the docs this inherits:
 
@@ -532,7 +535,7 @@ close.
 Two things it will never do, and both are the point:
 
 - **It only offers.** It never warns, never blocks, and never says you should have. Warnings
-  live in `doctor`, and only for contradictions. A work that reached review with no design
+  live in `doctor`, for contradictions and for what has drifted. A work that reached review with no design
   gate recorded has an *omission*, and an omission is something to offer, not to scold.
 - **It speaks only when asked.** A command you run — not a hook, and never fired off the back
   of another command.
