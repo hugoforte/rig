@@ -61,8 +61,36 @@ The recorded decision that a work in a tracked org deliberately has no ticket. D
 _Avoid_: ticketless, none
 
 **Gate**:
-A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed (with the adversarial-review choice), adversarial review done, lessons reviewed, closed. Lessons reviewed is the one gate that may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
+A decision recorded at a point in a work's life: ticket decided, repos confirmed, design agreed (with the adversarial-review choice), adversarial review done, lessons reviewed, user docs updated, closed. Lessons reviewed and user docs updated may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact. Whether the agent waited for the human at it is the separate question of the **stop**.
 _Avoid_: step, checkpoint, phase
+
+**Stop**:
+A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
+_Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
+
+**Pickup**:
+A session taking a work over from the handoff the last one left, trusting the trail rather than redoing it: read the handoff, the context doc and `rig status`, check once only what the next step stands on, and name the resume point. It has begun with its first commit.
+_Avoid_: resume (that is the point it names), onboarding, catch-up
+
+**Note**:
+One decision a session took along the way, kept as a row of a work's `notes.tsv`: when, the stage, what was chosen or done, why, a pointer at the evidence a reviewer can open, and the result. Appended by `rig note` and never edited. The context doc keeps the decisions that shaped the design; the notes keep every one.
+_Avoid_: decision (that is a gate), journal, log (a commit log is something else)
+
+**Transcript**:
+The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close`, `rig detach` and `rig tidy` tell a session may still be at work in a worktree.
+_Avoid_: log (a commit log is something else), chat, history
+
+**Frontier**:
+The lowest stage of a work that has not landed and was not withdrawn: the only stage that matters until it lands. The stages stacked above it are **waiting** on it.
+_Avoid_: current stage, active stage, head of the stack
+
+**Stale base**:
+A base that has moved past a pull request's branch, named beside a failing check as a possible cause: a failure in code the diff never touched may be the base's, which merging the base in fixes and a fresh run does not. A moved base alone is ordinary, and proves nothing about a failure.
+_Avoid_: out of date, behind (that is a count), conflict (that is a merge that cannot be made)
+
+**Verified**:
+A repo whose checks last passed at the diff it carries now. `rig check --run` records a pass with the patch it ran at; a diff that changed since makes it **stale**, and a repo with no pass recorded is **not verified**. A fact about a patch, not about a head: a rebase that leaves the diff alone keeps it.
+_Avoid_: green, tested, passing (that is the run, not the record)
 
 **Adversarial review**:
 A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.

@@ -14,6 +14,7 @@
 // directory of bare repos, which is what lets a test attach a real repo with no network and
 // no `gh`. rig picks the adapter from RIG_FAKE_REMOTES, as it picks the in-memory `gh` and
 // `twg` ones; see `trees()` in rig.mjs.
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { RigError } from './errors.mjs'
@@ -205,6 +206,14 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       fetched(org, repo)
     },
 
+    // A fetch for a read-only question: never a first clone, never a word on the way, and an
+    // answer of whether it reached the remote, so a count read off a mirror it could not bring
+    // forward is not passed off as a fresh one.
+    refresh ({ org, repo }) {
+      const mirror = mirrorPath(org, repo)
+      return fs.existsSync(mirror) && toRemote(mirror, 'fetch', '--prune', 'origin').code === 0
+    },
+
     // How a pushed branch stands against the base it is about to land on, both as the remote
     // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
     // files a merge of the two would conflict in, found without touching any worktree
@@ -345,6 +354,35 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
         if (push?.code === 0) git(mirror, 'update-ref', '-d', ref(branch))
       }
       return out
+    },
+
+    // What a worktree's HEAD carries over its base, which is what a check run proves: the branch
+    // checked out (null on a detached HEAD), the head, where it leaves the base (the merge-base
+    // with the base's remote-tracking ref), and a patch-id for the diff between them. A rebase
+    // that leaves the diff alone keeps the patch-id; one that changes it does not.
+    //
+    // The patch-id is a hash of the diff rather than `git patch-id`, which ignores whitespace:
+    // indentation is code in Python and YAML, and `--verbatim`, which keeps it, needs a newer
+    // git than rig does. The diff is `diff-tree`'s, plumbing, so no one's `diff.*` settings
+    // shape it and two machines hash the same patch alike. What a rebase moves without changing
+    // the diff is left out: the blob ids on `index` lines and the hunk headers, whose line
+    // numbers and function context come from around the change. `--binary` puts a binary
+    // file's content in it, and it is hashed byte for byte (`latin1` is one character a byte).
+    // An empty diff answers ''. `error` when git could not say.
+    patch ({ dir, base }) {
+      const failed = (r, what) => ({ error: (r.err || r.out).split('\n')[0].trim() || `git could not read ${what} in ${dir}` })
+      const head = git(dir, 'rev-parse', 'HEAD')
+      if (head.code !== 0) return failed(head, 'HEAD')
+      const from = git(dir, 'merge-base', ref(base), 'HEAD')
+      if (from.code !== 0) return failed(from, `where HEAD leaves ${base}`)
+      const diff = run('git', ['-C', dir, '-c', 'core.quotePath=false', 'diff-tree', '-p', '-r', '--binary', '--no-color', '--no-ext-diff', '--no-textconv', from.out, head.out],
+        { maxBuffer: 1024 * 1024 * 1024, encoding: 'latin1' })
+      if (diff.code !== 0) return failed(diff, 'the diff')
+      const moved = diff.out.split('\n')
+        .filter(line => !line.startsWith('index '))
+        .map(line => (line.startsWith('@@ ') ? '@@' : line))
+        .join('\n')
+      return { branch: checkedOut(dir), head: head.out, base: from.out, patchId: diff.out ? createHash('sha1').update(moved, 'latin1').digest('hex') : '' }
     },
 
     // A worktree as it stands right now: nothing here is ever written down (DESIGN.md

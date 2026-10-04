@@ -46,14 +46,22 @@ test('pr --help prints how pr is used and opens nothing', () => {
 })
 
 test('pr opens one per repo, work branch to the base it was cut from', () => {
+  // billing now says how it is verified, and nothing has run it, which the next test reads.
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+  fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace(/^check: \[\]$/m, 'check:\n  - git status'))
   const r = rig(['pr', '--work', 'to-review'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /billing: PR #\d+ → main/)
+  m.lastPr = r.out
 
   const opened = github().repos['acme/billing'].prs.find(pr => pr.branch === 'feat/work-to-review')
   assert.ok(opened, 'it reached GitHub through the adapter, not by shelling out on its own')
   assert.equal(opened.base, 'main')
   assert.equal(opened.state, 'OPEN')
+})
+
+test('a repo no check has passed at is named as the PR opens, and the PR opens anyway', () => {
+  assert.match(m.lastPr, /billing: no check has passed at this patch — `rig check billing --run`/)
 })
 
 test('the body carries the title, the ticket line and the context doc, not a paraphrase', () => {
