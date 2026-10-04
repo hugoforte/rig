@@ -55,6 +55,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
+| Every PR merged: what changed for someone, and why that is good | `rig save --outcome "…"` |
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close` |
 | Stopped without finishing | `rig close --abandoned` |

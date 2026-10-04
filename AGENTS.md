@@ -115,6 +115,13 @@ rig attach orders-web
    PR is `MERGED` — a terminal fact cannot go stale the way branch or PR state can, which is
    what makes storing it a different act from storing state.
 
+   The **outcome** is the third: what changed for someone and why that is good, in a sentence
+   or two a person outside the work can read, stored as `outcome: { text, at }` by
+   `rig save --outcome "…"`. It is a statement made once the work landed, which nothing can
+   derive later; saying it again replaces it. `rig next` offers it once every PR has merged,
+   `rig close` names a work closing without one, and neither refuses. `rig list --json` carries
+   it for whatever renders what landed.
+
    A repo's record carries `branches[]` — one entry per branch of this work it holds, each
    with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
    branch it was cut for, not to the repo, because a repo carries several once a work has

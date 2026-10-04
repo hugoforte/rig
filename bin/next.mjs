@@ -336,6 +336,15 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       'rig save -m "lessons reviewed" --learned'))
   }
 
+  // What landed and why it was worth doing, asked once everything has landed and the story is
+  // still in hand. Above the close offer only because it reads as part of finishing; nothing it
+  // needs goes with the trees, and `rig close` names it again on the way out.
+  if (!work?.outcome && repos.length && merged.length === repos.length) {
+    out.push(offer(phase,
+      'what changed for someone, and why is that good? — say it in a sentence or two',
+      'rig save --outcome "…"'))
+  }
+
   // Rule 5 says attaching a fourth repo on day two is normal, and §6 says the repo you forget
   // is almost always one hop from one you remembered. This is that, with a graph behind it
   // rather than a reminder.

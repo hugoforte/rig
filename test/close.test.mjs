@@ -298,6 +298,60 @@ test('a work whose lessons were reviewed closes without naming the review', () =
   assert.doesNotMatch(r.out, /lessons never reviewed/)
 })
 
+// ------------------------------------------------- the outcome
+
+// What changed for someone, and why that is good: a statement made once the work has landed,
+// which nothing can derive later. Named on the way out like the lesson review, and recordable
+// after the close for the same reason.
+
+test('a work closing with no outcome is named, with the command that records one', () => {
+  landedWork('untold', 46)
+  const r = rig(['close', '--work', 'untold'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /no outcome recorded — what changed for someone, and why that is good: `rig save --work untold --outcome "…"`/)
+})
+
+test('the outcome is recorded after the close, with its date', () => {
+  const r = rig(['save', '--work', 'untold', '--outcome', 'Refunds charge once, however often the client retries.'])
+  assert.equal(r.code, 0, r.out)
+  const { outcome } = record('untold')
+  assert.equal(outcome.text, 'Refunds charge once, however often the client retries.')
+  assert.ok(!Number.isNaN(Date.parse(outcome.at)), 'a statement made on a date')
+})
+
+test('recording it again replaces it', () => {
+  assert.equal(rig(['save', '--work', 'untold', '--outcome', 'A retried refund charges once.']).code, 0)
+  assert.equal(record('untold').outcome.text, 'A retried refund charges once.')
+})
+
+test('list --json carries the outcome, and null for a work with none', () => {
+  const { works } = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  assert.equal(works.find(w => w.id === 'untold').outcome.text, 'A retried refund charges once.')
+  assert.equal(works.find(w => w.id === 'tidy').outcome, null)
+})
+
+test('status says the outcome', () => {
+  assert.match(strip(rig(['status', '--work', 'untold']).out), /^outcome A retried refund charges once\. \(\d{4}-\d{2}-\d{2}\)$/m)
+})
+
+test('a work whose outcome was recorded closes without naming it', () => {
+  landedWork('told', 47)
+  assert.equal(rig(['save', '--work', 'told', '--outcome', 'Invoices carry the tax line.']).code, 0)
+  const r = rig(['close', '--work', 'told'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /no outcome recorded/)
+})
+
+test('--outcome needs the outcome, on one line', () => {
+  let r = rig(['save', '--work', 'told', '--outcome'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--outcome needs the outcome/)
+  r = rig(['save', '--work', 'told', '--outcome', 'One line.\nAnd another.'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--outcome takes one line/)
+  assert.equal(record('told').outcome.text, 'Invoices carry the tax line.', 'a refused outcome leaves the record alone')
+})
+
 // `close` asks the stack whether a slice is still up for review and `list` does not, because
 // a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
 // `list` has to stop at what it measured: the two works below differ only in whether a stage
@@ -363,6 +417,14 @@ test('abandoning drops the did-it-land checks that would refuse a close', () => 
   assert.doesNotMatch(r.out, /unfinished business/)
   assert.match(r.out, /abandoned given-up/)
   assert.doesNotMatch(r.out, /lessons never reviewed/, 'the command it would name refuses an abandoned work')
+  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
+})
+
+test('an abandoned work refuses an outcome, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '--outcome', 'Nothing, in the end.'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').outcome, undefined)
 })
 
 test('an abandoned work refuses the lesson review, and records nothing', () => {

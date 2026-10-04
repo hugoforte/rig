@@ -2571,7 +2571,7 @@ function offerNeighbours (work, name) {
 // decision someone took, on a date nothing else can recover. It used to set a status.
 // `--learned` records the lesson review the same way, and `--reviewed` the adversarial review.
 // `--title` corrects the title in the record and the two headings that show it, and never the
-// branch or the id.
+// branch or the id. `--outcome` records what landed and why it was worth doing.
 cmds.save = ({ flags }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
@@ -2580,6 +2580,9 @@ cmds.save = ({ flags }) => {
   const title = typeof flags.title === 'string' ? flags.title.trim() : flags.title
   if (title === true || title === '') die('--title needs the title')
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
+  const outcome = typeof flags.outcome === 'string' ? flags.outcome.trim() : flags.outcome
+  if (outcome === true || outcome === '') die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
+  if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
   // Whether the work's PRs get an adversarial review is decided at the design gate and nowhere
   // else, and decided explicitly, as `rig new` insists on the ticket decision (decision 168).
   // The flag is the answer, so a value on it is refused: `--adversarial=false` would otherwise
@@ -2594,7 +2597,7 @@ cmds.save = ({ flags }) => {
   if (flags.reviewed && flags.designed) die('--reviewed records a review of the agreed design — record the design first, and the review once it is done')
   if (choice !== null && !flags.designed) die('the adversarial-review choice is made at the design gate — pass it with --designed')
   if (flags.designed && choice === null) die('--designed needs the adversarial-review choice: --adversarial or --no-adversarial')
-  commitAs(id, flags.message || (title ? `title "${title}"` : undefined))
+  commitAs(id, flags.message || (title ? `title "${title}"` : outcome ? 'outcome' : undefined))
   if (flags.designed) {
     if (work.closedAt) die(`${id} is closed — its design gate is behind it`)
     if (work.abandonedAt) die(`${id} was abandoned — its design gate is behind it`)
@@ -2622,6 +2625,13 @@ cmds.save = ({ flags }) => {
     if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
     work.learnedAt = new Date().toISOString()
     ok(`${id}: lessons reviewed`)
+  }
+  // What landed and why it was worth doing: a statement on a date, like a gate, and allowed on a
+  // closed work for the lesson review's reason. Recording it again replaces it.
+  if (outcome) {
+    if (work.abandonedAt) die(`${id} was abandoned — nothing landed to say the outcome of`)
+    work.outcome = { text: outcome, at: new Date().toISOString() }
+    ok(`${id}: outcome recorded`)
   }
   // After the gates, so a gate refused leaves the doc as untouched as the record.
   if (title) {
@@ -2787,6 +2797,7 @@ const workJson = (cfg, work, live) => ({
   adversarial: typeof work.adversarial === 'boolean' ? work.adversarial : null,
   reviewedAt: work.reviewedAt || null,
   learnedAt: work.learnedAt || null,
+  outcome: work.outcome ? { text: work.outcome.text, at: work.outcome.at } : null,
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
   activityAt: activityAt(work) || null,
@@ -3065,6 +3076,7 @@ cmds.status = ({ flags }) => {
   // anyway: `rig status` is where `reviewing` and `landing` can be said out loud.
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
   for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}`)
+  if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
   // Named, not enumerated: `rig stage` is where the stack is read, and a status that
   // reprinted it would be two places to keep saying the same thing.
   if (work.stages.length) say(`stages ${work.stages.length} — \`rig stage\` for the stack`)
@@ -3910,6 +3922,10 @@ cmds.close = ({ flags }) => {
   // asked: `rig save --learned` refuses one, so naming it would hand over a command that dies.
   if (!abandoned && !work.learnedAt) {
     say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`${save} -m "lessons reviewed" --learned\``))
+  }
+  // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason.
+  if (!abandoned && !work.outcome) {
+    say(C.dim(`  no outcome recorded — what changed for someone, and why that is good: \`${save} --outcome "…"\``))
   }
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
@@ -4877,6 +4893,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    --learned the lesson review (the rig-learn skill)
        [--title "..."]             correct the work's title: the record, the context doc's
                                    heading and AGENTS.md — never the branch or the id
+       [--outcome "..."]           what landed and why it was worth doing, in a sentence
+                                   or two; again replaces it
   rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land

@@ -76,6 +76,10 @@ _Avoid_: stage (that is scope), status, step, state
 The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
 _Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
 
+**Outcome**:
+What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
+_Avoid_: summary, result, release note
+
 **Stage**:
 A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.
 _Avoid_: phase (that is lifecycle), slice, milestone, increment, child work

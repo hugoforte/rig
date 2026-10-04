@@ -598,6 +598,33 @@ test('the lesson review is offered, never demanded', () => {
   assert.doesNotMatch(says(out), /should|must|need to|failed/i)
 })
 
+// ------------------------------------------------------------- the outcome
+
+// What landed and why it was worth doing, asked once there is something landed to say it of.
+
+const OUTCOME = 'rig save --outcome "…"'
+
+test('a work whose PRs have all merged is offered the outcome', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.ok(commands(out).includes(OUTCOME))
+})
+
+test('a work with a PR still to merge is not asked its outcome', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [landed(), repo('b', { pr: { number: 2, state: 'OPEN' } })] })
+  assert.ok(!commands(out).includes(OUTCOME))
+})
+
+test('a recorded outcome is not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, outcome: { text: 'It landed.', at: AT } }), repos: [landed()] })
+  assert.ok(!commands(out).includes(OUTCOME))
+})
+
+test('the outcome is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
+  const offer = out.find(o => o.command === OUTCOME)
+  assert.doesNotMatch(offer.says, /should|must|need to|missing/i)
+})
+
 test('a worktree not on this machine is offered the restore, before anything else', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b') }),
