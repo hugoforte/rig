@@ -38,7 +38,7 @@ Check that the push landed before going on: the save's last line must end `and p
 ## What it says
 
 - **Suggested skills**: a section naming which skills the next agent should call the Skill tool for. Inside a work, `rig` is always one of them.
-- Do not duplicate content already captured in other artifacts — the work's `context.md`, specs, plans, ADRs, issues, commits, diffs. Reference them by path or URL instead. Inside a work, the context doc is the design; the handoff is what happened since, what is half-done, and what the next agent would otherwise have to rediscover.
+- Do not duplicate content already captured in other artifacts — the work's `context.md`, its `notes.tsv`, specs, plans, ADRs, issues, commits, diffs. A decision this session took along the way belongs in the notes, with `rig note`, rather than in the handoff. Reference them by path or URL instead. Inside a work, the context doc is the design; the handoff is what happened since, what is half-done, and what the next agent would otherwise have to rediscover.
 - Redact any sensitive information: API keys, passwords, personally identifiable information.
 - If the user passed arguments, treat them as a description of what the next session will focus on and tailor the document accordingly.
 

@@ -355,7 +355,9 @@ rig note "Dropped the cache layer" --why "it hid a stale read" --evidence abc123
 
 A row is `at`, `stage`, `note`, `why`, `evidence` and `result`, one line a cell. The evidence is
 a pointer a reviewer can open — a SHA, a PR, `file:line`, a path or a URL, several split by
-commas — and never prose; `rig note` refuses a row without it. Rows are appended and never read
+commas — and never prose: a word with no `/`, `\`, `:` or `.` in it, such as "done", is refused, and so is a
+pointer with a space, which is written `%20`. `rig note` refuses a row without one. A note that
+begins with a dash goes after `--`. Rows are appended and never read
 to be written, so the hundredth costs what the first did, and the data root is committed.
 `rig status` names the file; the lesson review and a pickup read it.
 

@@ -63,6 +63,66 @@ test('a note, a why or a result over more than one line, or with a tab, is refus
   }
 })
 
+test('a note over more than one line is refused, like its cells', () => {
+  const r = m.rig(['note', 'one\ntwo', '--why', 'w', '--evidence', 'abc1234', '--work', 'noted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /the note takes one line, with no tab/)
+})
+
+test('a word that is not a pointer is refused as evidence, though it has no space', () => {
+  const r = m.rig(['note', 'Checked it', '--why', 'to be sure', '--evidence', 'done', '--work', 'noted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /--evidence is a pointer/)
+})
+
+test('a trailing comma in the evidence is no empty pointer', () => {
+  const r = m.rig(['note', 'Listed', '--why', 'tidy', '--evidence', 'abc1234,', '--work', 'noted'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(rows().at(-1)[4], 'abc1234')
+})
+
+test('-- lets a note begin with a dash', () => {
+  const r = m.rig(['note', '--why', 'it was the wrong call', '--evidence', 'abc1234', '--work', 'noted', '--', '--force was the wrong call'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(rows().at(-1)[2], '--force was the wrong call')
+})
+
+test('a row is never glued to a last line left without its newline', () => {
+  fs.writeFileSync(notesFile, fs.readFileSync(notesFile, 'utf8').replace(/\n$/, ''))
+  assert.equal(m.rig(['note', 'After a hand edit', '--why', 'w', '--evidence', 'abc1234', '--work', 'noted']).code, 0)
+  assert.ok(rows().every(r => r.length === 6), 'every row is six cells')
+  assert.equal(rows().at(-1)[2], 'After a hand edit')
+})
+
+test('a notes file found empty is given its header first', () => {
+  assert.equal(m.rig(['new', 'emptied', '--title', 'An emptied notes file', '--no-ticket']).code, 0)
+  const file = path.join(m.dataRoot, 'work', 'emptied', 'notes.tsv')
+  fs.writeFileSync(file, '')
+  assert.equal(m.rig(['note', 'First', '--why', 'w', '--evidence', 'abc1234', '--work', 'emptied']).code, 0)
+  assert.equal(fs.readFileSync(file, 'utf8').split('\n')[0], 'at\tstage\tnote\twhy\tevidence\tresult')
+})
+
+test('two machines\' appends merge as both rows, since the notes merge as a union', () => {
+  assert.equal(fs.readFileSync(path.join(m.dataRoot, 'work', 'noted', '.gitattributes'), 'utf8'), 'notes.tsv merge=union\n')
+})
+
+test('a stage the work does not declare, or a work already closed, is said and noted all the same', () => {
+  assert.equal(m.rig(['stage', 'feat/noted-one', '--delivers', 'a slice', '--work', 'noted']).code, 0)
+  let r = m.rig(['note', 'On a typo', '--why', 'w', '--evidence', 'abc1234', '--stage', 'feat/noted-on', '--work', 'noted'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /feat\/noted-on is not one of noted's stages/)
+  assert.equal(m.rig(['close', '--abandoned', '--work', 'emptied']).code, 0)
+  r = m.rig(['note', 'Late', '--why', 'w', '--evidence', 'abc1234', '--work', 'emptied'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /emptied is abandoned — this note comes after its story/)
+})
+
+test('a long note is cut to one line in the commit subject', () => {
+  const long = 'x'.repeat(100)
+  assert.equal(m.rig(['note', long, '--why', 'w', '--evidence', 'abc1234', '--work', 'noted']).code, 0)
+  assert.equal(m.gitMust(m.dataRoot, 'log', '-1', '--format=%s'), `rig note noted: ${'x'.repeat(71)}…`)
+})
+
 test('a note needs its why', () => {
   const r = m.rig(['note', 'No reason', '--evidence', 'abc1234', '--work', 'noted'])
   assert.equal(r.code, 1, r.out)

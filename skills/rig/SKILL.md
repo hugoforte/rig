@@ -51,6 +51,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |
 | Context doc edited by hand | `rig save -m "…"` |
+| A decision taken along the way, worth a reviewer seeing | `rig note "…" --why "…" --evidence <sha,pr,file:line>` |
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
