@@ -45,6 +45,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Slice the work into reviewable parts | `rig stage` |
 | A planned stage was dropped, or done under another | `rig stage <branch> --dropped "why"`, `rig stage <branch> --replaced-by <stage>`; `rig stage <branch> --planned` puts it back |
 | Stage PRs show on GitHub as unrelated | `rig stage --link` |
+| Every stage still to land has passed its review | `rig stage --land`, then hand over at the work branch's PR; stop at a stage instead when its review raised a design question |
 | Put it up for review | write the context doc's `## Pull request` section (what the work delivers: Summary, Evidence, Merge Danger), with your PR-body skill if you have one, then `rig pr` |
 | The PR says what the work used to be | `rig pr --refresh` |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
@@ -74,7 +75,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 - The same failure twice is not flaky: read the logs.
 - Only a failure in the diff's own code gets a commit.
 
-rig names what it can see and never re-runs, rebases or merges anything itself.
+rig names what it can see and never re-runs or rebases anything itself. It merges only into a work branch, with `rig stage --land`; nothing merges out of one but the human.
 
 **More than one data root is normal** — personal, public and employer knowledge have different readers. A work lives in exactly one, and `rig new --repos a,b` refuses repos catalogued in different roots. `rig use` says which is in hand.
 

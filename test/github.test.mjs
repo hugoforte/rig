@@ -455,6 +455,72 @@ test('gh adapter: linkStack fails with gh stack\'s own error', () => {
   assert.throws(() => github.linkStack('acme', 'platform', { base: 'feat/work', urls: [] }), e => e instanceof GithubError && /failed to look up PR #3/.test(e.message))
 })
 
+test('gh adapter: mergeStack merges up to the PR with a merge commit, unprompted, for the repo it names', () => {
+  const calls = []
+  const github = githubViaGh({ exec: (args, opts) => { calls.push({ args, env: opts?.env }); return { status: 0, stdout: '', stderr: '' } } })
+  github.mergeStack('acme', 'platform', 4)
+  assert.deepEqual(calls, [{ args: ['stack', 'merge', '4', '--merge', '--yes'], env: { GH_REPO: 'acme/platform' } }])
+})
+
+test('gh adapter: mergePr merges the PR with a merge commit', () => {
+  const { calls, github } = canned(() => '')
+  github.mergePr('acme', 'platform', 4)
+  assert.deepEqual(calls[0], ['pr', 'merge', '4', '--repo', 'acme/platform', '--merge'])
+})
+
+test('gh adapter: a merge GitHub refuses fails with gh\'s own error', () => {
+  const { github } = canned(() => ({ code: 1, err: 'Pull request #4 is not mergeable' }))
+  assert.throws(() => github.mergeStack('acme', 'platform', 4), e => e instanceof GithubError && /not mergeable/.test(e.message))
+  assert.throws(() => github.mergePr('acme', 'platform', 4), e => e instanceof GithubError && /not mergeable/.test(e.message))
+})
+
+test('gh adapter: prReadiness reads the draft, the review decision, the open review requests and the checks', () => {
+  const { calls, github } = canned(() => '{"draft":false,"decision":"APPROVED","requested":1,"checks":"SUCCESS"}')
+  assert.deepEqual(github.prReadiness('acme', 'platform', 12), { draft: false, decision: 'APPROVED', requested: 1, checks: 'SUCCESS' })
+  assert.deepEqual(calls[0].slice(0, 2), ['api', 'graphql'])
+  assert.match(calls[0].find(a => a.startsWith('query=')), /reviewRequests \{ totalCount \}/)
+})
+
+test('gh adapter: prReadiness is null when gh cannot answer, and says no checks where none are set up', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prReadiness('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'oops').github.prReadiness('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'null').github.prReadiness('acme', 'platform', 12), null)
+  assert.deepEqual(canned(() => '{"draft":true,"decision":null,"requested":0,"checks":null}').github.prReadiness('acme', 'platform', 12),
+    { draft: true, decision: null, requested: 0, checks: null })
+})
+
+test('gh adapter: stackTool asks for the subcommand it is told, link by default', () => {
+  assert.equal(canned(() => 'Remote operations:\n  link        Link PRs\n').github.stackTool('merge'), 'old')
+  assert.equal(canned(() => 'Remote operations:\n  merge       Merge a stack\n').github.stackTool('merge'), 'ok')
+})
+
+test('in-memory adapter: mergeStack merges the stack up to the PR and leaves the rest open', () => {
+  const state = { repos: { 'acme/platform': { prs: [3, 4, 5].map(n => ({ branch: `s${n}`, number: n, state: 'OPEN' })), stacks: [{ number: 9, open: true, base: 'feat/work', prs: [3, 4, 5] }] } } }
+  githubInMemory(state).mergeStack('acme', 'platform', 4)
+  assert.deepEqual(state.repos['acme/platform'].prs.map(p => p.state), ['MERGED', 'MERGED', 'OPEN'])
+  assert.deepEqual(state.merges, [{ repo: 'acme/platform', via: 'stack', number: 4 }])
+})
+
+test('in-memory adapter: mergeStack refuses a PR in no open stack, and mergeFails fails it', () => {
+  const state = { repos: { 'acme/platform': { prs: [{ branch: 's3', number: 3, state: 'OPEN' }], stacks: [] } } }
+  assert.throws(() => githubInMemory(state).mergeStack('acme', 'platform', 3), /not in an open stack/)
+  state.mergeFails = 'not mergeable'
+  assert.throws(() => githubInMemory(state).mergePr('acme', 'platform', 3), /not mergeable/)
+  assert.equal(state.repos['acme/platform'].prs[0].state, 'OPEN')
+})
+
+test('in-memory adapter: prReadiness reads the fixture, and is null where GitHub would not say', () => {
+  const state = { repos: { 'acme/platform': { prs: [
+    { branch: 'a', number: 3, draft: true, reviewDecision: 'CHANGES_REQUESTED', reviewRequests: 2, checks: 'FAILURE' },
+    { branch: 'b', number: 4 },
+    { branch: 'c', number: 5, readinessUnknown: true },
+  ] } } }
+  const github = githubInMemory(state)
+  assert.deepEqual(github.prReadiness('acme', 'platform', 3), { draft: true, decision: 'CHANGES_REQUESTED', requested: 2, checks: 'FAILURE' })
+  assert.deepEqual(github.prReadiness('acme', 'platform', 4), { draft: false, decision: null, requested: 0, checks: null })
+  assert.equal(github.prReadiness('acme', 'platform', 5), null)
+})
+
 test('gh adapter: stackTool tells a missing gh stack from one too old to link', () => {
   assert.equal(canned(() => ({ code: 1, err: 'unknown command "stack" for "gh"' })).github.stackTool(), 'missing')
   assert.equal(canned(() => 'Stack management:\n  add  Add a branch\n  init Initialize\n').github.stackTool(), 'old')

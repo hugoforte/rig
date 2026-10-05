@@ -1170,7 +1170,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'by-agent', 'transcripts'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'land', 'by-agent', 'transcripts'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -4024,6 +4024,7 @@ cmds.stage = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const branch = positional[0]
 
+  if (flags.land) return landStages(cfg, work, branch, flags)
   if (flags.link) return linkStages(cfg, work, branch, flags)
   if (flags.planned) return replanStage(cfg, work, branch, flags)
   if (flags.dropped !== undefined || flags['replaced-by'] !== undefined) return withdrawStage(cfg, work, branch, flags)
@@ -4185,6 +4186,97 @@ function linkStages (cfg, work, branch, flags) {
       sayStackMerge('<n>')
     } else warn(`${entry.repo}: gh stack link ran, and ${numbers} are still not one stack${made.problem ? ` — ${made.problem}` : ''}`)
   }
+}
+
+// `--land`: the stages merged down into the work branch, with a merge commit, and never past it
+// (decision 207). With a branch, that stage and every stage below it; without, every stage
+// still to land. Anything may merge into a work branch, and nothing merges out of one but the
+// human merging the work PR, so the lowest PR in each repo must be based on the work branch,
+// and the work PR is never asked about.
+//
+// Every repo is checked before any repo merges, because a stage spans repos: a refusal in one
+// lands nothing anywhere. A stage PR is refused while it is a draft, while its checks have not
+// passed, while changes are requested on it, and while a review asked for is not given, since
+// a human reviewing a stage makes its merge theirs. Two or more open stage PRs in a repo land as
+// GitHub's atomic stack merge, linked first when they are not one stack yet, which is why
+// `stageStack`'s problems refuse here as they are named by `--link`; one lands on its own. Like
+// `--link`, it writes nothing into the record: the merged PRs' terminal facts are `rig close`'s.
+function landStages (cfg, work, branch, flags) {
+  const others = ['dropped', 'replaced-by', 'cut', 'key', 'delivers', 'planned', 'link'].filter(k => flags[k] !== undefined)
+  if (others.length) die(`--land merges the stages as they are, and takes nothing else (${others.map(k => `--${k}`).join(', ')})`)
+  if (!work.stages.length) die(`${work.id} has no stages — there is nothing to land`)
+  const stack = stackOf(work, branchRows(cfg, work))
+  const unknown = unknownStages(stack).map(st => st.branch)
+  if (unknown.length) die(`GitHub would not say what became of ${unknown.join(', ')} — nothing landed`)
+  const live = stack.filter(st => !st.landed && !st.withdrawn)
+  if (!live.length) die(`every stage of ${work.id} has landed — there is nothing to land`)
+  const upTo = branch ? live.slice(0, live.findIndex(st => st.branch === branch) + 1) : live
+  if (!upTo.length) die(`${branch} is not a stage of ${work.id} still to land`)
+
+  const problems = upTo.filter(st => !st.started).map(st => `${st.branch} is not cut in any repo yet`)
+  const plans = []
+  let tool = null
+  for (const entry of work.repos) {
+    const prs = []
+    for (const st of upTo.filter(s => s.repos.includes(entry.repo))) {
+      const pr = st.prs.find(p => p.repo === entry.repo)
+      if (pr?.state === 'MERGED') continue
+      if (pr?.state === 'OPEN') prs.push({ ...pr, branch: st.branch })
+      else problems.push(`${st.branch} has no open PR in ${entry.repo}`)
+    }
+    if (!prs.length) continue
+    const base = workBranch(entry, work)?.base || entry.base
+    if (base === work.branch) { problems.push(`${entry.repo}: ${work.branch} is the base branch itself — rig lands a stage into the work branch and never further`); continue }
+    const s = stageStack(stack, entry, work.branch)
+    if (s?.problem) { problems.push(`${entry.repo}: ${s.problem}`); continue }
+    if (!s && prs[0].base !== work.branch) {
+      problems.push(`${entry.repo}: #${prs[0].number} (${prs[0].branch}) is based on ${prs[0].base}, not ${work.branch} — rig lands a stage into the work branch and never further`)
+      continue
+    }
+    for (const pr of prs) {
+      const says = unready(github().prReadiness(entry.org, entry.repo, pr.number))
+      if (says) problems.push(`${entry.repo}: #${pr.number} (${pr.branch}): ${says}`)
+    }
+    if (s && !tool) {
+      tool = github().stackTool('merge')
+      if (tool === 'ok' && !s.linked) tool = github().stackTool('link')
+      if (tool === 'missing') problems.push('gh stack is not installed — `gh extension install github/gh-stack`; two or more stage PRs land only as one stack')
+      if (tool === 'old') problems.push('gh stack is too old to link and merge a stack — `gh extension upgrade gh-stack`')
+    }
+    plans.push({ entry, prs, stacked: s })
+  }
+  if (problems.length) die(`nothing landed:\n${problems.map(p => `  - ${p}`).join('\n')}`)
+
+  const numbers = prs => prs.map(pr => `#${pr.number}`).join(', ')
+  for (const { entry, stacked } of plans.filter(p => p.stacked && !p.stacked.linked)) {
+    const failed = trackerFailure(() => github().linkStack(entry.org, entry.repo, { base: work.branch, urls: stacked.prs.map(pr => pr.url) }))
+    if (failed) die(`${entry.repo}: could not link ${numbers(stacked.prs)} (${failed}) — nothing landed`)
+    // Read back rather than trusted, as `--link` does: a stack missing a PR would merge
+    // what sits below it without what it was cut on.
+    const made = stageStack(stack, entry, work.branch)
+    if (!made.linked && !made.unknown) die(`${entry.repo}: gh stack link ran, and ${numbers(stacked.prs)} are still not one stack — nothing landed`)
+  }
+  const landed = []
+  for (const { entry, prs, stacked } of plans) {
+    const top = prs[prs.length - 1].number
+    const failed = trackerFailure(() => stacked ? github().mergeStack(entry.org, entry.repo, top) : github().mergePr(entry.org, entry.repo, top))
+    if (failed) die(`${entry.repo}: could not land ${numbers(prs)} (${failed})${landed.length ? ` — ${landed.join('; ')} landed already` : ''}`)
+    ok(`${entry.repo}: landed ${numbers(prs)} in ${work.branch}`)
+    landed.push(`${numbers(prs)} in ${entry.repo}`)
+    const on = trees(cfg).state({ dir: entry.path, base: entry.base, recordedBase: entry.base, branch: work.branch }).on
+    if (prs.some(pr => pr.branch === on)) say(`  ${C.dim(`the worktree is still on ${on} — ${backToWorkBranch(work).map(c => `\`${c}\``).join(', then ')}`)}`)
+  }
+}
+
+// Why a stage PR is not one to merge, or null when it is. `ready` is `prReadiness`'s answer.
+function unready (ready) {
+  if (!ready) return 'GitHub would not say whether it is ready'
+  if (ready.draft) return 'it is a draft'
+  if (['FAILURE', 'ERROR'].includes(ready.checks)) return 'its checks are failing'
+  if (ready.checks && ready.checks !== 'SUCCESS') return 'its checks have not passed yet'
+  if (ready.decision === 'CHANGES_REQUESTED') return 'changes are requested'
+  if (ready.requested > 0) return 'a review is requested and not given — that merge is the reviewer\'s'
+  return null
 }
 
 // One repo's open stage pull requests as a GitHub stack: `stackState` over the stacks GitHub
@@ -5367,6 +5459,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --planned                   put a withdrawn stage back in the plan
   rig stage --link                register each repo's open stage PRs as one GitHub stack
                                   on the work branch, with gh stack link
+  rig stage [branch] --land       merge the stages, up to that one, into the work branch with
+                                  a merge commit, and never past it; refused while a stage PR
+                                  is a draft, unchecked, or under a review asked for
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure,

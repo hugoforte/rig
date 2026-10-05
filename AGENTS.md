@@ -451,6 +451,8 @@ rig stage feat/schema --dropped "not worth it"     # withdraw it from the plan, 
 rig stage feat/schema --replaced-by feat/shape     # it was done under another stage instead
 rig stage feat/schema --planned                    # put a withdrawn stage back in the plan
 rig stage --link                                   # register the open stage PRs as a GitHub stack
+rig stage --land                                   # merge them into the work branch, never further
+rig stage feat/schema --land                       # that stage and the ones below it
 ```
 
 **A work with no stages behaves exactly as it always did** — one branch per repo, one PR each.
@@ -477,11 +479,25 @@ decisions 110 and 159).
 commit**; the work branch is **squashed** into the base branch at the end. The squash is what
 keeps one commit per work in the base branch. The merge is what keeps the stack readable: a
 squash replaces a stage's commits, so the stage above stops descending from anything and has
-to be rebased — and a rebase is what breaks the chain rig reads the order from. rig never
-merges anything, so this is a convention it relies on rather than enforces; a stage somebody
-squashes anyway falls back to the order it was declared in. `rig next` names the stages above a
-squash, which still carry the commits it replaced, and offers the commands that replay only
-their own commits and force-push them, when the squash is the stage as it stood.
+to be rebased — and a rebase is what breaks the chain rig reads the order from. A stage landed
+with `rig stage --land` always merges; one merged by hand can still be squashed, and falls back
+to the order it was declared in. `rig next` names the stages above a squash, which still carry
+the commits it replaced, and offers the commands that replay only their own commits and
+force-push them, when the squash is the stage as it stood.
+
+**Anything may merge into a work branch; nothing merges out of one but the human.** `rig stage
+--land` merges the stages still to land into the work branch, and `rig stage <branch> --land`
+that stage and the ones below it. Two or more open stage PRs in a repo land as GitHub's atomic
+stack merge, `gh stack merge <PR> --merge`, linked first when they are not one stack yet; one
+lands with `gh pr merge --merge`. The lowest PR in each repo must be based on the work branch,
+and the work branch's own PR is never touched. Every repo is checked before any repo merges, so
+a refusal anywhere lands nothing: a stage with no open PR, stages that are not one chain, and a
+stage PR that is a draft, whose checks have not passed, with changes requested, or with a review
+asked for and not given — a human reviewing a stage makes its merge theirs. `rig next` offers it
+once every stage still to land is up for review, and the command says what is not ready. It
+writes nothing into the record. An agent lands the stack itself once each stage has passed its
+review, and hands the work over at the work branch's PR; it stops at a stage instead when that
+stage's review raised a design question.
 
 **A GitHub stack.** GitHub shows stacked PRs as unrelated until they are registered as a stack.
 `rig stage --link` registers, in each repo, the open stage PRs that form a chain on the work
@@ -489,8 +505,9 @@ branch, with `gh stack link`, by PR URL and `--base <work branch>`, so it never 
 a branch. Run again after a stage is added, it grows the same stack; `rig next` offers it while
 the open stage PRs are not one. Without the `gh stack` extension, or with one too old to `link`,
 it says so and carries on: the base branches already carry the stack. A stack records no merge
-method, so the one said where it is made is the convention: merge it with a merge commit, all at
-once (`gh stack merge <n> --merge`, which rewrites no head) or bottom-up. `rig close` never
+method, so the one said where it is made is the convention for merging it by hand: a merge
+commit, all at once (`gh stack merge <n> --merge`, which rewrites no head) or bottom-up;
+`rig stage --land` merges it that way. `rig close` never
 unstacks: GitHub keeps a merged stack as a closed record after its branches go.
 
 **Stored: the branch, one line of what it delivers, and a ticket if you gave it one.**

@@ -16,9 +16,13 @@
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
 //   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack
-//   stackTool()                         'ok' | 'missing' | 'old': is `gh stack link` there; never
-//                                       throws for a non-zero exit, which is 'missing'
+//   prReadiness(org, name, number)      { draft, decision, requested, checks }: whether a PR is
+//                                       ready to merge, or null where GitHub would not say
+//   stackTool(command = 'link')         'ok' | 'missing' | 'old': is `gh stack <command>` there;
+//                                       never throws for a non-zero exit, which is 'missing'
 //   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
+//   mergeStack(org, name, number)       merge a stack up to and including that PR, merge commit
+//   mergePr(org, name, number)          merge one PR, with a merge commit
 //   prsOnto(org, name, base)            [{ number, branch, url }] the open PRs landing on `base`
 //   pullsForCommit(org, name, sha)      every PR the commit belongs to
 //   createIssue(repo, title, body)      the new issue's number
@@ -28,7 +32,7 @@
 //   clone(spec, target)
 //   createRepo(spec, { source, description })   private, pushed from `source`
 // Every call but auth() throws GithubError when gh cannot be spawned, and every call but
-// auth(), stackTool() and prReview() when gh runs and exits non-zero, carrying gh's stderr.
+// auth(), stackTool(), prReview() and prReadiness() when gh runs and exits non-zero, carrying gh's stderr.
 // A lookup that gh could not answer — signed out, rate limited, offline — therefore throws,
 // and never reads as "not found" (DESIGN.md decision 169). Not found is said only where gh says it: exit 0 with nothing
 // (prForBranch, prTimeline, prsOnto, pullsForCommit), or HTTP 404 (repo, repoExists).
@@ -60,6 +64,12 @@ const PR_TIMELINE_JQ = [
 // with no checks set up.
 const REVIEW_QUERY = 'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100, after: $endCursor) { nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }'
 const REVIEW_JQ = '.data.repository.pullRequest | "\\([.reviewThreads.nodes[] | select(.isResolved | not)] | length) \\(.commits.nodes[0].commit.statusCheckRollup.state // "NONE")"'
+
+// Whether a PR is one rig may merge: a draft, its review decision, how many review requests
+// are still waiting, and its head commit's check rollup. `reviewRequests` holds only requests
+// not yet answered, since GitHub removes one once that reviewer submits.
+const READINESS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { isDraft reviewDecision reviewRequests { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }'
+const READINESS_JQ = '.data.repository.pullRequest | if . == null then null else {draft: .isDraft, decision: .reviewDecision, requested: .reviewRequests.totalCount, checks: .commits.nodes[0].commit.statusCheckRollup.state} end'
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
@@ -167,6 +177,17 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
         checks: pages[0][1] === 'NONE' ? null : pages[0][1],
       }
     },
+    // What `rig stage --land` asks of every stage PR before it merges any. Null where gh could
+    // not answer or the answer is not one, as prReview: it has no not-found.
+    prReadiness (org, name, number) {
+      const r = gh(['api', 'graphql', '-f', `query=${READINESS_QUERY}`,
+        '-f', `owner=${org}`, '-f', `name=${name}`, '-F', `number=${number}`, '--jq', READINESS_JQ])
+      if (r.code !== 0 || !r.out) return null
+      let t
+      try { t = JSON.parse(r.out) } catch { return null }
+      if (!t || typeof t.draft !== 'boolean' || !Number.isInteger(t.requested)) return null
+      return { draft: t.draft, decision: t.decision ?? null, requested: t.requested, checks: t.checks ?? null }
+    },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
     // the caller's, because "already open" is a thing to report rather than an error to raise).
     createPr (org, name, { branch, base, title, body }) {
@@ -191,12 +212,12 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
         return { number: s.number, open: s.open, base: s.base, prs: s.prs, openPrs: s.openPrs }
       })
     },
-    // Is the gh-stack extension here, and new enough to `link`? Read off its help, because an
-    // unknown `gh stack` subcommand prints that help and exits 0.
-    stackTool () {
+    // Is the gh-stack extension here, and new enough to have `command`? Read off its help,
+    // because an unknown `gh stack` subcommand prints that help and exits 0.
+    stackTool (command = 'link') {
       const r = gh(['stack', '--help'])
       if (r.code !== 0) return 'missing'
-      return /^\s+link\s/m.test(r.out) ? 'ok' : 'old'
+      return r.out.split('\n').some(l => l.trim().split(/\s+/)[0] === command && /^\s/.test(l)) ? 'ok' : 'old'
     },
     // `gh stack link`, which registers pull requests that already exist as one stack and owns
     // no branch. Given URLs, never branch names: a branch name is pushed, and opened as a pull
@@ -204,6 +225,17 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // repo is named by `GH_REPO`, so nothing depends on where rig was run.
     linkStack (org, name, { base, urls }) {
       must(['stack', 'link', '--base', base, ...urls], { env: { GH_REPO: `${org}/${name}` } })
+    },
+    // GitHub's atomic stack merge: every PR of the stack up to and including `number`, all or
+    // nothing, with a merge commit, which rewrites no head (decision 153). `--yes`, since rig is
+    // not a terminal to be asked in. A bare number is read as a stack's before a PR's, and the
+    // two share GitHub's one sequence of issue numbers, so a PR's number names only that PR.
+    mergeStack (org, name, number) {
+      must(['stack', 'merge', String(number), '--merge', '--yes'], { env: { GH_REPO: `${org}/${name}` } })
+    },
+    // One PR in no stack, with a merge commit (decision 75).
+    mergePr (org, name, number) {
+      must(['pr', 'merge', String(number), '--repo', `${org}/${name}`, '--merge'])
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -270,6 +302,13 @@ export function githubInMemory (state, { env } = {}) {
     const repo = lookup(spec)?.repo
     if (repo?.lookupFails) fail(repo.lookupFails)
     if (repo?.branchLookupFails?.[branch]) fail(repo.branchLookupFails[branch])
+  }
+  const merge = (found, numbers, via, number) => {
+    for (const n of numbers) {
+      const pr = (found.repo.prs || []).find(p => p.number === n) || fail(`${found.key}#${n}: no such pull request (in-memory GitHub)`)
+      Object.assign(pr, { state: 'MERGED', mergedAt: new Date().toISOString() })
+    }
+    state.merges = [...(state.merges || []), { repo: found.key, via, number: Number(number) }]
   }
   const issue = (spec, number) => {
     const found = lookup(spec)?.repo.issues?.find(i => i.number === Number(number))
@@ -340,6 +379,14 @@ export function githubInMemory (state, { env } = {}) {
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       return pr && !pr.reviewUnknown ? { unresolved: (pr.reviewThreads || []).filter(t => !t.resolved).length, checks: pr.checks || null } : null
     },
+    // A PR's `draft`, `reviewDecision`, `reviewRequests` (a count) and `checks` are the fixture's;
+    // `readinessUnknown` is one GitHub lists and will not say this of.
+    prReadiness (org, name, number) {
+      if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
+      if (state.auth === 'unauthenticated' || lookup(`${org}/${name}`)?.repo.lookupFails) return null
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      return pr && !pr.readinessUnknown ? { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, checks: pr.checks || null } : null
+    },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
@@ -366,6 +413,23 @@ export function githubInMemory (state, { env } = {}) {
       return (found.repo.stacks || []).map(s => ({ ...s, prs: [...s.prs], openPrs: s.prs.filter(open) }))
     },
     stackTool: () => state.ghStack || 'ok',
+    // As `gh stack merge <pr>` does: the open stack holding the PR merges up to and including it.
+    // Every merge is kept in `state.merges`, in order; `mergeFails` is GitHub's refusal.
+    mergeStack (org, name, number) {
+      signedIn()
+      if (state.mergeFails) fail(state.mergeFails)
+      const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      const stack = (found.repo.stacks || []).find(s => s.open && s.prs.includes(Number(number))) ||
+        fail(`#${number} is not in an open stack (in-memory GitHub)`)
+      merge(found, stack.prs.slice(0, stack.prs.indexOf(Number(number)) + 1), 'stack', number)
+      stack.open = stack.prs.some(n => found.repo.prs.find(p => p.number === n)?.state === 'OPEN')
+    },
+    mergePr (org, name, number) {
+      signedIn()
+      if (state.mergeFails) fail(state.mergeFails)
+      const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      merge(found, [Number(number)], 'pr', number)
+    },
     // As `gh stack link` does: a stack holding any of the PRs grows by the rest, and otherwise
     // a new one is made. Stack numbers share the PRs' sequence, as they do on GitHub.
     // `linkFails` is gh stack's error, for a link that fails.
