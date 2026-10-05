@@ -234,6 +234,21 @@ test('and its doctor says the same, rather than sending it to rig prompt setup',
   assert.doesNotMatch(r.out, /rig prompt setup/)
 })
 
+// The home file is this machine's, and the work's copy carries unreleased code — migrations
+// among it — so reading that file is still a thing to mean, not a default to fall into.
+test('a work\'s own rig does not fall back to the machine\'s home file either', () => {
+  const home = path.join(installed.env.USERPROFILE, '.rig', 'rig.local.json')
+  fs.mkdirSync(path.dirname(home), { recursive: true })
+  fs.writeFileSync(home, JSON.stringify({ dataRoot: installed.dataRoot, workRoot: installed.workRoot }))
+  try {
+    const r = driveLinked(['list'])
+    assert.equal(r.code, 1, r.out + r.err)
+    assert.ok(r.err.includes(`it would read this machine's ${home} — set RIG_LOCAL_CONFIG to it to mean it`), r.err)
+    const meant = drive({ ...installed, install: linked, env: { ...installed.env, RIG_LOCAL_CONFIG: home } }, ['use'])
+    assert.doesNotMatch(meant.err, /linked worktree/, 'and pointed at it on purpose, it runs')
+  } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
+})
+
 test('a work\'s own rig pointed at a machine file that is not there says so, rather than to set the variable', () => {
   const missing = path.join(installed.tmp, 'rig.local.jsn')
   const r = drive({ ...installed, install: linked, env: { ...installed.env, RIG_LOCAL_CONFIG: missing } }, ['list'])

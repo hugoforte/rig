@@ -103,6 +103,25 @@ test('the old machine file location is a note, not a problem — it still works'
   assert.equal(problemCount(found), 0)
 })
 
+test('a relative data root in a machine file to be moved is named, with what it means now', () => {
+  const found = doctorFindings(snap({
+    localFile: 'C:\\rig\\rig.local.json',
+    legacyLocalFile: {
+      home: 'C:\\Users\\dev\\.rig\\rig.local.json',
+      relative: [{ key: 'dataRoot', path: '..\\rig-data', absolute: 'C:\\rig-data' }],
+    },
+  }))
+  assert.match(only(found, /beside the tool/).says,
+    /first write dataRoot as C:\\rig-data — a relative path is read against the folder the file is in/)
+})
+
+test('a machine file beside the tool that another file shadows is a problem, because nothing reads it', () => {
+  const found = doctorFindings(snap({ shadowedLocalFile: 'C:\\rig\\rig.local.json' }))
+  assert.match(only(found, /is ignored/).says,
+    /C:\\rig\\rig\.local\.json is beside the tool and is ignored — C:\\Users\\dev\\\.rig\\rig\.local\.json is read instead/)
+  assert.equal(problemCount(found), 1)
+})
+
 test('a key of the org half left in the machine file is named, one line each', () => {
   const found = doctorFindings(snap({ strayOrgKeys: ['orgs', 'tracker'] }))
   assert.match(says(found), /has "orgs" — ignored; it lives in rig\.json/)

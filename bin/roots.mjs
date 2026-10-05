@@ -70,9 +70,10 @@ export const homeConfigFile = (env = process.env) =>
 // new one goes.
 //
 // The tool tree is a fallback **for reading only**, and it is what lets every clone install
-// made before this keep working with nothing done to it. Nothing is ever written there: a
+// made before this keep working with nothing done to it. No file is ever *created* there: a
 // first `rig init` writes the home file even on a machine that has a tool checkout, so an
-// installation cannot acquire a config in the one place an upgrade would delete it.
+// installation cannot acquire a config in the one place an upgrade would delete it. One that
+// already keeps its file there is written where it is read, so there is only ever one file.
 export function machineFile (toolRoot, env = process.env) {
   const override = env[LOCAL_CONFIG_ENV]
   if (override) return path.resolve(override)
@@ -86,6 +87,29 @@ export function machineFile (toolRoot, env = process.env) {
 // that an installation carrying the location a packaged upgrade would delete is told once,
 // by name, rather than finding out when its roots vanish.
 export const inToolTree = location => sameDir(path.dirname(location.localFile), location.toolRoot)
+
+// A file beside the tool that is not the one read: a home file has appeared since — a `rig init`
+// from another copy of rig writes one — and from then on nothing reads what this one holds.
+// Not when the run names its file, which is a choice rather than a default that moved.
+export function shadowedMachineFile (toolRoot, env = process.env) {
+  if (env[LOCAL_CONFIG_ENV]) return null
+  const beside = path.join(toolRoot, 'rig.local.json')
+  return fs.existsSync(beside) && !sameDir(path.dirname(machineFile(toolRoot, env)), toolRoot) ? beside : null
+}
+
+// The data-root paths in a machine file that are relative, with what they resolve to now. They
+// are read against the file's own folder (`rootsOf`), so the file cannot move without them
+// coming to mean somewhere else.
+export function relativeRootPaths (localFile) {
+  const machine = readJsonFile(localFile)
+  const named = machine?.dataRoots && typeof machine.dataRoots === 'object'
+    ? Object.entries(machine.dataRoots).map(([name, value]) =>
+      typeof value === 'string' ? [`dataRoots.${name}`, value] : [`dataRoots.${name}.path`, value?.path])
+    : []
+  return [['dataRoot', machine?.dataRoot], ...named]
+    .filter(([, p]) => typeof p === 'string' && p && !path.isAbsolute(p))
+    .map(([key, p]) => ({ key, path: p, absolute: path.resolve(path.dirname(localFile), p) }))
+}
 
 // Pins a shell to one data root by name, for the same reason `--data` pins one command. It
 // selects among the roots the machine file already configures — it is deliberately not a

@@ -183,8 +183,10 @@ function rootFindings (root) {
 //
 //   setUp             there is a rig.local.json at all; nothing below is gathered without one
 //   localFile         its path
-//   legacyLocalFile   { home } when that path is the one inside the tool tree, else null —
-//                     `home` being where it belongs instead
+//   legacyLocalFile   { home, relative } when that path is the one inside the tool tree, else
+//                     null — `home` being where it belongs instead, `relative` its data-root
+//                     paths that would mean something else there ({ key, path, absolute })
+//   shadowedLocalFile a machine file beside the tool that is not the one read, or null
 //   linkedCopyNeeds   without one, and when rig is running from a work's linked worktree,
 //                     the sentence saying what that copy needs instead; null otherwise
 //   strayOrgKeys      keys of the org half left behind in the machine file
@@ -237,7 +239,13 @@ export function doctorFindings (snap = {}) {
   // rig installed from the registry owns the directory it runs from and replaces it on every
   // upgrade, so a machine file left there goes with it, taking the roots and the identities.
   if (snap.legacyLocalFile) {
-    out.push(note(`${snap.localFile} is beside the tool — move it to ${snap.legacyLocalFile.home}, where an upgrade cannot delete it`))
+    const relative = (snap.legacyLocalFile.relative || []).map(r => `${r.key} as ${r.absolute}`)
+    const first = relative.length ? `; first write ${relative.join(', ')} — a relative path is read against the folder the file is in` : ''
+    out.push(note(`${snap.localFile} is beside the tool — move it to ${snap.legacyLocalFile.home}, where an upgrade cannot delete it${first}`))
+  }
+  // Read by nothing while another file is, so whatever it holds is silently not in force.
+  if (snap.shadowedLocalFile) {
+    out.push(warn(`${snap.shadowedLocalFile} is beside the tool and is ignored — ${snap.localFile} is read instead. Copy what you still need from it, then delete it`))
   }
 
   for (const key of snap.strayOrgKeys || []) {

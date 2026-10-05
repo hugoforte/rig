@@ -12,7 +12,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
   LOCAL_CONFIG_ENV, locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys,
-  sameDir, insideDir,
+  sameDir, insideDir, relativeRootPaths, shadowedMachineFile,
 } from '../bin/roots.mjs'
 import { DEFAULT_FRESHNESS } from '../bin/freshness.mjs'
 
@@ -302,4 +302,35 @@ test('a directory is the same directory under its 8.3 short name', t => {
   const short = spawnSync('cmd', ['/d', '/c', `for %I in ("${long}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true }).stdout.trim()
   if (!short || short.toLowerCase() === long.toLowerCase()) return t.skip('no short name on this volume')
   assert.ok(sameDir(short, long), `${short} is ${long}`)
+})
+
+// ------------------------------------------- the legacy file, before it is moved and after
+
+test('the relative data-root paths in a machine file are named with what they mean now', () => {
+  fixture({ machine: { dataRoot: '../rig-data', current: 'a', dataRoots: { a: { path: 'x' }, b: 'y', c: { path: path.resolve('/abs') } } } }, ({ toolRoot, tmp }) => {
+    const found = relativeRootPaths(path.join(toolRoot, 'rig.local.json'))
+    assert.deepEqual(found.map(r => [r.key, r.absolute]), [
+      ['dataRoot', path.join(tmp, 'rig-data')],
+      ['dataRoots.a.path', path.join(toolRoot, 'x')],
+      ['dataRoots.b', path.join(toolRoot, 'y')],
+    ])
+  })
+})
+
+test('a file beside the tool is shadowed once the home file is the one read', () => {
+  fixture({ machine: { dataRoot: 'a' }, homeMachine: { dataRoot: 'b' } }, ({ toolRoot, env }) => {
+    assert.equal(shadowedMachineFile(toolRoot, env), path.join(toolRoot, 'rig.local.json'))
+  })
+})
+
+test('a file beside the tool is not shadowed while it is the one read', () => {
+  fixture({ machine: { dataRoot: 'a' } }, ({ toolRoot, env }) => {
+    assert.equal(shadowedMachineFile(toolRoot, env), null)
+  })
+})
+
+test('a file beside the tool is not shadowed when the run names its machine file on purpose', () => {
+  fixture({ machine: { dataRoot: 'a' }, homeMachine: { dataRoot: 'b' } }, ({ toolRoot, env, homeFile }) => {
+    assert.equal(shadowedMachineFile(toolRoot, { ...env, [LOCAL_CONFIG_ENV]: homeFile }), null)
+  })
 })

@@ -380,6 +380,15 @@ scenario('a machine file left beside the tool is read, and named by doctor', {
     assert.ok(r.out.includes(`is beside the tool — move it to ${path.join(m.env.USERPROFILE, '.rig', 'rig.local.json')}`), r.out)
     assert.equal(r.code, 0, `a location that still works is not a failure:\n${r.out}`)
   }),
+
+  step('a home file written since shadows it, and doctor says nothing reads it', m => {
+    // What a `rig init` from another copy of rig — a work's worktree, a fresh package — leaves.
+    const home = path.join(m.env.USERPROFILE, '.rig', 'rig.local.json')
+    fs.mkdirSync(path.dirname(home), { recursive: true })
+    fs.cpSync(path.join(m.install, 'rig.local.json'), home)
+    const r = m.rig(['doctor'])
+    assert.ok(r.out.includes(`${path.join(m.install, 'rig.local.json')} is beside the tool and is ignored`), r.out)
+  }),
 ])
 
 // ------------------------------------- a package installed inside somebody else's repo

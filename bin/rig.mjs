@@ -24,7 +24,7 @@ import { transcriptsFor, refusal } from './transcripts.mjs'
 import { contextDocProblems } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, inToolTree, homeConfigFile, LOCAL_CONFIG_ENV } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, inToolTree, homeConfigFile, relativeRootPaths, shadowedMachineFile, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -5274,7 +5274,9 @@ function doctorSnapshot () {
     configFileExists: exists(localFile),
     // Only when it is the tool tree's copy: an installation carrying the one location a
     // packaged upgrade deletes should hear so before the upgrade, not after.
-    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile(env()) } : null,
+    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile(env()), relative: relativeRootPaths(localFile) } : null,
+    // The other side of the move: a file left beside the tool once a home file is read instead.
+    shadowedLocalFile: shadowedMachineFile(toolRoot(), env()),
     // Asked of the files, not carried on `cfg`: which keys the org half owns is
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
@@ -5485,12 +5487,17 @@ how far it is behind its remote, \`rig update\` brings it forward.`)
 // A work on rig itself runs the work's own copy — a linked worktree, with no machine file beside
 // it. Every default it would fall back to is some other installation's, so a command there would
 // work in data roots nobody chose, and `rig prompt setup` would write a second machine file into
-// the worktree. So it says what it needs instead (decision 158). Asked only when the machine file
-// is missing, so the git calls that tell a linked worktree cost an installation nothing.
+// the worktree. So it says what it needs instead (decision 158). The machine's home file is no
+// exception: the copy carries unreleased code, migrations among it, so reading the machine's
+// roots has to be meant. Asked only when the file is not one the run was pointed at or keeps
+// beside it, so the git calls that tell a linked worktree cost an installation nothing.
 function linkedCopyNeeds () {
   const localFile = registry(toolRoot(), env()).localFile
-  if (exists(localFile) || !toolState().linked) return null
-  if (env()[LOCAL_CONFIG_ENV]) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the installed rig's rig.local.json`
+  const override = env()[LOCAL_CONFIG_ENV]
+  if (exists(localFile) && (override || sameDir(path.dirname(localFile), toolRoot()))) return null
+  if (!toolState().linked) return null
+  if (override) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the installed rig's rig.local.json`
+  if (exists(localFile)) return `this is a work's copy of rig, in a linked worktree — it would read this machine's ${localFile} — set RIG_LOCAL_CONFIG to it to mean it`
   return `this is a work's copy of rig, in a linked worktree, and it has no machine config of its own (no ${localFile}) — set RIG_LOCAL_CONFIG to the installed rig's rig.local.json`
 }
 // The commands that run without one: the two that only print, `init`, which is how an

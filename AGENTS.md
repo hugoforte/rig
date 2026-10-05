@@ -571,9 +571,11 @@ because updating it would move the work's branch. `update` fast-forwards only, e
 when it could not do what was asked, and ends in the doctor checks.
 
 To run a work's own rig — the worktree's `bin/rig.mjs`, to try a change before it is released —
-borrow the installation's machine file: `RIG_LOCAL_CONFIG=<installed rig>/rig.local.json node
-<worktree>/bin/rig.mjs …`. Without it that copy knows no data roots, and every command but
-`help`, `prompt`, `init` and `doctor` refuses and says so (DESIGN.md decision 158).
+borrow the machine file on purpose: `RIG_LOCAL_CONFIG=~/.rig/rig.local.json node
+<worktree>/bin/rig.mjs …` (or `<installed rig>/rig.local.json` on an install that still keeps
+it there). Without it every command but `help`, `prompt`, `init` and `doctor` refuses and says
+so, even when the home file is there to be read, because the copy's unreleased migrations would
+reach every data root it names (DESIGN.md decision 158).
 
 A mutating command that dies with "run `rig update`" hit the **write refusal**: the data root is
 at a newer record format than this rig (the major version *is* the record format,
