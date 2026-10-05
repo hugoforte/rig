@@ -141,7 +141,7 @@ The rig repo itself, as distinct from any checkout of it. The thing a release is
 _Avoid_: rig (when the checkout is meant), binary
 
 **Installation**:
-One checkout of the tool on one machine, with its `rig.local.json`. Distinct from the tool (the repo) and from the data root.
+One copy of the tool on one machine — a checkout, or a package installed from the registry — and the machine's `rig.local.json` it reads. Distinct from the tool (the repo) and from the data root.
 _Avoid_: copy, instance
 
 **Finding**:

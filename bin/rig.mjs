@@ -5496,7 +5496,7 @@ function linkedCopyNeeds () {
   const override = env()[LOCAL_CONFIG_ENV]
   if (exists(localFile) && (override || sameDir(path.dirname(localFile), toolRoot()))) return null
   if (!toolState().linked) return null
-  if (override) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the installed rig's rig.local.json`
+  if (override) return `${LOCAL_CONFIG_ENV} names ${localFile}, which does not exist — point it at the machine file the installed rig reads (${homeConfigFile(env())}, unless it still keeps one beside it)`
   if (exists(localFile)) return `this is a work's copy of rig, in a linked worktree — it would read this machine's ${localFile} — set RIG_LOCAL_CONFIG to it to mean it`
   return `this is a work's copy of rig, in a linked worktree, and it has no machine config of its own (no ${localFile}) — set RIG_LOCAL_CONFIG to the installed rig's rig.local.json`
 }
