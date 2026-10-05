@@ -3113,10 +3113,12 @@ const worksByActivity = cfg => {
 // dies when the command is not there. Without git the answer is no longer always null, though
 // — a package installed from the registry has no `.git` and names itself from the version the
 // release injected, which is the whole of what it knows.
-const releaseHere = () => releaseMark({
-  describe: onPath('git') ? git(toolRoot(), 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null,
-  packageVersion: toolPackageVersion(),
-})
+//
+// Only a checkout of its own is asked: git does not stop at `node_modules`, so a package
+// installed inside somebody's tagged repo would otherwise be named by their tag.
+const toolDescribe = (tool = toolState()) =>
+  tool.repo === 'own' ? git(toolRoot(), 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
+const releaseHere = () => releaseMark({ describe: toolDescribe(), packageVersion: toolPackageVersion() })
 
 // The one machine-readable surface (decision 55). `rig list --json` prints it; `rig dash`
 // renders it; neither reads the records a second way.
@@ -5251,7 +5253,7 @@ function doctorSnapshot () {
   // same build twice and neither says whether it was ever published. The describe is asked
   // for here and not in `toolState`, which runs in every command's epilogue and is already
   // four spawns dear; doctor is the one caller that can afford a fifth.
-  const describe = hasGit ? git(toolRoot(), 'describe', '--tags', '--long', '--match', 'v[0-9]*').out : null
+  const describe = toolDescribe(tool)
   const roots = doctorRootLocations(loc).map(root => doctorRoot(root.name, root.loc, hasGit))
   const disk = freeSpace(cfg.workRoot)
   // Needed if *any* root tracks in Jira: twg is one tool on one machine, so the question is

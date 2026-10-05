@@ -380,3 +380,36 @@ scenario('a machine file left beside the tool is read, and named by doctor', {
     assert.equal(r.code, 0, `a location that still works is not a failure:\n${r.out}`)
   }),
 ])
+
+// ------------------------------------- a package installed inside somebody else's repo
+
+// A package has no `.git` of its own, and git does not stop at `node_modules`: `git describe`
+// from a project's dependency walks up into the project. A project tagged `v9.9.9` would name
+// the rig inside it `v9.9.9`, so a tool that is not a checkout of its own names itself from
+// the version the release injected, wherever it sits.
+scenario('a package inside a tagged repo names itself, not the repo', {
+  prefix: 'e2e-nested-package-',
+  localConfig: false,
+  github: { auth: 'ok', repos: {} },
+}, [
+  step('rig is installed as a dependency of a project tagged v9.9.9', m => {
+    assert.equal(m.rig(['init', '--data-root', m.dataRoot, '--work-root', m.workRoot,
+      '--orgs', ORG, '--tracker', `${ORG}=none`, '--email', 'hugo@e2e.invalid']).code, 0)
+    const project = path.join(m.tmp, 'project')
+    fs.mkdirSync(project)
+    m.gitMust(project, 'init', '-q', '-b', 'main')
+    fs.writeFileSync(path.join(project, 'README.md'), 'a project\n')
+    m.gitMust(project, 'add', '-A')
+    m.gitMust(project, 'commit', '-q', '-m', 'first')
+    m.gitMust(project, 'tag', 'v9.9.9')
+    m.nested = path.join(project, 'node_modules', '@hugoforte', 'rig')
+    copyTool(m.nested)
+    const pkg = path.join(m.nested, 'package.json')
+    fs.writeFileSync(pkg, JSON.stringify({ ...readJson(pkg), version: '4.1.0' }, null, 2))
+  }),
+
+  step('doctor names the package\'s version', m => {
+    const r = m.rig(['doctor'], { root: m.nested })
+    assert.match(r.out, /rig v4\.1\.0 at /, r.out)
+  }),
+])
