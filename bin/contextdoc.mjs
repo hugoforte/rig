@@ -56,6 +56,28 @@ function prose (text) {
 
 const headingsOf = lines => lines.map((l, i) => ({ heading: l.trim(), line: i + 1 })).filter(h => /^## /.test(h.heading))
 
+// The body of the doc's `## <name>` section: the lines after its heading, up to the next `## `
+// heading or the end. Found on `prose`, so a `## ` in a fence or a comment neither starts a
+// section nor ends one — a section shaped like a PR body is mostly fenced diagrams. Sliced by
+// line rather than by one clever expression: the clever one, `(?=^## |\Z)`, read `\Z` as a
+// literal `Z` in JavaScript, so a last section matched nothing and any section containing a
+// capital Z was cut there. Empty when the doc has no such section.
+export function sectionOf (text, name) {
+  const lines = (text || '').split(/\r?\n/)
+  const headings = headingsOf(prose(text || ''))
+  const at = headings.findIndex(h => h.heading.startsWith(`## ${name}`))
+  if (at < 0) return ''
+  const end = headings[at + 1]?.line ?? lines.length + 1
+  return lines.slice(headings[at].line, end - 1).join('\n')
+}
+
+// A section's own headings one level up, as it is lifted out from under its `## ` heading into a
+// PR body: its `### Summary` is the body's `## Summary`. A `#` in a fence is code, and stays.
+export function promoteHeadings (text) {
+  const said = prose(text)
+  return text.split(/\r?\n/).map((l, i) => (/^#{3,6} /.test(said[i]) ? l.slice(1) : l)).join('\n')
+}
+
 // The headings in the doc's order that are not in the longest run the template's order allows:
 // the ones that moved, so one heading moved is one problem and not one for each it jumped.
 function moved (found, required) {

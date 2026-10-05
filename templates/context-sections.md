@@ -65,6 +65,20 @@ Deploy order: _Repo #NN → Repo #NN → Repo #NN_
 <!-- Parity / idempotency checks, the headline "money test", read-only query snippets.
      Name the skills and their arguments. -->
 
+## Pull request
+
+<!-- What the work delivers, for the reviewer and for whoever reads the release note. `rig pr`
+     lifts this section into every PR body in place of the Direction, its ### headings raised to
+     ##. Write it once the build is done, with the agent host's PR-body skill if it has one:
+
+     ### Summary       the smallest view that makes the change clear — pseudocode, a call tree,
+                       a file tree, a Mermaid diagram, or a diff of one of those
+     ### Evidence      before and after: a screenshot, output, a test that failed and now passes
+     ### Merge Danger  one-way or two-way door, and the blast radius
+
+     Brief, no preamble, in the repo's own words. It is published: write it for whoever can
+     read the repo. -->
+
 ## Decisions log
 
 <!-- Date + decision + reasoning, so it doesn't get re-litigated. -->

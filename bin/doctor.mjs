@@ -153,7 +153,7 @@ function rootFindings (root) {
   // nobody has written yet is already reported above, and saying it twice would make the shorter
   // list the noisier one.
   //
-  // **Reported, never judged**, which is what CONTEXT.md's Freshness has always meant. The line
+  // **Reported, never judged**, which is what GLOSSARY.md's Freshness has always meant. The line
   // carries the count and the date and no opinion about either, because rig cannot know which
   // commits touched what the entry claims: 400 in code the entry never described is not
   // staleness, and 3 that moved a `talks_to` edge is. Zero is dropped all the same — it is the

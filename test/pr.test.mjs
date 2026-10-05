@@ -91,6 +91,26 @@ test('the Direction the design was agreed in is lifted verbatim, and the stub ne
   assert.match(opened.body, /## Direction\n\nBecause the adjacent effort would have cost a third major\./)
 })
 
+test('a Pull request section is lifted in place of the Direction, its headings heading the body (#314)', () => {
+  assert.equal(rig(['new', 'delivers', '--title', 'Delivers', '--type', 'feat', '--no-ticket']).code, 0)
+  const doc = path.join(dataRoot, 'work', 'delivers', 'context.md')
+  const delivers = '### Summary\n\n```diff\n on(save)\n+  return cached result\n```\n\n### Merge Danger\n\n**Door:** two-way'
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8')
+    .replace('_TODO_', 'Run the full suite before opening the PR.')
+    .replace('## Status / Next steps', `## Pull request\n\n<!-- What the work delivers. -->\n\n${delivers}\n\n## Status / Next steps`))
+  assert.equal(rig(['attach', 'billing', '--work', 'delivers']).code, 0)
+  const dest = worktree('delivers', 'billing')
+  fs.appendFileSync(path.join(dest, 'README.md'), 'delivers\n')
+  gitMust(dest, 'commit', '-qam', 'delivers')
+  gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
+
+  const r = rig(['pr', '--work', 'delivers'])
+  assert.equal(r.code, 0, r.out)
+  const body = github().repos['acme/billing'].prs.find(pr => pr.branch === 'feat/delivers').body
+  assert.match(body, /^Delivers\n\n## Summary\n\n```diff\n on\(save\)\n\+ {2}return cached result\n```\n\n## Merge Danger\n\n\*\*Door:\*\* two-way\n/)
+  assert.doesNotMatch(body, /## Direction|Run the full suite|What the work delivers/)
+})
+
 test('running it again reports the open PR instead of opening a second', () => {
   const before = github().repos['acme/billing'].prs.length
   const r = rig(['pr', '--work', 'to-review'])

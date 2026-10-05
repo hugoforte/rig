@@ -209,6 +209,25 @@ test('a pushed branch with no PR is offered one', () => {
   assert.ok(commands(out).includes('rig pr'))
 })
 
+test('the PR offer says when the body would lift the Direction, and still offers the PR (#314)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    prUnwritten: true,
+  })
+  assert.match(says(out), /a is pushed with no PR open — the context doc has no Pull request section, so the body would lift the Direction/)
+  assert.ok(commands(out).includes('rig pr'))
+})
+
+test('a written Pull request section leaves the PR offer as it was', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { pushed: true })],
+    prUnwritten: false,
+  })
+  assert.doesNotMatch(says(out), /Pull request section/)
+})
+
 test('a branch nobody has written on is never nagged about opening a PR', () => {
   // `unpushed` reads 0 both for a pushed branch and for one with nothing on it, which is why
   // this rung asks `pushed` instead. Getting it wrong here is a reproach, and this command

@@ -21,7 +21,7 @@ import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
 import { transcriptsFor, refusal } from './transcripts.mjs'
-import { contextDocProblems } from './contextdoc.mjs'
+import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
@@ -3641,6 +3641,7 @@ cmds.next = ({ flags }) => {
     repos,
     // The scaffolded stub, still standing where the design should be.
     directionTodo: directionIsTodo(doc),
+    prUnwritten: !pullRequestSaid(doc),
     planExists: exists(planFile(work.id)),
     // Never while a stage's PR is unknown: the refresh would write "PR state unknown" over a
     // deploy order that may be right.
@@ -3738,27 +3739,16 @@ function replacedStages (cfg, work, stack) {
   return found.filter((f, i) => !found.slice(i + 1).some(g => overlap(f, g)))
 }
 
-// The Direction section of a context doc, sliced out by hand rather than by one clever
-// expression. The clever one was wrong: `(?=^## |\Z)` reads as "the next heading, or the end
-// of the input" and `\Z` is not an end-of-input assertion in JavaScript — it is a literal `Z`.
-// So a Direction section that happened to be the last one matched nothing at all, and any
-// Direction containing a capital Z was silently truncated there. Measured against the real
-// data root when this was found: two of forty-six context docs truncated, one of them losing
-// 6,300 of 17,500 characters at the word `listHostedZones`.
-//
-// Finding the heading and then finding the next one is duller and cannot be wrong in that way.
-function directionSection (text) {
-  const heading = /^## Direction[^\n]*\n/m.exec(text || '')
-  if (!heading) return ''
-  const rest = text.slice(heading.index + heading[0].length)
-  const next = /^## /m.exec(rest)
-  return next ? rest.slice(0, next.index) : rest
-}
+// The Direction section of a context doc. Measured against the real data root when slicing it
+// by regex was found wrong (`sectionOf` says how): two of forty-six context docs truncated, one
+// of them losing 6,300 of 17,500 characters at the word `listHostedZones`.
+const directionSection = text => sectionOf(text, 'Direction')
 
-// What the section actually says: its prose with the template's guidance comments stripped.
-// Both readers below go through this, so neither can disagree with the other about whether a
+// What a section actually says: its prose with the template's guidance comments stripped.
+// Every reader below goes through this, so none can disagree with another about whether a
 // section that is only a comment and a stub counts as written.
-const directionSaid = text => directionSection(text).replace(/^\s*<!--[\s\S]*?-->\s*$/gm, '').trim()
+const sectionSaid = (text, name) => sectionOf(text, name).replace(/^\s*<!--[\s\S]*?-->\s*$/gm, '').trim()
+const directionSaid = text => sectionSaid(text, 'Direction')
 
 // Is the design still the scaffolded stub? Asked of the section rather than of the whole
 // document: the old test was `/^## Direction$[\s\S]*?^_TODO_$/m`, which finds a `_TODO_`
@@ -3775,7 +3765,15 @@ const directionBody = text => (directionIsTodo(text) ? '' : directionSaid(text))
 // agreed, not rig's paraphrase of it.
 const directionProse = id => (exists(contextFile(id)) ? directionBody(readText(contextFile(id))) : '')
 
-// The PR body rig writes: what the work is, the ticket, what was decided, and what landed in
+// What the work delivers, written for the reviewer and for whoever reads the release note: the
+// context doc's `## Pull request` section, its own headings lifted a level so they head the
+// body. The Direction is the design agreed at the gate, written for whoever builds it, and by
+// the time a PR opens it reads as instructions to the implementer (hugoforte/rig#314). Empty
+// when the doc has no such section, or one that says nothing.
+const pullRequestSaid = text => promoteHeadings(sectionSaid(text, 'Pull request'))
+const pullRequestProse = id => (exists(contextFile(id)) ? pullRequestSaid(readText(contextFile(id))) : '')
+
+// The PR body rig writes: what the work is, the ticket, what it delivers, and what landed in
 // which order. Everything in it is already recorded somewhere — the point is that it is
 // assembled rather than retyped, and that the stage table is rendered from the stack rather
 // than hand-maintained, which is the whole complaint against the rollout plan.
@@ -3791,7 +3789,11 @@ function prBody (work, stack, { spec, link }) {
     lines.push(...fixes.map(k => `Fixes ${k}`), ...(named.length ? [`Tickets: ${named.join(', ')}`] : []), '')
   }
 
-  const direction = directionProse(work.id)
+  // The Pull request section in place of the Direction, never beside it: two accounts of one
+  // work, written at different times, would disagree in the one place a reviewer reads first.
+  const delivers = pullRequestProse(work.id)
+  const direction = delivers ? '' : directionProse(work.id)
+  if (delivers) lines.push(delivers, '')
   if (direction) lines.push('## Direction', '', direction, '')
 
   // The same renderer the rollout plan uses. Two generators would be two tables that disagree,

@@ -51,6 +51,8 @@ const HEAVY = 3
 //                  `close`, plus `pushed` and `on`, the branch checked out, from the worktree
 //                  state; `missing` is a worktree not on this machine
 //   directionTodo  the context doc's Direction section is still the scaffolded `_TODO_`
+//   prUnwritten    the context doc has no `## Pull request` section that says anything, so a PR
+//                  body would lift the Direction
 //   planExists     a rollout plan has been scaffolded for this work
 //   planStale      that plan has one, and its generated deploy order disagrees with the stack
 //   prStale        the repos whose open PR's title or body is not what `rig pr` would write now
@@ -83,7 +85,7 @@ const HEAVY = 3
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -253,7 +255,10 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     // (decision 130), and said here alone: this is the offer that names the repos.
     const releases = bumps.filter(b => awaiting.some(r => r.repo === b.repo))
       .map(b => (awaiting.length === 1 ? `its PR would ask for ${b.release}` : `${b.repo}'s PR would ask for ${b.release}`))
-    out.push(offer('reviewing', [`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, ...releases].join(' — '), 'rig pr'))
+    // Said while the body is still to be written, which is the one moment it costs nothing: the
+    // Direction is the design, and a reviewer wants what the work delivers (hugoforte/rig#314).
+    const body = prUnwritten ? ['the context doc has no Pull request section, so the body would lift the Direction — write what the work delivers there first'] : []
+    out.push(offer('reviewing', [`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, ...releases, ...body].join(' — '), 'rig pr'))
   }
 
   if (entries.length >= HEAVY && !planExists) {
