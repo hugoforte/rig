@@ -16,13 +16,15 @@
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
 //   editPr(org, name, number, { title, body })
 //   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack
-//   prReadiness(org, name, number)      { draft, decision, requested, checks }: whether a PR is
-//                                       ready to merge, or null where GitHub would not say
+//   prReadiness(org, name, number)      { draft, decision, requested, mergeable, head, checks }:
+//                                       whether a PR is ready to merge, or null where GitHub
+//                                       would not say
 //   stackTool(command = 'link')         'ok' | 'missing' | 'old': is `gh stack <command>` there;
 //                                       never throws for a non-zero exit, which is 'missing'
 //   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
 //   mergeStack(org, name, number)       merge a stack up to and including that PR, merge commit
-//   mergePr(org, name, number)          merge one PR, with a merge commit
+//   mergePr(org, name, number, { head })  merge one PR, with a merge commit, and only while its
+//                                       head is still `head` when one is given
 //   prsOnto(org, name, base)            [{ number, branch, url }] the open PRs landing on `base`
 //   pullsForCommit(org, name, sha)      every PR the commit belongs to
 //   createIssue(repo, title, body)      the new issue's number
@@ -66,10 +68,11 @@ const REVIEW_QUERY = 'query($owner: String!, $name: String!, $number: Int!, $end
 const REVIEW_JQ = '.data.repository.pullRequest | "\\([.reviewThreads.nodes[] | select(.isResolved | not)] | length) \\(.commits.nodes[0].commit.statusCheckRollup.state // "NONE")"'
 
 // Whether a PR is one rig may merge: a draft, its review decision, how many review requests
-// are still waiting, and its head commit's check rollup. `reviewRequests` holds only requests
-// not yet answered, since GitHub removes one once that reviewer submits.
-const READINESS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { isDraft reviewDecision reviewRequests { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }'
-const READINESS_JQ = '.data.repository.pullRequest | if . == null then null else {draft: .isDraft, decision: .reviewDecision, requested: .reviewRequests.totalCount, checks: .commits.nodes[0].commit.statusCheckRollup.state} end'
+// someone made are still waiting, whether it conflicts, its head and that head's check rollup.
+// `reviewRequests` holds only requests not yet answered, since GitHub removes one once that
+// reviewer submits; a code owner's is left out, being GitHub's request rather than anyone's.
+const READINESS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { isDraft reviewDecision mergeable headRefOid reviewRequests(first: 100) { nodes { asCodeOwner } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }'
+const READINESS_JQ = '.data.repository.pullRequest | if . == null then null else {draft: .isDraft, decision: .reviewDecision, requested: ([.reviewRequests.nodes[] | select(.asCodeOwner | not)] | length), mergeable: .mergeable, head: .headRefOid, checks: .commits.nodes[0].commit.statusCheckRollup.state} end'
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
@@ -186,7 +189,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       let t
       try { t = JSON.parse(r.out) } catch { return null }
       if (!t || typeof t.draft !== 'boolean' || !Number.isInteger(t.requested)) return null
-      return { draft: t.draft, decision: t.decision ?? null, requested: t.requested, checks: t.checks ?? null }
+      return { draft: t.draft, decision: t.decision ?? null, requested: t.requested, mergeable: t.mergeable ?? null, head: t.head ?? null, checks: t.checks ?? null }
     },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
     // the caller's, because "already open" is a thing to report rather than an error to raise).
@@ -233,9 +236,10 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     mergeStack (org, name, number) {
       must(['stack', 'merge', String(number), '--merge', '--yes'], { env: { GH_REPO: `${org}/${name}` } })
     },
-    // One PR in no stack, with a merge commit (decision 75).
-    mergePr (org, name, number) {
-      must(['pr', 'merge', String(number), '--repo', `${org}/${name}`, '--merge'])
+    // One PR in no stack, with a merge commit (decision 75). `head` is the commit that was
+    // checked: a push since then makes GitHub refuse rather than land what nobody checked.
+    mergePr (org, name, number, { head } = {}) {
+      must(['pr', 'merge', String(number), '--repo', `${org}/${name}`, '--merge', ...(head ? ['--match-head-commit', head] : [])])
     },
     createIssue (repo, title, body) {
       const out = must(['issue', 'create', '--repo', repo, '--title', title, '--body', body])
@@ -379,13 +383,16 @@ export function githubInMemory (state, { env } = {}) {
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       return pr && !pr.reviewUnknown ? { unresolved: (pr.reviewThreads || []).filter(t => !t.resolved).length, checks: pr.checks || null } : null
     },
-    // A PR's `draft`, `reviewDecision`, `reviewRequests` (a count) and `checks` are the fixture's;
-    // `readinessUnknown` is one GitHub lists and will not say this of.
+    // A PR's `draft`, `reviewDecision`, `reviewRequests` (a count, code owners' left out),
+    // `mergeable`, `head` and `checks` are the fixture's; `readinessUnknown` is one GitHub lists
+    // and will not say this of.
     prReadiness (org, name, number) {
       if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
       if (state.auth === 'unauthenticated' || lookup(`${org}/${name}`)?.repo.lookupFails) return null
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
-      return pr && !pr.readinessUnknown ? { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, checks: pr.checks || null } : null
+      return pr && !pr.readinessUnknown
+        ? { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, mergeable: pr.mergeable || 'MERGEABLE', head: pr.head || null, checks: pr.checks || null }
+        : null
     },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()
@@ -421,13 +428,22 @@ export function githubInMemory (state, { env } = {}) {
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
       const stack = (found.repo.stacks || []).find(s => s.open && s.prs.includes(Number(number))) ||
         fail(`#${number} is not in an open stack (in-memory GitHub)`)
-      merge(found, stack.prs.slice(0, stack.prs.indexOf(Number(number)) + 1), 'stack', number)
-      stack.open = stack.prs.some(n => found.repo.prs.find(p => p.number === n)?.state === 'OPEN')
+      const isOpen = n => found.repo.prs.find(p => p.number === n)?.state === 'OPEN'
+      merge(found, stack.prs.slice(0, stack.prs.indexOf(Number(number)) + 1).filter(isOpen), 'stack', number)
+      stack.open = stack.prs.some(isOpen)
+      // The lowest PR left open now sits on the stack's base, as GitHub retargets it.
+      const next = found.repo.prs.find(p => p.number === stack.prs.find(isOpen))
+      if (next) next.base = stack.base
     },
-    mergePr (org, name, number) {
+    // As `gh pr merge` does: a PR in an open stack is refused, and so is one whose head moved
+    // off the `head` given.
+    mergePr (org, name, number, { head } = {}) {
       signedIn()
       if (state.mergeFails) fail(state.mergeFails)
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      if ((found.repo.stacks || []).some(s => s.open && s.prs.includes(Number(number)))) fail(`#${number} is in a stack, and must be merged with the stack (in-memory GitHub)`)
+      const pr = found.repo.prs.find(p => p.number === Number(number))
+      if (head && pr?.head && pr.head !== head) fail(`#${number}: head branch was modified (in-memory GitHub)`)
       merge(found, [Number(number)], 'pr', number)
     },
     // As `gh stack link` does: a stack holding any of the PRs grows by the rest, and otherwise

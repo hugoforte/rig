@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { strip } from './harness.mjs'
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, github, setGithub, cutStage, cleanup } = billingInstall('rig-stage-land-')
+const { rig, github, setGithub, cutStage, publish, cleanup } = billingInstall('rig-stage-land-')
 
 after(cleanup)
 
@@ -176,4 +176,92 @@ test('--land names a stage of this work, and one still to land', () => {
   const r = rig(['stage', 'feat/nowhere', '--land', '--work', 'no-tool'])
   assert.equal(r.code, 1, r.out)
   assert.match(strip(r.out), /feat\/nowhere is not a stage of no-tool still to land/)
+})
+
+test('the stage left alone in its GitHub stack by a partial landing lands with that stack, which GitHub requires', () => {
+  const r = rig(['stage', '--land', '--work', 'partial'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(pr(213).state, 'MERGED')
+  assert.deepEqual(github().merges.at(-1), { repo: 'acme/billing', via: 'stack', number: 213 })
+})
+
+test('a stage PR that conflicts with the work branch refuses the whole landing', () => {
+  refusesOver('conflicting', 331, { mergeable: 'CONFLICTING' }, /#332 \(feat\/conflicting-two\): it conflicts with the branch it merges into/)
+})
+
+test('a stage PR that needs an approving review refuses the whole landing', () => {
+  refusesOver('approval', 341, { reviewDecision: 'REVIEW_REQUIRED' }, /#342 \(feat\/approval-two\): it needs an approving review before it can merge/)
+})
+
+test('stage PRs in a repo GitHub will not list stacks for are not landed, since where a stack merge lands cannot be checked', () => {
+  stagedWork('unlisted', ['one', 'two'], 351)
+  const state = github()
+  const stacks = state.repos['acme/billing'].stacks
+  state.repos['acme/billing'].stacks = null
+  setGithub(state)
+  const r = rig(['stage', '--land', '--work', 'unlisted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /billing: GitHub would not list its stacks, so where a stack merge would land cannot be checked/)
+  assert.deepEqual(states(351, 352), ['OPEN', 'OPEN'])
+  state.repos['acme/billing'].stacks = stacks
+  setGithub(state)
+})
+
+test('a gh stack without the subcommands a landing needs is named, and nothing lands', () => {
+  const state = github()
+  state.ghStack = 'old'
+  setGithub(state)
+  const r = rig(['stage', '--land', '--work', 'unlisted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /gh stack has no `merge` or `link` — `gh extension upgrade gh-stack`/)
+  assert.deepEqual(states(351, 352), ['OPEN', 'OPEN'])
+  delete state.ghStack
+  setGithub(state)
+})
+
+test('--land takes no value, which would otherwise land every stage', () => {
+  const r = rig(['stage', '--land=feat/unlisted-one', '--work', 'unlisted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /--land takes no value — name the stage before it/)
+  assert.deepEqual(states(351, 352), ['OPEN', 'OPEN'])
+})
+
+test('a stage named as empty is refused, rather than read as every stage', () => {
+  const r = rig(['stage', '', '--land', '--work', 'unlisted'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /the stage named for --land is empty/)
+})
+
+// One stage cut in billing and in orders, each with its PR on its own work branch.
+const twoRepoWork = (id, numbers, fields = {}) => {
+  const work = `feat/${id}-work`
+  const branch = `feat/${id}-one`
+  assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
+  for (const repo of ['billing', 'orders']) assert.equal(rig(['attach', repo, '--work', id]).code, 0)
+  assert.equal(rig(['stage', branch, '--delivers', 'one', '--work', id]).code, 0)
+  const state = github()
+  for (const [repo, number] of [['billing', numbers.billing], ['orders', numbers.orders]]) {
+    cutStage({ work: id, repo, branch, from: work, back: work, message: `${id}: one` })
+    if (number === null) continue
+    state.repos[`acme/${repo}`].prs.push({ branch, number, state: 'OPEN', url: `https://github.com/acme/${repo}/pull/${number}`, base: work, openedAt: '2026-10-05T00:00:00Z', mergedAt: null, commits: [], ...fields[repo] })
+  }
+  setGithub(state)
+}
+const prIn = (repo, n) => github().repos[`acme/${repo}`].prs.find(p => p.number === n)
+
+test('a refusal in one repo lands nothing in any repo', () => {
+  publish('orders')
+  const state = github()
+  state.repos['acme/orders'] = { language: 'JavaScript', visibility: 'private', prs: [] }
+  setGithub(state)
+  twoRepoWork('two-repos', { billing: 401, orders: 402 }, { orders: { checks: 'FAILURE' } })
+  const r = rig(['stage', '--land', '--work', 'two-repos'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /orders: #402 \(feat\/two-repos-one\): its checks are failing/)
+  assert.deepEqual([prIn('billing', 401).state, prIn('orders', 402).state], ['OPEN', 'OPEN'])
+})
+
+test('rig next does not offer --land while a stage has no PR in one of the repos that carry it', () => {
+  twoRepoWork('half-open', { billing: 411, orders: null })
+  assert.equal(offersLand('half-open'), false)
 })

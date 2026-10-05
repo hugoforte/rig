@@ -474,19 +474,31 @@ test('gh adapter: a merge GitHub refuses fails with gh\'s own error', () => {
   assert.throws(() => github.mergePr('acme', 'platform', 4), e => e instanceof GithubError && /not mergeable/.test(e.message))
 })
 
-test('gh adapter: prReadiness reads the draft, the review decision, the open review requests and the checks', () => {
-  const { calls, github } = canned(() => '{"draft":false,"decision":"APPROVED","requested":1,"checks":"SUCCESS"}')
-  assert.deepEqual(github.prReadiness('acme', 'platform', 12), { draft: false, decision: 'APPROVED', requested: 1, checks: 'SUCCESS' })
+test('gh adapter: prReadiness reads the draft, the review decision, the open review requests, conflicts, the head and the checks', () => {
+  const { calls, github } = canned(() => '{"draft":false,"decision":"APPROVED","requested":1,"mergeable":"MERGEABLE","head":"abc123","checks":"SUCCESS"}')
+  assert.deepEqual(github.prReadiness('acme', 'platform', 12), { draft: false, decision: 'APPROVED', requested: 1, mergeable: 'MERGEABLE', head: 'abc123', checks: 'SUCCESS' })
   assert.deepEqual(calls[0].slice(0, 2), ['api', 'graphql'])
-  assert.match(calls[0].find(a => a.startsWith('query=')), /reviewRequests \{ totalCount \}/)
+})
+
+test('gh adapter: prReadiness counts only the review requests someone made, not a code owner\'s', () => {
+  const { calls, github } = canned(() => '{"draft":false,"decision":null,"requested":0,"mergeable":"MERGEABLE","head":"abc123","checks":null}')
+  github.prReadiness('acme', 'platform', 12)
+  assert.match(calls[0].find(a => a.startsWith('query=')), /reviewRequests\(first: 100\) \{ nodes \{ asCodeOwner \} \}/)
+  assert.match(calls[0][calls[0].indexOf('--jq') + 1], /select\(\.asCodeOwner \| not\)/)
 })
 
 test('gh adapter: prReadiness is null when gh cannot answer, and says no checks where none are set up', () => {
   assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prReadiness('acme', 'platform', 12), null)
   assert.equal(canned(() => 'oops').github.prReadiness('acme', 'platform', 12), null)
   assert.equal(canned(() => 'null').github.prReadiness('acme', 'platform', 12), null)
-  assert.deepEqual(canned(() => '{"draft":true,"decision":null,"requested":0,"checks":null}').github.prReadiness('acme', 'platform', 12),
-    { draft: true, decision: null, requested: 0, checks: null })
+  assert.deepEqual(canned(() => '{"draft":true,"decision":null,"requested":0,"mergeable":null,"head":null,"checks":null}').github.prReadiness('acme', 'platform', 12),
+    { draft: true, decision: null, requested: 0, mergeable: null, head: null, checks: null })
+})
+
+test('gh adapter: mergePr given the head that was checked merges only while the PR is still at it', () => {
+  const { calls, github } = canned(() => '')
+  github.mergePr('acme', 'platform', 4, { head: 'abc123' })
+  assert.deepEqual(calls[0], ['pr', 'merge', '4', '--repo', 'acme/platform', '--merge', '--match-head-commit', 'abc123'])
 })
 
 test('gh adapter: stackTool asks for the subcommand it is told, link by default', () => {
@@ -511,14 +523,20 @@ test('in-memory adapter: mergeStack refuses a PR in no open stack, and mergeFail
 
 test('in-memory adapter: prReadiness reads the fixture, and is null where GitHub would not say', () => {
   const state = { repos: { 'acme/platform': { prs: [
-    { branch: 'a', number: 3, draft: true, reviewDecision: 'CHANGES_REQUESTED', reviewRequests: 2, checks: 'FAILURE' },
+    { branch: 'a', number: 3, draft: true, reviewDecision: 'CHANGES_REQUESTED', reviewRequests: 2, mergeable: 'CONFLICTING', head: 'abc', checks: 'FAILURE' },
     { branch: 'b', number: 4 },
     { branch: 'c', number: 5, readinessUnknown: true },
   ] } } }
   const github = githubInMemory(state)
-  assert.deepEqual(github.prReadiness('acme', 'platform', 3), { draft: true, decision: 'CHANGES_REQUESTED', requested: 2, checks: 'FAILURE' })
-  assert.deepEqual(github.prReadiness('acme', 'platform', 4), { draft: false, decision: null, requested: 0, checks: null })
+  assert.deepEqual(github.prReadiness('acme', 'platform', 3), { draft: true, decision: 'CHANGES_REQUESTED', requested: 2, mergeable: 'CONFLICTING', head: 'abc', checks: 'FAILURE' })
+  assert.deepEqual(github.prReadiness('acme', 'platform', 4), { draft: false, decision: null, requested: 0, mergeable: 'MERGEABLE', head: null, checks: null })
   assert.equal(github.prReadiness('acme', 'platform', 5), null)
+})
+
+test('in-memory adapter: mergePr refuses a PR in an open stack, as GitHub does', () => {
+  const state = { repos: { 'acme/platform': { prs: [{ branch: 's3', number: 3, state: 'OPEN' }], stacks: [{ number: 9, open: true, base: 'feat/work', prs: [3] }] } } }
+  assert.throws(() => githubInMemory(state).mergePr('acme', 'platform', 3), /must be merged with the stack/)
+  assert.equal(state.repos['acme/platform'].prs[0].state, 'OPEN')
 })
 
 test('gh adapter: stackTool tells a missing gh stack from one too old to link', () => {

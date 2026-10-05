@@ -178,7 +178,9 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
       // No live stage is still to come, so the stack can land as it stands (decision 207).
       // Whether each PR is ready is the command's to say: asking here would cost a lookup per
       // stage on every `rig next` of a staged work.
-      if (stack.every(st => st.landed || st.withdrawn || (st.open && !st.prUnknown))) {
+      // In every repo that carries it, since the command refuses a repo where it has no PR open.
+      const inEveryRepo = st => st.repos.every(repo => st.prs.some(pr => pr.repo === repo && ['OPEN', 'MERGED'].includes(pr.state)))
+      if (stack.every(st => st.landed || st.withdrawn || (st.open && !st.prUnknown && inEveryRepo(st)))) {
         out.push(offer('reviewing', 'every stage still to land is up for review — once each has passed its review, land them in the work branch', 'rig stage --land'))
       }
     } else {
