@@ -16,9 +16,12 @@
     "templates/",
     "skills/",
     "docs/",
-    "AGENTS.md"
+    "AGENTS.md",
+    "DESIGN.md",
+    "CONTEXT.md"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "prepublishOnly": "node -e \"const v = require('./package.json').version; if (v === '0.0.0-development') { console.error('refusing to publish ' + v + ': only the release injects a version (ADR 0004)'); process.exit(1) }\""
   }
 }

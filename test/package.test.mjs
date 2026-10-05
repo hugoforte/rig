@@ -64,6 +64,23 @@ test('the instructions an agent is told to read are packed', { skip }, () => {
   assert.ok(paths.includes('AGENTS.md'), 'a packaged install has no repository to read it from')
 })
 
+test('the documents AGENTS.md sends an agent to are packed with it', { skip }, () => {
+  const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
+  for (const doc of ['DESIGN.md', 'CONTEXT.md']) {
+    assert.ok(agents.includes(doc), `AGENTS.md no longer mentions ${doc}; drop it here`)
+    assert.ok(paths.includes(doc), `AGENTS.md sends an agent to ${doc}, and a packaged install has no other copy`)
+  }
+})
+
+// Only the release injects a real version (ADR 0004), so a publish by hand from a clone would
+// put the placeholder on the registry as `latest`, where a version can never be published twice.
+test('publishing the placeholder version is refused', () => {
+  const r = spawnSync('npm', ['run', '-s', 'prepublishOnly'],
+    { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32' })
+  assert.notEqual(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stderr, /0\.0\.0-development/)
+})
+
 test('the agent skills are packed, because a packaged install has no checkout to link them from', { skip }, () => {
   const skills = fs.readdirSync(path.join(ROOT, 'skills'))
   assert.ok(skills.length > 0, 'skills/ has something to pack')
