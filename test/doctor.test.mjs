@@ -492,7 +492,7 @@ test('entries are named worst first, so the list reads as a ranking and not an i
 })
 
 test('an entry whose repo has not moved since it was written is not reported', () => {
-  // The measure is reported, never judged (CONTEXT.md's Freshness), but zero is not a measure
+  // The measure is reported, never judged (GLOSSARY.md's Freshness), but zero is not a measure
   // worth a line: it is the answer for every entry anyone has just corrected.
   const found = doctorFindings(snap({ dataRoots: [root({ catalogueFreshness: [entry('billing', 0)] })] }))
   assert.equal(matching(found, /catalogue entr.* behind/).length, 0)

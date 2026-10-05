@@ -604,6 +604,18 @@ test('an unpushed branch is offered a push by name, and once pushed with no PR, 
   assert.match(r.out, /billing is pushed with no PR open/)
 })
 
+test('the offer to open a PR asks for the Pull request section until the context doc has one (#314)', () => {
+  assert.match(strip(rig(['next', '--work', 'what-now']).out), /no PR open — the context doc has no Pull request section/)
+  const doc = path.join(dataRoot, 'work', 'what-now', 'context.md')
+  const before = fs.readFileSync(doc, 'utf8')
+  fs.writeFileSync(doc, `${before}\n## Pull request\n\n### Summary\n\nDelivers.\n`)
+  try {
+    assert.doesNotMatch(strip(rig(['next', '--work', 'what-now']).out), /Pull request section/)
+  } finally {
+    fs.writeFileSync(doc, before)
+  }
+})
+
 test('an open PR is walked through its review: threads, then the adversarial review, then a human', () => {
   const state = github()
   state.repos['acme/billing'].prs.push({

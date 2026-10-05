@@ -18,7 +18,7 @@ A repo with no target is one whose entry says `docs: []`, or that has no entry. 
 ## 2. Read
 
 - **The current page, in full, first.** A path: read it as the base branch has it now, which the work's merge put there, with `git -C <worktree> fetch origin` and then `git -C <worktree> show origin/<base>:<path>`; once the worktree is gone, `gh api repos/<owner>/<repo>/contents/<path>?ref=<base> -H "Accept: application/vnd.github.raw"`. A target that is a directory holds several pages: list it with `git -C <worktree> ls-tree --name-only origin/<base> <path>` and read the ones this change touches. A Confluence page: read it through the `twg` skill. You are editing what is there, so you need all of it.
-- **The context doc**, `context.md`: the Problem says who this was for, the Direction what changed.
+- **The context doc**, `context.md`: the Problem says who this was for, the Pull request section (or, without one, the Direction) what changed.
 - **The outcome**, which `rig status` shows: what changed for someone, in one line.
 - **The QA evidence**, `qa.md` beside the context doc when there is one, which `rig status` names: the steps walked on a deployed environment and what was seen. It is the closest thing to how a user meets the change. Without one, ask the user what they checked and where, and offer to write their answer to `qa.md` before you go on.
 

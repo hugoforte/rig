@@ -9,6 +9,9 @@
 // Placeholders are what the template leaves to be filled, and are expected until the design
 // gate: before it, the doc is being written.
 //
+// It also slices one section out of a doc (`sectionOf`) and raises a section's headings as it is
+// lifted into a PR body (`promoteHeadings`), which `rig pr` and `rig next` read.
+//
 // Markdown that is code — a fenced block, an inline span — and an HTML comment are read as
 // neither heading nor placeholder: a doc may well show `_TODO_` while talking about one.
 //
@@ -19,6 +22,32 @@
 // is a name and not a placeholder.
 const PLACEHOLDERS = [/(?<![\w])_TODO(?:_|[:\s][^_\n]*_)(?![\w])/, /(?<![\w])_next step_(?![\w])/, /\{\{[A-Z]+\}\}/, /^\|(\s*\|)+\s*$/]
 
+// A line that opens a code fence, as CommonMark has it: three or more backticks or tildes, at most
+// three spaces in, and no backtick in a backtick fence's info string — so a line that is only an
+// inline span wrapped in triple backticks opens nothing. A fence closes on a line of the same
+// character, at least as long, with nothing after it.
+const fenceOpener = line => /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/.exec(line)?.[1] ?? null
+const closesFence = (line, fence) => new RegExp(String.raw`^ {0,3}` + fence[0] + `{${fence.length},}` + String.raw`\s*$`).test(line)
+
+// Which lines sit in a fenced code block, its fences included. A fence that never closes runs to
+// the end of the doc as markdown renders it, and read that way it would carry every section after
+// it into whatever lifts one — into a public PR body — so an unclosed fence is read as no fence:
+// each `## ` after it ends a section, as it did before fences were read at all.
+function fenced (lines) {
+  const inside = lines.map(() => false)
+  let fence = null
+  lines.forEach((line, i) => {
+    if (fence) {
+      inside[i] = true
+      if (closesFence(line, fence)) fence = null
+      return
+    }
+    fence = fenceOpener(line)
+    inside[i] = !!fence
+  })
+  return fence ? lines.map(() => false) : inside
+}
+
 // The doc's lines with code and comments blanked out, so a line number still points at the
 // line, and what is left is only what the doc says in its own voice.
 function prose (text) {
@@ -26,13 +55,13 @@ function prose (text) {
   let fence = null
   let comment = false
   for (const raw of text.split(/\r?\n/)) {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(raw)
     if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = null
+      if (closesFence(raw, fence)) fence = null
       out.push('')
       continue
     }
-    if (marker) { fence = marker[1]; out.push(''); continue }
+    fence = fenceOpener(raw)
+    if (fence) { out.push(''); continue }
     let line = ''
     let rest = raw
     while (rest) {
@@ -55,6 +84,33 @@ function prose (text) {
 }
 
 const headingsOf = lines => lines.map((l, i) => ({ heading: l.trim(), line: i + 1 })).filter(h => /^## /.test(h.heading))
+
+// The body of the doc's `## <name>` section: the lines after its heading, up to the next `## `
+// heading or the end. A `## ` in a fence neither starts a section nor ends one — a section shaped
+// like a PR body is mostly fenced diagrams. Comments are not read here: `prose` hides everything
+// after a `<!--` it cannot see the end of, and a section that ran on past its next heading would
+// carry the doc's private sections into a public body. The name is matched as whole words in any
+// case, so a `## Pull requests` list of links is not the Pull request section. Sliced by line
+// rather than by one clever expression: the clever one, `(?=^## |\Z)`, read `\Z` as a literal `Z`
+// in JavaScript, so a last section matched nothing and any section containing a capital Z was cut
+// there. Empty when the doc has no such section.
+export function sectionOf (text, name) {
+  const lines = (text || '').split(/\r?\n/)
+  const code = fenced(lines)
+  const headings = lines.map((l, i) => (!code[i] && /^ {0,3}## /.test(l) ? i : -1)).filter(i => i >= 0)
+  const named = new RegExp(String.raw`^ {0,3}## +` + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + String.raw`(?![\p{L}\p{N}])`, 'iu')
+  const at = headings.findIndex(i => named.test(lines[i]))
+  if (at < 0) return ''
+  return lines.slice(headings[at] + 1, headings[at + 1] ?? lines.length).join('\n')
+}
+
+// A section's own headings one level up, as it is lifted out from under its `## ` heading into a
+// PR body: its `### Summary` is the body's `## Summary`. A `#` in a fence is code, and stays.
+export function promoteHeadings (text) {
+  const lines = text.split(/\r?\n/)
+  const code = fenced(lines)
+  return lines.map((l, i) => (!code[i] && /^#{3,6} /.test(l) ? l.slice(1) : l)).join('\n')
+}
 
 // The headings in the doc's order that are not in the longest run the template's order allows:
 // the ones that moved, so one heading moved is one problem and not one for each it jumped.

@@ -619,11 +619,23 @@ rig pr --refresh  # rewrite each open PR's title and body from the record as it 
 ```
 
 The body is assembled from what the record already holds: the title, the tickets, the
-**Direction** section of the context doc lifted verbatim, and the stage table rendered from the
-stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
+**Pull request** section of the context doc lifted as written, and the stage table rendered from
+the stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
 
-**What it says in public.** The Direction is lifted into a body anyone who can read the repo
+**What it delivers, not how it was built.** The Direction is the design agreed at the gate,
+written for whoever builds it; by the time the PR opens it reads as instructions to the
+implementer, and on a repo that publishes PR descriptions as release notes, as rig does, that is
+what ships. So the context doc carries a second text, the optional `## Pull request` section
+from `templates/context-sections.md`: what the work delivers, for the reviewer — a Summary with
+the smallest view of the change, before-and-after Evidence, and the Merge Danger, a one-way or
+two-way door and its blast radius. Write it once the build is done, with the agent host's
+PR-body skill if it has one. Its `###` headings are raised to `##` as it is lifted, outside code
+fences, so they head the body. A doc without one has the Direction lifted, under `## Direction`,
+as it always had, and `rig next` asks for the section beside its offer to open the PR. Never both: two
+accounts of one work, written at different times, would disagree where a reviewer reads first.
+
+**What it says in public.** The lifted section goes into a body anyone who can read the repo
 reads, so write it for them. The `Context doc:` link is written only where the repo is **no more
 visible than the data root** — public above internal above private, and a data root with no
 remote counts as private — because it names the private repo, and GitHub keeps a body's edit
@@ -773,7 +785,7 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ### Principles
 

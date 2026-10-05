@@ -9,7 +9,7 @@ import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
-  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, run,
+  baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, pullRequestSaid, run,
   spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
 import { makeInstall } from './harness.mjs'
@@ -589,4 +589,20 @@ test('an unfinished checklist further down the document is not the Direction bei
   const agreed = `${doc('Agreed: derive the phase, store the gates.')}\n## Status / Next steps\n\n_TODO_\n`
   assert.equal(directionIsTodo(agreed), false)
   assert.equal(directionBody(agreed), 'Agreed: derive the phase, store the gates.')
+})
+
+// The Pull request section, lifted in place of the Direction (hugoforte/rig#314). One that says
+// nothing is no section at all, so the body keeps the Direction rather than publishing a stub.
+const withPullRequest = body => `${doc('Agreed approach.')}\n## Pull request\n\n${body}\n`
+
+test('a Pull request section that is only the template comment says nothing', () => {
+  assert.equal(pullRequestSaid(withPullRequest('<!-- What the work delivers. -->')), '')
+})
+
+test('a Pull request section that is only the stub says nothing', () => {
+  assert.equal(pullRequestSaid(withPullRequest('<!-- What the work delivers. -->\n\n_TODO_')), '')
+})
+
+test('a written Pull request section is lifted with its headings raised', () => {
+  assert.equal(pullRequestSaid(withPullRequest('### Summary\n\nDelivers.')), '## Summary\n\nDelivers.')
 })
