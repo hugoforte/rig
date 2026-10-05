@@ -85,8 +85,12 @@ function buildInstall (tmp, {
   // which is what the identity checks read.
   const env = { ...process.env }
   for (const key of Object.keys(env)) if (key.startsWith('RIG_')) delete env[key]
+  // No auto-maintenance either: after a commit or a fetch git starts it, detached where the
+  // platform can detach, holding `.git/objects/maintenance.lock` while it runs. On Linux it
+  // outlives the command, and a cleanup that empties the temp dir meanwhile fails with
+  // ENOTEMPTY on `.git/objects`.
   env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '')
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[maintenance]\n\tauto = false\n')
   env.GIT_CONFIG_NOSYSTEM = '1'
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = author
   env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = email
