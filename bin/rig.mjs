@@ -4274,6 +4274,10 @@ function landStages (cfg, work, branch, flags) {
   const landed = []
   for (const { entry, prs, stacked, held } of plans) {
     const top = prs[prs.length - 1]
+    // `gh stack merge` takes no head to match, so the heads are asked again just before it: a
+    // push since the check would otherwise land what nothing checked. A window stays, a short one.
+    const moved = stacked || held ? prs.filter(pr => github().prReadiness(entry.org, entry.repo, pr.number)?.head !== pr.checked) : []
+    if (moved.length) die(`${entry.repo}: ${numbers(moved)} moved since ${moved.length === 1 ? 'it was' : 'they were'} checked — run it again${landed.length ? ` — ${landed.join('; ')} landed already` : ' — nothing landed'}`)
     const failed = trackerFailure(() => stacked || held
       ? github().mergeStack(entry.org, entry.repo, top.number)
       : github().mergePr(entry.org, entry.repo, top.number, { head: top.checked }))
@@ -4304,6 +4308,8 @@ function heldIn (entry, number, workBranch) {
 // A rollup of null is a head with no checks set up, which the hand-over reads the same way.
 function unready (ready) {
   if (!ready) return 'GitHub would not say whether it is ready'
+  // The head is what the merge is pinned to, so one not said is a merge nothing pins.
+  if (!ready.head) return 'GitHub would not say which commit it is at'
   if (ready.draft) return 'it is a draft'
   if (ready.mergeable === 'CONFLICTING') return 'it conflicts with the branch it merges into'
   if (['FAILURE', 'ERROR'].includes(ready.checks)) return 'its checks are failing'

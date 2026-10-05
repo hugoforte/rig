@@ -265,3 +265,15 @@ test('rig next does not offer --land while a stage has no PR in one of the repos
   twoRepoWork('half-open', { billing: 411, orders: null })
   assert.equal(offersLand('half-open'), false)
 })
+
+test('a stage PR whose head GitHub will not say refuses the whole landing, since nothing would pin the merge', () => {
+  refusesOver('headless', 421, { headUnknown: true }, /#422 \(feat\/headless-two\): GitHub would not say which commit it is at/)
+})
+
+test('a stage pushed to between the check and the stack merge is not landed', () => {
+  stagedWork('pushed', ['one', 'two'], 431, { two: { head: 'checked', headAfter: 'pushed-since' } })
+  const r = rig(['stage', '--land', '--work', 'pushed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /billing: #432 moved since it was checked — run it again — nothing landed/)
+  assert.deepEqual(states(431, 432), ['OPEN', 'OPEN'])
+})

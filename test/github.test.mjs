@@ -529,7 +529,7 @@ test('in-memory adapter: prReadiness reads the fixture, and is null where GitHub
   ] } } }
   const github = githubInMemory(state)
   assert.deepEqual(github.prReadiness('acme', 'platform', 3), { draft: true, decision: 'CHANGES_REQUESTED', requested: 2, mergeable: 'CONFLICTING', head: 'abc', checks: 'FAILURE' })
-  assert.deepEqual(github.prReadiness('acme', 'platform', 4), { draft: false, decision: null, requested: 0, mergeable: 'MERGEABLE', head: null, checks: null })
+  assert.deepEqual(github.prReadiness('acme', 'platform', 4), { draft: false, decision: null, requested: 0, mergeable: 'MERGEABLE', head: 'head-of-4', checks: null })
   assert.equal(github.prReadiness('acme', 'platform', 5), null)
 })
 

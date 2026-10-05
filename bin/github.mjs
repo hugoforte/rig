@@ -385,14 +385,16 @@ export function githubInMemory (state, { env } = {}) {
     },
     // A PR's `draft`, `reviewDecision`, `reviewRequests` (a count, code owners' left out),
     // `mergeable`, `head` and `checks` are the fixture's; `readinessUnknown` is one GitHub lists
-    // and will not say this of.
+    // and will not say this of, and `headUnknown` one whose head it will not say.
     prReadiness (org, name, number) {
       if (state.auth === 'missing') fail('gh not found on PATH (in-memory GitHub)')
       if (state.auth === 'unauthenticated' || lookup(`${org}/${name}`)?.repo.lookupFails) return null
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
-      return pr && !pr.readinessUnknown
-        ? { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, mergeable: pr.mergeable || 'MERGEABLE', head: pr.head || null, checks: pr.checks || null }
-        : null
+      if (!pr || pr.readinessUnknown) return null
+      const head = pr.headUnknown ? null : pr.head || `head-of-${pr.number}`
+      // `headAfter` is a push landing just after this read: the next one sees it.
+      if (pr.headAfter) { pr.head = pr.headAfter; delete pr.headAfter }
+      return { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, mergeable: pr.mergeable || 'MERGEABLE', head, checks: pr.checks || null }
     },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()
