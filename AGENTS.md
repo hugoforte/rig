@@ -491,12 +491,13 @@ that stage and the ones below it. Two or more open stage PRs in a repo land as G
 stack merge, `gh stack merge <PR> --merge`, linked first when they are not one stack yet; one
 lands with `gh pr merge --merge`. The lowest PR in each repo must be based on the work branch,
 and the work branch's own PR is never touched. Every repo is checked before any repo merges, so
-a refusal anywhere lands nothing: a stage with no open PR, stages that are not one chain, a repo
-whose stacks GitHub will not list, a work branch with a merge queue, and a stage PR that is a draft, conflicts, has checks not
-passed, has changes requested or needs an approval, or has a review someone asked for and not
-given — a human reviewing a stage makes its merge theirs, where a code owner's automatic request
-does not. Each repo's PRs are asked again just before it merges, so one that changed since — a
-push, a check failing — stops the landing there. `rig next` offers it
+a refusal found then lands nothing: a stage with no open PR, stages that are not one chain, a
+repo whose stacks GitHub will not list, a work branch with a merge queue, and a stage PR that is
+a draft, conflicts, has checks not passed, has changes requested or needs an approval, or has a
+review someone asked for and not given — a human reviewing a stage makes its merge theirs, where
+a code owner's automatic request does not. Each repo's PRs are asked again just before it merges,
+so one that changed since — a push, a check failing — stops the landing there, and the repos
+already merged stay merged, which the command names. `rig next` offers it
 once every stage still to land is up for review, and the command says what is not ready. It
 writes nothing into the record. An agent lands the stack itself once each stage has passed its
 review, and hands the work over at the work branch's PR; it stops at a stage instead when that
