@@ -414,3 +414,37 @@ scenario('a package inside a tagged repo names itself, not the repo', {
     assert.match(r.out, /rig v4\.1\.0 at /, r.out)
   }),
 ])
+
+// ------------------------------------------------ a package keeps nothing in npm's prefix
+
+// A clone puts its data root beside itself, which is a directory the user chose. A package's
+// "beside itself" is npm's prefix — `node_modules/@hugoforte/rig-data`, gone with a Node version
+// switch or an uninstall, unpushed records with it. So a package places the data repo in the
+// home directory, and reads a relative `--data-root` from where it was typed.
+scenario('a package puts its data root where npm cannot take it', {
+  prefix: 'e2e-package-placement-',
+  localConfig: false,
+  github: { auth: 'ok', repos: {} },
+}, [
+  step('rig is installed under a global prefix', m => {
+    m.packaged = path.join(m.tmp, 'prefix', 'node_modules', '@hugoforte', 'rig')
+    copyTool(m.packaged)
+  }),
+
+  step('--data-repo lands in the home directory', m => {
+    const r = m.rig(['init', '--data-repo', `${ORG}/rig-data`, '--work-root', m.workRoot,
+      '--orgs', ORG, '--tracker', `${ORG}=none`, '--email', 'hugo@e2e.invalid'], { root: m.packaged })
+    assert.equal(r.code, 0, r.out)
+    const machine = readJson(path.join(m.env.USERPROFILE, '.rig', 'rig.local.json'))
+    assert.ok(samePath(machine.dataRoot, path.join(m.env.USERPROFILE, 'rig-data')), machine.dataRoot)
+  }),
+
+  step('a relative --data-root is read from where it was typed', m => {
+    const typedIn = path.join(m.tmp, 'here')
+    fs.mkdirSync(typedIn)
+    const r = m.rig(['init', '--data-root', 'rig-data-local', '--name', 'local'], { root: m.packaged, cwd: typedIn })
+    assert.equal(r.code, 0, r.out)
+    const machine = readJson(path.join(m.env.USERPROFILE, '.rig', 'rig.local.json'))
+    assert.ok(samePath(machine.dataRoots.local.path, path.join(typedIn, 'rig-data-local')), machine.dataRoots.local.path)
+  }),
+])

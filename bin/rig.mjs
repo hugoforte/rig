@@ -65,6 +65,11 @@ const C = {
 let current = invocationOf({})
 
 const toolRoot = () => current.toolRoot
+// Whether npm owns the directory the tool runs from: a package it installed, rather than a
+// clone it linked to. Nothing rig keeps can go beside such a tool, because an upgrade, an
+// uninstall or a switch of Node version takes the whole prefix with it.
+const npmOwned = () => toolRoot().split(/[\\/]/).includes('node_modules')
+const homeDir = () => env().USERPROFILE || env().HOME || os.homedir()
 // Where the run is standing, for the commands that need to know. A run handed none is standing
 // where the process is, and the process is asked only now: a shell left in a folder `rig close`
 // deleted has no cwd to give, and `rig help` from there has no use for one.
@@ -1922,15 +1927,16 @@ function ensureDataRootCheckout (target) {
 }
 
 // `init --data-repo owner/name`: join the data repo if it exists on GitHub, create it
-// (private) if not. Either way it ends up cloned beside the tool, with a first commit,
-// and becomes the data root. Returns the local path.
+// (private) if not. Either way it ends up cloned beside the tool — in the home directory for a
+// package, whose neighbours are npm's — with a first commit, and becomes the data root.
+// Returns the local path.
 function joinOrCreateDataRepo (spec, named) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(spec) || /\/\.\.?$/.test(spec)) die(`--data-repo wants owner/name, got "${spec}"`)
   const [owner, name] = spec.split('/')
   // Every data repo is called `rig-data` by convention, so the repo's own name cannot place
   // the second one — both would land on the same directory. A named root is put in a
   // directory named for it; the unnamed first root keeps the path it has always had.
-  const target = path.join(path.dirname(toolRoot()), named ? `${name}-${named}` : name)
+  const target = path.join(npmOwned() ? homeDir() : path.dirname(toolRoot()), named ? `${name}-${named}` : name)
 
   // Already pointed somewhere else? Switching data roots is deliberate, not a side effect of
   // joining a repo — but `--name` *is* that deliberate act, and refusing it would make the
@@ -2001,7 +2007,9 @@ cmds.init = ({ flags }) => {
   // `init` used to poke the resolved root half-way through itself, which left everything
   // after that line depending on a line you had to read the whole command to find.
   const previousRoot = dataRoot()
-  if (flags['data-root']) current.location = withDataRoot(where(), path.resolve(toolRoot(), flags['data-root']))
+  // A relative path is read against the tool, as the setup prompt's `..\rig-data` expects —
+  // except in a package, where that would be inside npm's prefix, so from where it was typed.
+  if (flags['data-root']) current.location = withDataRoot(where(), path.resolve(npmOwned() ? cwd() : toolRoot(), flags['data-root']))
   const targetDataRoot = dataRoot()
   const isSplit = where().split
   // A separate data root is always a git checkout with a first commit (local or not).
@@ -3288,7 +3296,7 @@ function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...wor
   return transcriptsFor({
     patterns: transcriptPatterns(cfg),
     workspaces,
-    home: env().USERPROFILE || env().HOME || os.homedir(),
+    home: homeDir(),
   })
 }
 

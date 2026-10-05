@@ -30,7 +30,7 @@ Lead each with the recommended answer so the user can accept it in a word.
   orgs and trackers; its catalogue is already there. Nothing org-level gets asked.
 - **Create a new private data repo** — `owner/rig-data`, under an org when a team will
   share it, under the user otherwise. rig creates it and makes its first commit.
-- **Local only** — a directory beside the tool, `git init`ed, no remote. Fine for a solo
+- **Local only** — a directory beside the tool checkout (anywhere outside npm's folder for an installed package), `git init`ed, no remote. Fine for a solo
   trial; it can be pushed to a private repo later.
 
 The tool checkout itself is never the data root: with the tool public, knowledge inside
@@ -81,7 +81,7 @@ node <root>/bin/rig.mjs init --data-repo acme/rig-data --orgs acme,acme-labs --t
 node <root>/bin/rig.mjs init --data-root ..\rig-data --orgs acme --tracker acme=none --email you@acme.example
 ```
 
-`--data-repo` clones or creates beside the tool and sets `dataRoot`; `--orgs` adds to and
+`--data-repo` clones or creates beside the tool checkout — in the home directory for an installed package — and sets `dataRoot`; a relative `--data-root` is read against the tool checkout, or against the current directory for a package; `--orgs` adds to and
 `--tracker` merges into `rig.json` in the data root; `--email`, `--work-root` and
 `--data-root` write `rig.local.json`, filling only what is missing when it exists. Then
 `rig doctor` must come back clean — it also reports whether the data root has anything
