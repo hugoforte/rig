@@ -5266,7 +5266,7 @@ function doctorSnapshot () {
     configFileExists: exists(localFile),
     // Only when it is the tool tree's copy: an installation carrying the one location a
     // packaged upgrade deletes should hear so before the upgrade, not after.
-    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile() } : null,
+    legacyLocalFile: inToolTree(loc) ? { home: homeConfigFile(env()) } : null,
     // Asked of the files, not carried on `cfg`: which keys the org half owns is
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.

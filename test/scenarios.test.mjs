@@ -375,8 +375,9 @@ scenario('a machine file left beside the tool is read, and named by doctor', {
   }),
 
   step('and doctor names it, without counting it as a problem', m => {
-    const r = m.rig(['doctor'])
-    assert.match(r.out, /is beside the tool — move it to .*\.rig/)
+    // In process, so the home the run was handed is the only one it can know.
+    const r = m.rig(['doctor'], { inProcess: true })
+    assert.ok(r.out.includes(`is beside the tool — move it to ${path.join(m.env.USERPROFILE, '.rig', 'rig.local.json')}`), r.out)
     assert.equal(r.code, 0, `a location that still works is not a failure:\n${r.out}`)
   }),
 ])
