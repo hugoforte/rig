@@ -209,13 +209,13 @@ test('a pushed branch with no PR is offered one', () => {
   assert.ok(commands(out).includes('rig pr'))
 })
 
-test('the PR offer says when the body would lift the Direction, and still offers the PR (#314)', () => {
+test('the PR offer asks for the Pull request section while it is unwritten, and still offers the PR (#314)', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
     repos: [repo('a', { pushed: true })],
     prUnwritten: true,
   })
-  assert.match(says(out), /a is pushed with no PR open — the context doc has no Pull request section, so the body would lift the Direction/)
+  assert.match(says(out), /a is pushed with no PR open — the context doc has no Pull request section — write what the work delivers there before the PR opens/)
   assert.ok(commands(out).includes('rig pr'))
 })
 

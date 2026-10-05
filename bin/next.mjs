@@ -257,7 +257,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
       .map(b => (awaiting.length === 1 ? `its PR would ask for ${b.release}` : `${b.repo}'s PR would ask for ${b.release}`))
     // Said while the body is still to be written, which is the one moment it costs nothing: the
     // Direction is the design, and a reviewer wants what the work delivers (hugoforte/rig#314).
-    const body = prUnwritten ? ['the context doc has no Pull request section, so the body would lift the Direction — write what the work delivers there first'] : []
+    const body = prUnwritten ? ['the context doc has no Pull request section — write what the work delivers there before the PR opens'] : []
     out.push(offer('reviewing', [`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, ...releases, ...body].join(' — '), 'rig pr'))
   }
 

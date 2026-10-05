@@ -3769,8 +3769,12 @@ const directionProse = id => (exists(contextFile(id)) ? directionBody(readText(c
 // context doc's `## Pull request` section, its own headings lifted a level so they head the
 // body. The Direction is the design agreed at the gate, written for whoever builds it, and by
 // the time a PR opens it reads as instructions to the implementer (hugoforte/rig#314). Empty
-// when the doc has no such section, or one that says nothing.
-const pullRequestSaid = text => promoteHeadings(sectionSaid(text, 'Pull request'))
+// when the doc has no such section, or one that says nothing: only the template's comment, or
+// only `_TODO_`, which would publish a stub in place of the Direction.
+const pullRequestSaid = text => {
+  const said = sectionSaid(text, 'Pull request')
+  return said === '_TODO_' ? '' : promoteHeadings(said)
+}
 const pullRequestProse = id => (exists(contextFile(id)) ? pullRequestSaid(readText(contextFile(id))) : '')
 
 // The PR body rig writes: what the work is, the ticket, what it delivers, and what landed in
@@ -5620,7 +5624,7 @@ export {
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
-  directionSection, directionBody, directionIsTodo,
+  directionSection, directionBody, directionIsTodo, pullRequestSaid,
   spawnFailure,
   listing,
 }

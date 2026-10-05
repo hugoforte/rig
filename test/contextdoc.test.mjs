@@ -100,6 +100,32 @@ test('a heading in a fence does not start a section either', () => {
   assert.equal(sectionOf(`# w\n\n${FENCED.replace('Summary', 'Direction')}\n`, 'Direction'), '')
 })
 
+// The doc's private sections follow the Direction, and a section that runs past its next heading
+// publishes them in the PR body.
+const PRIVATE = '\n## Key data points\n\nprivate\n'
+
+test('a <!-- in a code span does not hide the next heading', () => {
+  assert.equal(sectionOf(`## Direction\n\nWe strip \`<!--\` in the parser.${PRIVATE}`, 'Direction'), '\nWe strip `<!--` in the parser.')
+})
+
+test('a line that is only an inline span in triple backticks opens no fence', () => {
+  assert.equal(sectionOf(`## Direction\n\n\`\`\`rig pr\`\`\` opens the PR.${PRIVATE}`, 'Direction'), '\n```rig pr``` opens the PR.')
+})
+
+test('an unclosed fence is read as no fence, so the next heading still ends the section', () => {
+  assert.equal(sectionOf(`## Direction\n\n~~~ a fence nobody closed${PRIVATE}`, 'Direction'), '\n~~~ a fence nobody closed')
+})
+
+test('a heading indented as code does not end the section', () => {
+  assert.equal(sectionOf(`## Direction\n\nExample doc:\n\n    ## Notes\n\nStill the Direction.${PRIVATE}`, 'Direction'),
+    '\nExample doc:\n\n    ## Notes\n\nStill the Direction.')
+})
+
+test('the name is matched as whole words in any case, so a list of PR links is not the section', () => {
+  assert.equal(sectionOf('## Pull requests\n\n- #12\n', 'Pull request'), '')
+  assert.equal(sectionOf('## Pull Request\n\nDelivers.\n', 'Pull request'), '\nDelivers.\n')
+})
+
 test('a section\'s headings go up a level as it is lifted, and a heading in a fence stays as it is', () => {
   assert.equal(promoteHeadings(`### Summary\n\n${FENCED}\n\n#### Door`), `## Summary\n\n${FENCED}\n\n### Door`)
 })

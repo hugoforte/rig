@@ -619,7 +619,7 @@ rig pr --refresh  # rewrite each open PR's title and body from the record as it 
 ```
 
 The body is assembled from what the record already holds: the title, the tickets, the
-**Pull request** section of the context doc lifted verbatim, and the stage table rendered from
+**Pull request** section of the context doc lifted as written, and the stage table rendered from
 the stack. Nothing in it is retyped, which is the point — the deploy-order table stops being
 hand-maintained the moment something renders it.
 
@@ -632,7 +632,7 @@ the smallest view of the change, before-and-after Evidence, and the Merge Danger
 two-way door and its blast radius. Write it once the build is done, with the agent host's
 PR-body skill if it has one. Its `###` headings are raised to `##` as it is lifted, outside code
 fences, so they head the body. A doc without one has the Direction lifted, under `## Direction`,
-as it always had, and `rig next` says so beside its offer to open the PR. Never both: two
+as it always had, and `rig next` asks for the section beside its offer to open the PR. Never both: two
 accounts of one work, written at different times, would disagree where a reviewer reads first.
 
 **What it says in public.** The lifted section goes into a body anyone who can read the repo
