@@ -64,6 +64,14 @@ test('the instructions an agent is told to read are packed', { skip }, () => {
   assert.ok(paths.includes('AGENTS.md'), 'a packaged install has no repository to read it from')
 })
 
+test('the agent skills are packed, because a packaged install has no checkout to link them from', { skip }, () => {
+  const skills = fs.readdirSync(path.join(ROOT, 'skills'))
+  assert.ok(skills.length > 0, 'skills/ has something to pack')
+  for (const skill of skills) {
+    assert.ok(paths.includes(`skills/${skill}/SKILL.md`), `skills/${skill} is not in the package`)
+  }
+})
+
 test('the tests and CI config are not packed — nothing installs them to run them', { skip }, () => {
   for (const prefix of ['test/', '.github/']) {
     const shipped = paths.filter(p => p.startsWith(prefix))

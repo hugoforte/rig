@@ -14,6 +14,7 @@
     "bin/",
     "prompts/",
     "templates/",
+    "skills/",
     "docs/",
     "AGENTS.md"
   ],
