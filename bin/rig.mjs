@@ -4230,6 +4230,12 @@ function landStages (cfg, work, branch, flags) {
     if (!prs.length) continue
     const base = workBranch(entry, work)?.base || entry.base
     if (base === work.branch) { problems.push(`${entry.repo}: ${work.branch} is the base branch itself — rig lands a stage into the work branch and never further`); continue }
+    // A merge queue picks its own merge method and may land a stack in parts, so neither the
+    // merge commit nor the all-or-nothing could be kept.
+    let queued = null
+    const unasked = trackerFailure(() => { queued = github().mergeQueue(entry.org, entry.repo, work.branch) })
+    if (unasked) { problems.push(`${entry.repo}: GitHub would not say whether ${work.branch} has a merge queue (${unasked})`); continue }
+    if (queued) { problems.push(`${entry.repo}: ${work.branch} has a merge queue, which picks its own merge method and may land the stages in parts`); continue }
     const s = stageStack(stack, entry, work.branch)
     if (s?.problem) { problems.push(`${entry.repo}: ${s.problem}`); continue }
     // A stack merges into its own base, so one GitHub would not list is one whose base nobody
@@ -4274,10 +4280,16 @@ function landStages (cfg, work, branch, flags) {
   const landed = []
   for (const { entry, prs, stacked, held } of plans) {
     const top = prs[prs.length - 1]
-    // `gh stack merge` takes no head to match, so the heads are asked again just before it: a
-    // push since the check would otherwise land what nothing checked. A window stays, a short one.
-    const moved = stacked || held ? prs.filter(pr => github().prReadiness(entry.org, entry.repo, pr.number)?.head !== pr.checked) : []
-    if (moved.length) die(`${entry.repo}: ${numbers(moved)} moved since ${moved.length === 1 ? 'it was' : 'they were'} checked — run it again${landed.length ? ` — ${landed.join('; ')} landed already` : ' — nothing landed'}`)
+    // Asked again just before the merge, since linking and the repos before this one take time:
+    // a check failing or a review asked for since is no less a refusal, and `gh stack merge`
+    // takes no head to match, so a push since would land what nothing checked. A window stays,
+    // a short one.
+    const changed = prs.flatMap(pr => {
+      const ready = github().prReadiness(entry.org, entry.repo, pr.number)
+      const says = unready(ready) || (ready.head !== pr.checked ? 'it was pushed to since it was checked' : null)
+      return says ? [`#${pr.number} (${pr.branch}): ${says}`] : []
+    })
+    if (changed.length) die(`${entry.repo}: ${changed.join('; ')} — run it again${landed.length ? ` — ${landed.join('; ')} landed already` : ' — nothing landed'}`)
     const failed = trackerFailure(() => stacked || held
       ? github().mergeStack(entry.org, entry.repo, top.number)
       : github().mergePr(entry.org, entry.repo, top.number, { head: top.checked }))

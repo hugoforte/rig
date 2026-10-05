@@ -19,6 +19,7 @@
 //   prReadiness(org, name, number)      { draft, decision, requested, mergeable, head, checks }:
 //                                       whether a PR is ready to merge, or null where GitHub
 //                                       would not say
+//   mergeQueue(org, name, branch)       true when the branch merges through a merge queue
 //   stackTool(command = 'link')         'ok' | 'missing' | 'old': is `gh stack <command>` there;
 //                                       never throws for a non-zero exit, which is 'missing'
 //   linkStack(org, name, { base, urls })  register open PRs, by URL, as one stack on `base`
@@ -73,6 +74,8 @@ const REVIEW_JQ = '.data.repository.pullRequest | "\\([.reviewThreads.nodes[] | 
 // reviewer submits; a code owner's is left out, being GitHub's request rather than anyone's.
 const READINESS_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { isDraft reviewDecision mergeable headRefOid reviewRequests(first: 100) { nodes { asCodeOwner } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }'
 const READINESS_JQ = '.data.repository.pullRequest | if . == null then null else {draft: .isDraft, decision: .reviewDecision, requested: ([.reviewRequests.nodes[] | select(.asCodeOwner | not)] | length), mergeable: .mergeable, head: .headRefOid, checks: .commits.nodes[0].commit.statusCheckRollup.state} end'
+
+const MERGE_QUEUE_QUERY = 'query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { mergeQueue(branch: $branch) { id } } }'
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
@@ -190,6 +193,14 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       try { t = JSON.parse(r.out) } catch { return null }
       if (!t || typeof t.draft !== 'boolean' || !Number.isInteger(t.requested)) return null
       return { draft: t.draft, decision: t.decision ?? null, requested: t.requested, mergeable: t.mergeable ?? null, head: t.head ?? null, checks: t.checks ?? null }
+    },
+    // Whether a branch merges through a merge queue, which `rig stage --land` will not send a
+    // stack into. GitHub answers null for a branch with none.
+    mergeQueue (org, name, branch) {
+      const out = must(['api', 'graphql', '-f', `query=${MERGE_QUEUE_QUERY}`,
+        '-f', `owner=${org}`, '-f', `name=${name}`, '-f', `branch=${branch}`, '--jq', '.data.repository.mergeQueue != null'])
+      if (out !== 'true' && out !== 'false') fail(`gh api graphql said neither true nor false about a merge queue: ${firstLine(out)}`)
+      return out === 'true'
     },
     // `rig pr` opens a pull request once: it checks for an existing one first (idempotence is
     // the caller's, because "already open" is a thing to report rather than an error to raise).
@@ -391,10 +402,16 @@ export function githubInMemory (state, { env } = {}) {
       if (state.auth === 'unauthenticated' || lookup(`${org}/${name}`)?.repo.lookupFails) return null
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       if (!pr || pr.readinessUnknown) return null
-      const head = pr.headUnknown ? null : pr.head || `head-of-${pr.number}`
-      // `headAfter` is a push landing just after this read: the next one sees it.
-      if (pr.headAfter) { pr.head = pr.headAfter; delete pr.headAfter }
-      return { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, mergeable: pr.mergeable || 'MERGEABLE', head, checks: pr.checks || null }
+      const ready = { draft: pr.draft === true, decision: pr.reviewDecision || null, requested: pr.reviewRequests || 0, mergeable: pr.mergeable || 'MERGEABLE', head: pr.headUnknown ? null : pr.head || `head-of-${pr.number}`, checks: pr.checks || null }
+      // `after` is what changes just after this read — a push, a check failing — which the
+      // next read sees.
+      if (pr.after) { Object.assign(pr, pr.after); delete pr.after }
+      return ready
+    },
+    // A repo's `mergeQueues` lists the branches that have one.
+    mergeQueue (org, name, branch) {
+      ask(`${org}/${name}`)
+      return (lookup(`${org}/${name}`)?.repo.mergeQueues || []).includes(branch)
     },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()

@@ -501,6 +501,15 @@ test('gh adapter: mergePr given the head that was checked merges only while the 
   assert.deepEqual(calls[0], ['pr', 'merge', '4', '--repo', 'acme/platform', '--merge', '--match-head-commit', 'abc123'])
 })
 
+test('gh adapter: mergeQueue says whether the branch has one, and throws on an answer that is neither', () => {
+  const { calls, github } = canned(() => 'true')
+  assert.equal(github.mergeQueue('acme', 'platform', 'feat/work'), true)
+  assert.ok(calls[0].includes('branch=feat/work'))
+  assert.equal(canned(() => 'false').github.mergeQueue('acme', 'platform', 'feat/work'), false)
+  assert.throws(() => canned(() => 'null').github.mergeQueue('acme', 'platform', 'feat/work'), GithubError)
+  assert.throws(() => canned(() => ({ code: 1, err: 'HTTP 502' })).github.mergeQueue('acme', 'platform', 'feat/work'), GithubError)
+})
+
 test('gh adapter: stackTool asks for the subcommand it is told, link by default', () => {
   assert.equal(canned(() => 'Remote operations:\n  link        Link PRs\n').github.stackTool('merge'), 'old')
   assert.equal(canned(() => 'Remote operations:\n  merge       Merge a stack\n').github.stackTool('merge'), 'ok')

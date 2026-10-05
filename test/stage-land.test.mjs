@@ -271,9 +271,28 @@ test('a stage PR whose head GitHub will not say refuses the whole landing, since
 })
 
 test('a stage pushed to between the check and the stack merge is not landed', () => {
-  stagedWork('pushed', ['one', 'two'], 431, { two: { head: 'checked', headAfter: 'pushed-since' } })
+  stagedWork('pushed', ['one', 'two'], 431, { two: { head: 'checked', after: { head: 'pushed-since' } } })
   const r = rig(['stage', '--land', '--work', 'pushed'])
   assert.equal(r.code, 1, r.out)
-  assert.match(strip(r.out), /billing: #432 moved since it was checked — run it again — nothing landed/)
+  assert.match(strip(r.out), /billing: #432 \(feat\/pushed-two\): it was pushed to since it was checked — run it again — nothing landed/)
   assert.deepEqual(states(431, 432), ['OPEN', 'OPEN'])
+})
+
+test('a stage PR whose check fails between the check and the merge is not landed', () => {
+  stagedWork('soured', ['one', 'two'], 441, { two: { after: { checks: 'FAILURE' } } })
+  const r = rig(['stage', '--land', '--work', 'soured'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /billing: #442 \(feat\/soured-two\): its checks are failing — run it again — nothing landed/)
+  assert.deepEqual(states(441, 442), ['OPEN', 'OPEN'])
+})
+
+test('a work branch with a merge queue is refused, since the queue picks its own merge method', () => {
+  const state = github()
+  state.repos['acme/billing'].mergeQueues = ['feat/queued-work']
+  setGithub(state)
+  stagedWork('queued', ['one'], 451)
+  const r = rig(['stage', '--land', '--work', 'queued'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /billing: feat\/queued-work has a merge queue, which picks its own merge method and may land the stages in parts/)
+  assert.equal(pr(451).state, 'OPEN')
 })
