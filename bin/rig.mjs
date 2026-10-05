@@ -4215,7 +4215,7 @@ function landStages (cfg, work, branch, flags) {
 
   const problems = upTo.filter(st => !st.started).map(st => `${st.branch} is not cut in any repo yet`)
   const plans = []
-  let tool = null
+  const needs = new Set()
   for (const entry of work.repos) {
     const prs = []
     for (const st of upTo.filter(s => s.repos.includes(entry.repo))) {
@@ -4237,14 +4237,14 @@ function landStages (cfg, work, branch, flags) {
       const says = unready(github().prReadiness(entry.org, entry.repo, pr.number))
       if (says) problems.push(`${entry.repo}: #${pr.number} (${pr.branch}): ${says}`)
     }
-    if (s && !tool) {
-      tool = github().stackTool('merge')
-      if (tool === 'ok' && !s.linked) tool = github().stackTool('link')
-      if (tool === 'missing') problems.push('gh stack is not installed — `gh extension install github/gh-stack`; two or more stage PRs land only as one stack')
-      if (tool === 'old') problems.push('gh stack is too old to link and merge a stack — `gh extension upgrade gh-stack`')
-    }
+    if (s) needs.add('merge')
+    if (s && !s.linked) needs.add('link')
     plans.push({ entry, prs, stacked: s })
   }
+  // Asked once per subcommand, whichever repos need it.
+  const tools = [...needs].map(c => github().stackTool(c))
+  if (tools.includes('missing')) problems.push('gh stack is not installed — `gh extension install github/gh-stack`; two or more stage PRs land only as one stack')
+  else if (tools.includes('old')) problems.push(`gh stack is too old to ${[...needs].join(' and ')} a stack — \`gh extension upgrade gh-stack\``)
   if (problems.length) die(`nothing landed:\n${problems.map(p => `  - ${p}`).join('\n')}`)
 
   const numbers = prs => prs.map(pr => `#${pr.number}`).join(', ')
