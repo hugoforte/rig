@@ -32,13 +32,13 @@ The game analogy has a second half: mastery at this level before the next. rig s
 
 ### 4. Attention is the budget
 
-The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A closed work never re-asks GitHub what its merged PRs did: close records the terminal facts once, and every later read uses them. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line. The demo page makes the case for rig out of a data root so nobody has to make it by hand.
+The human's attention is what rig conserves, so every surface is measured by how much of it it costs. A closed work never re-asks GitHub what its merged PRs did: close records the terminal facts once, and every later read uses them. rig-learn leads with a TL;DR the user can answer with one word (#177), and every lesson line is one line.
 
 The rule that follows: a feature that saves the agent effort but costs the human a question has the sign wrong.
 
 ### 5. Facts in code, judgement in prompts
 
-`bin/` answers what is true: which branch sits on which, whether a PR is open, which repos a change reaches. `prompts/` and `skills/` answer what to do about it, given those facts. The rollout plan's deploy order is generated; its prose is not (decision 73). The phase of a work is derived; only the gates are stored (decision 64).
+`bin/` answers what is true: which branch sits on which, whether a PR is open, which repos a change reaches. `prompts/` and `skills/` answer what to do about it, given those facts. The rollout plan's deploy order is generated; its prose is not (decision 73). The phase of a work is derived; what is stored is only what nothing can observe afterwards: the gates and the choices made at them (decisions 64 and 198), and a check's pass at the patch it ran at (decision 199).
 
 The seam is deliberate. Code changes with a release and is tested; a prompt changes with an edit and is judged. Judgement that is put into code ossifies before it is understood, and facts left to a prompt drift.
 
@@ -50,7 +50,7 @@ The rule that follows: anything that must be hand-maintained to stay true will r
 
 ### 7. Everything accretes
 
-Knowledge enters rig at the moment it is fresh, never through a form filled in up front. A catalogue entry is drafted when a repo is attached and corrected when a work touches it. A lesson is offered a home before close, while the work that taught it is still on disk. A decision is logged when it is made, with its rejected alternatives.
+Knowledge enters rig at the moment it is fresh, never through a form filled in up front. A catalogue entry is drafted when a repo is attached and corrected when a work touches it. A lesson is offered a home before close, while the work that taught it is still on disk. A decision is logged when it is made, with its rejected alternatives, and the smaller ones a work takes along the way are kept as its notes, each with a pointer at its evidence (decision 204).
 
 The rule that follows: the question is never "what should we write down about this repo?" but "what did this work just teach about it?"
 

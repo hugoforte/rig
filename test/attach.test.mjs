@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { makeInstall, readJson, strip } from './harness.mjs'
 
-const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, env, cleanup } = makeInstall({
+const { tmp, dataRoot, workRoot, remotesDir, githubStateFile, rig, gitMust, env, cleanup } = makeInstall({
   // Nothing here is about the process rig runs in, so the runs happen in this one.
   inProcess: true,
   prefix: 'rig-attach-',
@@ -89,6 +89,34 @@ test('attaching a repo the catalogue has never seen drafts an entry to correct',
   assert.match(fs.readFileSync(entry, 'utf8'), /^stack: JavaScript$/m)
 })
 
+
+test('a repo GitHub would not answer for is not resolved, and the refusal is named', () => {
+  // A signed-out gh throws on the lookup, rather than reading as "no such repo in acme" and
+  // leaving rig to ask `gh auth status` why (decision 170).
+  const state = readJson(githubStateFile)
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'unauthenticated' }))
+  const r = rig(['attach', 'orders', '--work', 't1'])
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /cannot resolve "orders": could not ask GitHub whether acme\/orders exists \(gh is not authenticated \(in-memory GitHub\)\) — authorise gh's token for acme \(SAML SSO, for one\), catalogue the repo, or list acme after the org that has it in `orgs`/)
+  assert.equal(attached('orders'), undefined)
+})
+
+test('a repo another org has is not taken while an earlier org would not say', () => {
+  // "Would not answer" is not "not here": acme may have it too, and attaching the other org's
+  // repo of the same name would be a confident wrong answer (decision 169).
+  assert.equal(rig(['init', '--orgs', 'globex']).code, 0)
+  const state = readJson(githubStateFile)
+  const failing = structuredClone(state)
+  failing.repos['acme/ledger'] = { language: 'Go', lookupFails: 'HTTP 502: Bad Gateway' }
+  failing.repos['globex/ledger'] = { language: 'Go' }
+  fs.writeFileSync(githubStateFile, JSON.stringify(failing))
+  const r = rig(['attach', 'ledger', '--work', 't1'])
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /cannot resolve "ledger": could not ask GitHub whether acme\/ledger exists \(HTTP 502: Bad Gateway\)/)
+  assert.equal(attached('ledger'), undefined)
+})
 
 test('next offers the draft entry for correction, while the worktree is still on disk', () => {
   const r = rig(['next', '--work', 't1'])

@@ -17,8 +17,13 @@ const lockFile = path.join(dataRoot, '.git', 'rig.lock')
 const lastCommit = dir => gitMust(dir, 'log', '-1', '--format=%s')
 const dirty = () => gitMust(dataRoot, 'status', '--porcelain')
 
+// One instant for the planted lock's `since` and the machine's clock to start from, so how long
+// the lock reads as held is the machine's sleeps alone. Read apart, the git calls between the two
+// readings counted too, and under a loaded run "30 s" read "31 s".
+const START = Date.now()
+
 const machine = ({ onSleep = () => {}, alive = () => true } = {}) => {
-  const m = { at: Date.now(), sleeps: 0 }
+  const m = { at: START, sleeps: 0 }
   m.now = () => m.at
   m.sleep = ms => { m.sleeps++; m.at += ms; onSleep(m.sleeps) }
   m.alive = pid => alive(pid)
@@ -27,7 +32,7 @@ const machine = ({ onSleep = () => {}, alive = () => true } = {}) => {
 }
 const plant = (over = {}) => fs.writeFileSync(lockFile, JSON.stringify({
   pid: process.pid, host: os.hostname(), command: 'rig close', work: 'other-work',
-  section: 'commit and push', since: new Date().toISOString(), nonce: 'theirs', ...over,
+  section: 'commit and push', since: new Date(START).toISOString(), nonce: 'theirs', ...over,
 }) + '\n')
 const note = text => fs.writeFileSync(path.join(dataRoot, 'work', 't1', 'notes.md'), `${text}\n`)
 

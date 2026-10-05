@@ -106,8 +106,15 @@ doc has nothing to name.
 
 Once the Direction section
 of the context doc is agreed with the user, end that gate with
-`rig save -m "design agreed" --designed` — rig commits the data root after its own
-commands, but the context doc is yours to edit, so this is how those edits get committed.
+`rig save -m "design agreed" --designed --adversarial` (or `--no-adversarial`) — rig commits
+the data root after its own commands, but the context doc is yours to edit, so this is how
+those edits get committed. Ask the user whether the work's PRs get an adversarial review; the
+gate refuses without the answer.
+
+The repo set and the design gate are stops a work may skip, when the user said so at the
+outset: pass `--stops` to `rig new`. `AGENTS.md`'s "Stops" lists them and says how the agent
+records what it decided in their place.
+
 When the work is done, `rig close` comments on every ticket with the PR links. GitHub
 tickets also close when every PR is merged. Jira tickets never auto-close or transition —
 move it yourself once the comment lands.

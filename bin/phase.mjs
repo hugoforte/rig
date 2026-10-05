@@ -48,7 +48,16 @@ export const TERMINAL = ['closed', 'abandoned']
 // Each gate and the field its date is stored in. `closedAt` predates all of this; the others
 // join it rather than replacing anything. `learnedAt` is the lesson review, and unlike the
 // design gate it may be passed after the close: the catalogue and rig's tracker outlive the work.
-export const GATES = { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+// `reviewedAt` is the adversarial review a design chose: GitHub cannot say one happened.
+// `documentedAt` is the user docs kept true once the work landed, passable after the close too.
+export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+
+// The gates that may stop being stops — where the agent waits for the human — chosen per work
+// as `stops`. A record with no `stops` waits at both, as every work did before the choice
+// existed. The ticket decision is the human's at `rig new` already, and the lesson review stays a
+// stop because skipping it would let an agent file issues and edit the org doc unseen.
+export const STOP_WORDS = { repos: 'the repo set', design: 'the design' }
+export const STOPPABLE = Object.keys(STOP_WORDS)
 
 const MERGED = 'MERGED'
 
@@ -134,6 +143,11 @@ export function contradictions (work, repos = []) {
       found.push(`${work.id}: \`${field}\` is "${work[field]}", which is not a date — the ${gate} gate cannot be read`)
     }
   }
+  // `rig save` writes only true or false; anything else is read as "not chosen" and would skip
+  // a review someone asked for.
+  if (work.adversarial !== undefined && typeof work.adversarial !== 'boolean') {
+    found.push(`${work.id}: \`adversarial\` is ${JSON.stringify(work.adversarial)}, which is neither true nor false — the review choice cannot be read`)
+  }
 
   // An abandoned work carries both dates, and that is not a contradiction: `closedAt` is when
   // the teardown ran and `abandonedAt` is the decision that it ended unfinished. The two are
@@ -145,10 +159,13 @@ export function contradictions (work, repos = []) {
 
   // A gate cannot have been passed after the work stopped. Compared only when both dates are
   // readable, so an unparseable one is reported once, above, rather than twice.
+  // The adversarial review is refused on a stopped work just as the design gate is.
   const stoppedAt = work.abandonedAt || work.closedAt
-  if (stoppedAt && readable(stoppedAt) && work.designedAt && readable(work.designedAt) &&
-      Date.parse(work.designedAt) > Date.parse(stoppedAt)) {
-    found.push(`${work.id}: the design gate (${day(work.designedAt)}) is dated after the work stopped (${day(stoppedAt)})`)
+  for (const [gate, field] of [['design gate', 'designedAt'], ['adversarial review', 'reviewedAt']]) {
+    if (stoppedAt && readable(stoppedAt) && work[field] && readable(work[field]) &&
+        Date.parse(work[field]) > Date.parse(stoppedAt)) {
+      found.push(`${work.id}: the ${gate} (${day(work[field])}) is dated after the work stopped (${day(stoppedAt)})`)
+    }
   }
 
   // An open PR under a closed work means rig closed something that had not landed, which its

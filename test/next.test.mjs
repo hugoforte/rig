@@ -25,7 +25,8 @@ test('a work with nothing attached is pointed at the repo interview', () => {
 test('the design gate is offered while it is unrecorded, and names the Direction when it is a stub', () => {
   const out = nextFor({ work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true })
   assert.match(says(out), /Direction is still `_TODO_`/)
-  assert.ok(commands(out).includes('rig save -m "design agreed" --designed'))
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial'))
+  assert.match(says(out), /adversarial review \(`--no-adversarial` declines it\)/, 'both answers are named')
 })
 
 test('once the Direction is written the offer is only about the gate', () => {
@@ -36,6 +37,109 @@ test('once the Direction is written the offer is only about the gate', () => {
 test('a recorded design gate stops being offered', () => {
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
   assert.doesNotMatch(says(out), /design gate/)
+})
+
+// ------------------------------------------------- the stops a work chose
+
+test('where the design is not a stop, the agent is offered the gate to record itself, with an adversarial review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), stops: ['repos'] }), repos: [repo('a')] })
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial --by-agent'))
+  assert.match(says(out), /the design is not a stop on this work/)
+})
+
+test('a work grown to three repos waits for the human at the design all the same', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] })
+  assert.ok(commands(out).includes('rig save -m "design agreed" --designed --adversarial'))
+  assert.match(says(out), /3 repos is the weight at which the design waits for the human/)
+})
+
+test('a gate the agent decided is offered to the human for review', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] })
+  assert.match(says(out), /for the human: the agent decided the repo set and the design — go over them, then record the design as theirs/)
+  assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --adversarial'))
+})
+
+test('the review keeps the adversarial-review choice the design made', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: false, agentDecided: ['design'] }), repos: [repo('a')] })
+  assert.ok(commands(out).includes('rig save -m "design reviewed" --designed --no-adversarial'))
+})
+
+test('what the agent decided does not hide that the code is still to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] })
+  assert.match(says(out), /this part is yours to write/)
+})
+
+test('a work whose gates the human decided is offered no review of them', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true }), repos: [repo('a')] })
+  assert.doesNotMatch(says(out), /the agent decided/)
+})
+
+// ------------------------------------------------- picking up a handoff
+
+test('a handoff left after the last commit is offered as the place to pick up from', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T11:00:00Z' })
+  const pickup = out.find(o => o.command === 'rig prompt pickup')
+  assert.match(pickup.says, /a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it/)
+  assert.equal(out[0], pickup, 'before anything the trail may already answer')
+})
+
+test('the pickup offer clears on the pickup\'s first commit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T12:30:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a landed work is offered no pickup: there is nothing left to start', () => {
+  const merged = repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [merged], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: '2026-10-04T11:00:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a pickup does not hide that the code is still to write', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: null })
+  assert.match(says(out), /this part is yours to write/)
+})
+
+test('a work grown to three repos after the agent agreed its design waits for the human, above the floor', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, adversarial: true, stops: [], agentDecided: ['repos', 'design'] }), repos: [repo('a'), repo('b'), repo('c')] })
+  const grown = out.find(o => /3 repos is the weight at which the design waits for the human/.test(o.says))
+  assert.ok(grown, says(out))
+  assert.equal(grown.command, 'rig save -m "design reviewed" --designed --adversarial')
+  assert.ok(out.indexOf(grown) < out.findIndex(o => /yours to write/.test(o.says)) || !/yours to write/.test(says(out)))
+  assert.equal(out.filter(o => /the agent decided/.test(o.says)).length, 1, 'said once')
+})
+
+test('a work with no handoff is offered no pickup', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: null, lastCommitAt: '2026-10-04T12:30:00Z' })
+  assert.ok(!commands(out).includes('rig prompt pickup'))
+})
+
+test('a handoff on a work with no commit yet is offered', () => {
+  const out = nextFor({ work: work({ repos: attached('a') }), repos: [repo('a')], handoffAt: '2026-10-04T12:00:00Z', lastCommitAt: null })
+  assert.ok(commands(out).includes('rig prompt pickup'))
+})
+
+// ------------------------------------------------- checks pinned to the patch
+
+test('a repo with work on it and no pass at the diff it carries is offered the run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], verification: [{ repo: 'a', state: 'unverified' }] })
+  assert.ok(commands(out).includes('rig check a --run'))
+  assert.match(says(out), /a has no pass recorded at the diff it carries — run its checks, and a pass is kept against this patch/)
+})
+
+test('a pass from before the diff changed is offered the run again, saying so', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { unpushed: 1 }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] })
+  assert.ok(commands(out).includes('rig check a b --run'))
+  assert.match(says(out), /a's pass was for an earlier diff/)
+})
+
+test('a repo verified at its patch is offered no run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], verification: [{ repo: 'a', state: 'verified' }] })
+  assert.ok(!commands(out).some(c => /rig check/.test(c)))
+})
+
+test('a branch nobody has written on is offered no run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], verification: [{ repo: 'a', state: 'unverified' }] })
+  assert.ok(!commands(out).some(c => /rig check/.test(c)))
 })
 
 test('uncommitted changes are named before anything that would build on them', () => {
@@ -53,6 +157,38 @@ test('unpushed commits are offered a push, and not also a pull request', () => {
   })
   assert.match(says(out), /commits that are not pushed/)
   assert.doesNotMatch(says(out), /no PR open/, 'one branch state, one offer')
+})
+
+test('the push it offers names the branch, since a bare push goes to the base (#259)', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
+    repos: [repo('a', { unpushed: 2, on: 'feat/x' }), repo('b', { unpushed: 1, on: 'feat/x' }), repo('c', { unpushed: 1, on: 'feat/x-stage' })],
+  })
+  assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x', 'git push origin feat/x-stage'])
+})
+
+test('a worktree switched off this work\'s branches is offered no push, so the base is never pushed to by name', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: 'main' })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
+})
+
+test('a declared stage\'s branch is offered its push', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, stages: [{ branch: 'feat/x-stage' }] }),
+    repos: [repo('a', { unpushed: 1, on: 'feat/x-stage' })],
+  })
+  assert.deepEqual(out.find(o => /not pushed/.test(o.says)).command, ['git push origin feat/x-stage'])
+})
+
+test('a detached HEAD with unpushed commits is named, and offered no push it would not make', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a', { unpushed: 1, on: null })],
+  })
+  assert.equal(out.find(o => /a has commits that are not pushed/.test(o.says)).command, null)
 })
 
 test('a branch ahead of its base but wholly on the remote is not offered a push (#192)', () => {
@@ -180,6 +316,45 @@ test('a work with stages is told which one is next, and what it delivers', () =>
   assert.match(says(out), /stage 2 of 2: feat\/two — the endpoints \(a — up for review\)/)
 })
 
+test('the stages above the frontier are named as waiting on it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [
+      stage('feat/one', { landed: true, started: true, repos: ['a'] }),
+      stage('feat/two', { started: true, repos: ['a'], open: true }),
+      stage('feat/three', { started: true, repos: ['a'], open: true }),
+      stage('feat/four', { withdrawn: { dropped: 'not worth it' } }),
+      stage('feat/five'),
+    ],
+  })
+  const frontier = out.find(o => /stage 2 of 5/.test(o.says))
+  assert.match(frontier.says, / — waiting on it: feat\/three, feat\/five$/)
+})
+
+test('a stage whose place is a guess, or whose PR GitHub would not say, is not called waiting', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [
+      stage('feat/one', { started: true, repos: ['a'], open: true }),
+      stage('feat/two', { started: true, repos: ['a'], adrift: true }),
+      stage('feat/three', { prUnknown: ['a'] }),
+      stage('feat/four'),
+    ],
+  })
+  assert.match(out.find(o => /stage 1 of 4/.test(o.says)).says, / — waiting on it: feat\/four$/)
+})
+
+test('the last stage left has nothing waiting on it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT }),
+    repos: [repo('a')],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] }), stage('feat/two', { started: true, repos: ['a'], open: true })],
+  })
+  assert.doesNotMatch(says(out), /waiting on it/)
+})
+
 test('a stage nobody has cut yet says so rather than claiming progress', () => {
   const out = nextFor({
     work: work({ repos: attached('a'), designedAt: AT }),
@@ -196,6 +371,18 @@ test('every stage in makes the work branch the thing that is left', () => {
     stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
   })
   assert.match(says(out), /every stage is in — the work branch is what is left to land/)
+})
+
+test('a branch whose PR lookup failed is never said to have no PR open', () => {
+  // gh signed out over an open PR: offering `rig pr` would be a command that refuses, and "no
+  // PR open" a claim nobody checked (decision 169).
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [repo('a', { pushed: true, prUnknown: 'gh is not authenticated' }), repo('b', { prUnknown: 'gh is not authenticated' })],
+    bumps: [{ repo: 'a', release: 'a minor release (the branch prefix `feat/`)' }],
+  })
+  assert.doesNotMatch(says(out), /no PR open|would ask for|nothing has been written/)
+  assert.ok(!commands(out).includes('rig pr'))
 })
 
 test('which release a PR would ask for is said once, beside the offer that names its repo (#228)', () => {
@@ -293,7 +480,7 @@ test('once the stages are replayed here, only the push is offered, and not a pla
     replaced: [{ repo: 'a', branch: 'feat/one', head: HEAD, carriers: ['feat/two'], rebased: true, behind: ['feat/two'], sameTree: true }],
   })
   assert.ok(commands(out).some(c => String(c) === 'git push --force-with-lease origin feat/two'))
-  assert.ok(!commands(out).includes('git push'))
+  assert.ok(!out.some(o => /commits that are not pushed/.test(o.says)), 'no plain push beside it')
 })
 
 test('a squash that is not the stage as it stood is named, and no command is offered for it', () => {
@@ -331,6 +518,14 @@ test('it only ever offers: nothing it says is a warning or a reproach', () => {
     { work: work({ repos: attached('a') }), repos: [repo('a')], directionTodo: true },
     { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { dirty: 2, unpushed: 1 })] },
     { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT }), repos: [repo('a'), repo('b'), repo('c')] },
+    { work: work({ repos: attached('a'), stops: [] }), repos: [repo('a')] },
+    { work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], handoffAt: AT, lastCommitAt: null },
+    { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 3 }] },
+    { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 0 }] },
+    { work: work({ repos: attached('a', 'b', 'c'), designedAt: AT, adversarial: true, stops: [], agentDecided: ['design'] }), repos: [repo('a'), repo('b'), repo('c')] },
+    { work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [repo('a', { pushed: true }), repo('b', { pushed: true })], verification: [{ repo: 'a', state: 'stale' }, { repo: 'b', state: 'unverified' }] },
+    { work: work({ repos: attached('a', 'b', 'c'), stops: [] }), repos: [repo('a'), repo('b'), repo('c')] },
+    { work: work({ repos: attached('a'), designedAt: AT, adversarial: true, agentDecided: ['repos', 'design'] }), repos: [repo('a')] },
     {
       work: work({ repos: attached('a'), designedAt: AT }),
       repos: [repo('a', { merged: true, pr: { number: 1, state: 'MERGED' } })],
@@ -553,6 +748,102 @@ test('the lesson review is offered, never demanded', () => {
   assert.doesNotMatch(says(out), /should|must|need to|failed/i)
 })
 
+// ------------------------------------------------------------- the outcome
+
+// What landed and why it was worth doing, asked once there is something landed to say it of.
+
+const OUTCOME = 'rig save --outcome "…"'
+
+test('a work whose PRs have all merged is offered the outcome', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.ok(commands(out).includes(OUTCOME))
+})
+
+test('a work with a PR still to merge is not asked its outcome', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [landed(), repo('b', { pr: { number: 2, state: 'OPEN' } })] })
+  assert.ok(!commands(out).includes(OUTCOME))
+})
+
+test('a recorded outcome is not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, outcome: { text: 'It landed.', at: AT } }), repos: [landed()] })
+  assert.ok(!commands(out).includes(OUTCOME))
+})
+
+test('the outcome offer names the skill that drafts it, while the lesson review is still to run', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()] })
+  assert.match(out.find(o => o.command === OUTCOME).says, /the rig-learn skill drafts it/)
+})
+
+test('once the lesson review has run, the outcome offer names the digest skill instead', () => {
+  // The review usually runs while a PR is still open, before there is an outcome to draft.
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
+  const says = out.find(o => o.command === OUTCOME).says
+  assert.doesNotMatch(says, /rig-learn/)
+  assert.match(says, /the rig-digest skill drafts it/)
+})
+
+test('the outcome is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, learnedAt: AT }), repos: [landed()] })
+  const offer = out.find(o => o.command === OUTCOME)
+  assert.doesNotMatch(offer.says, /should|must|need to|missing/i)
+})
+
+// ------------------------------------------------------------- the user docs
+
+// Kept true once the work has landed and been seen working where it was deployed: offered for
+// a work whose repos say where their user docs live, and recorded like the lesson review.
+
+const DOCUMENTED = 'rig save -m "user docs updated" --documented'
+const docsAt = (...targets) => [{ repo: 'a', targets }]
+
+test('a landed work whose repo has a docs target is offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: docsAt('docs/guide.md') })
+  const offer = out.find(o => o.command === DOCUMENTED)
+  assert.ok(offer, commands(out).join(', '))
+  assert.match(offer.says, /the rig-docs skill drafts the edit/)
+  assert.match(offer.says, /a: `docs\/guide\.md`/, 'and says where the docs live')
+})
+
+test('a work with a PR still to merge is not offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a', 'b'), designedAt: AT }), repos: [landed(), repo('b', { pr: { number: 2, state: 'OPEN' } })], docs: docsAt('docs/') })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('recorded docs are not offered again', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT, documentedAt: AT }), repos: [landed()], docs: docsAt('docs/') })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('a work none of whose repos has a docs target is not offered the docs edit', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: [{ repo: 'a', targets: [] }] })
+  assert.ok(!commands(out).includes(DOCUMENTED))
+})
+
+test('the docs offer names an attached repo with no docs target, with where to say it', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [landed(), repo('b', { merged: true, pr: { number: 2, state: 'MERGED' } })],
+    docs: [{ repo: 'a', targets: ['docs/'] }, { repo: 'b', targets: [] }],
+  })
+  assert.match(out.find(o => o.command === DOCUMENTED).says, /b has no docs target — `docs:` in its catalogue entry \(`rig catalog b` names the file\)/)
+})
+
+test('a repo with no catalogue entry at all is pointed at where its entry would go', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT }),
+    repos: [landed(), repo('b', { merged: true, pr: { number: 2, state: 'MERGED' } })],
+    docs: [{ repo: 'a', targets: ['docs/'] }, { repo: 'b', targets: [], missing: 'catalog/acme/b.md' }],
+  })
+  const says = out.find(o => o.command === DOCUMENTED).says
+  assert.match(says, /b has no catalogue entry — write one at `catalog\/acme\/b\.md`, with `docs:`/)
+  assert.doesNotMatch(says, /rig catalog b/, 'a command that would only say there is no entry')
+})
+
+test('the docs edit is offered, never demanded', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [landed()], docs: docsAt('docs/') })
+  assert.doesNotMatch(out.find(o => o.command === DOCUMENTED).says, /should|must|need to|missing/i)
+})
+
 test('a worktree not on this machine is offered the restore, before anything else', () => {
   const out = nextFor({
     work: work({ repos: attached('a', 'b') }),
@@ -589,4 +880,241 @@ test('open stage PRs that are not a GitHub stack are offered rig stage --link', 
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a', { pushed: true })], unstacked: ['a'] })
   assert.match(says(out), /a: the open stage PRs are not a GitHub stack/)
   assert.ok(commands(out).includes('rig stage --link'))
+})
+
+// ------------------------------------------------------------- after the PR is open
+
+// The flow once a pull request is up: resolve the review already on it, then the adversarial
+// review if the design chose one, then hand the PR to a human. Threads are derived from GitHub;
+// the adversarial choice and its review are recorded, because nothing on GitHub can say either.
+const reviewing = (over = {}) => ({
+  work: work({ repos: attached('a'), designedAt: AT, ...over }),
+  repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true })],
+})
+
+test('an open PR with unresolved review threads is offered the review, with no command', () => {
+  const out = nextFor({ ...reviewing(), reviews: [{ repo: 'a', unresolved: 2 }] })
+  const resolve = out.find(o => /unresolved review thread/.test(o.says))
+  assert.match(resolve.says, /a: 2 unresolved review threads/)
+  assert.equal(resolve.command, null)
+})
+
+test('a work that chose an adversarial review is offered it once no thread is unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.match(says(out), /adversarial review/)
+  assert.ok(commands(out).includes('rig save -m "adversarial review" --reviewed'))
+})
+
+test('the adversarial review waits while the review already on the PR is unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: 1 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a work that declined the adversarial review is never offered one', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a work designed before the choice existed is not offered an adversarial review', () => {
+  const out = nextFor({ ...reviewing(), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('a recorded adversarial review is not offered again, and the PR is offered to a human', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true, reviewedAt: AT }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+  assert.match(says(out), /ready for a human reviewer/)
+})
+
+test('a PR is offered to a human once its threads are resolved and no adversarial review is pending', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  const handover = out.find(o => /ready for a human reviewer/.test(o.says))
+  assert.equal(handover.command, null, 'who reviews is the human\'s call, and rig takes no outward-facing step')
+})
+
+test('the hand-over waits for unresolved threads, a pending adversarial review, and unpushed commits', () => {
+  for (const [why, input] of [
+    ['threads', { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 1 }] }],
+    ['adversarial', { ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: 0 }] }],
+    ['unpushed', { ...reviewing({ adversarial: false }), repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, unpushed: 1 })], reviews: [{ repo: 'a', unresolved: 0 }] }],
+    ['dirty', { ...reviewing({ adversarial: false }), repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, dirty: 1 })], reviews: [{ repo: 'a', unresolved: 0 }] }],
+  ]) assert.doesNotMatch(says(nextFor(input)), /ready for a human reviewer/, why)
+})
+
+test('the hand-over is not offered while GitHub would not say whether threads are unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: null }] })
+  assert.doesNotMatch(says(out), /ready for a human reviewer/)
+})
+
+test('nothing about the review is offered before a PR is open, or once every PR merged', () => {
+  const building = nextFor({ work: work({ repos: attached('a'), designedAt: AT, adversarial: true }), repos: [repo('a', { pushed: true })] })
+  assert.doesNotMatch(says(building), /adversarial review|human reviewer/)
+  const landing = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, adversarial: true }),
+    repos: [repo('a', { merged: true, pr: { number: 4, state: 'MERGED' } })],
+  })
+  assert.doesNotMatch(says(landing), /adversarial review|human reviewer/)
+})
+
+test('the review offers come in the order the flow runs: threads, adversarial, hand-over', () => {
+  // One at a time, each waiting for the one before it.
+  const step = input => nextFor(input).filter(o => /review thread|adversarial review|human reviewer/.test(o.says)).map(o => o.says)
+  const threads = step({ ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: 3 }] })
+  assert.equal(threads.length, 1)
+  assert.match(threads[0], /review threads/)
+  const adversarial = step({ ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.equal(adversarial.length, 1)
+  assert.match(adversarial[0], /adversarial review/)
+  const handover = step({ ...reviewing({ adversarial: true, reviewedAt: AT }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.equal(handover.length, 1)
+  assert.match(handover[0], /human reviewer/)
+})
+
+test('a PR closed without merging is neither reviewed nor handed over', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, adversarial: true }),
+    repos: [repo('a', { pr: { number: 4, state: 'CLOSED' }, pushed: true })],
+  })
+  assert.doesNotMatch(says(out), /adversarial review|human reviewer/)
+})
+
+test('one repo merged beside one never opened has no PR to hand over', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT, adversarial: false }),
+    repos: [repo('a', { merged: true, pr: { number: 4, state: 'MERGED' } }), repo('b')],
+  })
+  assert.doesNotMatch(says(out), /human reviewer/)
+})
+
+test('the adversarial review waits while GitHub would not say whether threads are unresolved', () => {
+  const out = nextFor({ ...reviewing({ adversarial: true }), reviews: [{ repo: 'a', unresolved: null }] })
+  assert.doesNotMatch(says(out), /adversarial review/)
+})
+
+test('the hand-over waits for the design gate, which carries the review choice', () => {
+  const input = reviewing()
+  delete input.work.designedAt
+  const out = nextFor({ ...input, reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.doesNotMatch(says(out), /human reviewer/)
+})
+
+test('a design agreed again after the adversarial review asks for another', () => {
+  const out = nextFor({
+    ...reviewing({ adversarial: true, reviewedAt: '2026-09-01T00:00:00.000Z', designedAt: '2026-09-10T00:00:00.000Z' }),
+    reviews: [{ repo: 'a', unresolved: 0 }],
+  })
+  assert.match(says(out), /the design chose an adversarial review/)
+  assert.doesNotMatch(says(out), /human reviewer/)
+})
+
+test('the hand-over waits while a worktree is missing or git could not count what is unpushed', () => {
+  for (const [why, over] of [['missing', { missing: true, unpushed: null }], ['uncounted', { unpushed: null }]]) {
+    const out = nextFor({
+      ...reviewing({ adversarial: false }),
+      repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, ...over })],
+      reviews: [{ repo: 'a', unresolved: 0 }],
+    })
+    assert.doesNotMatch(says(out), /human reviewer/, why)
+  }
+})
+
+test('the hand-over waits for the PR\'s checks to go green', () => {
+  for (const checks of ['PENDING', 'EXPECTED', 'FAILURE', 'ERROR']) {
+    const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks }] })
+    assert.doesNotMatch(says(out), /human reviewer/, checks)
+  }
+  const green = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'SUCCESS' }] })
+  assert.match(says(green), /human reviewer/)
+})
+
+test('failing checks on an open PR are named, with no command', () => {
+  for (const checks of ['FAILURE', 'ERROR']) {
+    const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks }] })
+    const failing = out.find(o => /checks are failing/.test(o.says))
+    assert.match(failing.says, /^a: the PR's checks are failing/, checks)
+    assert.equal(failing.command, null)
+  }
+})
+
+test('a failing check on a PR whose base moved is still the PR\'s to fix, with the moved base named as a possible cause', () => {
+  const input = reviewing({ adversarial: false })
+  input.repos = [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, on: 'feat/x' })]
+  const out = nextFor({ ...input, reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 3 }] })
+  const failing = out.find(o => /checks are failing/.test(o.says))
+  assert.match(failing.says, /^a: the PR's checks are failing — fix them before it is handed over; main has 3 commits the branch does not, so a failure in code the diff never touched may be a stale base: merge it in first, then push$/)
+  assert.deepEqual(failing.command, ['git merge origin/main', 'git push origin feat/x'])
+})
+
+test('the merge is offered as a command only on the work branch, so it never lands on a stage', () => {
+  const input = reviewing({ adversarial: false })
+  input.repos = [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, on: 'feat/x-stage' })]
+  const out = nextFor({ ...input, reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 1 }] })
+  const failing = out.find(o => /checks are failing/.test(o.says))
+  assert.match(failing.says, /merge it into feat\/x first, then push$/)
+  assert.equal(failing.command, null)
+})
+
+test('a count of the base that could not be made names no stale base', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: null }] })
+  assert.doesNotMatch(says(out), /stale base/)
+})
+
+test('a failing check on a PR whose base has not moved is still the PR\'s to fix', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks: 'FAILURE', base: 'main', behind: 0 }] })
+  assert.match(says(out), /a: the PR's checks are failing — fix them before it is handed over/)
+  assert.doesNotMatch(says(out), /stale base/)
+})
+
+test('checks that have not reported are named, so the wait is never silent', () => {
+  for (const checks of ['PENDING', 'EXPECTED']) {
+    const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0, checks }] })
+    assert.match(says(out), new RegExp(`a \\(${checks}\\): the PR's checks have not all reported`), checks)
+  }
+})
+
+test('the hand-over waits for a worktree with commits on a stage that landed', () => {
+  const out = nextFor({
+    work: work({ repos: attached('a'), designedAt: AT, adversarial: false }),
+    repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true, on: 'feat/one', unpushed: 3 })],
+    stack: [stage('feat/one', { landed: true, started: true, repos: ['a'] })],
+    reviews: [{ repo: 'a', unresolved: 0, checks: 'SUCCESS' }],
+  })
+  assert.match(says(out), /move it to the work branch/)
+  assert.doesNotMatch(says(out), /human reviewer/)
+})
+
+test('the hand-over waits for a repo pushed with no PR, and for a stage still to come', () => {
+  const awaiting = nextFor({
+    work: work({ repos: attached('a', 'b'), designedAt: AT, adversarial: false }),
+    repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true }), repo('b', { pushed: true })],
+    reviews: [{ repo: 'a', unresolved: 0 }],
+  })
+  assert.doesNotMatch(says(awaiting), /human reviewer/, 'a pushed with no PR')
+  const staged = nextFor({
+    ...reviewing({ adversarial: false }),
+    stack: [stage('feat/one', { started: true, repos: ['a'] })],
+    reviews: [{ repo: 'a', unresolved: 0 }],
+  })
+  assert.doesNotMatch(says(staged), /human reviewer/, 'a stage still to come')
+})
+
+test('a sibling PR closed without merging holds the hand-over, and is never asked about', () => {
+  const input = {
+    work: work({ repos: attached('a', 'b'), designedAt: AT, adversarial: true }),
+    repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true }), repo('b', { pr: { number: 5, state: 'CLOSED' }, pushed: true })],
+    reviews: [{ repo: 'a', unresolved: 0 }],
+  }
+  assert.match(says(nextFor(input)), /the design chose an adversarial review/, 'the open PR alone decides the review')
+  input.work.reviewedAt = AT
+  assert.doesNotMatch(says(nextFor(input)), /human reviewer/)
+})
+
+test('review and design dates are compared as instants, and an unreadable review is no review', () => {
+  const later = nextFor({
+    ...reviewing({ adversarial: true, designedAt: '2026-09-10T12:00:00+02:00', reviewedAt: '2026-09-10T11:00:00Z' }),
+    reviews: [{ repo: 'a', unresolved: 0 }],
+  })
+  assert.doesNotMatch(says(later), /adversarial review/, '11:00Z is after 10:00Z')
+  const garbage = nextFor({ ...reviewing({ adversarial: true, reviewedAt: 'yes' }), reviews: [{ repo: 'a', unresolved: 0 }] })
+  assert.match(says(garbage), /the design chose an adversarial review/)
 })

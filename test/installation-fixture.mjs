@@ -54,7 +54,7 @@ function build ({ tmp, origin, install, dataRoot, workRoot, env, git }) {
   // the harness's runner will not build. `cwd` is the temp directory for the same reason the
   // runner defaults to it: rig resolves its data root partly from the folder it runs in, and
   // this suite is itself run from inside a rig work folder often enough that inheriting would
-  // let that folder's `.rig/data` name a root the temp installation does not configure.
+  // look that folder's work up in a temp installation that does not hold it.
   const spawnRig = (args, spawnEnv = env) =>
     spawnSync(process.execPath, [path.join(install, 'bin', 'rig.mjs'), ...args],
       { encoding: 'utf8', env: spawnEnv, cwd: tmp })

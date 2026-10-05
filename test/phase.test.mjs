@@ -26,7 +26,7 @@ test('active phases are present participles and terminal ones past', () => {
 })
 
 test('every gate names the field it is stored in', () => {
-  assert.deepEqual(GATES, { designed: 'designedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
+  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
 })
 
 // ---------------------------------------------------------------- deriving the phase
@@ -112,9 +112,11 @@ test('an abandoned work says so and keeps its design gate', () => {
 })
 
 test('the gates passed are listed with their dates, in lifecycle order', () => {
-  assert.deepEqual(gatesOf(work({ designedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
+  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, documentedAt: AT, abandonedAt: AT, closedAt: AT })), [
     { gate: 'designed', at: AT },
+    { gate: 'reviewed', at: AT },
     { gate: 'learned', at: AT },
+    { gate: 'documented', at: AT },
     { gate: 'abandoned', at: AT },
     { gate: 'closed', at: AT },
   ])
@@ -166,6 +168,19 @@ test('a design gate dated after the close is a contradiction', () => {
   assert.match(found[0], /design gate/)
 })
 
+test('a review choice that is neither true nor false is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, adversarial: 'true' }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /`adversarial` is "true", which is neither true nor false/)
+  assert.deepEqual(contradictions(work({ designedAt: AT, adversarial: false }), []), [])
+})
+
+test('an adversarial review dated after the close is a contradiction', () => {
+  const found = contradictions(work({ designedAt: AT, reviewedAt: '2026-09-20T00:00:00.000Z', closedAt: AT }), [])
+  assert.equal(found.length, 1)
+  assert.match(found[0], /adversarial review \(2026-09-20\) is dated after the work stopped/)
+})
+
 test('an unparseable gate date is a contradiction', () => {
   const found = contradictions(work({ designedAt: 'last tuesday' }), [])
   assert.equal(found.length, 1)
@@ -176,4 +191,9 @@ test('omissions are not contradictions', () => {
   // A work under review with no design gate recorded is the commonest record there is.
   // `rig next` offers the gate; `doctor` says nothing, or nobody reads `doctor`.
   assert.deepEqual(contradictions(work({ repos: [{ repo: 'r' }] }), [open(1)]), [])
+})
+
+test('a design gate the agent decided is a design gate: the stops and the marks do not move the phase', () => {
+  const by = over => phaseOf(work({ repos: [{ repo: 'r' }], designedAt: AT, ...over }), [repo()])
+  assert.equal(by({ stops: [], agentDecided: ['repos', 'design'] }), by({}))
 })

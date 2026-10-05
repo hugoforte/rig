@@ -23,9 +23,12 @@ test('gh adapter: createIssue reads the issue number from the URL gh prints', ()
   assert.deepEqual(calls[0], ['issue', 'create', '--repo', 'acme/platform', '--title', 'A title', '--body', 'A body'])
 })
 
-test('gh adapter: createIssue fails loudly when no issue URL is printed', () => {
+test('gh adapter: createIssue says the issue may have been created when its answer has no issue URL', () => {
+  // gh exited 0, so the issue exists whether or not its answer can be read, and a retry would
+  // make a second one (DESIGN.md decision 172, the twin of 150).
   const { github } = canned(() => 'Creating issue in acme/platform\n')
-  assert.throws(() => github.createIssue('acme/platform', 't', 'b'), /could not read the issue number/)
+  assert.throws(() => github.createIssue('acme/platform', 'A title', 'b'),
+    /gh exited 0 but rig could not read the new issue's number from its answer, so the issue may have been created\. Search acme\/platform for "A title" before retrying, then record it on this work with `rig ticket acme\/platform#<n> --work <id>`\.\ngh's answer:\nCreating issue in acme\/platform/)
 })
 
 test('gh adapter: createIssue fails with gh\'s own error when gh fails', () => {
@@ -48,9 +51,9 @@ test('gh adapter: labels lists the names of every label a repo has, across pages
   assert.deepEqual(calls[0], ['api', 'repos/acme/platform/labels', '--paginate', '--jq', '.[].name'])
 })
 
-test('gh adapter: a repo with no labels has none, and one gh cannot list for is unknown', () => {
+test('gh adapter: a repo with no labels has none, and one gh cannot list for throws', () => {
   assert.deepEqual(canned(() => '').github.labels('acme', 'platform'), [])
-  assert.equal(canned(() => ({ code: 1, err: 'HTTP 404: Not Found' })).github.labels('acme', 'platform'), null)
+  assert.throws(() => canned(() => ({ code: 1, err: 'gh: Bad credentials (HTTP 401)' })).github.labels('acme', 'platform'), GithubError)
 })
 
 test("gh adapter: editPr rewrites a PR's title and body by number", () => {
@@ -97,9 +100,34 @@ test('gh adapter: prTimeline asks the PR, not the branch, and takes commits and 
   assert.match(calls[0][8], /select\(\.submittedAt != null\)/, 'a review still being written is not a first look')
 })
 
-test('gh adapter: prTimeline is null when gh cannot answer', () => {
-  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prTimeline('acme', 'platform', 12), null)
+test('gh adapter: prTimeline throws when gh could not answer, and is null when gh answered nothing', () => {
+  const { github } = canned(() => ({ code: 1, err: 'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)' }))
+  assert.throws(() => github.prTimeline('acme', 'platform', 12), e => e instanceof GithubError && /Could not resolve to a PullRequest/.test(e.message))
   assert.equal(canned(() => '').github.prTimeline('acme', 'platform', 12), null)
+})
+
+test('gh adapter: prReview adds up the unresolved threads on every page and reads the checks off the first', () => {
+  const { calls, github } = canned(() => '2 PENDING\n0 PENDING\n1 PENDING\n')
+  assert.deepEqual(github.prReview('acme', 'platform', 12), { unresolved: 3, checks: 'PENDING' })
+  assert.deepEqual(calls[0].slice(0, 3), ['api', 'graphql', '--paginate'])
+  assert.match(calls[0].find(a => a.startsWith('query=')), /\$endCursor: String/, 'pagination walks the cursor')
+  assert.match(calls[0].find(a => a.startsWith('query=')), /statusCheckRollup \{ state \}/)
+})
+
+test('gh adapter: prReview sends owner and name as strings, so a repo named 2048 is not a number', () => {
+  const { calls, github } = canned(() => '0 SUCCESS\n')
+  github.prReview('acme', '2048', 12)
+  const flagOf = value => calls[0][calls[0].indexOf(value) - 1]
+  assert.equal(flagOf('owner=acme'), '-f')
+  assert.equal(flagOf('name=2048'), '-f')
+  assert.equal(flagOf('number=12'), '-F', 'the number stays typed: the query takes an Int!')
+})
+
+test('gh adapter: prReview is null when gh cannot answer, and says no checks where none are set up', () => {
+  assert.equal(canned(() => ({ code: 1, err: 'no such PR' })).github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => 'oops').github.prReview('acme', 'platform', 12), null)
+  assert.equal(canned(() => '3\n').github.prReview('acme', 'platform', 12), null, 'a line without its rollup is not read')
+  assert.deepEqual(canned(() => '0 NONE\n').github.prReview('acme', 'platform', 12), { unresolved: 0, checks: null })
 })
 
 test('gh adapter: prForBranch is null when there is no PR', () => {
@@ -107,9 +135,13 @@ test('gh adapter: prForBranch is null when there is no PR', () => {
   assert.equal(github.prForBranch('acme', 'platform', 'feat/x'), null)
 })
 
-test('gh adapter: prForBranch is null when gh cannot answer', () => {
-  const { github } = canned(() => ({ code: 1, err: 'HTTP 401: Bad credentials' }))
-  assert.equal(github.prForBranch('acme', 'platform', 'feat/x'), null)
+test('gh adapter: prForBranch throws when gh exits non-zero', () => {
+  // A branch with no PR is `[]` and exit 0; anything non-zero is gh failing to answer, and must
+  // never read as "no PR" (DESIGN.md decision 169).
+  for (const err of ['HTTP 401: Bad credentials (https://api.github.com/graphql)', 'Post "https://api.github.com/graphql": dial tcp: connection refused']) {
+    const { github } = canned(() => ({ code: 1, err }))
+    assert.throws(() => github.prForBranch('acme', 'platform', 'feat/x'), e => e instanceof GithubError && e.message.includes(err))
+  }
 })
 
 test('gh adapter: prForBranch fails as a GithubError, not a TypeError, when gh prints a non-array', () => {
@@ -129,9 +161,14 @@ test('gh adapter: a repo GitHub names no visibility for reads as unknown, not as
   assert.equal(github.repo('acme', 'platform').visibility, null)
 })
 
-test('gh adapter: repo is null when GitHub has no such repo', () => {
-  const { github } = canned(() => ({ code: 1, err: 'HTTP 404: Not Found' }))
-  assert.equal(github.repo('acme', 'nope'), null)
+test('gh adapter: repo is null on HTTP 404 and throws when gh could not answer', () => {
+  // The wording gh 2.83 gives for each, captured 2026-10-01.
+  assert.equal(canned(() => ({ code: 1, err: 'gh: Not Found (HTTP 404)' })).github.repo('acme', 'nope'), null)
+  for (const r of [
+    { code: 1, err: 'gh: Bad credentials (HTTP 401)' },
+    { code: 4, err: 'To get started with GitHub CLI, please run:  gh auth login' },
+    { code: 1, err: 'Get "https://api.github.com/repos/acme/nope": proxyconnect tcp: dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it.' },
+  ]) assert.throws(() => canned(() => r).github.repo('acme', 'nope'), e => e instanceof GithubError && e.message.includes(r.err))
 })
 
 test('gh adapter: auth is "missing" when gh cannot be spawned', () => {
@@ -159,9 +196,20 @@ test('gh adapter: a failed write surfaces the whole of gh\'s stderr, not just it
   assert.throws(() => github.closeIssue('acme/platform', 3), /gh issue close: Cloning into/)
 })
 
-test('gh adapter: repoExists follows gh repo view\'s exit code', () => {
-  assert.equal(canned(() => '{"name":"rig-data"}').github.repoExists('acme/rig-data'), true)
-  assert.equal(canned(() => ({ code: 1, err: 'Could not resolve' })).github.repoExists('acme/rig-data'), false)
+test('gh adapter: repoExists is false on HTTP 404 and throws when gh could not answer', () => {
+  const { calls, github } = canned(() => 'rig-data')
+  assert.equal(github.repoExists('acme/rig-data'), true)
+  assert.deepEqual(calls[0], ['api', 'repos/acme/rig-data', '--jq', '.name'])
+  assert.equal(canned(() => ({ code: 1, err: 'gh: Not Found (HTTP 404)' })).github.repoExists('acme/rig-data'), false)
+  assert.throws(() => canned(() => ({ code: 4, err: 'To get started with GitHub CLI, please run:  gh auth login' })).github.repoExists('acme/rig-data'), GithubError)
+})
+
+test('gh adapter: prsOnto and pullsForCommit throw when gh could not answer, and answer none only when gh says so', () => {
+  const { github } = canned(() => ({ code: 1, err: 'gh: Bad credentials (HTTP 401)' }))
+  assert.throws(() => github.prsOnto('acme', 'platform', 'feat/x'), GithubError)
+  assert.throws(() => github.pullsForCommit('acme', 'platform', 'abc123'), GithubError)
+  assert.deepEqual(canned(() => '[]').github.prsOnto('acme', 'platform', 'feat/x'), [])
+  assert.deepEqual(canned(() => '[]').github.pullsForCommit('acme', 'platform', 'abc123'), [])
 })
 
 test('gh adapter: clone and createRepo pass the right argv and fail on error', () => {
@@ -231,6 +279,18 @@ test('in-memory adapter: prTimeline on a PR with no reviews dates the commit and
     { firstCommitAt: '2026-01-02T00:00:00Z', firstReviewAt: null, approvedAt: null })
 })
 
+test('in-memory adapter: prReview counts the fixture threads not resolved, beside its checks', () => {
+  const state = { repos: { 'acme/platform': { prs: [
+    { branch: 'feat/x', number: 12, checks: 'FAILURE', reviewThreads: [{ resolved: false }, { resolved: true }, { resolved: false }] },
+    { branch: 'feat/y', number: 13 },
+    { branch: 'feat/z', number: 14, reviewUnknown: true },
+  ] } } }
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 12), { unresolved: 2, checks: 'FAILURE' })
+  assert.deepEqual(githubInMemory(state).prReview('acme', 'platform', 13), { unresolved: 0, checks: null }, 'no review on it, no checks set up')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 14), null, 'GitHub would not say')
+  assert.equal(githubInMemory(state).prReview('acme', 'platform', 99), null, 'no such PR')
+})
+
 test('in-memory adapter: editPr rewrites the title and body prForBranch then reads', () => {
   const github = githubInMemory({ repos: { 'acme/platform': { prs: [{ branch: 'feat/x', number: 12, state: 'OPEN', title: 'Old', body: 'old' }] } } })
   github.editPr('acme', 'platform', 12, { title: 'New', body: 'new' })
@@ -256,7 +316,7 @@ test('in-memory adapter: labels answers what a fixture gives a repo and its PRs'
   const github = githubInMemory(state)
   assert.deepEqual(github.labels('acme', 'platform'), ['release:patch'])
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x').labels, ['release:minor'])
-  assert.equal(githubInMemory(world()).labels('acme', 'platform'), null, 'a fixture that gives none is one GitHub would not list')
+  assert.throws(() => githubInMemory(world()).labels('acme', 'platform'), GithubError, 'a fixture that gives none is one GitHub would not list')
 })
 
 test('in-memory adapter: prForBranch carries the base a seeded PR lands on', () => {
@@ -314,11 +374,46 @@ test('in-memory adapter: with gh "missing", every call but auth fails as the rea
   assert.throws(() => github.repo('acme', 'platform'), /gh not found on PATH/)
 })
 
-test('in-memory adapter: when "unauthenticated", lookups answer null and writes fail, as with the real gh', () => {
+test('in-memory adapter: when "unauthenticated", lookups and writes throw, as with the real gh', () => {
   const github = githubInMemory({ ...world(), auth: 'unauthenticated' })
-  assert.equal(github.repo('acme', 'platform'), null)
-  assert.equal(github.repoExists('acme/Platform'), false)
-  assert.throws(() => github.createIssue('acme/Platform', 't', 'b'), /not authenticated/)
+  for (const call of [
+    () => github.repo('acme', 'platform'),
+    () => github.repoExists('acme/Platform'),
+    () => github.prForBranch('acme', 'Platform', 'feat/x'),
+    () => github.prTimeline('acme', 'Platform', 12),
+    () => github.labels('acme', 'Platform'),
+    () => github.stacks('acme', 'Platform'),
+    () => github.prsOnto('acme', 'Platform', 'main'),
+    () => github.pullsForCommit('acme', 'Platform', 'abc'),
+    () => github.createIssue('acme/Platform', 't', 'b'),
+  ]) assert.throws(call, e => e instanceof GithubError && /not authenticated/.test(e.message))
+})
+
+test('in-memory adapter: one branch\'s lookup fails while the rest answer', () => {
+  const state = world()
+  state.repos['acme/Platform'].branchLookupFails = { 'feat/x': 'HTTP 502: Bad Gateway' }
+  state.repos['acme/Platform'].prs.push({ branch: 'feat/y', number: 13, state: 'OPEN', url: 'u' })
+  const github = githubInMemory(state)
+  assert.throws(() => github.prForBranch('acme', 'Platform', 'feat/x'), e => e instanceof GithubError && /HTTP 502/.test(e.message))
+  assert.equal(github.prForBranch('acme', 'Platform', 'feat/y').number, 13)
+})
+
+test('in-memory adapter: one repo\'s lookups fail while another\'s answer', () => {
+  const state = world()
+  state.repos['acme/Platform'].lookupFails = 'HTTP 403: API rate limit exceeded'
+  state.repos['acme/Other'] = { prs: [{ branch: 'feat/x', number: 1, state: 'OPEN', url: 'u' }] }
+  const github = githubInMemory(state)
+  for (const call of [
+    () => github.repo('acme', 'platform'),
+    () => github.repoExists('acme/Platform'),
+    () => github.prForBranch('acme', 'Platform', 'feat/x'),
+    () => github.prTimeline('acme', 'Platform', 12),
+    () => github.labels('acme', 'Platform'),
+    () => github.stacks('acme', 'Platform'),
+    () => github.prsOnto('acme', 'Platform', 'main'),
+    () => github.pullsForCommit('acme', 'Platform', 'abc'),
+  ]) assert.throws(call, e => e instanceof GithubError && /rate limit/.test(e.message))
+  assert.equal(github.prForBranch('acme', 'Other', 'feat/x').number, 1)
 })
 
 test('in-memory adapter: createRepo makes the repo exist; clone needs it to exist', () => {
@@ -342,9 +437,9 @@ test('gh adapter: stacks reads every stack a repo has from the REST answer, one 
     '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'])
 })
 
-test('gh adapter: a repo with no stacks has none, and one GitHub would not list them for is unknown', () => {
+test('gh adapter: a repo with no stacks has none, and one GitHub would not list them for throws', () => {
   assert.deepEqual(canned(() => '').github.stacks('acme', 'platform'), [])
-  assert.equal(canned(() => ({ code: 1, err: 'HTTP 404: Not Found' })).github.stacks('acme', 'platform'), null)
+  assert.throws(() => canned(() => ({ code: 1, err: 'gh: Not Found (HTTP 404)' })).github.stacks('acme', 'platform'), GithubError)
 })
 
 test('gh adapter: linkStack links pull requests by URL onto the base, for the repo it names', () => {

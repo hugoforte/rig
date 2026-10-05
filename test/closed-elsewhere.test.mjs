@@ -13,7 +13,7 @@ import path from 'node:path'
 import { strip } from './harness.mjs'
 import { billingInstall } from './billing-install.mjs'
 
-const { dataRoot, workRoot, rig, git, gitMust, github, bare, commitWork, seedPr, worktree, cleanup } = billingInstall('rig-closed-elsewhere-')
+const { dataRoot, workRoot, rig, git, gitMust, github, setGithub, bare, commitWork, seedPr, worktree, cleanup } = billingInstall('rig-closed-elsewhere-')
 
 after(cleanup)
 
@@ -24,9 +24,10 @@ const hasBranch = (dir, branch) => git(dir, 'rev-parse', '--verify', '--quiet', 
 // A work that landed here, then was closed on the other machine. Its remote branch is left in
 // place: whatever that close did on GitHub was its own decision, and this machine must not
 // take it again.
-const closedElsewhere = (id, number, { state = 'MERGED', stamp = {} } = {}) => {
+const closedElsewhere = (id, number, { state = 'MERGED', stamp = {}, stage } = {}) => {
   assert.equal(rig(['new', id, '--title', `${id} work`, '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  if (stage) assert.equal(rig(['stage', stage, '--delivers', 'a slice', '--work', id]).code, 0)
   const dest = worktree(id, 'billing')
   commitWork(dest, `${id}: the work`)
   gitMust(dest, 'push', '-q', '-u', 'origin', 'HEAD')
@@ -141,6 +142,22 @@ test('an open PR on a leftover does not refuse the close: it is on GitHub, not o
   const r = rig(['close', '--work', 'still-open'])
   assert.equal(r.code, 0, r.out)
   assert.equal(hasBranch(mirror('billing'), 'feat/still-open-work'), true, 'nothing landed, so the mirror keeps the branch')
+})
+
+test("a leftover whose stage GitHub would not answer for keeps the mirror's branches, and says why", () => {
+  // The clear drops the mirror's copies only when the work is done, and a stage rig could not
+  // ask about may not have landed: keeping them is right, keeping them silently is not.
+  closedElsewhere('flaky', 58, { stage: 'feat/flaky-one' })
+  const state = github()
+  const failing = structuredClone(state)
+  failing.repos['acme/billing'].branchLookupFails = { 'feat/flaky-one': 'HTTP 502: Bad Gateway' }
+  setGithub(failing)
+  const r = rig(['close', '--work', 'flaky'])
+  setGithub(state)
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /kept the mirror's copies of flaky's branches — GitHub would not say whether feat\/flaky-one landed/)
+  assert.match(strip(r.out), /cleared this machine's copy of flaky/)
+  assert.equal(hasBranch(mirror('billing'), 'feat/flaky-work'), true)
 })
 
 test('a close date that is not a string is reported, not a crash', () => {

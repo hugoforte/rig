@@ -5,18 +5,26 @@ description: Review what a rig work taught before it closes, and offer each less
 
 # rig-learn
 
-Read the story of the current work, find what it taught, and offer each lesson a home. Then record the review with `rig save --learned`.
+Read the story of the current work, find what it taught, and offer each lesson a home. Draft its outcome while the story is in hand. Then record the review with `rig save --learned`.
 
 Run it while the worktrees are still on disk, before `rig close`, because a lesson for a repo has to be committed in one. `rig next` offers it once a pull request is open. After a close, only the catalogue, the org doc and the tracker are left to write to. A late review is still worth doing.
 
 ## 1. Read the story
 
-Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with the `--data <root>` `rig close` printed, when another data root keeps a copy of the work. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
+- `notes.tsv` beside them, if there is one: every decision a session took along the way, each with why and a pointer at its evidence. A row whose result is `reverted`, or two rows about one thing, is a lesson looking for its home.
 - Each PR's review threads: `gh pr view <n> --repo <owner/repo> --comments`, and `gh api repos/<owner/repo>/pulls/<n>/comments` for the inline ones. Findings that were fixed are the richest source.
 - Each PR's checks, including failed runs that were re-run: `gh pr checks <n> --repo <owner/repo>`.
 - The commit log on the work branch: `git -C <repo worktree> log --oneline <base>..HEAD`, or `gh pr view <n> --repo <owner/repo> --json commits` once the worktree is gone. Fixups, reverts and "try again" commits mark where something took more than one attempt.
+
+- The sessions that did the work, when this machine keeps them: `rig status --transcripts` prints their paths, one a line, and only the work folder's and its worktrees' own. By the time a correction reaches a commit or a review thread it has been smoothed away; in the session it is still there.
+  - **Read them through subagents**, a few files each, never in this thread: transcripts are large. Each subagent reports the user stepping in ("no, not like that"), a command tried more than once, and an assumption the agent made and later corrected, each with a short quote. Work from those findings, never the raw logs.
+  - **Read no transcript the command did not print.** Another workspace's sessions are other work, and often private.
+  - **Check each session is this work's.** A host names a session's folder by its workspace with every character but a letter or digit made a dash, so two works can share one, such as `D:\w\a\b` and `D:\w\a-b`. Each subagent first reads the working directory the transcript itself records, and drops a session that is not the work folder or one of its worktrees.
+  - Sessions started in a subfolder of a worktree are not among them.
+  - When it prints nothing, carry on without them. It says on stderr where this machine would name them.
 
 A lesson is usually hiding in *this took three attempts*, not in the design.
 
@@ -42,6 +50,8 @@ For every lesson, prefer a machine check over prose, and never add a rule to an 
 2. <…>
 3. <…>
 
+Outcome: <what changed for someone, and why that is good, in a sentence or two>
+
 Say **go** for all of them, or name the numbers you want.
 
 **Repos we touched**
@@ -61,6 +71,7 @@ Say **go** for all of them, or name the numbers you want.
 ```
 
 - **The TL;DR is two or three actions, never more.** They are the lessons most worth keeping, each one a thing you would do on "go". Everything else stays in the detail, where the user can still name it.
+- **The outcome line is the work's outcome**, drafted from the story, the sessions included: what changed for someone and why that is good, in words a person outside the work can read, on one line, with no backticks or `$`. Leave it out when `rig status` already shows an outcome, or while a PR is still to merge. A bare "go" records it with the lessons; an answer naming numbers records it only if it also says "outcome". The user may correct it in their answer.
 - **Every detail line is one line.** What changes, where it lands, and why that home in a clause. If a line needs a paragraph, the lesson is not understood yet.
 - **Omit empty sections**, and name what was left out under **Dropped** so the user can see it was considered.
 
@@ -122,7 +133,9 @@ Later reviews fill the other headings. A skip writes nothing, and the next revie
 Once the lessons have landed, or the user says there are none:
 
 ```bash
-rig save -m "lessons reviewed" --learned
+rig save -m "lessons reviewed" --learned --outcome '…'
 ```
 
-This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone. `rig next` stops offering the review, and `rig close` stops naming it.
+The agreed outcome goes in single quotes in place of `…`, which rig refuses as an outcome. Leave `--outcome` off when none was offered or the user did not agree it.
+
+This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone, and `--data <root>` where `rig close` named one. `rig next` stops offering the review, and `rig close` stops naming it.

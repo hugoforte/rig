@@ -185,6 +185,8 @@ function rootFindings (root) {
 //   localFile         its path
 //   legacyLocalFile   { home } when that path is the one inside the tool tree, else null —
 //                     `home` being where it belongs instead
+//   linkedCopyNeeds   without one, and when rig is running from a work's linked worktree,
+//                     the sentence saying what that copy needs instead; null otherwise
 //   strayOrgKeys      keys of the org half left behind in the machine file
 //   selection         { error } — why no data root could be resolved, or null when one was.
 //                     The only field here that is a *failure* to gather rather than a thing
@@ -210,12 +212,12 @@ function rootFindings (root) {
 //                     `catalogueFreshness` is [{ repo, writtenAt, commits }] — one per
 //                     catalogue entry, `commits` null for an entry nothing could measure
 //   works             every root's, in one list — [{ id, closed, contradictions,
-//                     folderMissing, strays, repos, marker, holders, leftover }]: `marker` is
-//                     the folder's `.rig/data`, null when it has none, `holders` the roots
+//                     folderMissing, strays, repos, holders, leftover }]: `holders` the roots
 //                     that hold the work's record, and `leftover` set only on a closed work
 //                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
-//                     a record that would not read is { id, unreadable } instead,
-//                     `unreadable` the sentence saying why
+//                     a record that would not read is { id, unreadable, holders } instead,
+//                     `unreadable` the sentence saying why. One entry per work that reads,
+//                     beside every copy that would not
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -223,8 +225,10 @@ export function doctorFindings (snap = {}) {
   const out = []
 
   // Nothing else can be asked of an installation that does not exist yet.
+  // A work's own copy of rig is the exception: setting it up would write a second machine file
+  // into the worktree, so it is told how to borrow the installation's instead.
   if (!snap.setUp) {
-    out.push(warn(`not set up — no ${snap.localFile}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`))
+    out.push(warn(snap.linkedCopyNeeds ?? `not set up — no ${snap.localFile}. Run \`rig prompt setup\` and follow it; it ends in one \`rig init\`.`))
     return out
   }
 
@@ -239,6 +243,7 @@ export function doctorFindings (snap = {}) {
   for (const key of snap.strayOrgKeys || []) {
     out.push(warn(`${snap.localFile} has "${key}" — ignored; it lives in rig.json. Remove it.`))
   }
+  if (snap.transcriptsProblem) out.push(warn(`${snap.transcriptsProblem} — no session is found until it is`))
 
   // The two things everything below needs, reported before anything that needs them: doctor
   // used to reach the tool checkout first and die there when git was absent, saying nothing.
@@ -277,7 +282,7 @@ export function doctorFindings (snap = {}) {
     if (snap.gitConfig.symlinks === 'false') out.push(note('core.symlinks=false — by design, rig never symlinks'))
   }
 
-  out.push(check('config file', snap.configFileExists, { bad: `${snap.localFile} missing — run \`rig init\`` }))
+  out.push(check('config file', snap.configFileExists, { ok: snap.localFile, bad: `${snap.localFile} missing — run \`rig init\`` }))
   const wr = snap.workRoot || {}
   out.push(check('work root', wr.exists, { ok: wr.path, bad: `${wr.path} missing` }))
   const mr = snap.mirrorRoot || {}
@@ -327,32 +332,33 @@ export function doctorFindings (snap = {}) {
   // Strays: anything directly under a work folder that rig did not create. Over every root's
   // works at once, which is what makes the missing-folder warning below reach an unclosed work
   // whatever root holds its record.
+  // A record in two roots is said once per work, from whichever copy reaches it first: a copy
+  // that will not read has nothing else to ask of it, but it still says where its twin is.
+  const heldTwice = new Set()
+  const sayHeldTwice = w => {
+    if (heldTwice.has(w.id)) return
+    heldTwice.add(w.id)
+    out.push(warn(`${w.id}: data roots ${w.holders.join(', ')} each hold its record — delete the copy that is wrong`))
+  }
   for (const w of snap.works || []) {
-    // A record that will not read has nothing else to ask of it.
-    if (w.unreadable) { out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`)); continue }
+    // Open or closed: two closed copies are a pick every command about the work refuses.
+    if ((w.holders || []).length > 1) sayHeldTwice(w)
+    if (w.unreadable) {
+      out.push(bad(`${w.id}: ${w.unreadable} — fix it, or bring it back from the data root's history`))
+      continue
+    }
     // The mirror of a missing folder: the close ran on another machine, and this one still has
     // the copy it tore down there. Nothing else is asked of the folder, which is on its way out.
     if (w.closed) {
       if (w.leftover) out.push(warn(`${w.id}: ${w.leftover}, but its folder is still on this machine — \`rig tidy\` clears it`))
       continue
     }
+    // The context doc lives in the data root, so it is checked whether or not the folder is here.
+    // A lost or moved heading counts; a placeholder left is a chore, said and not counted.
+    for (const f of w.contextDoc || []) out.push(warn(`${w.id}: ${f.text}`, { counts: f.counts }))
     if (w.folderMissing) { out.push(warn(`${w.id}: work folder missing but not closed — \`rig restore ${w.id}\``)); continue }
     for (const entry of w.strays || []) {
       out.push(warn(`${w.id}: unmanaged entry "${entry}" under the work root — rig owns this folder`))
-    }
-    // The marker is what a command run in the folder resolves by. Without one it falls back to
-    // `current`, which only matters when there is more than one root to fall between; one
-    // naming a root that does not hold the record sends it to the wrong root, or to none. A
-    // record in two roots is named whatever the marker says, since either copy may be the
-    // wrong one and no marker can say which.
-    const holders = w.holders || []
-    const rewrite = `\`rig save --data ${holders[0]}\` in it writes the right one`
-    if (holders.length > 1) {
-      out.push(warn(`${w.id}: data roots ${holders.join(', ')} each hold its record — delete the copy that is wrong`))
-    } else if (holders.length && w.marker === null && (snap.dataRoots || []).length > 1) {
-      out.push(warn(`${w.id}: work folder has no .rig/data, so commands run in it fall back to \`current\` — ${rewrite}`))
-    } else if (holders.length && w.marker && w.marker !== holders[0]) {
-      out.push(warn(`${w.id}: .rig/data names "${w.marker}", but the record is in "${holders[0]}" — ${rewrite}`))
     }
     for (const r of w.repos || []) {
       if (r.worktreeMissing) out.push(warn(`${w.id}: ${r.repo} is attached but its worktree is gone — \`rig restore ${w.id}\``))

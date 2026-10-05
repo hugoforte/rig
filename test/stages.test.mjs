@@ -111,6 +111,23 @@ test('a stage nobody has cut has not started', () => {
   assert.equal(stageState(stage('feat/one'), []).started, false)
 })
 
+test('an absent branch GitHub would not answer for is unknown, not started', () => {
+  // The row `branchRows` keeps for a branch gone from here whose lookup failed: it may have
+  // landed, so it is unknown, but nothing carries it here, so it is not where the stage is.
+  const s = stageState(stage('feat/one'), [{ repo: 'a', branch: 'feat/one', base: null, pr: null, prError: 'HTTP 502', absent: true }])
+  assert.deepEqual([s.prUnknown, s.started, s.repos, s.landed], [['a'], false, [], false])
+})
+
+test('a stage merged in one repo and unknown in another has not landed', () => {
+  // Cut and merged in billing, never cut in orders, where GitHub would not answer: the slice
+  // may yet be open there, so nothing may call it landed (decision 173).
+  const s = stageState(stage('feat/one'), [
+    on('billing', 'feat/one', 'feat/work', merged(1)),
+    { repo: 'orders', branch: 'feat/one', base: null, pr: null, prError: 'HTTP 502', absent: true },
+  ])
+  assert.deepEqual([s.landed, s.prUnknown], [false, ['orders']])
+})
+
 test('a stage is up for review while any of its PRs is open', () => {
   const s = stageState(stage('feat/one'), [
     on('a', 'feat/one', 'feat/work', merged(1)),

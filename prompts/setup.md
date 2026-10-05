@@ -47,6 +47,25 @@ keeps the global default.
 
 **E. Work root** — every path. `D:\w` (or `%USERPROFILE%\w`) unless there is a reason.
 
+**F. Session transcripts** — every path, optional. Where this machine's agent host keeps its
+sessions, so the lesson review can read the conversations that did a work, and `rig close` and
+`rig detach` can name a session still at work in a worktree. It goes in `rig.local.json` by
+hand, as a list of patterns: a folder that is exactly `{slug}` stands for a workspace's path
+with every character but a letter or digit made a dash, `~` for the home folder, and a `*`
+matches names in any part after the `{slug}` folder, where a host may keep more, such as its
+subagents' sessions. `transcriptSession` names the environment variable that carries the
+running session's id, which the host names its transcript or its folder by, so a session is
+never warned about itself. Claude Code's:
+
+```json
+"transcripts": ["~/.claude/projects/{slug}/*.jsonl", "~/.claude/projects/{slug}/*/subagents/*.jsonl"],
+"transcriptSession": "CLAUDE_CODE_SESSION_ID"
+```
+
+A pattern that could reach past the workspace's own folder — no `{slug}` folder, a `*` before
+it, a `..`, a relative path — finds nothing and is named, since it would read other work's
+sessions. With none, the lesson review carries on without them, and nothing is named at a close.
+
 ## Step 3: Confirm and write
 
 One command, one line. Join:
@@ -66,7 +85,8 @@ node <root>/bin/rig.mjs init --data-root ..\rig-data --orgs acme --tracker acme=
 `--tracker` merges into `rig.json` in the data root; `--email`, `--work-root` and
 `--data-root` write `rig.local.json`, filling only what is missing when it exists. Then
 `rig doctor` must come back clean — it also reports whether the data root has anything
-uncommitted or unpushed.
+uncommitted or unpushed. If F was answered, add `transcripts` and `transcriptSession` to `rig.local.json` now: `init`
+does not write them.
 
 ## Step 4: Check the org-level half landed
 

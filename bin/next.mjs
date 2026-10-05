@@ -6,7 +6,7 @@
 // decorative:
 //
 //   1. **It only ever offers.** Never warns, never blocks, never says you should have.
-//      Warnings live in `doctor`, and only for contradictions (decision 64). The moment this
+//      Warnings live in `doctor`, for contradictions and for what has drifted (decision 64). The moment this
 //      command tells you off for not having recorded a design gate, it becomes a workflow
 //      engine with a to-do list, which is the thing the whole epic exists not to build.
 //   2. **It speaks only when asked.** A command you run — not a hook, never firing off the
@@ -24,14 +24,23 @@
 // no fs, no git, no gh. The gathering is the caller's job, which is what makes every ladder
 // rung below assertable from an object literal.
 
-import { phaseOf } from './phase.mjs'
-import { backToWorkBranch, nextStage, onLandedStage } from './stages.mjs'
+import { phaseOf, STOP_WORDS, STOPPABLE } from './phase.mjs'
+import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './stages.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
 // conversation, and only the recording of it is a command — and a list of lines, run in
 // order, when there is more than one.
 const offer = (phase, says, command = null) => ({ phase, says, command })
+
+const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
+const PICKUP = 'rig prompt pickup'
+
+// Three repos is where deploy order stops being obvious and starts being a thing that causes
+// incidents. Two is a pair you can hold in your head. The weight threshold, derived from the
+// repo count and nothing anybody declared: it offers the rollout plan, and it makes the design a
+// stop again on a work that chose to skip it, since the work has outgrown what the human saw.
+const HEAVY = 3
 
 // Everything `rig next` needs that it cannot work out for itself. Gathered by the caller so
 // this module stays pure:
@@ -57,13 +66,24 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 //                  its PR would ask for and why; absent where the repo does not release by bump
 //   unstacked      the repos whose open stage PRs, two or more and a chain, GitHub does not
 //                  show as one stack; empty where GitHub would not list its stacks
+//   reviews        one `{ repo, unresolved, checks }` per repo whose work-branch PR is open: how
+//                  many of its review threads are unresolved and its head commit's check rollup
+//                  (`SUCCESS`, `PENDING`, `FAILURE`, …, or null where none are set up); both
+//                  null where GitHub would not say. A failing one also carries its `base` and
+//                  `behind`, how many commits the base has that the branch does not, read off
+//                  a fresh fetch; null where git could not count them
+//   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
+//                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
+//                  --run` recorded
+//   handoffAt      when the work's `handoff.md` was last committed into the data root, or null
+//   lastCommitAt   the newest commit on any of the work's branches checked out here, or null
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
 
@@ -72,6 +92,15 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   if (phase === 'closed' || phase === 'abandoned') {
     if (leftover) out.push(offer(phase, `this work is ${phase}, but its folder is still on this machine — clear this machine's copy`, 'rig close'))
     return out
+  }
+
+  // A handoff newer than the last commit on any of the work's branches is a trail nobody has
+  // picked up yet, and it comes first: it may already answer everything below. It clears on the
+  // pickup's first commit, which is the pickup having started from it. Not on a work whose every
+  // PR has merged: nobody commits on it again, and there is nothing left to start.
+  const landed = repos.length > 0 && repos.every(r => r.merged)
+  if (handoffAt && !landed && !(Date.parse(lastCommitAt) >= Date.parse(handoffAt))) {
+    out.push(offer(phase, 'a handoff was left after the last commit — pick up from it: the trail is what happened, so read it rather than redo it', PICKUP))
   }
 
   const entries = work?.repos || []
@@ -93,11 +122,22 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
 
   // The design gate is offered whenever it has not been recorded, and it is an *offer*: a
   // work can reach review without one and that is not an error, it is an omission. Which is
-  // exactly why this lives here and not in `doctor`.
-  if (!work?.designedAt) {
+  // exactly why this lives here and not in `doctor`. The gate carries the adversarial-review
+  // choice (decision 168), so the offer names both answers and the command carries one.
+  //
+  // A work that chose not to stop at the design has the agent record it, and the agent's
+  // default is the adversarial review: it costs the agent effort and the human nothing. A work
+  // grown heavy since is offered the human's gate all the same, since a stop skipped for a small
+  // work was not chosen for this one.
+  const skipsDesign = work?.stops && !work.stops.includes('design')
+  if (!work?.designedAt && skipsDesign && entries.length < HEAVY) {
+    out.push(offer('designing', 'the design is not a stop on this work — agree it yourself, write it in the Direction, and record it as the agent\'s, with an adversarial review', `${DESIGNED} --by-agent`))
+  } else if (!work?.designedAt) {
+    const choose = 'and decide whether its PRs get an adversarial review (`--no-adversarial` declines it)'
+    const grown = skipsDesign ? `${entries.length} repos is the weight at which the design waits for the human; ` : ''
     out.push(directionTodo
-      ? offer('designing', 'the context doc\'s Direction is still `_TODO_` — agree the approach, write it down, then record the gate', 'rig save -m "design agreed" --designed')
-      : offer('designing', 'Direction is written but the design gate is not recorded', 'rig save -m "design agreed" --designed'))
+      ? offer('designing', `${grown}the context doc's Direction is still \`_TODO_\` — agree the approach, write it down, then record the gate ${choose}`, DESIGNED)
+      : offer('designing', `${grown}Direction is written but the design gate is not recorded — record it ${choose}`, DESIGNED))
   }
 
   // Unsaved work outranks everything below it: it is the one thing every other suggestion
@@ -122,10 +162,17 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       // — this stage sits on something the stack does not contain — it says so. A fact about
       // what the branches report, not a reproach and not a guess at why. The ordinary reasons
       // a stack cannot be walked end to end are deliberately silent here.
+      // A stage GitHub would not answer for may have landed and lost its branch, so it is never
+      // called uncut (decision 171).
       const where = up.started
         ? `${up.repos.join(', ')}${up.open ? ' — up for review' : ''}${up.adrift ? ' — outside the stack' : ''}`
-        : 'not cut in any repo yet'
-      out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})`))
+        : up.prUnknown ? `PR state unknown in ${up.prUnknown.join(', ')}` : 'not cut in any repo yet'
+      // The frontier: the lowest stage still to land is the only PR that matters until it
+      // merges, so what is stacked above it is named as waiting on it rather than offered.
+      // Not a stage whose place the order only guessed (adrift), nor one GitHub would not say
+      // about, which may have landed (decision 171): neither is known to be waiting on this one.
+      const waiting = stack.slice(stack.indexOf(up) + 1).filter(st => !st.landed && !st.withdrawn && !st.adrift && !st.prUnknown?.length).map(st => st.branch)
+      out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})${waiting.length ? ` — waiting on it: ${waiting.join(', ')}` : ''}`))
     } else {
       const on = new Map()
       for (const r of stranded) on.set(r.on, [...(on.get(r.on) || []), r.repo])
@@ -172,16 +219,35 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // A repo whose stages are replayed here is offered their force-push above; a plain push fails.
   const replaying = replaced.filter(r => r.rebased).map(r => r.repo)
   const unpushed = repos.filter(r => !r.merged && r.unpushed > 0 && !stranded.includes(r) && !replaying.includes(r.repo))
+  // Pushed by name: a work branch's upstream is its base (decision 110), so a bare `git push`
+  // is refused under git's default `push.default` and lands on the base under `upstream`
+  // (decision 159). Only this work's own branches are named: a detached HEAD has none, and a
+  // worktree switched to the base would be offered a push straight onto it.
   if (unpushed.length) {
-    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, 'git push'))
+    const ours = new Set([work.branch, ...(work.stages || []).map(s => s.branch)])
+    const pushes = [...new Set(unpushed.filter(r => ours.has(r.on)).map(r => `git push origin ${r.on}`))]
+    out.push(offer('building', `${unpushed.map(r => r.repo).join(', ')} ${unpushed.length === 1 ? 'has' : 'have'} commits that are not pushed`, pushes.length ? pushes : null))
+  }
+
+  // The checks, for a repo with work on it whose diff no recorded pass covers: never run, or
+  // run against a diff that has changed since. Only where something has been written, for the
+  // reason the PR offer below asks `pushed` too, and only before the merge.
+  const written = r => r.pushed || r.unpushed > 0
+  const unproven = verification.filter(v => (v.state === 'unverified' || v.state === 'stale') &&
+    repos.some(r => r.repo === v.repo && written(r) && !r.merged && !r.missing))
+  if (unproven.length) {
+    const said = unproven.map(v => v.state === 'stale' ? `${v.repo}'s pass was for an earlier diff` : `${v.repo} has no pass recorded at the diff it carries`)
+    out.push(offer(phase, `${said.join('; ')} — run its checks, and a pass is kept against this patch`, `rig check ${unproven.map(v => v.repo).join(' ')} --run`))
   }
 
   // A branch that reached the remote and has no PR is the review phase waiting to start.
   // Asked of `pushed` as well as `unpushed`: `unpushed` reads 0 both for a branch that has
   // been pushed and for one nobody has written anything on, and nagging the second to open a
   // pull request for nothing is exactly the reproach this command does not make.
-  const untouched = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && !r.pushed)
-  const awaiting = repos.filter(r => !r.pr && !r.merged && !r.missing && r.unpushed === 0 && r.pushed && !stranded.includes(r))
+  // A repo whose PR lookup failed is neither: its PR may be open, and `rig pr` would refuse.
+  const noPr = r => !r.pr && !r.prUnknown && !r.merged && !r.missing && r.unpushed === 0
+  const untouched = repos.filter(r => noPr(r) && !r.pushed)
+  const awaiting = repos.filter(r => noPr(r) && r.pushed && !stranded.includes(r))
   if (awaiting.length) {
     // Which release each of those PRs would ask for, said while a label can still change it
     // (decision 130), and said here alone: this is the offer that names the repos.
@@ -190,10 +256,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('reviewing', [`${awaiting.map(r => r.repo).join(', ')} ${awaiting.length === 1 ? 'is' : 'are'} pushed with no PR open`, ...releases].join(' — '), 'rig pr'))
   }
 
-  // Three repos is where deploy order stops being obvious and starts being a thing that
-  // causes incidents. Two is a pair you can hold in your head; this is the weight threshold,
-  // derived from the repo count and nothing anybody declared.
-  if (entries.length >= 3 && !planExists) {
+  if (entries.length >= HEAVY && !planExists) {
     out.push(offer('landing', `${entries.length} repos means deploy order matters — a rollout plan is worth having`, 'rig plan'))
   }
 
@@ -216,6 +279,66 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
     out.push(offer('reviewing', `${unstacked.join(', ')}: the open stage PRs are not a GitHub stack`, 'rig stage --link'))
   }
 
+  // After the PR is open, three steps in the order they run, each waiting for the one before
+  // it (decision 168): the review already on the PR, the adversarial review the design chose,
+  // then the hand-over to a human. The first is read off GitHub; the other two are read off
+  // the record, because nothing on GitHub says a design chose a review or that one happened.
+  // Asked only of open PRs: a phase of `reviewing` can be a PR closed unmerged, or one repo
+  // merged beside another never opened, and neither has anything to review or hand over.
+  const openPrs = phase === 'reviewing' ? repos.filter(r => r.pr?.state === 'OPEN') : []
+  if (openPrs.length) {
+    const reviewOf = r => reviews.find(t => t.repo === r.repo)
+    const open = reviews.filter(t => t.unresolved > 0)
+    if (open.length) {
+      const counts = open.map(t => `${t.repo}: ${t.unresolved} unresolved review thread${t.unresolved === 1 ? '' : 's'}`)
+      out.push(offer('reviewing', `${counts.join('; ')} — action what is worth actioning, reply to every thread, resolve ${open.length === 1 && open[0].unresolved === 1 ? 'it' : 'them'}`))
+    }
+    // Every open PR's threads known to be resolved. Unknown is not resolved: going on past a
+    // count GitHub would not give is the "nobody could tell" mistake decision 62 exists to prevent.
+    const resolved = openPrs.every(r => reviewOf(r)?.unresolved === 0)
+    // A review recorded before the design was last agreed was a review of another design. Dates
+    // are compared as instants, not strings, and one nobody can read is no review at all.
+    const adversarial = work.adversarial === true && !(Date.parse(work.reviewedAt) >= (Date.parse(work.designedAt) || 0))
+    if (adversarial && resolved) {
+      out.push(offer('reviewing',
+        'the design chose an adversarial review — a reviewer told to find what is wrong with the PR, fixing what it finds and pushing',
+        'rig save -m "adversarial review" --reviewed'))
+    }
+    // A failing check is the PR's to fix. Where the base has moved past the branch, that is said
+    // beside it as a possible cause and never as the cause: a moved base is ordinary in a busy
+    // repo, and only a failure in code the diff never touched is a stale base's. The merge is a
+    // command only on the work branch, so it never lands on a stage checked out instead.
+    const failing = openPrs.filter(r => ['FAILURE', 'ERROR'].includes(reviewOf(r)?.checks))
+    const moved = failing.filter(r => reviewOf(r).behind > 0)
+    for (const r of moved) {
+      const { base, behind } = reviewOf(r)
+      const onWork = r.on === work.branch
+      out.push(offer('reviewing',
+        `${r.repo}: the PR's checks are failing — fix them before it is handed over; ${base} has ${behind} commit${behind === 1 ? '' : 's'} the branch does not, so a failure in code the diff never touched may be a stale base: merge it ${onWork ? 'in' : `into ${work.branch}`} first, then push`,
+        onWork ? [`git merge origin/${base}`, `git push origin ${work.branch}`] : null))
+    }
+    const own = failing.filter(r => !moved.includes(r))
+    if (own.length) {
+      out.push(offer('reviewing', `${own.map(r => r.repo).join(', ')}: the PR's checks are failing — fix them before it is handed over`))
+    }
+    // Neither green nor failing — running, or required and never reported. Said, because the
+    // hand-over waits on it, and a wait nothing names reads as "nothing to suggest".
+    const unreported = openPrs.filter(r => ![null, 'SUCCESS', 'FAILURE', 'ERROR'].includes(reviewOf(r)?.checks ?? null))
+    if (unreported.length) {
+      out.push(offer('reviewing', `${unreported.map(r => `${r.repo} (${reviewOf(r).checks})`).join(', ')}: the PR's checks have not all reported — it is handed over once they pass`))
+    }
+    // The design gate passed, with its review choice; every check green or none set up; nothing
+    // local left, or that nobody could count, including on a landed stage; no stage still to
+    // come, no PR body behind the record, and no sibling PR closed without merging, since the
+    // work cannot land as a whole while one is.
+    const green = openPrs.every(r => [null, 'SUCCESS'].includes(reviewOf(r)?.checks ?? null))
+    const pending = dirty.length || unpushed.length || stranded.length || awaiting.length || prStale.length || (stack.length && nextStage(stack)) ||
+      repos.some(r => !r.merged && (r.missing || r.unpushed === null || r.pr?.state === 'CLOSED'))
+    if (work.designedAt && resolved && !adversarial && green && !pending) {
+      out.push(offer('reviewing', 'the PR is ready for a human reviewer — hand it over'))
+    }
+  }
+
   const merged = repos.filter(r => r.merged)
   if (merged.length && merged.length < repos.length) {
     const left = repos.filter(r => !r.merged).map(r => r.repo).join(', ')
@@ -232,9 +355,29 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
   // thing left to do and rig is not the tool that does it. Asked here, before the draft and
   // close offers below are pushed, because both are about something other than the work
   // itself: a draft entry must not silence the one line that says the code is yours to write.
-  const floor = !out.length && untouched.length === repos.length && !offeringNeighbours
+  //
+  // A work grown heavy since the agent agreed its design alone waits for the human after all,
+  // as one that grew before it would have (the re-raise above): that is said here, above the
+  // floor, since it is a wait and not a note. A pickup is no reason to hide the floor either: it
+  // reads the trail, and the code is still to write.
+  const decided = STOPPABLE.filter(n => work?.agentDecided?.includes(n))
+  const choice = work?.adversarial === false ? '--no-adversarial' : '--adversarial'
+  const review = `rig save -m "design reviewed" --designed ${choice}`
+  const grownSinceAgreed = work?.designedAt && decided.includes('design') && entries.length >= HEAVY
+  if (grownSinceAgreed) {
+    out.push(offer(phase, `${entries.length} repos is the weight at which the design waits for the human — the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')}; go over them with the human, then record the design as theirs`, review))
+  }
+  const floor = !out.some(o => o.command !== PICKUP) && untouched.length === repos.length && !offeringNeighbours
   if (floor) {
     out.push(offer('building', 'everything is attached and agreed — this part is yours to write'))
+  }
+
+  // What the agent decided where the human chose not to stop, offered back to the human. Below
+  // the floor, like the drafts, and addressed to the human by name: to the agent reading it, it
+  // is no wait, and an unattended run goes on with the work. The human confirming it, with the
+  // review choice it already made, records it as theirs and keeps the design's date.
+  if (work?.designedAt && decided.length && !grownSinceAgreed) {
+    out.push(offer(phase, `for the human: the agent decided ${decided.map(n => STOP_WORDS[n]).join(' and ')} — go over them, then record the design as theirs`, review))
   }
 
   // Correcting the catalogue, offered while the worktrees still exist — which is the only span
@@ -271,6 +414,29 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       'rig save -m "lessons reviewed" --learned'))
   }
 
+  // What landed and why it was worth doing, asked once everything has landed and the story is
+  // still in hand. Above the close offer only because it reads as part of finishing; nothing it
+  // needs goes with the trees, and `rig close` names it again on the way out.
+  if (!work?.outcome && repos.length && merged.length === repos.length) {
+    out.push(offer(phase,
+      `what changed for someone, and why is that good? — a sentence or two; the ${work?.learnedAt ? 'rig-digest' : 'rig-learn'} skill drafts it`,
+      'rig save --outcome "…"'))
+  }
+
+  // The user docs, kept true once everything has landed: offered only where a repo says where
+  // its docs live, since a nag for a repo with none would be on every work. A repo beside it
+  // with none is named, as an empty `check` is, with where to say it.
+  const documented = docs.filter(d => d.targets.length)
+  if (!work?.documentedAt && documented.length && repos.length && merged.length === repos.length) {
+    const where = documented.map(d => `${d.repo}: ${d.targets.map(t => `\`${t}\``).join(', ')}`).join('; ')
+    const none = docs.filter(d => !d.targets.length).map(d => d.missing
+      ? `; ${d.repo} has no catalogue entry — write one at \`${d.missing}\`, with \`docs:\``
+      : `; ${d.repo} has no docs target — \`docs:\` in its catalogue entry (\`rig catalog ${d.repo}\` names the file)`).join('')
+    out.push(offer(phase,
+      `once it is verified where it was deployed, keep the user docs true — the rig-docs skill drafts the edit (${where})${none}`,
+      'rig save -m "user docs updated" --documented'))
+  }
+
   // Rule 5 says attaching a fourth repo on day two is normal, and §6 says the repo you forget
   // is almost always one hop from one you remembered. This is that, with a graph behind it
   // rather than a reminder.
@@ -292,13 +458,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, planExists =
       `rig attach ${neighbours[0].repo}`))
   }
 
-  // A slice still up for review is a refusal `close` makes, so offering it here would be a
-  // command that fails and a second answer one line under the stage offer that just named the
-  // slice. The stack was in hand the whole time; this asks it. Silence rather than a warning,
-  // because the stage offer above has already said what is next.
+  // A slice still up for review, or one GitHub would not answer for, is a refusal `close` makes
+  // (decision 173), so offering it here would be a command that fails and a second answer one
+  // line under the stage offer that just named the slice. The stack was in hand the whole time;
+  // this asks it. Silence rather than a warning, because the stage offer above has already said
+  // what is next.
   //
   // Last, because it is the one offer that takes the worktrees away.
-  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open)) {
+  if (phase === 'landing' && !dirty.length && !stack.some(st => st.open) && !unknownStages(stack).length) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
 

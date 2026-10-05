@@ -108,6 +108,45 @@ export function reduceWork (work) {
   }
 }
 
+// Every pull request a repo of the work merged: each stage's, recorded on its own branch entry,
+// then the work branch's, which a recorded work also carries in `branches` — once each.
+function pullRequests (r) {
+  const prs = []
+  for (const p of [...(r.branches || []).map(b => b.pr), r.pr].filter(Boolean)) {
+    if (!prs.some(q => (q.url || q.number) === (p.url || p.number))) prs.push(p)
+  }
+  return prs.map(p => ({ name: p.number ? `${r.repo}#${p.number}` : r.repo, url: p.url || null }))
+}
+
+// What a work says about itself, for a reader rather than a statistic: what changed, if
+// anyone said (decision 194), and the title, tickets and pull requests that lead back to it.
+const telling = work => ({
+  title: work.title || '',
+  outcome: work.outcome?.text || null,
+  tickets: work.tickets || [],
+  abandoned: !!work.abandonedAt,
+  repos: (work.repos || []).map(r => ({ org: r.org, repo: r.repo })),
+  prs: (work.repos || []).flatMap(pullRequests),
+})
+
+// The landed works of one org, under each of its repos they touched: the repo with the
+// latest landing first, and the latest work first inside it. A work across two repos landed
+// in both, so it is listed under both, as a cross-org work is counted under both orgs. An
+// abandoned work is left out even when a slice of it merged: `rig save --outcome` refuses it,
+// so it would be a gap nobody can close.
+function whatLanded (done, org) {
+  const byRepo = new Map()
+  for (const w of done.filter(w => !w.told.abandoned).sort((a, b) => byMoment(b.mergedAt, a.mergedAt))) {
+    const { repos, abandoned: _abandoned, ...told } = w.told
+    const entry = { id: w.id, ...told, mergedAt: w.mergedAt, cycleHours: w.cycleHours }
+    for (const repo of new Set(repos.filter(r => r.org === org).map(r => r.repo))) {
+      if (!byRepo.has(repo)) byRepo.set(repo, [])
+      byRepo.get(repo).push(entry)
+    }
+  }
+  return [...byRepo].map(([repo, works]) => ({ repo, works }))
+}
+
 const bucket = (rows, key) => rows.reduce((acc, row) => {
   const k = key(row)
   if (k === null || k === undefined) return acc
@@ -140,7 +179,7 @@ function weeksFrom (done) {
 // Everything the page shows, per org. Works are never summed across orgs — see the header
 // comment; `only` narrows to one org instead.
 export function summarize (payload, { org: only, since } = {}) {
-  const all = (payload.works || []).map(reduceWork)
+  const all = (payload.works || []).map(work => ({ ...reduceWork(work), told: telling(work) }))
   const kept = all.filter(w => (!only || w.orgs.includes(only)) &&
     (!since || !w.mergedAt || w.mergedAt >= since))
 
@@ -187,6 +226,7 @@ export function summarize (payload, { org: only, since } = {}) {
       repoSpread: Object.entries(bucket(works, w => w.repoCount))
         .map(([repos, rows]) => ({ repos: Number(repos), n: rows.length })).sort((a, b) => a.repos - b.repos),
       recent: done.slice().sort((a, b) => byMoment(b.mergedAt, a.mergedAt)).slice(0, 12),
+      landed: whatLanded(done, name),
     }
   }).sort((a, b) => b.merged - a.merged || b.works - a.works)
 
@@ -281,6 +321,48 @@ function orgSection (o) {
 </section>`
 }
 
+// A pull request is linked only when its address is a web page: the page is opened from a
+// file:// URL, and anything else in an href is something run rather than somewhere gone.
+const prLink = p => /^https?:\/\//i.test(p.url || '')
+  ? `<a href="${esc(p.url)}">${esc(p.name)}</a>`
+  : esc(p.name)
+
+const counted = (n, what) => `${n} ${what}${n === 1 ? '' : 's'}`
+
+function landedWork (w) {
+  const said = w.outcome
+    ? esc(w.outcome)
+    : `${esc(w.title || w.id)} <span class="warn">(no outcome recorded)</span>`
+  const facts = [
+    `<strong>${esc(w.id)}</strong>${w.outcome && w.title ? ` — ${esc(w.title)}` : ''}`,
+    `merged ${esc((w.mergedAt || '').slice(0, 10))}`,
+    `cycle ${duration(w.cycleHours)}`,
+    ...(w.tickets.length ? [w.tickets.map(esc).join(', ')] : []),
+    ...(w.prs.length ? [w.prs.map(prLink).join(' ')] : []),
+  ]
+  return `<details><summary>${said}</summary><p class="facts">${facts.join(' · ')}</p></details>`
+}
+
+// Org, then repo, then work, each folded until the reader opens it: a hundred works read as
+// a handful of lines until someone asks for more.
+function landedSection (orgs) {
+  const byOrg = orgs.map(o => {
+    const total = new Set(o.landed.flatMap(r => r.works.map(w => w.id))).size
+    const repos = o.landed.map(r =>
+      `<details><summary>${esc(r.repo)} <span class="dim">· ${counted(r.works.length, 'work')}</span></summary>` +
+      `${r.works.map(landedWork).join('')}</details>`)
+    return `<details><summary>${esc(o.org)} <span class="dim">· ${counted(total, 'work')}</span></summary>` +
+      `${repos.join('') || '<p class="empty">Nothing has landed yet.</p>'}</details>`
+  })
+  return `<section class="landed">
+  <h2>What landed</h2>
+  <p class="note">What changed for someone, as said when each work landed with
+  <code>rig save --outcome</code>. A work nobody said it of shows its title instead, marked, so
+  the gap is visible. A work across two repos is listed under each.</p>
+  ${byOrg.join('\n  ')}
+</section>`
+}
+
 // Dark by default — a page opened from a file:// URL with no stated preference should look
 // like the terminal it was asked for from, not like a printout. The light variant is the
 // override, for the one machine whose OS says so.
@@ -352,6 +434,13 @@ header.meta p { margin: .35rem 0; font-size: .82rem; color: var(--dim); }
 header.meta p:first-child { color: var(--text); }
 header.meta strong { color: var(--link); font-weight: 500; }
 header.meta em { font-style: normal; color: var(--text); }
+a { color: var(--link); }
+.landed details { margin: .25rem 0 0 1rem; }
+.landed > details { margin-left: 0; }
+.landed summary { cursor: pointer; padding: .2rem 0; }
+.landed .dim, .landed .facts { color: var(--dim); }
+.landed .facts { margin: .1rem 0 .5rem 1rem; font-size: .82rem; }
+.landed .facts strong { color: var(--text); font-weight: 500; }
 .caveats { padding-left: 1.1rem; margin: .3rem 0 0; }
 .caveats li { margin: .35rem 0; }
 `
@@ -367,9 +456,9 @@ export function renderDash (payload, opts = {}) {
 
   return `<!doctype html>
 <meta charset="utf-8">
-<title>rig — throughput and cycle time</title>
+<title>rig — throughput, cycle time and what landed</title>
 <style>${STYLE}</style>
-<h1><span class="tag">rig</span>Throughput and cycle time</h1>
+<h1><span class="tag">rig</span>Throughput, cycle time and what landed</h1>
 <header class="meta">
   <p>Generated <strong>${esc(s.generatedAt)}</strong> by rig ${esc(s.release || 'from an untagged checkout')} · scope: ${esc(scope)}${s.since ? ` · merged since ${esc(s.since)}` : ''}</p>
   <p>${stale}</p>
@@ -383,9 +472,13 @@ export function renderDash (payload, opts = {}) {
   remembered, not when anything landed.</p>
 </header>
 ${s.orgs.map(orgSection).join('\n') || '<p class="empty">No works matched.</p>'}
+${s.orgs.length ? landedSection(s.orgs) : ''}
 <section>
   <h2>How to read this</h2>
   <ul class="caveats">
+    <li>The numbers count every work whose pull requests all merged. What landed leaves out a
+    work that was abandoned after a slice merged: the merge happened, but there is no outcome to
+    say of it.</li>
     <li>Orgs are never summed. Work on the tooling and work for an employer are different
     questions, and one number across both answers neither.</li>
     <li>These are the works recorded since rig started keeping them. There is no pre-rig

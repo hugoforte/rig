@@ -2,15 +2,15 @@
 //
 // Two halves, and they are tested in the two places they live. The resolution order is a
 // decision about files and an environment, so it is asserted directly against
-// `bin/roots.mjs` with no subprocess. `rig use`, the `.rig/data` anchor a work folder
-// carries, and the refusal of a work id another root already owns are things the CLI does,
+// `bin/roots.mjs` with no subprocess. `rig use`, a work two roots hold,
+// and the refusal of a work id another root already owns are things the CLI does,
 // so those drive the tool.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { locate, registry, load, anchoredRoot, rootsCataloguing, dataAnchorFile, DATA_ROOT_ENV, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
+import { locate, registry, load, rootsCataloguing, DATA_ROOT_ENV, DEFAULT_ROOT_NAME } from '../bin/roots.mjs'
 import { makeInstall, strip } from './harness.mjs'
 
 // The home directory every fixture below pins. The machine file's default location lives
@@ -91,29 +91,73 @@ test(`${DATA_ROOT_ENV} pins a shell to one root, and --data still overrides it`,
   })
 })
 
-test('a work folder says which root it belongs to, and that beats the current one', () => {
-  fixture(THREE, ({ tmp, toolRoot, env }) => {
-    const work = path.join(tmp, 'w', 'payments-refunds')
-    fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
-    fs.writeFileSync(dataAnchorFile(work), 'linenmaster\n')
-    const location = locate(toolRoot, env, { cwd: path.join(work, 'billing', 'src') })
-    assert.equal(location.name, 'linenmaster', 'resolved from a directory deep inside the work')
-    assert.equal(location.source, 'cwd')
+// A root's record of a work, reduced to what decides which root holds it: whether it is closed,
+// or that it will not parse. `bom` is a closed record as PowerShell 5.1 saves it, BOM first.
+const holds = (root, id, state = 'open') => {
+  fs.mkdirSync(path.join(root, 'work', id), { recursive: true })
+  const closed = JSON.stringify({ id, closedAt: '2026-10-01' })
+  const text = { open: JSON.stringify({ id }), closed, bom: `﻿${closed}`, unreadable: '{"id":' }[state]
+  fs.writeFileSync(path.join(root, 'work', id, 'work.json'), text)
+}
+// A work folder as `rig new` leaves it, reduced to its `.rig/id`.
+const folder = (tmp, id) => {
+  const dir = path.join(tmp, 'w', id)
+  fs.mkdirSync(path.join(dir, '.rig'), { recursive: true })
+  fs.writeFileSync(path.join(dir, '.rig', 'id'), `${id}\n`)
+  return dir
+}
+
+test('a work open in one root resolves there, from its folder or by name, whatever closed copies the others keep', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
+    // hugoforte/rig#274: the current root keeps an abandoned copy, and the work moved on in another.
+    holds(machine.dataRoots.hugoforte.path, 'w', 'closed')
+    holds(machine.dataRoots.personal.path, 'w')
+    const dir = folder(tmp, 'w')
+    // A marker from before the move names the closed copy's root, and is no longer read.
+    fs.writeFileSync(path.join(dir, '.rig', 'data'), 'hugoforte\n')
+    const fromFolder = locate(toolRoot, env, { cwd: path.join(dir, 'billing', 'src') })
+    assert.equal(fromFolder.name, 'personal', 'resolved from a directory deep inside the work')
+    assert.equal(fromFolder.source, 'work')
+    assert.equal(locate(toolRoot, env, { cwd: tmp, work: 'w' }).name, 'personal', 'named on the command')
+    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
+    assert.equal(locate(toolRoot, env, { cwd: dir, repos: ['Payments'] }).name, 'personal', 'the work beats the repo')
+    assert.equal(locate(toolRoot, { ...env, [DATA_ROOT_ENV]: 'linenmaster' }, { cwd: dir }).name, 'linenmaster', 'a pinned shell beats it')
+    assert.equal(locate(toolRoot, env, { cwd: dir, data: 'hugoforte' }).name, 'hugoforte', '--data beats it')
+    holds(machine.dataRoots.hugoforte.path, 'w', 'bom')
+    assert.equal(locate(toolRoot, env, { cwd: dir }).name, 'personal', 'a closed copy saved with a BOM is still closed')
   })
 })
 
-test('the shell beats the work folder: a pinned shell was pinned on purpose', () => {
-  fixture(THREE, ({ tmp, toolRoot, env }) => {
-    const work = path.join(tmp, 'w', 'payments-refunds')
-    fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
-    fs.writeFileSync(dataAnchorFile(work), 'linenmaster\n')
-    assert.equal(locate(toolRoot, { ...env, [DATA_ROOT_ENV]: 'personal' }, { cwd: work }).name, 'personal')
+test('a work no root holds open is in the one root that holds it at all', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
+    holds(machine.dataRoots.linenmaster.path, 'w', 'closed')
+    assert.equal(locate(toolRoot, env, { cwd: folder(tmp, 'w') }).name, 'linenmaster')
   })
 })
 
-test('outside any work folder there is no anchor to read', () => {
-  fixture(THREE, ({ tmp }) => {
-    assert.equal(anchoredRoot(path.join(tmp, 'w')), null)
+test('two copies with none to prefer is a pick, so it is refused, naming the roots', () => {
+  // Two open, and two closed: a closed work is still written to, since lessons are reviewed
+  // after the close. A copy that will not parse counts as open, and a closed copy beside two
+  // open ones is not one of the roots to choose between.
+  for (const [a, b, c] of [['open', 'open'], ['closed', 'closed'], ['unreadable', 'open', 'closed']]) {
+    fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
+      holds(machine.dataRoots.hugoforte.path, 'w', a)
+      holds(machine.dataRoots.personal.path, 'w', b)
+      if (c) holds(machine.dataRoots.linenmaster.path, 'w', c)
+      const refused = /: data roots hugoforte, personal each hold a record of work "w" — pass --data <name> to say which$/
+      assert.throws(() => locate(toolRoot, env, { cwd: folder(tmp, 'w') }), refused, [a, b, c].join(', '))
+    })
+  }
+})
+
+test('the work a command names beats the folder it runs in, and one no root holds falls through to current', () => {
+  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
+    holds(machine.dataRoots.personal.path, 'w')
+    holds(machine.dataRoots.linenmaster.path, 'other')
+    const dir = folder(tmp, 'w')
+    assert.equal(locate(toolRoot, env, { cwd: dir, work: 'other' }).name, 'linenmaster')
+    assert.equal(locate(toolRoot, env, { cwd: dir, work: 'nowhere' }).source, 'current')
+    assert.equal(locate(toolRoot, env, { cwd: folder(tmp, 'nowhere') }).source, 'current', 'and so does a folder no root holds')
   })
 })
 
@@ -197,16 +241,6 @@ test('nor when no root catalogues anything, because a repo could not place this 
     const location = locate(toolRoot, env, { cwd: tmp, repoAt: () => { asked++; return 'notes' } })
     assert.equal(asked, 0, 'a catalogue entry is what binds a repo to a root, and there is none')
     assert.equal(location.source, 'current', 'so the pointer decides, exactly as it would have')
-  })
-})
-
-test('the work folder still beats the repo: the work already said where it lives', () => {
-  fixture(THREE, ({ tmp, toolRoot, machine, env }) => {
-    catalogue(machine.dataRoots.linenmaster.path, 'acme', 'Payments')
-    const work = path.join(tmp, 'w', 'a-work')
-    fs.mkdirSync(path.dirname(dataAnchorFile(work)), { recursive: true })
-    fs.writeFileSync(dataAnchorFile(work), 'personal\n')
-    assert.equal(locate(toolRoot, env, { cwd: work, repos: ['Payments'] }).name, 'personal')
   })
 })
 
@@ -363,6 +397,20 @@ test('--data-repo --name adds a second root rather than refusing to move the fir
   fs.writeFileSync(localConfig, saved)
 })
 
+test('a data repo GitHub would not say exists is neither joined nor created', () => {
+  // "gh could not answer" read as "does not exist" would send an existing repo down the
+  // create path, so the lookup's own refusal stops it (decision 170).
+  const saved = fs.readFileSync(localConfig, 'utf8')
+  const state = JSON.parse(fs.readFileSync(githubStateFile, 'utf8'))
+  fs.writeFileSync(githubStateFile, JSON.stringify({ ...state, auth: 'unauthenticated' }))
+  const r = rig(['init', '--data-repo', 'acme/unasked', '--name', 'unasked', '--orgs', 'acme'])
+  fs.writeFileSync(localConfig, saved)
+  fs.writeFileSync(githubStateFile, JSON.stringify(state))
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /could not ask GitHub whether acme\/unasked exists \(gh is not authenticated \(in-memory GitHub\)\) — joining or creating a data repo needs it/)
+  assert.doesNotMatch(r.out, /cloning to|creating it, private/, 'nothing was joined or created')
+})
+
 test('joining an empty data repo pushes its first commit without ever asking for credentials', () => {
   // A server-side hook runs under the pushing git's environment on a local remote, so it
   // sees what the push was run with. The two variables are taken out of the run's own
@@ -467,46 +515,67 @@ test('a work belongs to the root it was made in, and every other root is unaware
   assert.ok(!fs.existsSync(path.join(second, 'work', 'only-here', 'work.json')))
 })
 
-test('the work folder records which root holds its record', () => {
-  assert.equal(fs.readFileSync(dataAnchorFile(path.join(workRoot, 'only-here')), 'utf8').trim(), 'hugoforte')
+test('a work abandoned in the current root and open in another is the open one, in its folder and by name', (t) => {
+  // hugoforte/rig#274: the work moved to personal, leaving its first copy behind abandoned.
+  const record = path.join(dataRoot, 'work', 'only-here', 'work.json')
+  const saved = fs.readFileSync(record, 'utf8')
+  const copy = path.join(second, 'work', 'only-here')
+  t.after(() => { fs.rmSync(copy, { recursive: true, force: true }); fs.writeFileSync(record, saved) })
+  fs.cpSync(path.dirname(record), copy, { recursive: true })
+  fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(saved), closedAt: '2026-10-01T00:00:00Z', abandonedAt: '2026-10-01T00:00:00Z' }))
+  for (const [r, how] of [[rig(['status'], { cwd: path.join(workRoot, 'only-here') }), 'in its folder'], [rig(['status', '--work', 'only-here']), 'by --work']]) {
+    assert.equal(r.code, 0, `${how}: ${r.out}`)
+    assert.match(r.out, /only-here/, how)
+    assert.doesNotMatch(r.out, /abandoned/i, how)
+  }
+  assert.match(rig(['restore', 'only-here']).out, /has no repos attached/, 'not "abandoned — there is nothing to restore"')
+  const doctor = strip(rig(['doctor']).out)
+  assert.match(doctor, /only-here: data roots hugoforte, personal each hold its record/)
+  assert.equal(doctor.match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
 })
 
-test('a work folder with no marker gets one from a command that finds its record in one root', () => {
-  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
-  fs.rmSync(marker)
-  const r = rig(['save', '-m', 'marked again', '--data', 'hugoforte'], { cwd: path.join(workRoot, 'only-here') })
-  assert.equal(r.code, 0, r.out)
-  assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'hugoforte')
+test('a work moved, then closed, is closed in two roots: close says --data, commands ask for it, doctor and tidy name it', (t) => {
+  assert.equal(rig(['new', 'moved-twice', '--title', 'Moved, then closed', '--no-ticket']).code, 0)
+  const record = path.join(dataRoot, 'work', 'moved-twice', 'work.json')
+  fs.cpSync(path.dirname(record), path.join(second, 'work', 'moved-twice'), { recursive: true })
+  fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(fs.readFileSync(record, 'utf8')), closedAt: '2026-10-01T00:00:00Z', abandonedAt: '2026-10-01T00:00:00Z' }))
+  t.after(() => { for (const root of [dataRoot, second]) fs.rmSync(path.join(root, 'work', 'moved-twice'), { recursive: true, force: true }) })
+  t.after(() => fs.rmSync(path.join(workRoot, 'moved-twice'), { recursive: true, force: true }))
+  const closed = rig(['close', '--work', 'moved-twice'])
+  assert.equal(closed.code, 0, closed.out)
+  assert.match(strip(closed.out), /`rig save --work moved-twice --data personal -m "lessons reviewed" --learned`/)
+  const status = rig(['status', '--work', 'moved-twice'])
+  assert.equal(status.code, 1, status.out)
+  assert.match(strip(status.out), /data roots hugoforte, personal each hold a record of work "moved-twice" — pass --data <name> to say which/)
+  assert.equal(rig(['status', '--work', 'moved-twice', '--data', 'personal']).code, 0)
+  assert.match(strip(rig(['doctor']).out), /moved-twice: data roots hugoforte, personal each hold its record/)
+  // A copy of the folder left on this machine, with a file in it that only this machine has.
+  fs.mkdirSync(path.join(workRoot, 'moved-twice'), { recursive: true })
+  fs.writeFileSync(path.join(workRoot, 'moved-twice', 'notes.txt'), 'mine')
+  assert.match(strip(rig(['tidy', '--dry-run']).out), /`rig close --work moved-twice --data hugoforte --force` to discard it/)
 })
 
-test('no marker is written for a work whose record is in two roots, since either may be wrong', (t) => {
-  // A data root split half done: both roots hold a copy, and the root the command happened to
-  // resolve to is no evidence of which one is the real record.
+test('a record in two roots with a copy unreadable: doctor names each broken copy and says both roots hold it, whichever is broken', (t) => {
   const copy = path.join(second, 'work', 'only-here')
   t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
   fs.cpSync(path.join(dataRoot, 'work', 'only-here'), copy, { recursive: true })
-  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
-  fs.rmSync(marker)
-  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
-  const r = rig(['save', '-m', 'which one', '--data', 'personal'], { cwd: path.join(workRoot, 'only-here') })
-  assert.equal(r.code, 0, r.out)
-  assert.ok(!fs.existsSync(marker))
-  assert.match(strip(rig(['doctor']).out), /only-here: data roots hugoforte, personal each hold its record/)
-  assert.equal(strip(rig(['doctor']).out).match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
-})
-
-test('doctor names a work folder with no marker, and the command that writes one', (t) => {
-  const marker = dataAnchorFile(path.join(workRoot, 'only-here'))
-  fs.rmSync(marker)
-  t.after(() => fs.writeFileSync(marker, 'hugoforte\n'))
-  assert.match(strip(rig(['doctor']).out), /only-here: work folder has no \.rig\/data, so commands run in it fall back to `current` — `rig save --data hugoforte` in it writes the right one/)
+  const saved = fs.readFileSync(path.join(copy, 'work.json'), 'utf8')
+  for (const broken of [[dataRoot], [second], [dataRoot, second]]) {
+    const files = broken.map(root => path.join(root, 'work', 'only-here', 'work.json'))
+    for (const file of files) fs.writeFileSync(file, saved.slice(0, 20))
+    try {
+      const out = strip(rig(['doctor']).out)
+      assert.equal(out.match(/only-here: work record for "only-here" at .*work\.json could not be read/g)?.length, files.length, broken.join(', '))
+      assert.equal(out.match(/only-here: data roots hugoforte, personal each hold its record — delete the copy that is wrong/g)?.length, 1, broken.join(', '))
+    } finally { for (const file of files) fs.writeFileSync(file, saved) }
+  }
 })
 
 test('a command run inside a work folder reads that work\'s root, whatever is current', () => {
   assert.equal(rig(['use', 'personal']).code, 0)
   const r = rig(['status'], { cwd: path.join(workRoot, 'only-here') })
   assert.equal(r.code, 0, r.out)
-  assert.match(r.out, /only-here/, 'the anchor won, and `current` was never consulted')
+  assert.match(r.out, /only-here/, 'the work its folder names won, and `current` was never consulted')
   assert.equal(rig(['use', 'hugoforte']).code, 0)
 })
 
@@ -560,6 +629,12 @@ test('the checkout a command runs in chooses the root that catalogues its repo',
   assert.equal(rig(['use', 'hugoforte']).code, 0)
   const r = rig(['list', '--quick'], { cwd: checkoutAt('somewhere/my-clone', 'ledger') })
   assert.match(r.out, /data root: personal \(the repo it is about\)/)
+})
+
+test('the root a command chose is said beside its answer, so `list --json` is JSON alone', () => {
+  const r = rig(['list', '--json', '--quick'], { cwd: checkoutAt('somewhere/piped', 'ledger') })
+  assert.match(r.out, /data root: personal \(the repo it is about\)/, 'still said')
+  assert.doesNotThrow(() => JSON.parse(r.stdout), 'and a pipe gets the payload and nothing else')
 })
 
 test('a checkout of another org\'s repo with the same name is not placed by it', () => {
@@ -712,4 +787,38 @@ test('a root whose directory has gone is a finding, and the roots that are fine 
     assert.match(out, /ghost: data root .* missing — check dataRoots\.ghost/)
     assert.match(out, /hugoforte: rig\.json/, 'and the root after it was still checked')
   } finally { fs.writeFileSync(localConfig, saved) }
+})
+
+// A work id held by two roots, closed in the first and open in the second: a work that moved to
+// another root, with the copy it left behind closed. The folder is the open work's, so nothing
+// that clears leftovers may take it, whichever root's records are read first.
+const openInSecond = (t, id) => {
+  assert.equal(rig(['new', id, '--title', 'Open in personal', '--no-ticket', '--data', 'personal']).code, 0)
+  const copy = path.join(dataRoot, 'work', id)
+  fs.cpSync(path.join(second, 'work', id), copy, { recursive: true })
+  const record = path.join(copy, 'work.json')
+  fs.writeFileSync(record, JSON.stringify({ ...JSON.parse(fs.readFileSync(record, 'utf8')), closedAt: '2026-09-29T12:00:00.000Z', abandonedAt: '2026-09-29T12:00:00.000Z' }, null, 2) + '\n')
+  t.after(() => fs.rmSync(copy, { recursive: true, force: true }))
+}
+
+test('a work open in one root and closed in another is named as held by both, not as a leftover', (t) => {
+  openInSecond(t, 'moved-open')
+  const out = strip(rig(['doctor']).out)
+  assert.match(out, /moved-open: data roots hugoforte, personal each hold its record — delete the copy that is wrong/)
+  assert.doesNotMatch(out, /moved-open: abandoned/)
+})
+
+test('tidy leaves the folder of a work that is open in another root', (t) => {
+  openInSecond(t, 'moved-tidy')
+  const r = rig(['tidy'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(fs.existsSync(path.join(workRoot, 'moved-tidy')), 'the open work keeps its folder')
+})
+
+test('close on the closed copy refuses, naming the root that holds the open one', (t) => {
+  openInSecond(t, 'moved-close')
+  const r = rig(['close', '--work', 'moved-close', '--data', 'hugoforte', '--force'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(strip(r.out), /data root "personal" holds a record of moved-close that does not say it is closed/)
+  assert.ok(fs.existsSync(path.join(workRoot, 'moved-close')), 'the open work keeps its folder')
 })

@@ -433,11 +433,51 @@ test('rig new --key <a Jira key> fetches title and description from Jira, no pip
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /Fetched description/)
 })
 
-test('rig save --designed records the design-agreed gate and commits with the message', () => {
+test('rig save --designed refuses without the adversarial-review choice, and records nothing', () => {
   const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--adversarial or --no-adversarial/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).designedAt, undefined)
+})
+
+test('the adversarial-review choice is refused away from the design gate, and both at once', () => {
+  for (const args of [['--adversarial'], ['--no-adversarial'], ['--designed', '--adversarial', '--no-adversarial']]) {
+    const r = rig(['save', '--work', 't7', ...args])
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}`)
+  }
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).adversarial, undefined)
+})
+
+test('rig save --reviewed is refused before the design gate, whose choice it answers', () => {
+  const r = rig(['save', '--work', 't7', '-m', 'adversarial review', '--reviewed'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /no design gate yet/)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).reviewedAt, undefined)
+})
+
+test('rig save refuses --reviewed beside --designed, and a value on the review choice', () => {
+  for (const args of [['--designed', '--adversarial', '--reviewed'], ['--designed', '--adversarial=false'], ['--designed', '--no-adversarial=yes']]) {
+    const r = rig(['save', '--work', 't7', ...args])
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}`)
+  }
+  const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
+  assert.equal(record.designedAt, undefined)
+  assert.equal(record.reviewedAt, undefined)
+})
+
+test('rig save --designed --adversarial records the choice beside the gate', () => {
+  const r = rig(['save', '--work', 't7', '--designed', '--adversarial'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(readJson(path.join(dataRoot, 'work', 't7', 'work.json')).adversarial, true)
+})
+
+test('rig save --designed records the design-agreed gate and commits with the message', () => {
+  // Agreeing the design again records the choice again: the one that counts is the latest.
+  const r = rig(['save', '--work', 't7', '-m', 'design agreed', '--designed', '--no-adversarial'])
   assert.equal(r.code, 0, r.out)
   const record = readJson(path.join(dataRoot, 'work', 't7', 'work.json'))
-  assert.ok(record.designedAt, 'the gate is stored with its date, and nothing else is')
+  assert.ok(record.designedAt, 'the gate is stored with its date')
+  assert.equal(record.adversarial, false, 'and the review choice made at it')
   assert.equal(record.status, undefined)
   assert.match(fs.readFileSync(path.join(dataRoot, 'work', 't7', 'context.md'), 'utf8'), /^Tickets: PROJ-2 · Status: Building \(design agreed \d{4}-\d{2}-\d{2}\)$/m)
   assert.equal(lastCommit(dataRoot), 'rig save t7: design agreed')
@@ -720,6 +760,8 @@ test('list --json carries the record plus the timestamps a consumer cannot deriv
   assert.equal(old.branch, 'feat/old')
   assert.equal(old.createdAt, '2026-01-01T00:00:00.000Z')
   assert.equal(old.learnedAt, null, 'a gate not passed is null, not missing')
+  assert.equal(old.reviewedAt, null)
+  assert.equal(old.adversarial, null, 'a review choice never made is null, not false')
   const [billing] = old.repos
   assert.equal(billing.pr.number, 12)
   assert.equal(billing.pr.openedAt, '2026-01-02T00:00:00Z')
@@ -792,10 +834,10 @@ test('dash --quick looks nothing up, and still renders what is recorded', () => 
 
 // A record that no longer parses — truncated, or cut off by an interrupted write — planted for
 // one test and taken away after it, so the tests below read the root they were written for.
-const withBrokenRecord = body => {
+const withBrokenRecord = (body, text = '{"id": "broken", "repos": [') => {
   const dir = path.join(dataRoot, 'work', 'broken')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'work.json'), '{"id": "broken", "repos": [')
+  fs.writeFileSync(path.join(dir, 'work.json'), text)
   try { body() } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -854,6 +896,17 @@ test('when gh cannot answer, status and list say the PR state is unknown, and cl
   assert.match(r.out, /billing: PR state unknown \(gh not found on PATH/)
   assert.ok(fs.existsSync(path.join(workRoot, 'old', 'billing')), 'nothing torn down')
   setGithub(state)
+})
+
+test('a signed-out gh is a PR state unknown too, and close refuses on it', () => {
+  // gh runs and exits non-zero when signed out, which used to read as "no PR" (decision 170).
+  const state = github()
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['close', '--work', 'old'])
+  setGithub(state)
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: PR state unknown \(gh is not authenticated/)
+  assert.ok(fs.existsSync(path.join(workRoot, 'old', 'billing')), 'nothing torn down')
 })
 
 test('close refuses on an open PR even when the repo\'s worktree folder is already gone', () => {
@@ -1139,6 +1192,23 @@ test('backfill: a lookup GitHub refuses is reported and left unstored, never cac
   assert.equal(readJson(path.join(dataRoot, 'work', 't9', 'work.json')).repos[0].branches[0].pr.number, 30)
 })
 
+test('backfill: a signed-out gh is reported for the branch it would not answer for, never skipped as unmerged', () => {
+  // gh runs and exits non-zero when signed out, and that used to read as "no PR yet", so the
+  // branch was passed over in silence (decision 169).
+  const state = github()
+  plantWork('t9b', {
+    id: 't9b', title: 'Asked while signed out', tickets: [], ticketsDeclined: true, type: 'feat',
+    branch: 'feat/t9b', status: 'closed',
+    repos: [{ repo: 'warehouse', org: 'acme', base: 'main', attachedAt: '2026-02-10T00:00:00.000Z' }],
+    createdAt: '2026-02-10T00:00:00.000Z', closedAt: '2026-02-12T01:00:00.000Z',
+  })
+  setGithub({ ...state, auth: 'unauthenticated' })
+  const r = rig(['backfill', '--work', 't9b'])
+  setGithub(state)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /t9b\/warehouse feat\/t9b: gh is not authenticated/)
+})
+
 test('rig backfill with no --work scans every work in the data root', () => {
   const state = github()
   state.repos['acme/reporting'] = {
@@ -1182,6 +1252,60 @@ test('doctor reports a record that will not read as a problem, and still checks 
   assert.match(r.out, /broken: work record .*work\.json could not be read \(/)
   assert.match(r.out, /disk on /, 'the checks after the works still ran')
 }))
+
+// Valid JSON that is not a work record: only a hand edit makes one, and each of these was a
+// TypeError out of `loadWork` or a command reading the record raw.
+const MISSHAPEN = [
+  ['[]', /is not an object/],
+  ['{"repos": []}', /it has no `id`/],
+  ['{"id": 7}', /it has no `id`/],
+  ['{"id": "broken", "stages": [{"branch": "s", "tickets": {}}]}', /`tickets` of stage s is not a list/],
+  ['{"id": "broken", "repos": {}}', /`repos` is not a list/],
+  ['{"id": "broken", "repos": "x"}', /`repos` is not a list/],
+  ['{"id": "broken", "stages": {}}', /`stages` is not a list/],
+  ['{"id": "broken", "tickets": "PROJ-1"}', /`tickets` is not a list/],
+  ['{"id": "broken", "repos": [{"org": "acme"}]}', /repo 1 has no `repo`/],
+  ['{"id": "broken", "repos": [{"repo": "a", "branches": {}}]}', /`branches` of a is not a list/],
+  ['{"id": "broken", "stages": [{"delivers": "x"}]}', /stage 1 has no `branch`/],
+  ['{"id": "broken", "outcome": "Shipped it"}', /`outcome` is not a statement with its date/],
+  ['{"id": "broken", "outcome": {"text": "Shipped it"}}', /`outcome` is not a statement with its date/],
+  ['{"id": "broken", "repos": [{"repo": "a", "branches": [{"branch": "b", "verified": "yes"}]}]}', /`verified` of a is not a pass with its branch, head, base, patch-id and date/],
+  ['{"id": "broken", "repos": [{"repo": "a", "branches": [{"branch": "b", "verified": {"branch": "b", "head": "h", "base": "b", "patchId": "", "at": "t"}}, {"branch": "c", "verified": "yes"}]}]}', /`verified` of a is not a pass with its branch/],
+  ['{"id": "broken", "stops": "design"}', /`stops` is not a list of gate names/],
+  ['{"id": "broken", "stops": [7]}', /`stops` is not a list of gate names/],
+  ['{"id": "broken", "agentDecided": "design"}', /`agentDecided` is not a list of gate names/],
+]
+
+test('doctor reports a record of the wrong shape as unreadable, says why, and still checks everything else', () => {
+  for (const [text, why] of MISSHAPEN) {
+    withBrokenRecord(() => {
+      const r = rig(['doctor'])
+      assert.equal(r.code, 1, `${text}\n${r.out}`)
+      assert.match(r.out, /broken: work record .*work\.json could not be read \(/, text)
+      assert.match(r.out, why, text)
+      assert.match(r.out, /disk on /, `${text}: the checks after the works still ran`)
+    }, text)
+  }
+})
+
+test('list leaves out a record of the wrong shape and names it', () => withBrokenRecord(() => {
+  const r = rig(['list', '--quick'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /1 work record could not be read and was left out: broken \(`repos` is not a list\)/)
+}, '{"id": "broken", "repos": {}}'))
+
+test('rig new over a record that will not read says the id is taken and why, not a stack trace', () => {
+  for (const text of ['{"id": "broken", "repos": [', '{"id": "broken", "repos": {}}']) {
+    withBrokenRecord(() => {
+      for (const args of [['new', 'broken', '--no-ticket'], ['new', 'broken', '--ticket', '--dry-run', '--org', 'acme']]) {
+        const r = rig(args)
+        assert.equal(r.code, 1, `${args.join(' ')} over ${text}\n${r.out}`)
+        assert.match(r.out, /work "broken" already exists: work record for "broken" at .*work\.json could not be read \(/, text)
+        assert.doesNotMatch(r.out, /TypeError|SyntaxError|\n\s+at /, 'no stack trace')
+      }
+    }, text)
+  }
+})
 
 test('a record saved with a byte-order mark reads like any other', () => {
   const file = path.join(dataRoot, 'work', 't10', 'work.json')
