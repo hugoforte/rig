@@ -525,7 +525,7 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
   }
 
   // The data root's lock, for the two sections of a command that move its git state
-  // (decisions 160–162). Waits up to `LOCK_WAIT_MS` for a live holder, and takes over a stale
+  // (decisions 160–162). Waits up to `waitMs` for a live holder, and takes over a stale
   // one. `holder` is what a waiter is told: `{ command, work, section }`.
   //
   //   taken · taken-over (`stale` is `{ why, holder }`; why is gone, old or unreadable)
@@ -533,7 +533,7 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
   //
   // The lock is advisory. git's own `index.lock` is under it, and so are `pushRebasing`'s
   // outcomes, so a lock that fails leaves rig as it was without one — never worse.
-  function lock (dir, holder) {
+  function lock (dir, holder, { waitMs = LOCK_WAIT_MS } = {}) {
     const m = machine()
     const gitDir = gitDirOf(dir)
     if (!gitDir) return { outcome: 'failed', error: `${dir} is not a git checkout` }
@@ -552,7 +552,7 @@ export function checkouts ({ run, env = () => process.env, machine = () => REAL_
       const seen = readLock(file)
       const why = seen && staleness(seen, m)
       if (why && removeIfUnchanged(file, seen.raw)) { stale = { why, holder: seen.holder }; continue }
-      if (m.now() - start >= LOCK_WAIT_MS) {
+      if (m.now() - start >= waitMs) {
         if (!seen) return { outcome: 'failed', error: `${file} could be neither made nor read` }
         const since = seen.holder ? Date.parse(seen.holder.since) : seen.mtimeMs
         // Never negative: a holder on another host may be writing a clock that runs ahead.

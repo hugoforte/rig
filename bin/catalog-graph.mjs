@@ -1,11 +1,10 @@
 // The catalogue as a graph, and the questions worth asking of it.
 //
-// `talks_to` was the catalogue's load-bearing field and the only thing that ever read it back
-// was `rig demo`, which drew it. DESIGN.md §6 makes the traversal a rule *for the agent* — "for
-// every selected repo, check its neighbours and say why each is or isn't in scope" — which is
-// discipline standing in for a command. `impact` is that traversal, and having it means a
-// corrected entry changes an outcome, which is the only thing that makes rule 4's correction
-// worth making.
+// `talks_to` is the catalogue's load-bearing field, and this module is what reads it back.
+// DESIGN.md §6 makes the traversal a rule *for the agent* — "for every selected repo, check its
+// neighbours and say why each is or isn't in scope". `impact` is that traversal as a command,
+// and having it means a corrected entry changes an outcome, which is the only thing that makes
+// rule 4's correction worth making.
 //
 // Pure by construction: a catalogue in, a graph or an answer out. No data root, no mirror, no
 // `gh`. The entry freshness `rig impact` prints beside an edge is gathered by the caller and
@@ -44,13 +43,11 @@ export function buildGraph (catalog) {
         id: repo,
         org: entry?.org || '',
         role: entry?.role || '',
-        stack: entry?.stack || '',
         // A neighbour named by someone else's `talks_to` with no entry of its own is a real
         // finding, not a rendering problem: it is the catalogue telling you where it is thin.
         // Dropping it would hide exactly the gap worth seeing.
         catalogued: Boolean(entry),
         draft: Boolean(entry?.draft),
-        degree: 0,
       })
     }
     return nodes.get(key)
@@ -76,11 +73,7 @@ export function buildGraph (catalog) {
     }
   }
 
-  for (const e of edges.values()) {
-    nodes.get(lower(e.a)).degree++
-    nodes.get(lower(e.b)).degree++
-    Object.assign(e, resolve(e))
-  }
+  for (const e of edges.values()) Object.assign(e, resolve(e))
 
   return { nodes: [...nodes.values()], edges: [...edges.values()] }
 }

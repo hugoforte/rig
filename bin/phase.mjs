@@ -49,7 +49,15 @@ export const TERMINAL = ['closed', 'abandoned']
 // join it rather than replacing anything. `learnedAt` is the lesson review, and unlike the
 // design gate it may be passed after the close: the catalogue and rig's tracker outlive the work.
 // `reviewedAt` is the adversarial review a design chose: GitHub cannot say one happened.
-export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+// `documentedAt` is the user docs kept true once the work landed, passable after the close too.
+export const GATES = { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' }
+
+// The gates that may stop being stops — where the agent waits for the human — chosen per work
+// as `stops`. A record with no `stops` waits at both, as every work did before the choice
+// existed. The ticket decision is the human's at `rig new` already, and the lesson review stays a
+// stop because skipping it would let an agent file issues and edit the org doc unseen.
+export const STOP_WORDS = { repos: 'the repo set', design: 'the design' }
+export const STOPPABLE = Object.keys(STOP_WORDS)
 
 const MERGED = 'MERGED'
 

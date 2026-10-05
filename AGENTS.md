@@ -94,6 +94,50 @@ rig attach billing
 rig attach orders-web
 ```
 
+## Stops
+
+A **stop** is a gate where the agent waits for the human. A work has five:
+
+1. **The ticket decision** — `--key`, `--ticket` or `--no-ticket` at `rig new`.
+2. **The repo set** — the repo interview ends by presenting the set and waiting.
+3. **The design gate** — the Direction agreed, with the adversarial-review choice.
+4. **The lesson review** — `rig-learn` presents its lessons and waits for "go".
+5. **The user-docs edit** — `rig-docs` shows the edit and publishes only on "go".
+
+**Only the repo set and the design gate can stop being stops.** The ticket decision already is
+the human's, made on the command line. The lesson review and the user-docs edit stay stops because both
+reach outside the work: skipping them would let an agent file issues on a tracker, edit the org
+doc and publish the product's docs unseen. A work chooses at `rig new`,
+and `rig save` changes it later:
+
+```bash
+rig new <id> --title "..." --no-ticket --stops design   # wait at the design only
+rig save --stops none                                   # wait at neither, from here on
+```
+
+Absent means both, which is how every work behaved before the choice existed, so there is nothing
+to ask: pass `--stops` only when the user said at the outset what to skip. Unlike the declared
+track decision 67 rejected, a stop is read once, just before it fires, so a choice made early has
+nothing to go stale against.
+
+**A gate that is not a stop is still a gate.** The agent decides it and says so:
+`rig attach <repo> --by-agent` (or `rig new --repos a,b --by-agent`) for the repo set, and
+`rig save -m "design agreed" --designed --adversarial --by-agent` for the design. Deciding the
+design alone, the agent chooses the adversarial review: it costs the agent effort and the human
+nothing. `rig status` marks what the agent decided, `rig list --json` carries `stops` and
+`agentDecided`, and `rig next` offers it to the human for review. The human agreeing the design
+again, without `--by-agent`, clears both marks, since the repo set is in the Direction they agreed.
+With the review choice the agent made, that is a confirmation: the design keeps its date, so an
+adversarial review already done still stands. `rig status` always names the stops, the default
+included.
+
+**A skipped stop fires anyway once the work outgrows what the human saw**: more repos than the
+human named at the start, or three repos, the weight at which `rig next` offers a rollout plan.
+`rig next` says the second, before the design is recorded and after the agent recorded it alike; the first is the agent's to notice.
+
+Stops are kept by the prompts and skills, not by rig: no command refuses because a stop was
+skipped, and none waits. rig records the choice and what the agent decided.
+
 ## Rules that matter
 
 1. **Never `git worktree add` inside the work root.** Use `rig attach`. rig owns that tree and
@@ -105,15 +149,23 @@ rig attach orders-web
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
    **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
    hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
-   `reviewedAt`, `learnedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing
+   `reviewedAt`, `learnedAt`, `documentedAt`, `abandonedAt` and `closedAt`, each a decision on a date that nothing
    can observe afterwards — and, beside `designedAt`, whether the design chose an adversarial
-   review. The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
+   review; and the choices about gates: which ones the work stops at (`stops`) and which ones
+   the agent decided (`agentDecided`), see "Stops". The phase (`planning` → `designing` → `building` → `reviewing` → `landing`,
    terminating in `closed` or `abandoned`) is computed from those gates and the repos,
    branches and PRs every time it is shown — see `bin/phase.mjs`. A merged PR's terminal
    facts (`number`, `url`, `openedAt`, `firstCommitAt`, `firstReviewAt`, `approvedAt`,
    `mergedAt`) are the other thing stored, recorded by `rig close` and `rig backfill` once a
    PR is `MERGED` — a terminal fact cannot go stale the way branch or PR state can, which is
    what makes storing it a different act from storing state.
+
+   The **outcome** is the third: what changed for someone and why that is good, in a sentence
+   or two a person outside the work can read, stored as `outcome: { text, at }` by
+   `rig save --outcome "…"`. It is a statement made once the work landed, which nothing can
+   derive later; saying it again replaces it. `rig next` offers it once every PR has merged,
+   `rig close` names a work that merged everything and closes without one, and neither
+   refuses. `rig list --json` carries it for whatever renders what landed.
 
    A repo's record carries `branches[]` — one entry per branch of this work it holds, each
    with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
@@ -139,12 +191,20 @@ rig attach orders-web
    machine check before prose, and never a new rule. The org doc is the one home for prose
    every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, and `rig close` names a work that never
    passed it. Neither refuses.
+
+   The story includes the sessions that did the work, where this machine keeps them.
+   `rig status --transcripts` prints their paths, one a line on stdout: the sessions whose
+   workspace is the work folder or one of its worktrees, found through the patterns in
+   `rig.local.json`'s `transcripts` (`rig prompt setup` has Claude Code's). rig knows no agent
+   host. A pattern must place the workspace with `{slug}`, or it would read every work's
+   sessions, which are private; one that does not finds nothing and is named. `rig-learn`
+   reads only what the command prints, through subagents.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `docs`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -180,18 +240,44 @@ pull request is open, adding a repo is a decision already taken. Neither blocks,
 attaches anything for you.
 
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
-lint, its build. Both are commands and never results: no pass or fail is ever stored.
+lint, its build. Both are commands, and the catalogue never holds a result.
 
 ```bash
 rig check                 # what verifies every repo in this work — printed, not run
 rig check billing --run   # run billing's, in its worktree; non-zero if one fails
 ```
 
+**A pass is recorded, pinned to the patch.** What passed at one diff cannot be seen afterwards —
+a re-run says what passes now — so `rig check --run` records each repo that passes on the work
+branch's record as `verified`: the branch it ran on, the head, where it leaves the base, a
+patch-id for the diff between them (whitespace counts, and no one's diff settings shape it), and
+the date, all read before the run, so what the run itself writes is not taken for what it proved. That makes `rig check --run` a mutating command: it
+commits and pushes the data root like `rig save`, and `rig check` without `--run` writes
+nothing. A failure clears the pass. A pass with uncommitted changes is not recorded, since they are in no
+patch, nor one on a detached HEAD, which is in no PR. A worktree not on this machine is not run,
+and a check that never started is no verdict: neither clears what was recorded. A stopped work
+refuses `--run`. `rig status` reads the pass against the diff the repo carries now:
+**verified** while the same branch carries the same patch-id, whatever happened to the head,
+**stale** once the diff changed, **not verified** with none or with a pass for another branch,
+and **not compared** when the worktree is not on this machine. `rig next` offers the run for a repo with work on it
+and no pass at its diff, and `rig pr` names such a repo, or one whose pass was recorded on a stage rather than the work branch, and opens the PR anyway. A pass is for the patch, not the base: a base that moved since is not compared, so when a PR's checks fail with `rig next` naming a moved base, the pass is a claim to run again.
+
 Neither is run behind your back: `rig attach` prints the setup commands and `--setup` opts
 in, `rig check` prints the check commands and `--run` opts in. A command that cannot
 succeed yet — a test run in a worktree nothing has installed — is worse run than shown. A
 repo whose `check` is empty is named, with the file to write one in; write it while the
 repo is still loaded in your head (rule 4).
+
+`docs` is where the repo's user documentation lives: a path in the repo, or a page elsewhere
+such as Confluence. rig knows a docs target and never edits one; the generated work file lists
+it beside `check`. Once every PR has merged, `rig next` offers the `rig-docs` skill for a work
+whose repos have a target, naming any attached repo with none and the file to say it in, and
+`rig save -m "user docs updated" --documented` records the gate. `rig close` names a work
+closing without it, as it names the lesson review. Nothing refuses without it.
+
+A work keeps its **QA evidence** in `qa.md` beside `context.md`: the steps walked on a deployed
+environment and what was seen. `rig status` names it. The user-docs edit and the digest read it,
+because it is the nearest record of how a user meets the change.
 
 ## The org doc
 
@@ -216,6 +302,17 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 you have content for them**. Empty stubs are how the last attempt ended up with a dead
 "Cross-Repo Contracts" table containing one blank row.
 
+**The four are checked; the rest are not.** `rig save` checks the doc against
+`templates/context.md` and prints each problem as `path:line: problem`, so an editor opens it
+where it is, and `rig doctor` lists them under the work: a scaffolded heading lost or renamed, the
+four out of order, and — once the design gate has passed — a placeholder of the template's still
+standing (`_TODO_`, `_next step_`, an unfilled `{{FIELD}}`, an empty table row). Before the gate,
+placeholders are what a doc being written looks like. Code — a fenced block, an inline span — and
+comments are not read as either. A section from `context-sections.md` is never required. Neither
+command refuses; in doctor a lost or moved heading counts among the things to look at, and a
+placeholder is a chore it says without counting. The headings are the template's, so renaming one
+in `templates/context.md` is a change to every open doc.
+
 Two habits worth keeping from the docs this inherits:
 
 - **Inline epistemic markers.** `✅ CONFIRMED (2026-06-12)` / `❌ REFUTED by data (2026-06-12)`
@@ -225,7 +322,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `plan`, `save`, `close`) ends by committing the whole
+(`new`, `ticket`, `attach`, `detach`, `restore`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:
@@ -251,11 +348,29 @@ was just agreed, with the catalogue corrections you made in passing swept up alo
 command holds a lock on it (`rig.lock`, in the data root's git dir, never committed) while it
 fast-forwards at the start and while it commits and pushes at the end — never for the rest of
 the command. A second command that finds it held waits up to 30 seconds, then says which
-command and work hold it: at the start it stops before doing anything, so run it again; at the
-end what it wrote waits in the tree for the next command, or `rig save` once the other
+command and work hold it: at the start it stops before doing anything, so run it again — with
+several roots, only for the root it commits into, or one that may hold the work it is about
+(DESIGN.md decision 192); at the end what it wrote waits in the tree for the next command, or `rig save` once the other
 finishes. A lock left by a session that was killed is taken over, and rig says whose it was.
 Read-only commands never wait. The lock does not change the sweep: the second of two queued
 commits still carries whatever hand edits are in the tree (DESIGN.md decisions 160–162).
+
+**The notes are every decision taken along the way.** The context doc's sections keep what
+shaped the design, edited into the order that reads best. The smaller decisions a long or
+unattended session takes — why an approach was dropped, which check proved a step, what was
+reverted — go in the work's `notes.tsv`, one row each, with `rig note`:
+
+```bash
+rig note "Dropped the cache layer" --why "it hid a stale read" --evidence abc1234,bin/cache.mjs:40 --result reverted
+```
+
+A row is `at`, `stage`, `note`, `why`, `evidence` and `result`, one line a cell. The evidence is
+a pointer a reviewer can open — a SHA, a PR, `file:line`, a path or a URL, several split by
+commas — and never prose: a word with no `/`, `\`, `:` or `.` in it, such as "done", is refused, and so is a
+pointer with a space, which is written `%20`. `rig note` refuses a row without one. A note that
+begins with a dash goes after `--`. Rows are appended and never read
+to be written, so the hundredth costs what the first did, and the data root is committed.
+`rig status` names the file; the lesson review and a pickup read it.
 
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
@@ -276,10 +391,10 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work folder the command is running in**, **the repo it is about**
-(named by `--repos`, then a data root's own checkout, then the repo checkout it runs in),
-then `current`. The middle two are the ones that matter: `C:\w\<id>\.rig\data` names the
-root a work's records live in, and a repo's catalogue entry — drafted by `rig attach` the
+`RIG_DATA_ROOT`, **the work it is about** (named by `--work` or `rig restore <id>`, else the
+work folder it runs in), **the repo it is about** (named by `--repos`, then a data root's own
+checkout, then the repo checkout it runs in), then `current`. The middle two are the ones that
+matter: the root that holds a work's record is the root for that work, and a repo's catalogue entry — drafted by `rig attach` the
 first time it saw that repo — names the root that repo belongs to. A checkout's repo is
 matched by org as well as name, because same-named repos in different orgs are normal. So
 `rig new <id> --repos Payments` lands in Payments' root, a command run in a checkout of a
@@ -295,16 +410,16 @@ rather than drafting its entry into this one. Two works, one per root, is the an
 Two consequences worth holding on to:
 
 - **One work root, shared.** A work id is unique across every data root on the machine, and
-  `rig new` refuses one whose folder exists, naming the root that owns it. Renaming a folder
+  `rig new` refuses one another root holds or whose folder exists, naming the root that owns it. Renaming a folder
   another root's records point at would break that work, so the id is what gives.
 - **`rig update` brings every configured root forward**, not the one in hand. The write
   refusal is per data root, so migrating only the current one leaves the others to refuse the
   next mutating command, mid-work. It needs no root in hand to do that, so two roots and no
   `current` do not stop it; the doctor checks it ends in say that selection, once.
-- **A work folder's `.rig/data` is written only where the record is**: rig writes it when the
-  root in hand is the one root holding the work's record. `rig doctor` names a folder with
-  none when more than one root is configured, one whose marker names a root that does not
-  hold the record, and a record held by two roots.
+- **A work held by two roots resolves to the one that holds it open**: a work moved between
+  roots leaves its first copy behind closed. Two open copies, or two closed and none open, is
+  a pick rig will not make — the command names the roots and asks for `--data`, and `rig
+  doctor` names a record held by two roots (DESIGN.md decisions 188–191).
 - **`rig doctor` checks every configured root**, in full, each finding labelled with the
   root's name — the roots nobody looks at are the ones that rot. Its two work-root checks are
   the exception and are asked once against every root's records at once: the work root is
@@ -401,6 +516,11 @@ which puts the stage back as though it had never been withdrawn; the commit says
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
+**The frontier.** The lowest stage still to land is the only stage that matters until it lands,
+so `rig next` leads with it and names the live stages stacked above it as waiting on it, rather
+than offering each one. A stage whose place in the order is a guess, or whose PR GitHub would
+not say anything about, is not called waiting.
+
 ## What now
 
 ```bash
@@ -408,14 +528,14 @@ rig next        # what is available on the current work, read off live state
 ```
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
-attach something, record the design gate, push, open a PR, work through its review threads,
-the adversarial review, hand the PR over, scaffold a rollout plan, review what the work taught,
-close.
+pick up a handoff, attach something, record the design gate, run the checks, push, open a PR,
+work through its review threads, the adversarial review, hand the PR over, scaffold a rollout
+plan, review what the work taught, say its outcome, close.
 
 Two things it will never do, and both are the point:
 
 - **It only offers.** It never warns, never blocks, and never says you should have. Warnings
-  live in `doctor`, and only for contradictions. A work that reached review with no design
+  live in `doctor`, for contradictions and for what has drifted. A work that reached review with no design
   gate recorded has an *omission*, and an omission is something to offer, not to scold.
 - **It speaks only when asked.** A command you run — not a hook, and never fired off the back
   of another command.
@@ -441,6 +561,8 @@ The record is portable and the work root is not: a second machine that clones th
 
 A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
+**Picking one up trusts it.** `rig prompt pickup` is the other half: read the handoff, the context doc and `rig status` — its stops line says what the human chose to be asked, and its checks lines what passed at the patch each repo carries — compare what was planned with what happened, check once only what the next step stands on, and name the resume point before starting. It runs no verify-from-scratch pass on top of the trail; the trail was written so none would be needed. `rig next` offers it while the handoff was committed after the last commit on any of the work's branches here, first, since it may answer everything else, and stops on the pickup's first commit.
+
 ## Staying up to date
 
 A dim line on stderr — `rig is N commits behind … — rig update` — is addressed to you. Run
@@ -457,7 +579,11 @@ A mutating command that dies with "run `rig update`" hit the **write refusal**: 
 at a newer record format than this rig (the major version *is* the record format,
 `docs/adr/0002-the-major-version-is-the-record-format.md`). Read-only commands — `list`,
 `status`, `catalog`, `doctor` — still answer. Mutating commands fast-forward the data root
-before they read it, so a second machine never works from stale records. A data root whose
+before they read it, so a second machine never works from stale records — every configured root
+when there are several, before the root is chosen, since a work moved on the other machine has
+moved only in what it pushed, and an id taken there must be seen before `rig new` takes it here.
+A root whose remote is out of reach is said and worked from as it is, and asked again after
+fifteen minutes. A data root whose
 branch tracks an upstream it has not fetched yet, such as a clone of an empty remote that
 another machine has since pushed to, is fetched too, rather than read as local only. How the
 check is measured and configured is in the README's "Staying up to date" and DESIGN.md decisions 45–49.
@@ -484,28 +610,6 @@ derive, and a refresh never touches them.
 an artifact deserves to exist, and the rollout plan failed it for its entire existence — `rig
 plan` wrote the file and nothing ever looked again. Now `rig next` compares the rendered table
 to the live stack and offers `rig plan --refresh` when they disagree.
-
-## Showing rig to people
-
-```bash
-rig demo                      # into <data root>/demo/index.html, then opens it
-rig demo --example <work-id>  # walk through a particular work rather than the chosen one
-```
-
-One interactive page, rendered from the data root in hand: the `talks_to` graph — arrowheads
-where a direction is stated, plain lines where it is not — the outcome figures for the works
-that landed, and one real
-work walked through command by command. It exists because this repo is public and a page
-naming a real org's repos cannot live in it — so the generator is committed here and the page
-is committed wherever its data root is.
-
-**It is a generated file** (rule 2): never edit `demo/index.html`, re-render it. Unlike `rig
-dash`, it is written into the data root rather than a temp path, and the reason is the input —
-the dashboard renders live PR state, this reads the catalogue and the terminal facts of closed
-work, which cannot change again.
-
-The work it walks through is the one with the most repos that *merged*, not the most repos: a
-walkthrough that stops before the merge makes half the case.
 
 ## Opening the pull requests
 
@@ -580,6 +684,15 @@ once the one before it is done:
    failing, or have not reported, are named on their own, so the wait is never silent. It names no command: who reviews is the
    human's call, and rig takes no outward-facing step on its own.
 
+   A failing check is the PR's to fix, and `rig next` names the base beside it when the base has
+   moved past the branch: for a failing PR only, it fetches the repo, quietly and never as a
+   first clone, and counts against the PR's live base, as `rig pr` does. A moved base is a
+   possible cause, never the cause — a **stale base** fails code the diff never touched, which
+   no fresh run fixes and merging the base in does — so the offer says so, with
+   `git merge origin/<base>` when the worktree is on the work branch. A fetch that fails gives
+   no count, and nothing is said. The rest of the triage — one fresh run for a flaky failure,
+   the same failure twice is not flaky — is the `rig` skill's.
+
 rig names each step and says nothing about how it is done; an agent host maps them to its own
 skills. Only the work branch's PR is asked about, never a stage's.
 
@@ -601,6 +714,19 @@ its stack one PR at a time holds the same patches under new shas, so a copy the 
 not contain is compared by patch and by content: it goes when everything on it landed, and is
 kept otherwise, naming the first commit that did not. A close forced past a blocker, or
 abandoned, deletes no branch. Nothing else is ever auto-deleted.
+
+**A session still at work is named, not refused on.** A clean worktree a live session is about
+to write into looks exactly like an abandoned one. So before `rig close`, `rig detach` or
+`rig tidy` takes a worktree away, it names each session whose transcript was written there, or
+in the work folder, in the last two hours — found the way the lesson review finds them, through
+`rig.local.json`'s `transcripts` — and carries on: only that session can say whether it is
+done, and it is said at the teardown because rig speaks unasked nowhere earlier. Tell the user
+which session was named, in so many words. The session running the command is left out where
+`transcriptSession` names the variable carrying its id; without it, one named may be this one,
+and the close says so. A session started in a subfolder of a worktree is not found, and a pattern
+refused as too wide is named, so silence is never read as no session. `rig list` does not look,
+and says "(sessions not checked)" beside a work it would call safe to close, on a machine that
+could have.
 
 A **stage** still up for review refuses the close too, and is named like any other blocker: a
 slice that never landed is unfinished business, and the work branch's own pull request cannot
@@ -630,10 +756,12 @@ overridden.
 ### Skills rig ships
 
 `skills/rig` finds rig and routes into it; `skills/rig-handoff` writes a session's handoff into
-the work's record; `skills/rig-learn` runs the lesson review before a close. All are shipped,
-never linked: whatever manages a machine symlinks `skills/*` into its agent hosts' skills
-directories. Every skill but the entry point is prefixed `rig-`, and `test/skills.test.mjs`
-holds the shape a host's linker relies on.
+the work's record; `skills/rig-learn` runs the lesson review before a close, and drafts the
+work's outcome; `skills/rig-digest` explains what landed, from `rig list --json`, at the
+altitude asked for, and drafts outcomes for landed works with none; `skills/rig-docs` keeps the
+user docs true once a work has landed. All are shipped, never linked: whatever manages a
+machine symlinks `skills/*` into its agent hosts' skills directories. Every skill but the entry
+point is prefixed `rig-`, and `test/skills.test.mjs` holds the shape a host's linker relies on.
 
 ### Issue tracker
 

@@ -26,7 +26,7 @@ test('active phases are present participles and terminal ones past', () => {
 })
 
 test('every gate names the field it is stored in', () => {
-  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
+  assert.deepEqual(GATES, { designed: 'designedAt', reviewed: 'reviewedAt', learned: 'learnedAt', documented: 'documentedAt', abandoned: 'abandonedAt', closed: 'closedAt' })
 })
 
 // ---------------------------------------------------------------- deriving the phase
@@ -112,10 +112,11 @@ test('an abandoned work says so and keeps its design gate', () => {
 })
 
 test('the gates passed are listed with their dates, in lifecycle order', () => {
-  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, abandonedAt: AT, closedAt: AT })), [
+  assert.deepEqual(gatesOf(work({ designedAt: AT, reviewedAt: AT, learnedAt: AT, documentedAt: AT, abandonedAt: AT, closedAt: AT })), [
     { gate: 'designed', at: AT },
     { gate: 'reviewed', at: AT },
     { gate: 'learned', at: AT },
+    { gate: 'documented', at: AT },
     { gate: 'abandoned', at: AT },
     { gate: 'closed', at: AT },
   ])
@@ -190,4 +191,9 @@ test('omissions are not contradictions', () => {
   // A work under review with no design gate recorded is the commonest record there is.
   // `rig next` offers the gate; `doctor` says nothing, or nobody reads `doctor`.
   assert.deepEqual(contradictions(work({ repos: [{ repo: 'r' }] }), [open(1)]), [])
+})
+
+test('a design gate the agent decided is a design gate: the stops and the marks do not move the phase', () => {
+  const by = over => phaseOf(work({ repos: [{ repo: 'r' }], designedAt: AT, ...over }), [repo()])
+  assert.equal(by({ stops: [], agentDecided: ['repos', 'design'] }), by({}))
 })

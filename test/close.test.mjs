@@ -208,6 +208,13 @@ test('a stage that landed goes with the work branch', () => {
   assert.equal(hasBranch(bare('billing'), 'feat/sliced-one'), false)
 })
 
+test('the close records a landed stage\'s pull request beside the work branch\'s', () => {
+  // So `rig list --json` and `rig dash` can link each slice without a `rig backfill` first.
+  const stage = record('sliced').repos[0].branches.find(b => b.branch === 'feat/sliced-one')
+  assert.equal(stage.pr?.number, 43, JSON.stringify(record('sliced').repos[0].branches))
+  assert.equal(stage.pr.url, 'https://github.com/acme/billing/pull/43')
+})
+
 // What GitHub does to a stack merged one pull request at a time (hugoforte/rig#257): the stage
 // below merges into the work branch with a merge commit, and the one above is retargeted there
 // and has its own commits re-made on that merge — same patches, new shas — before it merges in
@@ -298,6 +305,116 @@ test('a work whose lessons were reviewed closes without naming the review', () =
   assert.doesNotMatch(r.out, /lessons never reviewed/)
 })
 
+// ------------------------------------------------- the outcome
+
+// What changed for someone, and why that is good: a statement made once the work has landed,
+// which nothing can derive later. Named on the way out like the lesson review, and recordable
+// after the close for the same reason.
+
+test('a work closing with nothing merged is not asked its outcome', () => {
+  assert.equal(rig(['new', 'unmerged', '--title', 'unmerged work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'unmerged']).code, 0)
+  const r = rig(['close', '--work', 'unmerged', '--force'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
+})
+
+test('a work closing with no outcome is named, with the command that records one', () => {
+  landedWork('untold', 46)
+  const r = rig(['close', '--work', 'untold'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(strip(r.out), /no outcome recorded — what changed for someone, and why that is good: `rig save --work untold --outcome "…"`/)
+})
+
+test('the outcome is recorded after the close, with its date', () => {
+  const r = rig(['save', '--work', 'untold', '--outcome', 'Refunds charge once, however often the client retries.'])
+  assert.equal(r.code, 0, r.out)
+  const { outcome } = record('untold')
+  assert.equal(outcome.text, 'Refunds charge once, however often the client retries.')
+  assert.ok(!Number.isNaN(Date.parse(outcome.at)), 'a statement made on a date')
+})
+
+test('recording it again replaces it, and dates it again', () => {
+  const first = record('untold').outcome.at
+  assert.equal(rig(['save', '--work', 'untold', '--outcome', '  A retried refund charges once.  ']).code, 0)
+  const { outcome } = record('untold')
+  assert.equal(outcome.text, 'A retried refund charges once.', 'the statement, without the padding around it')
+  assert.ok(Date.parse(outcome.at) > Date.parse(first), 'dated when it was said, not when the first one was')
+})
+
+test('list --json carries the outcome, and null for a work with none', () => {
+  const { works } = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  assert.equal(works.find(w => w.id === 'untold').outcome.text, 'A retried refund charges once.')
+  assert.equal(works.find(w => w.id === 'tidy').outcome, null)
+})
+
+test('status says the outcome', () => {
+  assert.match(strip(rig(['status', '--work', 'untold']).out), /^outcome A retried refund charges once\. \(\d{4}-\d{2}-\d{2}\)$/m)
+})
+
+test('a work whose outcome was recorded closes without naming it', () => {
+  landedWork('told', 47)
+  assert.equal(rig(['save', '--work', 'told', '--outcome', 'Invoices carry the tax line.']).code, 0)
+  const r = rig(['close', '--work', 'told'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /no outcome recorded/)
+})
+
+test('--outcome needs the outcome, on one line', () => {
+  let r = rig(['save', '--work', 'told', '--outcome'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--outcome needs the outcome/)
+  r = rig(['save', '--work', 'told', '--outcome', 'One line.\nAnd another.'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /--outcome takes one line/)
+  // The offers print `--outcome "…"`, and an agent runs an offered command as written.
+  for (const empty of ['   ', '--outcome=', '…', '...']) {
+    r = rig(['save', '--work', 'told', ...(empty.startsWith('--') ? [empty] : ['--outcome', empty])])
+    assert.equal(r.code, 1, `${JSON.stringify(empty)}: ${r.out}`)
+    assert.match(r.out, /--outcome needs the outcome/)
+  }
+  assert.equal(record('told').outcome.text, 'Invoices carry the tax line.', 'a refused outcome leaves the record alone')
+})
+
+// ------------------------------------------------- the user docs
+
+test('the user-docs edit is recorded after the close, with its date, and listed', () => {
+  const r = rig(['save', '--work', 'told', '-m', 'user docs updated', '--documented'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!Number.isNaN(Date.parse(record('told').documentedAt)), 'a gate, with its date')
+  const { works } = JSON.parse(rig(['list', '--json', '--quick']).stdout)
+  assert.equal(works.find(w => w.id === 'told').documentedAt, record('told').documentedAt)
+  assert.equal(works.find(w => w.id === 'tidy').documentedAt, null, 'null, not missing, for a work without it')
+})
+
+test('status names the QA evidence beside the context doc', () => {
+  fs.writeFileSync(path.join(dataRoot, 'work', 'told', 'qa.md'), '# QA\n')
+  assert.match(strip(rig(['status', '--work', 'told']).out), /^qa .*qa\.md/m)
+})
+
+// The offer read end to end: the docs target comes out of the repo's catalogue entry, and a
+// work closed before the docs were done is told so on its way out, as with the lesson review.
+const billingEntry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
+
+test('a landed work is offered the docs edit from its catalogue entry, and closing without it is named', () => {
+  const entry = fs.readFileSync(billingEntry, 'utf8')
+  try {
+    fs.writeFileSync(billingEntry, entry.replace(/^docs: \[\]$/m, 'docs:\n  - Help centre: https://acme.example/help/billing'))
+    landedWork('docsy', 48)
+    assert.match(strip(rig(['next', '--work', 'docsy']).out), /the rig-docs skill drafts the edit \(billing: `https:\/\/acme\.example\/help\/billing`\)/)
+    const r = rig(['close', '--work', 'docsy'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(strip(r.out), /user docs never updated — the rig-docs skill, then `rig save --work docsy -m "user docs updated" --documented`/)
+  } finally {
+    fs.writeFileSync(billingEntry, entry)
+  }
+})
+
+test('a work whose repos name no docs target closes without mentioning them', () => {
+  landedWork('undocumented', 49)
+  assert.doesNotMatch(rig(['close', '--work', 'undocumented']).out, /user docs/)
+})
+
 // `close` asks the stack whether a slice is still up for review and `list` does not, because
 // a git pass and a GitHub call per stage per work is not what a listing is (decision 77). So
 // `list` has to stop at what it measured: the two works below differ only in whether a stage
@@ -363,6 +480,14 @@ test('abandoning drops the did-it-land checks that would refuse a close', () => 
   assert.doesNotMatch(r.out, /unfinished business/)
   assert.match(r.out, /abandoned given-up/)
   assert.doesNotMatch(r.out, /lessons never reviewed/, 'the command it would name refuses an abandoned work')
+  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
+})
+
+test('an abandoned work refuses an outcome, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '--outcome', 'Nothing, in the end.'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').outcome, undefined)
 })
 
 test('an abandoned work refuses the lesson review, and records nothing', () => {
@@ -370,6 +495,13 @@ test('an abandoned work refuses the lesson review, and records nothing', () => {
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /given-up was abandoned/)
   assert.equal(record('given-up').learnedAt, undefined)
+})
+
+test('an abandoned work refuses the user-docs edit, and records nothing', () => {
+  const r = rig(['save', '--work', 'given-up', '-m', 'user docs updated', '--documented'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /given-up was abandoned/)
+  assert.equal(record('given-up').documentedAt, undefined)
 })
 
 test('an abandoned work refuses the adversarial review, and records nothing', () => {
@@ -508,6 +640,40 @@ test('an open PR is walked through its review: threads, then the adversarial rev
   pr.reviewUnknown = true
   setGithub(state)
   assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /human reviewer/, 'nor while GitHub will not say what the review is')
+})
+
+test('a failing check on a PR whose base moved names the base, read off a quiet fresh fetch', () => {
+  const state = github()
+  const pr = state.repos['acme/billing'].prs.find(p => p.number === 9)
+  Object.assign(pr, { checks: 'FAILURE', reviewUnknown: false })
+  setGithub(state)
+  const mirror = path.join(workRoot, '.mirrors', 'acme', 'billing.git')
+  try {
+    assert.doesNotMatch(rig(['next', '--work', 'what-now']).out, /stale base/, 'the base has not moved yet')
+
+    // Someone else lands on main, and only the remote knows.
+    const other = path.join(workRoot, '..', 'stale-base-other')
+    gitMust(path.dirname(other), 'clone', '-q', bare('billing'), other)
+    fs.writeFileSync(path.join(other, 'LANDED.md'), 'landed elsewhere\n')
+    gitMust(other, 'add', '-A')
+    gitMust(other, 'commit', '-qm', 'landed elsewhere')
+    gitMust(other, 'push', '-q', 'origin', 'HEAD:main')
+
+    const r = rig(['next', '--work', 'what-now'])
+    assert.match(r.out, /billing: the PR's checks are failing — fix them before it is handed over; main has 1 commit the branch does not, so a failure in code the diff never touched may be a stale base/)
+    assert.match(r.out, /git merge origin\/main$/m)
+    assert.doesNotMatch(r.out, /^(!|· fetching)/m, 'the fetch says nothing, and next never warns')
+
+    // Offline: a mirror that cannot be fetched gives no count, so no stale base, and no warning.
+    gitMust(mirror, 'remote', 'set-url', 'origin', path.join(workRoot, '..', 'nowhere.git'))
+    const offline = rig(['next', '--work', 'what-now'])
+    assert.equal(offline.code, 0, offline.out)
+    assert.doesNotMatch(offline.out, /stale base|^!/m)
+  } finally {
+    gitMust(mirror, 'remote', 'set-url', 'origin', bare('billing'))
+    Object.assign(pr, { checks: 'SUCCESS' })
+    setGithub(state)
+  }
 })
 
 test('a closed work refuses the adversarial review, and records nothing', () => {

@@ -29,7 +29,7 @@ The committed checkout holding the catalogue, the work records and `rig.json`. P
 _Avoid_: knowledge repo, rig-data (that is its conventional name, not the concept), profile, workspace
 
 **Current data root**:
-The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT`, the work folder the command is running in and the repo or data root checkout it is about — so it decides only for the commands that have no work to anchor them, and those say when it did.
+The name in `rig.local.json` that says which data root a command reads when nothing else does, moved by `rig use`. Last in the resolution order, after `--data`, `RIG_DATA_ROOT`, the work the command names or runs in and the repo or data root checkout it is about — so it decides only for the commands that have no work to anchor them, and those say when it did.
 _Avoid_: active profile, selected root, default (that is the name of the one-root form)
 
 **Direction**:
@@ -61,8 +61,36 @@ The recorded decision that a work in a tracked org deliberately has no ticket. D
 _Avoid_: ticketless, none
 
 **Gate**:
-A point in a work's life where the agent stops for a decision before proceeding: ticket decided, repos confirmed, design agreed (with the adversarial-review choice), adversarial review done, lessons reviewed, closed. Lessons reviewed is the one gate that may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact.
+A decision recorded at a point in a work's life: ticket decided, repos confirmed, design agreed (with the adversarial-review choice), adversarial review done, lessons reviewed, user docs updated, closed. Lessons reviewed and user docs updated may be passed after the close. A gate that has been passed is recorded with its date — the only lifecycle facts stored, because nothing can observe them after the fact. Whether the agent waited for the human at it is the separate question of the **stop**.
 _Avoid_: step, checkpoint, phase
+
+**Stop**:
+A gate where the agent waits for the human before going on: the ticket decision, the repo set, the design gate, the lesson review and the user-docs edit. A work may choose not to stop at the repo set or the design gate; the agent then decides that gate itself, and the record says it was the agent's. A gate that is not a stop is still a gate.
+_Avoid_: checkpoint, pause, approval, gate (the decision, not the waiting)
+
+**Pickup**:
+A session taking a work over from the handoff the last one left, trusting the trail rather than redoing it: read the handoff, the context doc and `rig status`, check once only what the next step stands on, and name the resume point. It has begun with its first commit.
+_Avoid_: resume (that is the point it names), onboarding, catch-up
+
+**Note**:
+One decision a session took along the way, kept as a row of a work's `notes.tsv`: when, the stage, what was chosen or done, why, a pointer at the evidence a reviewer can open, and the result. Appended by `rig note` and never edited. The context doc keeps the decisions that shaped the design; the notes keep every one.
+_Avoid_: decision (that is a gate), journal, log (a commit log is something else)
+
+**Transcript**:
+The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close`, `rig detach` and `rig tidy` tell a session may still be at work in a worktree.
+_Avoid_: log (a commit log is something else), chat, history
+
+**Frontier**:
+The lowest stage of a work that has not landed and was not withdrawn: the only stage that matters until it lands. The stages stacked above it are **waiting** on it.
+_Avoid_: current stage, active stage, head of the stack
+
+**Stale base**:
+A base that has moved past a pull request's branch, named beside a failing check as a possible cause: a failure in code the diff never touched may be the base's, which merging the base in fixes and a fresh run does not. A moved base alone is ordinary, and proves nothing about a failure.
+_Avoid_: out of date, behind (that is a count), conflict (that is a merge that cannot be made)
+
+**Verified**:
+A repo whose checks last passed at the diff it carries now. `rig check --run` records a pass with the patch it ran at; a diff that changed since makes it **stale**, and a repo with no pass recorded is **not verified**. A fact about a patch, not about a head: a rebase that leaves the diff alone keeps it.
+_Avoid_: green, tested, passing (that is the run, not the record)
 
 **Adversarial review**:
 A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.
@@ -75,6 +103,22 @@ _Avoid_: stage (that is scope), status, step, state
 **Abandoned**:
 The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
 _Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
+
+**Outcome**:
+What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
+_Avoid_: summary, result, release note
+
+**Digest**:
+An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the pull request or ticket it rests on. Written from the records each time and never stored, like the dashboard.
+_Avoid_: report, changelog, release notes, summary
+
+**User docs**:
+How the product works now, written for its users and kept with the product — a repo's docs or a Confluence page — which a work edits once it has landed. The present, where a digest is the history. A repo's catalogue entry names where they live, its **docs target**.
+_Avoid_: documentation (too wide), release notes, help (one kind of it)
+
+**QA evidence**:
+The steps walked on a deployed environment and what was seen, kept in a work's `qa.md` beside its context doc. A record of what happened, not a plan; the rollout plan's UAT steps are the plan.
+_Avoid_: test results, UAT plan, sign-off
 
 **Stage**:
 A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.

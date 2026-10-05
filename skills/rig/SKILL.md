@@ -37,7 +37,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Which repos does it touch | `rig prompt select-repos` |
 | First run on this machine | `rig prompt setup` |
 | Standing in a work, what now | `rig next` |
-| Picking up a work someone else left | `rig status`; a `handoff.md` beside its `context.md` is the previous session's account — read it first |
+| Picking up a work someone else left | `rig prompt pickup`: the handoff, the context doc and `rig status` are the trail, and the trail is authoritative |
 | A work whose folder is not on this machine | `rig restore <id>` |
 | Closed works whose folders are still here | `rig tidy` (`--dry-run` to preview) |
 | Where has this work got to | `rig status` |
@@ -49,23 +49,36 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | The PR says what the work used to be | `rig pr --refresh` |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
-| How is a repo verified | `rig check [--run]` |
+| How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |
 | Context doc edited by hand | `rig save -m "…"` |
+| A decision taken along the way, worth a reviewer seeing | `rig note "…" --why "…" --evidence <sha,pr,file:line>` |
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
+| Every PR merged: what changed for someone, and why that is good | `rig save --outcome '…'`; the `rig-learn` skill drafts it with the lessons, or the `rig-digest` skill once they are reviewed |
+| What landed, explained to someone: a work, a repo, an org or a period | the `rig-digest` skill; `rig dash` for the numbers and the list |
+| Landed and verified where it was deployed: the user docs | the `rig-docs` skill, then `rig save -m "user docs updated" --documented` |
 | Leaving a work for another session | the `rig-handoff` skill |
-| Finished | `rig close` |
+| Finished | `rig close`; if it names a session still at work, tell the user which |
 | Stopped without finishing | `rig close --abandoned` |
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
 
-**Stop for the user at three points**, and `rig new` enforces the first by refusing without it: the ticket decision (`--key`, `--ticket` or `--no-ticket`), the repo set, and the design gate. Each `rig prompt` ends by stopping; do not run past it.
+**Stop for the user at the work's stops**, listed in `AGENTS.md`'s "Stops" with how a work skips one. `rig new` enforces the ticket decision by refusing without it, and `rig status` shows a work that skips a stop. The interviews — `rig prompt setup`, `new-work` and `select-repos` — end by stopping unless the work skips that stop; do not run past them. `rig prompt pickup` is no interview, and ends by starting.
+
+**When a PR's checks fail, find the cause before you act.** Work the frontier first: `rig next` names the lowest stage still to land and what is waiting on it.
+
+- A moved base can fail code the diff never touched. `rig next` names the base when it has moved; if the failure is in code the diff did not change, merge the base in, then push.
+- A flaky or infrastructure failure gets one fresh run, no more.
+- The same failure twice is not flaky: read the logs.
+- Only a failure in the diff's own code gets a commit.
+
+rig names what it can see and never re-runs, rebases or merges anything itself.
 
 **More than one data root is normal** — personal, public and employer knowledge have different readers. A work lives in exactly one, and `rig new --repos a,b` refuses repos catalogued in different roots. `rig use` says which is in hand.
 
 ## Two rules before you have read `AGENTS.md`
 
 - **Never `git worktree add` inside the work root.** `rig attach` adds repos; rig owns that tree and `rig doctor` fails on strays. Outside it, do as you like.
-- **Never edit a generated file.** Every `AGENTS.md` under the work root is rewritten on each mutating command, as is `demo/index.html`. Prose lives in the work's `context.md`, which is the only copy.
+- **Never edit a generated file.** Every `AGENTS.md` under the work root is rewritten on each mutating command. Prose lives in the work's `context.md`, which is the only copy.

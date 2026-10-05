@@ -24,12 +24,15 @@ import { DEFAULT_FRESHNESS } from './freshness.mjs'
 // is made here and nowhere else. `freshness` is in both on purpose: the policy travels in
 // the org half, and a machine that wants to handle updates its own way overrides one key
 // locally rather than the whole object.
-const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness']
+const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness', 'transcripts', 'transcriptSession']
 const ORG_KEYS = ['orgs', 'tracker', 'writtenBy', 'freshness']
 // The keys the org half owns outright. A copy in the machine file — `orgs` and `tracker`
 // were both written there by older versions of `init` — is dropped before the merge rather
 // than allowed to shadow the committed answer, and `rig doctor` says so.
 const ORG_ONLY = ORG_KEYS.filter(k => !MACHINE_KEYS.includes(k))
+// The keys only the machine half may set, so a copy committed into the org half is never read:
+// where one machine's agent host keeps its sessions is no other machine's business.
+const MACHINE_ONLY = ['transcripts', 'transcriptSession']
 
 // Relocates the machine half without relocating the tool. rig is driven as a subprocess, so
 // an environment variable is the way a test — or a second installation sharing one checkout
@@ -49,14 +52,6 @@ export const DATA_ROOT_ENV = 'RIG_DATA_ROOT'
 // the directory's own name because every data repo is called `rig-data` by convention, so
 // basenames collide across roots — the one thing a name may not do.
 export const DEFAULT_ROOT_NAME = 'default'
-
-// A work folder says which data root it belongs to, beside the `.rig/id` saying which work
-// it is. Two markers, one folder, and neither duplicates a fact: the record lives in the
-// data root this names. It is what makes `current` safe — a command run inside a work
-// folder never consults it.
-const MARKER_DIR = '.rig'
-const DATA_ANCHOR = 'data'
-export const dataAnchorFile = dir => path.join(dir, MARKER_DIR, DATA_ANCHOR)
 
 // Paths compared as git sees them: real (8.3 short names on Windows expanded, links
 // followed) and case-folded, since git prints the long real path and NTFS ignores case.
@@ -189,20 +184,31 @@ function rootAt (reg, from) {
   return hits.length ? hits[0][0] : null
 }
 
-// The data root the work folder above the cwd belongs to, or null outside one. Walks up
-// exactly as `findWorkId` does, and reads the marker beside the one it reads.
-export function anchoredRoot (from) {
-  let dir = path.resolve(from)
-  for (;;) {
-    const file = dataAnchorFile(dir)
-    if (fs.existsSync(file)) {
-      const name = fs.readFileSync(file, 'utf8').trim()
-      if (name) return name
-    }
-    const up = path.dirname(dir)
-    if (up === dir) return null
-    dir = up
+// The id of the work folder the cwd is in, from its `.rig/id`, or null outside one.
+export function workIdAt (from) {
+  for (let dir = path.resolve(from); ; dir = path.dirname(dir)) {
+    const file = path.join(dir, '.rig', 'id')
+    if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim() || null
+    if (path.dirname(dir) === dir) return null
   }
+}
+
+// Which configured root holds work `id`, the roots it could be, and every root that holds a
+// record of it, in registry order. The one root holding it open wins, whatever closed copies the others keep:
+// a work moved between roots leaves one behind. With none open, the one root holding it at
+// all. Anything else is a pick, so `name` is null: two open copies, and two closed ones as
+// well, because a closed work is still written to — lessons are reviewed after the close
+// (DESIGN.md decisions 188 and 191). A record that will not parse counts as open, since only
+// one that says its work is over gives way.
+export function rootHoldingWork (roots, id) {
+  const holders = Object.entries(roots).flatMap(([name, entry]) => {
+    const file = path.join(entry.path, 'work', id, 'work.json')
+    if (!fs.existsSync(file)) return []
+    try { return [{ name, open: !JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')).closedAt }] } catch { return [{ name, open: true }] }
+  })
+  const open = holders.filter(h => h.open)
+  const candidates = open.length ? open : holders
+  return { name: candidates.length === 1 ? candidates[0].name : null, candidates, holders }
 }
 
 // The root a set of repos places this command in, or null when none of them is catalogued
@@ -226,7 +232,7 @@ function fromRepos (reg, repos, said) {
 }
 
 // Which root is in hand, and what decided it. First hit wins, and the order is the point:
-// what the command said, then what the shell said, then the work folder the command runs
+// what the command said, then what the shell said, then the work the command names or runs
 // in, and only then the stored pointer. `current` is never read where the cwd had an
 // answer — which is most commands, and what keeps a mutable pointer from being invisible
 // state.
@@ -243,8 +249,14 @@ function chooseRoot (reg, env, opts) {
   if (typeof opts.data === 'string' && opts.data) return known(opts.data, 'flag', '--data')
   const pinned = env[DATA_ROOT_ENV]
   if (pinned) return known(pinned, 'env', DATA_ROOT_ENV)
-  const anchored = anchoredRoot(opts.cwd ?? process.cwd())
-  if (anchored) return known(anchored, 'cwd', `${MARKER_DIR}/${DATA_ANCHOR} in the work folder above the current directory`)
+  // The work named on the command, else the work folder it runs in: a command about another
+  // work is not about the folder it stands in (decision 189).
+  const work = opts.work || workIdAt(opts.cwd ?? process.cwd())
+  if (work) {
+    const { name, candidates } = rootHoldingWork(reg.roots, work)
+    if (name) return { name, source: 'work' }
+    if (candidates.length) throw new RigError(`data roots ${candidates.map(h => h.name).join(', ')} each hold a record of work "${work}" — pass --data <name> to say which`)
+  }
   // The repos the command named, then the data root checkout the command is standing in, then
   // the repo it is standing in. All three answer which knowledge is in hand before `current`,
   // because a repo that has been attached once already said where it belongs and having to
@@ -288,7 +300,7 @@ export function load (location) {
   const machine = readJsonFile(location.localFile) ?? {}
   const org = readJsonFile(location.orgFile) ?? {}
   const cfg = { workRoot: defaultWorkRoot(), orgs: [], tracker: {}, identities: {}, secrets: {} }
-  Object.assign(cfg, org)
+  for (const [key, value] of Object.entries(org)) if (!MACHINE_ONLY.includes(key)) cfg[key] = value
   for (const [key, value] of Object.entries(machine)) if (!ORG_ONLY.includes(key)) cfg[key] = value
   // The registry is the location's to answer, never the merged config's: two copies of
   // "which roots are there" is one more than can be kept true.
