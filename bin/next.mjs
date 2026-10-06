@@ -175,6 +175,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
       // about, which may have landed (decision 171): neither is known to be waiting on this one.
       const waiting = stack.slice(stack.indexOf(up) + 1).filter(st => !st.landed && !st.withdrawn && !st.adrift && !st.prUnknown?.length).map(st => st.branch)
       out.push(offer('building', `stage ${stack.indexOf(up) + 1} of ${stack.length}: ${up.branch}${up.delivers ? ` — ${up.delivers}` : ''} (${where})${waiting.length ? ` — waiting on it: ${waiting.join(', ')}` : ''}`))
+      // No live stage is still to come, so the stack can land as it stands (decision 207).
+      // Whether each PR is ready is the command's to say: asking here would cost a lookup per
+      // stage on every `rig next` of a staged work.
+      // In every repo that carries it, since the command refuses a repo where it has no PR open.
+      const inEveryRepo = st => st.repos.every(repo => st.prs.some(pr => pr.repo === repo && ['OPEN', 'MERGED'].includes(pr.state)))
+      if (stack.every(st => st.landed || st.withdrawn || (st.open && !st.prUnknown && inEveryRepo(st)))) {
+        out.push(offer('reviewing', 'every stage still to land is up for review — once each has passed its review, land them in the work branch', 'rig stage --land'))
+      }
     } else {
       const on = new Map()
       for (const r of stranded) on.set(r.on, [...(on.get(r.on) || []), r.repo])
