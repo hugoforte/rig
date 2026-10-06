@@ -124,6 +124,10 @@ _Avoid_: test results, UAT plan, sign-off
 A delivery slice of a work: one coherent piece of scope, carried by a branch and reviewed on its own. Stages are stacked — the first on the work branch, each one after it on the stage before — and merge down into the work branch. A work has no stages until it declares them. A declared stage may be **withdrawn** from the plan — **dropped**, with a reason, or **replaced** by another stage — and is then kept with the date, never deleted. Never used for a gate.
 _Avoid_: phase (that is lifecycle), slice, milestone, increment, child work
 
+**Attempt**:
+One of several ways of building a stage, or the work branch, tried at the same time: a sibling branch, `<branch>@<n>`, with a worktree of its own, `<repo>@<n>`, beside the repo's. The attempts on one branch are a **set**. A set is open until one attempt is **kept**, which fast-forwards the branch to it, or until all are **dropped**. Either way the rest are discarded and the reason goes in the notes.
+_Avoid_: variant, candidate, experiment, spike, fork
+
 **Work branch**:
 The branch a work's changes land on, cut from the base branch in every attached repo and sharing one name across them. Stages stack on it; one PR per repo takes it to the base branch at the end.
 _Avoid_: feature branch, integration branch, the work's base branch

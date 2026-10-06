@@ -537,6 +537,30 @@ which puts the stage back as though it had never been withdrawn; the commit says
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
+**Attempts.** When it is not clear how a stage should be built, try it more than one way at once. This works on the work branch too, which is what a work with no stages does:
+
+```bash
+rig attempt feat/schema --n 3                  # cut three attempts here: feat/schema@1..3, in billing@1..3
+rig attempt feat/schema                        # compare them: commits, diff and checks, a line a repo
+rig attempt feat/schema --run                  # run each repo's checks in each, and keep each pass
+rig attempt feat/schema --keep 2 --why "…"     # fast-forward feat/schema to attempt 2, discard the rest
+rig attempt feat/schema --dropped "why"        # keep none of them
+```
+
+- **Cut where you stand, joined by name.** `--n` cuts in the repo whose worktree you are standing in, as `--cut` does. Run it in each repo the stage touches. `feat/schema@2` in two repos is one attempt. Each attempt is a whole checkout in `<repo>@<n>`, beside the repo's own folder, so it can be handed to an agent of its own.
+- **Where the attempts start.** They are cut from the branch's tip, or, for a stage nobody has started, from what `--cut` would cut it from.
+- **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
+- **After `--keep`.** The branch moves in every repo that carries the winner, and an unstarted stage's branch is made there. The other folders and their branches are discarded. A copy someone pushed is named and left on the remote. The winner's pass becomes the repo's while its diff is unchanged. Nothing is pushed.
+- **What is recorded.** The record keeps only that the set existed and how it ended (`attempts` in `work.json`); the reason goes in `notes.tsv`.
+- **An open set is a decision nobody has made yet.**
+  - `rig close` refuses while one is open, and `--abandoned` still refuses uncommitted changes in an attempt.
+  - `rig detach` refuses a repo that carries an open set.
+  - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again.
+  - `rig doctor` treats an open set's folders as the work's own, not as strays.
+  - `rig status` names each open set.
+  - `rig next` says how far an open set has got, and offers the comparison once every attempt has commits.
+- **Not a gate, and no phase.** A stage with an open set is a stage that has not landed.
+
 **The frontier.** The lowest stage still to land is the only stage that matters until it lands,
 so `rig next` leads with it and names the live stages stacked above it as waiting on it, rather
 than offering each one. A stage whose place in the order is a guess, or whose PR GitHub would
