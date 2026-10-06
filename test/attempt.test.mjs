@@ -126,7 +126,20 @@ test('close refuses while attempts are open, and says how to end them', () => {
 test('detach refuses while the repo carries open attempts', () => {
   const r = rig(['detach', 'billing', '--work', WORK])
   assert.equal(r.code, 1, r.out)
-  assert.match(r.out, /billing carries open attempts \(billing@1, billing@2\)/)
+  assert.match(r.out, /billing carries open attempts \(feat\/tried-work@1, feat\/tried-work@2\)/)
+})
+
+test('a repo holds one open set at a time, since its attempt folders do not say whose they are', () => {
+  assert.equal(rig(['stage', 'feat/tried-other', '--delivers', 'something else', '--work', WORK]).code, 0)
+  const r = rig(['attempt', 'feat/tried-other', '--n', '2', '--work', WORK], here())
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing already holds the attempts at feat\/tried-work — keep one or drop them first/)
+})
+
+test('rig check --run in an attempt\'s folder says it would check the repo, not the attempt', () => {
+  const r = rig(['check', '--run', '--work', WORK], { cwd: folder(1) })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@1 is attempt 1 at feat\/tried-work, and `rig check --run` checks billing's own worktree/)
 })
 
 test('--keep wants the reason the attempt won', () => {
@@ -144,6 +157,14 @@ test('--keep refuses, and moves nothing, while an attempt that lost has uncommit
   assert.match(r.out, /billing@1: uncommitted changes in an attempt that did not win — commit them, or pass --force/)
   assert.equal(head(worktree(WORK, 'billing')), before)
   assert.ok(fs.existsSync(folder(2)))
+})
+
+test('--keep refuses a winner with uncommitted changes, which would not be part of what is kept', () => {
+  fs.writeFileSync(path.join(folder(2), 'unsaved.txt'), 'not committed\n')
+  const r = rig(['attempt', '--keep', '2', '--why', 'it passes its checks', '--force', '--work', WORK])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@2: uncommitted changes — commit them, or they are not part of what is kept/)
+  fs.rmSync(path.join(folder(2), 'unsaved.txt'))
 })
 
 test('--keep fast-forwards the branch to the winner, discards the rest, and notes why', () => {
@@ -231,6 +252,65 @@ test('--dropped names a copy on the remote rather than deleting it', () => {
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /billing: feat\/tried-work@1 is still on the remote, and rig never pushed it/)
   assert.equal(gitMust(m.bare('billing'), 'branch', '--list', `${BRANCH}@1`).replace(/^[*+ ]+/, ''), `${BRANCH}@1`)
+})
+
+test('a new set will not take over an attempt branch an earlier set left on the remote', () => {
+  const r = rig(['attempt', '--n', '2', '--work', WORK], here())
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/tried-work@1 already exists in billing, left by an earlier set — rig will not take it over/)
+  assert.ok(!fs.existsSync(folder(2)), 'nothing was cut')
+  gitMust(worktree(WORK, 'billing'), 'push', '-q', 'origin', '--delete', `${BRANCH}@1`)
+})
+
+test('--n takes a whole number from two to nine', () => {
+  for (const [n, says] of [['2.5', /--n takes a whole number, not "2.5"/], ['10', /--n takes at most 9/]]) {
+    const r = rig(['attempt', '--n', n, '--work', WORK], here())
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, says)
+  }
+})
+
+test('a set on a stage withdrawn from the plan can still be dropped, and a new one cannot be cut', () => {
+  const later = 'feat/tried-later'
+  assert.equal(rig(['stage', later, '--delivers', 'maybe later', '--work', WORK]).code, 0)
+  assert.equal(rig(['attempt', later, '--n', '2', '--work', WORK], here()).code, 0)
+  assert.equal(rig(['stage', later, '--dropped', 'not needed after all', '--work', WORK]).code, 0)
+  const cut = rig(['attempt', later, '--n', '3', '--work', WORK], here())
+  assert.equal(cut.code, 1, cut.out)
+  assert.match(cut.out, /was withdrawn from the plan/)
+  const r = rig(['attempt', later, '--dropped', 'the stage went', '--work', WORK])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(record(WORK).attempts.at(-1).droppedAt)
+})
+
+test('--keep moves the branch in every repo that carries the winner', () => {
+  m.publish('ledger')
+  m.setVisibility('acme/ledger', 'private')
+  assert.equal(rig(['new', 'pair', '--title', 'Pair work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'pair']).code, 0)
+  assert.equal(rig(['attach', 'ledger', '--work', 'pair']).code, 0)
+  const pairFolder = (repo, n) => path.join(workRoot, 'pair', `${repo}@${n}`)
+  for (const repo of ['billing', 'ledger']) {
+    assert.equal(rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', repo) }).code, 0)
+    commitWork(pairFolder(repo, 1), `${repo}, one way`)
+    commitWork(pairFolder(repo, 2), `${repo}, the other way`)
+  }
+  const winners = ['billing', 'ledger'].map(repo => head(pairFolder(repo, 2)))
+  const r = rig(['attempt', '--keep', '2', '--why', 'both halves agree', '--work', 'pair'])
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(['billing', 'ledger'].map(repo => head(worktree('pair', repo))), winners)
+})
+
+test('a forced close ends an open set with the work, so nothing reads it as open afterwards', () => {
+  assert.equal(rig(['new', 'forced', '--title', 'Forced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'forced']).code, 0)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'forced'], { cwd: worktree('forced', 'billing') }).code, 0)
+  const r = rig(['close', '--force', '--work', 'forced'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'forced')))
+  const [set] = record('forced').attempts
+  assert.equal(set.reason, 'the work was closed past it with --force')
+  assert.ok(set.droppedAt)
 })
 
 test('a first close refuses over a folder rig did not put in the work folder', () => {

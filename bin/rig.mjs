@@ -1718,7 +1718,7 @@ function regenerate (cfg, work) {
     if (c?.docs?.length) lines.push(`- Docs: ${c.docs.map(s => `\`${s}\``).join(' · ')}`)
     // An agent dropped into one of these folders reads this file to learn what it is in.
     for (const a of attemptFoldersHere(cfg, work).filter(a => a.repo === r.repo)) {
-      lines.push(`- Attempt ${a.n} at \`${a.set.branch}\`: \`${a.dir}\` on \`${a.branch}\` — one way of ${a.set.count}; \`rig attempt ${a.set.branch}\` compares them`)
+      lines.push(`- Attempt ${a.n} at \`${a.set.branch}\`: \`${a.dir}\` on \`${a.branch}\` — one way of ${a.set.count}; \`rig attempt ${a.set.branch}\` compares them, and \`--run\` checks them`)
     }
     lines.push('')
   }
@@ -2880,11 +2880,12 @@ cmds.detach = ({ flags, positional }) => {
   const name = positional[0] || die('usage: rig detach <repo>')
   const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
   if (!entry) die(`${name} is not attached to ${id}`)
-  // An attempt's folder belongs to its repo, and a repo detached would leave it nobody's.
-  const attempts = attemptFoldersHere(cfg, work).filter(a => a.repo === entry.repo)
+  // An attempt belongs to its repo, and a repo detached would leave it nobody's: asked of the
+  // mirror as well as the folders, since the attempts may be on another machine.
+  const attempts = openSets(work).flatMap(set => attemptTrees(cfg, work, set)).filter(a => a.repo === entry.repo)
   if (attempts.length) {
     const sets = [...new Set(attempts.map(a => a.set.branch))]
-    die(`${entry.repo} carries open attempts (${attempts.map(a => a.folder).join(', ')}) — keep one or drop them first: ${sets.map(b => `\`rig attempt ${b}\``).join(', ')}`)
+    die(`${entry.repo} carries open attempts (${attempts.map(a => a.branch).join(', ')}) — keep one or drop them first: ${sets.map(b => `\`rig attempt ${b}\``).join(', ')}`)
   }
 
   const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
@@ -3519,6 +3520,10 @@ cmds.check = ({ flags, positional }) => {
   if (!targets.length) die('no matching attached repos')
   // A run records, so a stopped work refuses one, as `rig pr` refuses to open a PR on it.
   if (flags.run && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to verify`)
+  // Run from an attempt's folder, this would check the repo's own worktree and record a pass for a
+  // tree that attempt never built.
+  const attempt = flags.run && attemptFoldersHere(cfg, work).find(a => sameDir(a.dir, cwd()) || insideDir(cwd(), a.dir))
+  if (attempt) die(`${attempt.folder} is attempt ${attempt.n} at ${attempt.set.branch}, and \`rig check --run\` checks ${attempt.repo}'s own worktree — \`rig attempt ${attempt.set.branch} --run\` checks the attempts`)
   const catalog = loadCatalog()
   const changed = { verified: [], cleared: [] }
   for (const r of targets) {
@@ -4493,10 +4498,12 @@ cmds.attempt = ({ flags, positional }) => {
   const branch = positional[0] || work.branch
   const stage = work.stages.find(s => s.branch === branch)
   if (branch !== work.branch && !stage) die(`${branch} is neither ${work.id}'s work branch nor one of its stages — \`rig stage\` lists them`)
-  if (stage && withdrawalOf(stage)) die(`${branch} was withdrawn from the plan (${withdrawnLabel(withdrawalOf(stage))}) — there is nothing to try`)
   const acts = ['n', 'run', 'keep', 'dropped'].filter(f => flags[f] !== undefined)
   if (acts.length > 1) die(`--${acts[0]} and --${acts[1]} are two acts — one at a time`)
-  if (acts.length && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to try`)
+  // Ending a set is never refused: a set left open with no way to end it holds `rig close` up
+  // for good. Starting one, or adding to it, is.
+  if (acts.length && flags.dropped === undefined && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to try`)
+  if (flags.n !== undefined && stage && withdrawalOf(stage)) die(`${branch} was withdrawn from the plan (${withdrawnLabel(withdrawalOf(stage))}) — there is nothing to try`)
   if (flags.n !== undefined) return cutAttempts(cfg, work, branch, flags)
   const set = openSet(work, branch) || die(`no attempts are open on ${branch} — \`rig attempt ${branch} --n 2\`, in one of the work's worktrees, cuts them`)
   if (flags.run) return runAttempts(cfg, work, set)
@@ -4506,25 +4513,30 @@ cmds.attempt = ({ flags, positional }) => {
 }
 
 // The attempts of one open set this machine can see, in the repos that carry them: each with its
-// folder (`dir`, and `here` when it exists) and the mirror's copies of its branch.
+// folder (`dir`, and `here` when it exists on the attempt's branch) and the mirror's copies of its
+// branch. A folder of the right name on another branch is not this attempt's.
 function attemptTrees (cfg, work, set) {
   const t = trees(cfg)
   return attemptsOf(work, [set]).map(a => {
     const entry = work.repos.find(r => r.repo === a.repo)
     const dir = path.join(workDir(cfg, work.id), a.folder)
     const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
-    return { ...a, entry, dir, here: exists(dir), ...tips, tip: tips.local || tips.remote }
+    return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, tip: tips.local || tips.remote }
   }).filter(a => a.here || a.tip)
 }
 
-// Every attempt folder of every open set that is on this machine, read off the record and the
-// disk alone: what doctor, the generated file and the teardowns need, none of which asks git.
+// Every attempt folder of every open set that is on this machine, on its attempt's branch: what
+// doctor, the generated file and the teardowns need. One git call a folder, and none for a folder
+// that is not there.
 const attemptFoldersHere = (cfg, work) => attemptsOf(work)
   .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
-  .filter(a => exists(a.dir))
+  .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch)
 
 const uncommittedIn = dir => git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
 const branchIn = dir => git(dir, 'symbolic-ref', '-q', '--short', 'HEAD').out || null
+
+// More attempts than this is a fleet, not a comparison, and each one is a whole checkout.
+const MOST_ATTEMPTS = 9
 
 // `--n`: the attempts, cut in the repo whose worktree the command runs in, the way `rig stage
 // --cut` cuts a stage, and for the same reason: which repos an attempt touches is read from where
@@ -4532,18 +4544,35 @@ const branchIn = dir => git(dir, 'symbolic-ref', '-q', '--short', 'HEAD').out ||
 // from the branch's tip where it exists, and where it does not — a stage nobody has started —
 // from what `--cut` would cut the stage from. Run again with a larger number, it cuts only the
 // attempts that are missing.
+//
+// A repo holds one open set at a time, because the folders `<repo>@<n>` do not say which branch
+// they are attempts at. And a new attempt never takes over a branch that already exists: one an
+// earlier set left on the remote holds work that set ended, which a keep would bring back.
 function cutAttempts (cfg, work, branch, flags) {
   const { n, problem } = attemptNumber(flags.n, '--n')
   if (problem) die(problem)
   if (n < 2) die('--n wants two or more — one attempt is the branch itself')
+  if (n > MOST_ATTEMPTS) die(`--n takes at most ${MOST_ATTEMPTS} — each attempt is a whole checkout`)
   const entry = worktreeHere(work, '--n cuts the attempts in one repo')
   const { org, repo } = entry
   const t = trees(cfg)
+  const elsewhere = openSets(work).filter(s => s.branch !== branch)
+    .find(s => attemptTrees(cfg, work, s).some(a => a.repo === repo))
+  if (elsewhere) die(`${repo} already holds the attempts at ${elsewhere.branch} — keep one or drop them first: \`rig attempt ${elsewhere.branch}\``)
+  let set = openSet(work, branch)
+  const known = set ? set.count : 0
+  const taken = []
+  for (let i = known + 1; i <= n; i++) {
+    const tips = t.tips({ org, repo, branch: attemptBranch(branch, i) })
+    if (tips.local || tips.remote) taken.push(attemptBranch(branch, i))
+  }
+  if (taken.length) {
+    die(`${taken.join(', ')} already ${taken.length === 1 ? 'exists' : 'exist'} in ${repo}, left by an earlier set — rig will not take ${taken.length === 1 ? 'it' : 'them'} over for a new attempt; delete ${taken.length === 1 ? 'it' : 'them'} first (\`git branch -D\`, \`git push origin --delete\`)`)
+  }
   const own = t.tips({ org, repo, branch })
   const base = own.local || own.remote ? branch : stageBase(cfg, work, entry, branch)
   const at = base === branch ? own : t.tips({ org, repo, branch: base })
   const from = at.local || at.remote || die(`${repo}: ${base} is in neither the mirror nor the remote — there is nothing to cut the attempts from`)
-  let set = openSet(work, branch)
   if (!set) {
     set = { branch, count: 0, at: new Date().toISOString() }
     ;(work.attempts ||= []).push(set)
@@ -4554,11 +4583,17 @@ function cutAttempts (cfg, work, branch, flags) {
     const dest = path.join(workDir(cfg, work.id), attemptFolder(repo, i))
     if (exists(dest)) { step(`${attemptFolder(repo, i)} is already here`); continue }
     const tips = t.tips({ org, repo, branch: name })
-    // An attempt already cut — on another machine, or before its folder was deleted — is put
-    // back as it is rather than cut again over the top of it.
-    const failed = tips.local || tips.remote
-      ? (t.checkOut({ org, repo, branch: name, dest }) ? null : 'git could not check it out')
-      : t.cutAttempt({ org, repo, branch: name, from, dest })
+    // An attempt of this set already cut — on another machine, or before its folder was deleted —
+    // is put back as it is rather than cut again over the top of it.
+    let failed
+    try {
+      failed = tips.local || tips.remote
+        ? (t.checkOut({ org, repo, branch: name, dest }) ? null : 'git could not check it out')
+        : t.cutAttempt({ org, repo, branch: name, from, dest })
+    } catch (e) {
+      if (!(e instanceof RigError)) throw e
+      failed = e.message
+    }
     if (failed) {
       warn(`${repo}: could not cut ${name} — ${failed}`)
       current.exitCode = 1
@@ -4567,7 +4602,7 @@ function cutAttempts (cfg, work, branch, flags) {
     prepareWorktree(cfg, org, repo, dest)
     made.push(i)
   }
-  if (made.length) set.count = Math.max(set.count, ...made, n)
+  if (made.length) set.count = Math.max(set.count, ...made)
   if (!set.count) work.attempts = work.attempts.filter(s => s !== set)
   if (!made.length) return
   commitAs(work.id, `${made.length} attempts at ${branch} in ${repo}`)
@@ -4680,7 +4715,14 @@ function discardAttempts (cfg, attempts, { force = () => false } = {}) {
     const { org, repo } = a.entry
     if (a.here) {
       const failed = trees(cfg).remove({ org, repo, dir: a.dir, force: force(a) })
-      if (failed) { warn(`${a.folder}: ${failed} — its branch ${a.branch} is kept`); current.exitCode = 1; continue }
+      // The set ends all the same, so this folder becomes a stray that `rig close` refuses on
+      // until it goes: said with the two commands that finish what this one could not.
+      if (failed) {
+        warn(`${a.folder}: ${failed} — not removed, and its branch ${a.branch} is kept`)
+        say(C.dim(`  close whatever has it open, then: git -C ${a.entry.path} worktree remove ${a.dir}; git -C ${a.entry.path} branch -D ${a.branch}`))
+        current.exitCode = 1
+        continue
+      }
       step(`removed ${a.folder}`)
     }
     const kept = trees(cfg).deleteLocal({ org, repo, branch: a.branch })
@@ -4706,10 +4748,13 @@ function keepAttempt (cfg, work, set, flags) {
   const problems = []
   const moves = winners.map(w => {
     const { org, repo, path: dir } = w.entry
+    if (!w.tip) { problems.push(`${w.folder}: ${w.branch} is in neither the mirror nor the remote — there is nothing to keep`); return { w } }
     const target = t.tips({ org, repo, branch: set.branch })
-    const was = target.local || target.remote
     if (w.here && uncommittedIn(w.dir)) problems.push(`${w.folder}: uncommitted changes — commit them, or they are not part of what is kept`)
-    if (was && !t.ancestor({ org, repo, ancestor: was, of: w.tip })) problems.push(`${repo}: ${set.branch} has moved since attempt ${n} was cut, so ${w.tip.slice(0, 7)} is not a fast-forward of it`)
+    // Both copies: one pushed from elsewhere and fetched here has moved the branch as surely as a
+    // commit made here, and a keep that left it behind could never be pushed.
+    const moved = [target.local, target.remote].filter(Boolean).some(was => !t.ancestor({ org, repo, ancestor: was, of: w.tip }))
+    if (moved) problems.push(`${repo}: ${set.branch} has moved since attempt ${n} was cut, so ${w.tip.slice(0, 7)} is not a fast-forward of it`)
     const on = exists(dir) && branchIn(dir) === set.branch
     if (on && uncommittedIn(dir)) problems.push(`${repo}: uncommitted changes on ${set.branch} — commit or stash them before it moves`)
     return { w, on }
@@ -4774,13 +4819,15 @@ function dropAttempts (cfg, work, set, flags) {
     current.exitCode = 1
     return
   }
+  // The heads the attempts reached, or with none here to point at, the record that held the set.
   const heads = all.map(a => a.tip).filter(Boolean)
+  const evidence = pointers.length ? pointers : heads.length ? heads : [`work/${work.id}/work.json`]
   discardAttempts(cfg, all, { force: () => !!flags.force })
   set.droppedAt = new Date().toISOString()
   set.reason = reason
   delete set.passes
   const stageCell = set.branch === work.branch ? '' : set.branch
-  appendNote(work.id, { stage: stageCell, note: `dropped the ${set.count} attempts at ${set.branch}`, why: reason, evidence: pointers.length ? pointers : heads, result: 'dropped' })
+  appendNote(work.id, { stage: stageCell, note: `dropped the ${set.count} attempts at ${set.branch}`, why: reason, evidence, result: 'dropped' })
   commitAs(work.id, `dropped the attempts at ${set.branch}`)
   saveWork(cfg, work)
   ok(`${work.id}: dropped the attempts at ${set.branch} — ${set.branch} is where it was`)
@@ -4905,6 +4952,14 @@ cmds.close = ({ flags }) => {
   }
   sayLiveSessions(cfg, work)
   removeWorktrees(cfg, work, { force: !!flags.force })
+  // A set still open here was closed past, forced or abandoned: it ended with the work, and says
+  // so, rather than reading as open on a work nothing can try anything on again. Its branches
+  // stay in the mirror, as a forced close's do.
+  for (const set of openSets(work)) {
+    set.droppedAt = new Date().toISOString()
+    set.reason = abandoned ? 'the work was abandoned' : 'the work was closed past it with --force'
+    delete set.passes
+  }
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
   // one the next `rig attach` on that name has to step round (#149). Only when it all landed:
   // `done` is every PR merged with nothing in the way, which a forced or abandoned close is not.
@@ -5946,7 +6001,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --dropped "why"             keep none: discard them all, the branch left as it was
        [--evidence <pointer,...>]  with --keep or --dropped: what the note points at
        [--force]                   discard uncommitted changes in the attempts that lost
-  rig setup [repo...]           run the catalogue's setup commands
+  rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure,
                                   and records each pass against the patch it ran at

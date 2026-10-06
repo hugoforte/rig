@@ -1274,6 +1274,11 @@ const MISSHAPEN = [
   ['{"id": "broken", "stops": "design"}', /`stops` is not a list of gate names/],
   ['{"id": "broken", "stops": [7]}', /`stops` is not a list of gate names/],
   ['{"id": "broken", "agentDecided": "design"}', /`agentDecided` is not a list of gate names/],
+  ['{"id": "broken", "attempts": {}}', /`attempts` is not a list/],
+  ['{"id": "broken", "attempts": [{"count": 2, "at": "t"}]}', /attempt set 1 has no `branch`/],
+  ['{"id": "broken", "attempts": [{"branch": "b", "count": 1000000000, "at": "t"}]}', /attempt set b has no `count` from 1 to 99/],
+  ['{"id": "broken", "attempts": [{"branch": "b", "count": 2}]}', /attempt set b has no `at`/],
+  ['{"id": "broken", "attempts": [{"branch": "b", "count": 2, "at": "t", "passes": [{"n": 1, "repo": "a", "patchId": "p"}]}]}', /`passes` of attempt set b is not a list of passes/],
 ]
 
 test('doctor reports a record of the wrong shape as unreadable, says why, and still checks everything else', () => {

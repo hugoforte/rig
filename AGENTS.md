@@ -549,12 +549,18 @@ rig attempt feat/schema --dropped "why"        # keep none of them
 
 - **Cut where you stand, joined by name.** `--n` cuts in the repo whose worktree you are standing in, as `--cut` does. Run it in each repo the stage touches. `feat/schema@2` in two repos is one attempt. Each attempt is a whole checkout in `<repo>@<n>`, beside the repo's own folder, so it can be handed to an agent of its own.
 - **Where the attempts start.** They are cut from the branch's tip, or, for a stage nobody has started, from what `--cut` would cut it from.
+- **Limits on cutting.**
+  - `--n` takes from two to nine.
+  - A repo holds one open set at a time, because `<repo>@<n>` does not say which branch it is an attempt at.
+  - A new attempt never takes over a `<branch>@<n>` an earlier set left behind.
+  - `rig check --run` refuses inside an attempt's folder; `rig attempt --run` checks attempts.
 - **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
 - **After `--keep`.** The branch moves in every repo that carries the winner, and an unstarted stage's branch is made there. The other folders and their branches are discarded. A copy someone pushed is named and left on the remote. The winner's pass becomes the repo's while its diff is unchanged. Nothing is pushed.
 - **What is recorded.** The record keeps only that the set existed and how it ended (`attempts` in `work.json`); the reason goes in `notes.tsv`.
 - **An open set is a decision nobody has made yet.**
-  - `rig close` refuses while one is open, and `--abandoned` still refuses uncommitted changes in an attempt.
-  - `rig detach` refuses a repo that carries an open set.
+  - `rig close` refuses while one is open, and `--abandoned` still refuses uncommitted changes in an attempt. A close forced or abandoned past an open set records the set as dropped with the work.
+  - `--dropped` works on a stage withdrawn from the plan and on a closed work, so a set can always be ended.
+  - `rig detach` refuses a repo that carries an open set, here or in the mirror.
   - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again.
   - `rig doctor` treats an open set's folders as the work's own, not as strays.
   - `rig status` names each open set.

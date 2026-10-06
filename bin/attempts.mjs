@@ -38,8 +38,13 @@ export function attemptsShapeProblem (attempts) {
   if (!Array.isArray(attempts)) return '`attempts` is not a list'
   for (const [i, s] of attempts.entries()) {
     if (s === null || typeof s !== 'object' || typeof s.branch !== 'string' || !s.branch) return `attempt set ${i + 1} has no \`branch\``
-    if (!Number.isInteger(s.count) || s.count < 1) return `attempt set ${s.branch} has no \`count\``
-    if (s.passes !== undefined && !(Array.isArray(s.passes) && s.passes.every(p => p && Number.isInteger(p.n) && typeof p.repo === 'string' && typeof p.patchId === 'string'))) {
+    // Bounded, since every attempt of every set is listed for each repo: a hand edit to a billion
+    // would have every command that reads the record run out of memory.
+    if (!Number.isInteger(s.count) || s.count < 1 || s.count > 99) return `attempt set ${s.branch} has no \`count\` from 1 to 99`
+    if (typeof s.at !== 'string') return `attempt set ${s.branch} has no \`at\``
+    // A pass becomes a repo's `verified` when its attempt is kept, so it is held to that shape.
+    const isPass = p => p && Number.isInteger(p.n) && typeof p.repo === 'string' && ['branch', 'head', 'base', 'patchId', 'at'].every(k => typeof p[k] === 'string')
+    if (s.passes !== undefined && !(Array.isArray(s.passes) && s.passes.every(isPass))) {
       return `\`passes\` of attempt set ${s.branch} is not a list of passes`
     }
   }
