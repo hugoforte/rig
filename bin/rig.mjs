@@ -20,7 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { attemptBranch, attemptFolder, openSet, openSets, attemptsOf, attemptsShapeProblem, attemptNumber } from './attempts.mjs'
+import { attemptBranch, attemptFolder, openSet, openSets, attemptsOf, attemptsShapeProblem, attemptNumber, countIn } from './attempts.mjs'
 import { transcriptsFor, refusal } from './transcripts.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
@@ -2546,12 +2546,15 @@ function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
 
 // The open attempts whose folders are not here, put back beside their repos from the remote or
 // the mirror, and never cut again: a branch on neither was never pushed from the machine that cut
-// it, and an open set with none of its attempts here is said. Answers how many were put back.
+// it, and an open set with none of its attempts here is said. Answers how many were put back and
+// how many git refused.
 function restoreAttempts (cfg, work) {
   const t = trees(cfg)
   const fetched = new Set()
   let restored = 0
+  let refused = 0
   for (const set of openSets(work)) {
+    const refusedBefore = refused
     for (const a of attemptsOf(work, [set])) {
       const entry = work.repos.find(r => r.repo === a.repo)
       const dest = path.join(workDir(cfg, work.id), a.folder)
@@ -2567,6 +2570,7 @@ function restoreAttempts (cfg, work) {
         if (!(e instanceof RigError)) throw e
         warn(`${a.folder}: ${e.message}`)
         current.exitCode = 1
+        refused++
         continue
       }
       prepareWorktree(cfg, entry.org, entry.repo, dest)
@@ -2574,10 +2578,11 @@ function restoreAttempts (cfg, work) {
       restored++
     }
     if (!attemptFoldersHere(cfg, { ...work, attempts: [set] }).length) {
-      warn(`${set.branch}: ${set.count} attempts are open and none could be put back — they were never pushed from the machine that cut them; \`rig attempt ${set.branch} --dropped "why"\` ends the set`)
+      const why = refused > refusedBefore ? 'git refused them, above' : 'they were never pushed from the machine that cut them'
+      warn(`${set.branch}: ${set.count} attempts are open and none could be put back — ${why}; \`rig attempt ${set.branch} --dropped "why"\` ends the set`)
     }
   }
-  return restored
+  return { restored, refused }
 }
 
 // Rebuild a work's folder from its record — every missing worktree, on the top of its stack,
@@ -2607,8 +2612,9 @@ cmds.restore = ({ flags, positional }) => {
   })
   const attempts = restoreAttempts(cfg, work)
   regenerate(cfg, work)
-  if (!missing.length && !attempts) return ok(`${work.id}: every worktree is already here — ${workDir(cfg, work.id)}`)
-  if (!missing.length) return ok(`${work.id}: put back ${attempts} attempt${attempts === 1 ? '' : 's'} — cd ${workDir(cfg, work.id)}`)
+  if (attempts.refused) warn(`${work.id}: ${attempts.refused} attempt${attempts.refused === 1 ? '' : 's'} could not be restored — see above`)
+  if (!missing.length && !attempts.restored && !attempts.refused) return ok(`${work.id}: every worktree is already here — ${workDir(cfg, work.id)}`)
+  if (!missing.length) return attempts.restored ? ok(`${work.id}: put back ${attempts.restored} attempt${attempts.restored === 1 ? '' : 's'} — cd ${workDir(cfg, work.id)}`) : undefined
   const left = missing.filter(r => !restored.includes(r))
   if (left.length) warn(`${work.id}: ${left.map(r => r.repo).join(', ')} could not be restored — see above`)
   ok(`${work.id}: restored ${restored.length} of ${missing.length} — cd ${workDir(cfg, work.id)}`)
@@ -4521,7 +4527,9 @@ cmds.attempt = ({ flags, positional }) => {
   // Ending a set is never refused: a set left open with no way to end it holds `rig close` up
   // for good. Starting one, or adding to it, is.
   if (acts.length && flags.dropped === undefined && work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing left to try`)
-  if (flags.n !== undefined && stage && withdrawalOf(stage)) die(`${branch} was withdrawn from the plan (${withdrawnLabel(withdrawalOf(stage))}) — there is nothing to try`)
+  // A stage withdrawn from the plan is landed by no PR, so nothing is cut, run or kept on it; its
+  // attempts can only be compared and dropped.
+  if (acts.length && flags.dropped === undefined && stage && withdrawalOf(stage)) die(`${branch} was withdrawn from the plan (${withdrawnLabel(withdrawalOf(stage))}) — there is nothing to try; \`rig attempt ${branch} --dropped "why"\` ends its attempts`)
   if (flags.n !== undefined) return cutAttempts(cfg, work, branch, flags)
   const set = openSet(work, branch) || die(`no attempts are open on ${branch} — \`rig attempt ${branch} --n 2\`, in one of the work's worktrees, cuts them`)
   if (flags.run) return runAttempts(cfg, work, set)
@@ -4582,13 +4590,13 @@ function cutAttempts (cfg, work, branch, flags) {
   const entry = worktreeHere(work, '--n cuts the attempts in one repo')
   const { org, repo } = entry
   const t = trees(cfg)
-  const elsewhere = openSets(work).find(s => s.branch !== branch && (s.repos || []).includes(repo))
+  const elsewhere = openSets(work).find(s => s.branch !== branch && countIn(s, repo) > 0)
   if (elsewhere) die(`${repo} already holds the attempts at ${elsewhere.branch} — keep one or drop them first: \`rig attempt ${elsewhere.branch}\``)
   let set = openSet(work, branch)
   // The numbers this set already has in this repo are its own; any other that exists is not.
-  const known = set && set.repos.includes(repo) ? set.count : 0
+  const known = set ? countIn(set, repo) : 0
   const taken = []
-  for (let i = known + 1; i <= Math.max(n, set?.count ?? 0); i++) {
+  for (let i = known + 1; i <= n; i++) {
     const tips = t.tips({ org, repo, branch: attemptBranch(branch, i) })
     if (tips.local || tips.remote) taken.push(attemptBranch(branch, i))
   }
@@ -4635,7 +4643,9 @@ function cutAttempts (cfg, work, branch, flags) {
   }
   if (made.length) {
     set.count = Math.max(set.count, ...made)
-    if (!set.repos.includes(repo)) set.repos.push(repo)
+    const here = set.repos.find(r => r.repo === repo)
+    if (here) here.count = Math.max(here.count, ...made)
+    else set.repos.push({ repo, count: Math.max(...made) })
   }
   if (!set.count) work.attempts = work.attempts.filter(s => s !== set)
   if (!made.length) return
@@ -4766,6 +4776,21 @@ function discardAttempts (cfg, attempts, { force = () => false } = {}) {
   }
 }
 
+// The set's folders that are not on their attempt's branch — a rebase stopped mid-way, a detached
+// checkout — as refusals: rig cannot say what such a folder holds, and deleting its branch from
+// under it would leave a rebase with nowhere to finish. Said as `rig close` says them.
+const offBranch = (cfg, work, set) => attemptFolderNamesHere(cfg, { ...work, attempts: [set] })
+  .filter(a => branchIn(a.dir) !== a.branch)
+  .map(a => `${a.folder}: not on ${a.branch}, so rig cannot say what it holds — put it back on its branch, or move it out of the work folder`)
+
+// What a keep or a drop notes as its evidence: the pointers it was given, then every head the
+// attempts reached, since the branches go and the notes are the one place their commits are named
+// afterwards; with none at all, the record that held the set.
+function evidenceWith (work, pointers, attempts) {
+  const all = [...new Set([...pointers, ...attempts.map(a => a.tip).filter(Boolean)])]
+  return all.length ? all : [`work/${work.id}/work.json`]
+}
+
 // `--keep <n>`: the branch fast-forwarded to attempt n in every repo that carries it, checked in
 // every repo before any repo moves, and the attempts discarded. A fast-forward only: the branch
 // must be an ancestor of the winner, so nothing on it is lost and nothing is rewritten. The pass
@@ -4779,7 +4804,7 @@ function keepAttempt (cfg, work, set, flags) {
   const t = trees(cfg)
   // Fetched first: a push to the branch from another machine is the branch moving, and an attempt
   // pushed to from elsewhere has moved too. A fetch that fails is said, and the copies here stand.
-  for (const entry of work.repos.filter(r => set.repos.includes(r.repo))) {
+  for (const entry of work.repos.filter(r => countIn(set, r.repo) > 0)) {
     if (!t.refresh({ org: entry.org, repo: entry.repo })) warn(`${entry.repo}: could not fetch — checking against the remote as this mirror last saw it`)
   }
   const all = attemptTrees(cfg, work, set)
@@ -4802,6 +4827,7 @@ function keepAttempt (cfg, work, set, flags) {
   for (const a of all.filter(a => a.n !== n && a.here && uncommittedIn(a.dir))) {
     if (!flags.force) problems.push(`${a.folder}: uncommitted changes in an attempt that did not win — commit them, or pass --force to discard them`)
   }
+  problems.push(...offBranch(cfg, work, set))
   if (problems.length) {
     warn(`not keeping attempt ${n} — nothing has moved:`)
     for (const p of problems) say(`    ${C.red('•')} ${p}`)
@@ -4840,7 +4866,7 @@ function keepAttempt (cfg, work, set, flags) {
   set.keptAt = new Date().toISOString()
   delete set.passes
   const stageCell = set.branch === work.branch ? '' : set.branch
-  appendNote(work.id, { stage: stageCell, note: `kept attempt ${n} of ${set.count} at ${set.branch}`, why, evidence: [...pointers, ...winners.map(w => w.tip)] })
+  appendNote(work.id, { stage: stageCell, note: `kept attempt ${n} of ${set.count} at ${set.branch}`, why, evidence: evidenceWith(work, [...pointers, ...winners.map(w => w.tip).filter(Boolean)], all) })
   commitAs(work.id, `kept attempt ${n} at ${set.branch}`)
   saveWork(cfg, work)
   ok(`${work.id}: kept attempt ${n} of ${set.count} at ${set.branch} — the why is in the notes`)
@@ -4853,15 +4879,15 @@ function dropAttempts (cfg, work, set, flags) {
   const pointers = evidenceOf(flags)
   const all = attemptTrees(cfg, work, set)
   const dirty = all.filter(a => a.here && uncommittedIn(a.dir))
-  if (dirty.length && !flags.force) {
+  const problems = offBranch(cfg, work, set)
+  if (!flags.force) problems.push(...dirty.map(a => `${a.folder}: uncommitted changes — commit them, or pass --force to discard them`))
+  if (problems.length) {
     warn(`not dropping the attempts at ${set.branch} — nothing was discarded:`)
-    for (const a of dirty) say(`    ${C.red('•')} ${a.folder}: uncommitted changes — commit them, or pass --force to discard them`)
+    for (const p of problems) say(`    ${C.red('•')} ${p}`)
     current.exitCode = 1
     return
   }
-  // The heads the attempts reached, or with none here to point at, the record that held the set.
-  const heads = all.map(a => a.tip).filter(Boolean)
-  const evidence = pointers.length ? pointers : heads.length ? heads : [`work/${work.id}/work.json`]
+  const evidence = evidenceWith(work, pointers, all)
   discardAttempts(cfg, all, { force: () => !!flags.force })
   set.droppedAt = new Date().toISOString()
   set.reason = reason

@@ -559,10 +559,11 @@ rig attempt feat/schema --dropped "why"        # keep none of them
   - `rig check --run` refuses inside an attempt's folder; `rig attempt --run` checks attempts.
 - **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
 - **After `--keep`.** The branch moves in every repo that carries the winner, and an unstarted stage's branch is made there. The other folders and their branches are discarded. A copy someone pushed is named and left on the remote. The winner's pass becomes the repo's while its diff is unchanged. Nothing is pushed.
-- **What is recorded.** The record keeps only that the set existed and how it ended (`attempts` in `work.json`); the reason goes in `notes.tsv`.
+- **What is recorded.** The record (`attempts` in `work.json`) keeps that the set existed, how many attempts were cut in each repo, the check passes while it is open, and how it ended. The reason goes in `notes.tsv`, with every attempt's head as evidence, since the losers' branches are deleted.
 - **An open set is a decision nobody has made yet.**
   - `rig close` refuses while one is open, and `--abandoned` still refuses uncommitted changes in an attempt. A close forced or abandoned past an open set records the set as dropped with the work.
-  - `--dropped` works on a stage withdrawn from the plan and on a closed work, so a set can always be ended.
+  - `--dropped` works on a stage withdrawn from the plan and on a closed work, so a set can always be ended. Nothing else does: a withdrawn stage is landed by no PR.
+  - `--keep` and `--dropped` refuse while an attempt's folder is off its branch, such as mid-rebase.
   - `rig detach` refuses a repo that carries an open set, here or in the mirror.
   - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again.
   - `rig doctor` treats an open set's folders as the work's own, not as strays.
