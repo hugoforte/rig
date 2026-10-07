@@ -77,8 +77,24 @@ One decision a session took along the way, kept as a row of a work's `notes.tsv`
 _Avoid_: decision (that is a gate), journal, log (a commit log is something else)
 
 **Transcript**:
-The record an agent host keeps of one session: what was said and done in it. A work's are the sessions whose workspace is its folder or one of its worktrees, found through the machine's patterns. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close`, `rig detach` and `rig tidy` tell a session may still be at work in a worktree.
+The record an agent host keeps of one session: what was said and done in it. A work's are the sessions that ran in its folder, ran on one of its branches in a checkout of one of its repos, or name its folder in what they did, found through the machine's `sessions` and read by a **reader**. Read by the lesson review for the corrections that never reach a commit, and its date is how `rig close`, `rig detach` and `rig tidy` tell a session may still be at work in a worktree.
 _Avoid_: log (a commit log is something else), chat, history
+
+**Reader**:
+The one module that knows an agent host's session files, under `readers/`: it says where and when a session ran and what it did, and gives the session as rig's events. `bin/` knows no host; a machine names a reader for each place its hosts keep sessions.
+_Avoid_: adapter, parser, plugin
+
+**Extract**:
+One session as a reader can afford to read it: what the user said and what the assistant had just said, interrupts, denials, errors, irreversible commands and gaps, redacted. Printed by `rig sessions --extract`, never stored.
+_Avoid_: digest (that explains what landed), summary, log
+
+**Struggle**:
+Something that kept going wrong in a session — the user stepping in, a command tried again and again, an assumption put right — kept as a redacted row with the session it was in and the kind of fix it wants. A work's are in its `struggles.tsv`; a session in no work's are in the user's own root, by month and machine. A `read` row says a session was read. What a retro keeps instead of the sessions, which do not last.
+_Avoid_: lesson (that has a home), friction, finding
+
+**Retro**:
+A look back over a period, a month by default, for the struggles that recur across works, and whether last period's fixes held. Personal over one machine's sessions, company over a data root's struggles. Distinct from the lesson review, which reads one work.
+_Avoid_: retrospective meeting, review, post-mortem
 
 **Frontier**:
 The lowest stage of a work that has not landed and was not withdrawn: the only stage that matters until it lands. The stages stacked above it are **waiting** on it.
