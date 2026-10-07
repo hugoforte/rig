@@ -2550,7 +2550,16 @@ function restoreAttempts (cfg, work) {
       if (!fetched.has(a.repo)) { t.fetch({ org: entry.org, repo: entry.repo }); fetched.add(a.repo) }
       const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
       if (!tips.local && !tips.remote) continue
-      if (!t.checkOut({ org: entry.org, repo: entry.repo, branch: a.branch, dest })) continue
+      // One git refuses — a copy diverged from the remote's — is said, and the rest still come
+      // back, as a repo's refusal is in `cmds.restore`.
+      try {
+        if (!t.checkOut({ org: entry.org, repo: entry.repo, branch: a.branch, dest })) continue
+      } catch (e) {
+        if (!(e instanceof RigError)) throw e
+        warn(`${a.folder}: ${e.message}`)
+        current.exitCode = 1
+        continue
+      }
       prepareWorktree(cfg, entry.org, entry.repo, dest)
       ok(`restored ${C.bold(a.folder)} on ${a.branch}`)
       restored++
@@ -4515,22 +4524,30 @@ cmds.attempt = ({ flags, positional }) => {
 // The attempts of one open set this machine can see, in the repos that carry them: each with its
 // folder (`dir`, and `here` when it exists on the attempt's branch) and the mirror's copies of its
 // branch. A folder of the right name on another branch is not this attempt's.
+//
+// `tip` is the newest copy: the remote's where it is ahead of this mirror's, as it is for an
+// attempt another machine pushed to, and this mirror's otherwise.
 function attemptTrees (cfg, work, set) {
   const t = trees(cfg)
   return attemptsOf(work, [set]).map(a => {
     const entry = work.repos.find(r => r.repo === a.repo)
     const dir = path.join(workDir(cfg, work.id), a.folder)
     const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
-    return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, tip: tips.local || tips.remote }
+    const ahead = tips.local && tips.remote && tips.local !== tips.remote && t.ancestor({ org: entry.org, repo: entry.repo, ancestor: tips.local, of: tips.remote })
+    return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, tip: ahead ? tips.remote : tips.local || tips.remote }
   }).filter(a => a.here || a.tip)
 }
 
-// Every attempt folder of every open set that is on this machine, on its attempt's branch: what
-// doctor, the generated file and the teardowns need. One git call a folder, and none for a folder
-// that is not there.
-const attemptFoldersHere = (cfg, work) => attemptsOf(work)
+// Every folder of this machine named for an attempt of an open set, whatever it has checked out:
+// what the teardowns and the stray check need, since a folder on a detached HEAD mid-rebase is
+// still that attempt's, and still holds whatever is uncommitted in it. No git call.
+const attemptFolderNamesHere = (cfg, work) => attemptsOf(work)
   .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
-  .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch)
+  .filter(a => exists(a.dir))
+
+// The same, only those on their attempt's branch: what doctor, the generated file and the commands
+// that act on an attempt read. One git call a folder.
+const attemptFoldersHere = (cfg, work) => attemptFolderNamesHere(cfg, work).filter(a => branchIn(a.dir) === a.branch)
 
 const uncommittedIn = dir => git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
 const branchIn = dir => git(dir, 'symbolic-ref', '-q', '--short', 'HEAD').out || null
@@ -4556,25 +4573,30 @@ function cutAttempts (cfg, work, branch, flags) {
   const entry = worktreeHere(work, '--n cuts the attempts in one repo')
   const { org, repo } = entry
   const t = trees(cfg)
-  const elsewhere = openSets(work).filter(s => s.branch !== branch)
-    .find(s => attemptTrees(cfg, work, s).some(a => a.repo === repo))
+  const elsewhere = openSets(work).find(s => s.branch !== branch && (s.repos || []).includes(repo))
   if (elsewhere) die(`${repo} already holds the attempts at ${elsewhere.branch} — keep one or drop them first: \`rig attempt ${elsewhere.branch}\``)
   let set = openSet(work, branch)
-  const known = set ? set.count : 0
+  // The numbers this set already has in this repo are its own; any other that exists is not.
+  const known = set && set.repos.includes(repo) ? set.count : 0
   const taken = []
-  for (let i = known + 1; i <= n; i++) {
+  for (let i = known + 1; i <= Math.max(n, set?.count ?? 0); i++) {
     const tips = t.tips({ org, repo, branch: attemptBranch(branch, i) })
     if (tips.local || tips.remote) taken.push(attemptBranch(branch, i))
   }
   if (taken.length) {
     die(`${taken.join(', ')} already ${taken.length === 1 ? 'exists' : 'exist'} in ${repo}, left by an earlier set — rig will not take ${taken.length === 1 ? 'it' : 'them'} over for a new attempt; delete ${taken.length === 1 ? 'it' : 'them'} first (\`git branch -D\`, \`git push origin --delete\`)`)
   }
+  // A folder of an attempt's name that is not on its branch is somebody's, and is not taken over.
+  const occupied = Array.from({ length: n }, (_, i) => i + 1)
+    .map(i => ({ name: attemptBranch(branch, i), folder: attemptFolder(repo, i), dir: path.join(workDir(cfg, work.id), attemptFolder(repo, i)) }))
+    .filter(a => exists(a.dir) && branchIn(a.dir) !== a.name)
+  if (occupied.length) die(`${occupied.map(a => a.folder).join(', ')} already ${occupied.length === 1 ? 'exists' : 'exist'} in the work folder and ${occupied.length === 1 ? 'is' : 'are'} not on ${occupied.map(a => a.name).join(', ')} — move ${occupied.length === 1 ? 'it' : 'them'} out of the way first`)
   const own = t.tips({ org, repo, branch })
   const base = own.local || own.remote ? branch : stageBase(cfg, work, entry, branch)
   const at = base === branch ? own : t.tips({ org, repo, branch: base })
   const from = at.local || at.remote || die(`${repo}: ${base} is in neither the mirror nor the remote — there is nothing to cut the attempts from`)
   if (!set) {
-    set = { branch, count: 0, at: new Date().toISOString() }
+    set = { branch, count: 0, at: new Date().toISOString(), repos: [] }
     ;(work.attempts ||= []).push(set)
   }
   const made = []
@@ -4602,12 +4624,16 @@ function cutAttempts (cfg, work, branch, flags) {
     prepareWorktree(cfg, org, repo, dest)
     made.push(i)
   }
-  if (made.length) set.count = Math.max(set.count, ...made)
+  if (made.length) {
+    set.count = Math.max(set.count, ...made)
+    if (!set.repos.includes(repo)) set.repos.push(repo)
+  }
   if (!set.count) work.attempts = work.attempts.filter(s => s !== set)
   if (!made.length) return
-  commitAs(work.id, `${made.length} attempts at ${branch} in ${repo}`)
+  const attempts = `${made.length} attempt${made.length === 1 ? '' : 's'}`
+  commitAs(work.id, `${attempts} at ${branch} in ${repo}`)
   saveWork(cfg, work)
-  ok(`${repo}: cut ${made.length} attempts at ${C.bold(branch)} from ${base} (${from.slice(0, 7)})`)
+  ok(`${repo}: cut ${attempts} at ${C.bold(branch)} from ${base} (${from.slice(0, 7)})`)
   for (const i of made) say(`  ${path.join(workDir(cfg, work.id), attemptFolder(repo, i))}  ${C.dim(attemptBranch(branch, i))}`)
   say(C.dim(`  one attempt a folder, each for an agent of its own; \`rig attempt ${branch}\` compares them`))
 }
@@ -4725,8 +4751,8 @@ function discardAttempts (cfg, attempts, { force = () => false } = {}) {
       }
       step(`removed ${a.folder}`)
     }
-    const kept = trees(cfg).deleteLocal({ org, repo, branch: a.branch })
-    if (kept) warn(`${repo}: ${a.branch} is kept — ${kept}`)
+    const kept = a.local && trees(cfg).deleteLocal({ org, repo, branch: a.branch, expect: a.local })
+    if (kept) { warn(`${repo}: ${a.branch} is kept — ${kept}`); current.exitCode = 1 }
     if (a.remote) say(C.dim(`  ${repo}: ${a.branch} is still on the remote, and rig never pushed it — \`git push origin --delete ${a.branch}\` deletes it`))
   }
 }
@@ -4742,6 +4768,11 @@ function keepAttempt (cfg, work, set, flags) {
   const why = reasonOf(flags.why, '--why', 'the reason attempt ' + n + ' won, in plain words')
   const pointers = evidenceOf(flags)
   const t = trees(cfg)
+  // Fetched first: a push to the branch from another machine is the branch moving, and an attempt
+  // pushed to from elsewhere has moved too. A fetch that fails is said, and the copies here stand.
+  for (const entry of work.repos.filter(r => set.repos.includes(r.repo))) {
+    if (!t.refresh({ org: entry.org, repo: entry.repo })) warn(`${entry.repo}: could not fetch — checking against the remote as this mirror last saw it`)
+  }
   const all = attemptTrees(cfg, work, set)
   const winners = all.filter(a => a.n === n)
   if (!winners.length) die(`attempt ${n} at ${set.branch} is not cut in any repo`)
@@ -5023,7 +5054,7 @@ function removeWorktrees (cfg, work, { force }) {
   let removedAll = true
   // An attempt's worktree is a worktree like a repo's, and its branch stays in the mirror: a
   // close forced or abandoned past an open set deletes no branch, as it deletes no other.
-  const attempts = attemptFoldersHere(cfg, work).map(a => ({ org: a.entry.org, repo: a.repo, dir: a.dir, name: a.folder }))
+  const attempts = attemptFolderNamesHere(cfg, work).map(a => ({ org: a.entry.org, repo: a.repo, dir: a.dir, name: a.folder }))
   for (const r of [...work.repos.map(r => ({ org: r.org, repo: r.repo, dir: r.path, name: r.repo })), ...attempts]) {
     if (!exists(r.dir)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.dir, force })
@@ -5037,16 +5068,21 @@ function removeWorktrees (cfg, work, { force }) {
 // open set of attempts, which is a decision nobody has made yet; uncommitted changes in an
 // attempt's folder; and anything rig did not put there, which is nobody's copy but this one
 // (decision 165). `close` refuses on them and `--abandoned` on all but the open set.
+//
+// A folder of an attempt's name that is not on that attempt's branch — a rebase stopped
+// mid-way, a detached checkout, a folder made by hand — is one rig cannot vouch for, so it is
+// refused as a stray is, rather than read as clean.
 function folderBlockers (cfg, work) {
   const open = openSets(work).map(set => ({
     kind: 'attempts',
     message: `${set.branch}: ${set.count} attempts still open — keep one (\`rig attempt ${set.branch} --keep <n> --why "…"\`) or none (\`rig attempt ${set.branch} --dropped "why"\`)`,
   }))
-  const dirty = attemptFoldersHere(cfg, work).flatMap(a => {
+  const folders = attemptFolderNamesHere(cfg, work).flatMap(a => {
+    if (branchIn(a.dir) !== a.branch) return [{ repo: a.folder, kind: 'stray', message: `${a.folder}: not on ${a.branch}, so rig cannot say what it holds — put it back on its branch, or move it out of the work folder` }]
     const n = uncommittedIn(a.dir)
     return n ? [{ repo: a.folder, kind: 'dirty', message: `${a.folder}: ${n} uncommitted change${n === 1 ? '' : 's'}` }] : []
   })
-  return [...open, ...dirty, ...straysIn(cfg, work)]
+  return [...open, ...folders, ...straysIn(cfg, work)]
 }
 
 // Whatever is directly under the work folder that rig did not put there: not a repo's worktree,
@@ -5056,7 +5092,7 @@ function straysIn (cfg, work) {
   if (!exists(wd)) return []
   const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES, ...attemptsOf(work).map(a => a.folder)])
   return fs.readdirSync(wd).filter(e => !known.has(e))
-    .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds` }))
+    .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds — move it out of the work folder` }))
 }
 
 function removeWorkFolder (cfg, id) {

@@ -4,10 +4,12 @@
 // which repos carry an attempt, its commits, its diff — is asked of git by the caller.
 //
 // The record holds only what nothing can see afterwards: that a set existed, how many attempts
-// it had, and how it ended. A kept set's losing branches are deleted, so once it ends the record
-// is the only place the alternatives are remembered.
+// it had, the repos it was cut in, and how it ended. A kept set's losing branches are deleted, so
+// once it ends the record is the only place the alternatives are remembered. The repos are
+// recorded because a branch of the right name is no proof: one an ended set left on the remote
+// looks exactly like an attempt of the set open now.
 //
-//   attempts: [{ branch, count, at, passes?, kept?, keptAt?, droppedAt?, reason? }]
+//   attempts: [{ branch, count, at, repos, passes?, kept?, keptAt?, droppedAt?, reason? }]
 
 // Attempt n of `branch`. `@` is legal in a ref where `@{` is not, and the prefix survives, so
 // the release a `feat/` branch asks for is the release its attempts ask for.
@@ -25,12 +27,13 @@ export const openSet = (work, branch) => (work.attempts || []).find(s => s.branc
 
 export const openSets = work => (work.attempts || []).filter(isOpen)
 
-// Every attempt of every open set, in every attached repo, whether or not this machine has its
-// folder: `{ set, n, repo, branch, folder }`. Which of them a repo actually carries is git's to
-// say; this is the list of names the record makes legitimate.
+// Every attempt of every open set, in every repo the set was cut in and the work still has,
+// whether or not this machine has its folder: `{ set, n, repo, branch, folder }`. Which of them a
+// repo actually carries is git's to say; this is the list of names the record makes legitimate.
 export const attemptsOf = (work, sets = openSets(work)) => sets.flatMap(set =>
   Array.from({ length: set.count }, (_, i) => i + 1).flatMap(n =>
-    (work.repos || []).map(r => ({ set, n, repo: r.repo, branch: attemptBranch(set.branch, n), folder: attemptFolder(r.repo, n) }))))
+    (work.repos || []).filter(r => (set.repos || []).includes(r.repo))
+      .map(r => ({ set, n, repo: r.repo, branch: attemptBranch(set.branch, n), folder: attemptFolder(r.repo, n) }))))
 
 // What the record must be for every command to read it, or why it is not.
 export function attemptsShapeProblem (attempts) {
@@ -42,6 +45,7 @@ export function attemptsShapeProblem (attempts) {
     // would have every command that reads the record run out of memory.
     if (!Number.isInteger(s.count) || s.count < 1 || s.count > 99) return `attempt set ${s.branch} has no \`count\` from 1 to 99`
     if (typeof s.at !== 'string') return `attempt set ${s.branch} has no \`at\``
+    if (!(Array.isArray(s.repos) && s.repos.every(r => typeof r === 'string'))) return `\`repos\` of attempt set ${s.branch} is not a list of repos`
     // A pass becomes a repo's `verified` when its attempt is kept, so it is held to that shape.
     const isPass = p => p && Number.isInteger(p.n) && typeof p.repo === 'string' && ['branch', 'head', 'base', 'patchId', 'at'].every(k => typeof p[k] === 'string')
     if (s.passes !== undefined && !(Array.isArray(s.passes) && s.passes.every(isPass))) {

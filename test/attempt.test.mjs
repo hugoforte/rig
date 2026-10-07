@@ -301,6 +301,88 @@ test('--keep moves the branch in every repo that carries the winner', () => {
   assert.deepEqual(['billing', 'ledger'].map(repo => head(worktree('pair', repo))), winners)
 })
 
+test('a set counts only the repos it was cut in, so a branch an earlier set left in another repo is never kept', () => {
+  const pairFolder = (repo, n) => path.join(workRoot, 'pair', `${repo}@${n}`)
+  const pairBranch = 'feat/pair-work'
+  for (const repo of ['billing', 'ledger']) assert.equal(rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', repo) }).code, 0)
+  commitWork(pairFolder('ledger', 1), 'ledger, a way that will be dropped')
+  gitMust(pairFolder('ledger', 1), 'push', '-q', 'origin', `${pairBranch}@1`)
+  assert.equal(rig(['attempt', '--dropped', 'neither', '--work', 'pair']).code, 0)
+
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', 'billing') }).code, 0)
+  commitWork(pairFolder('billing', 1), 'billing, the way that wins')
+  const ledgerWas = head(worktree('pair', 'ledger'))
+  const r = rig(['attempt', '--keep', '1', '--why', 'billing alone', '--work', 'pair'])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /ledger: feat\/pair-work →/)
+  assert.equal(head(worktree('pair', 'ledger')), ledgerWas, 'ledger never had this set, so its work branch did not move')
+
+  const again = rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', 'ledger') })
+  assert.equal(again.code, 1, again.out)
+  assert.match(again.out, /feat\/pair-work@1 already exists in ledger, left by an earlier set/)
+})
+
+test('--keep fetches first, so a push to the branch from another machine is the branch moving', () => {
+  const pairFolder = (repo, n) => path.join(workRoot, 'pair', `${repo}@${n}`)
+  gitMust(worktree('pair', 'billing'), 'push', '-q', 'origin', 'feat/pair-work')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', 'billing') }).code, 0)
+  commitWork(pairFolder('billing', 1), 'an attempt')
+  const elsewhere = path.join(m.tmp, 'other-machine')
+  gitMust(m.tmp, 'clone', '-q', '-b', 'feat/pair-work', m.bare('billing'), elsewhere)
+  commitWork(elsewhere, 'pushed from another machine')
+  gitMust(elsewhere, 'push', '-q', 'origin', 'feat/pair-work')
+
+  const r = rig(['attempt', '--keep', '1', '--why', 'it was first', '--work', 'pair'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: feat\/pair-work has moved since attempt 1 was cut/)
+  assert.equal(rig(['attempt', '--dropped', 'the branch moved on', '--force', '--work', 'pair']).code, 0)
+})
+
+test('restore puts back the attempts it can when git refuses one', () => {
+  const pairFolder = (repo, n) => path.join(workRoot, 'pair', `${repo}@${n}`)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'pair'], { cwd: worktree('pair', 'billing') }).code, 0)
+  commitWork(pairFolder('billing', 1), 'pushed')
+  gitMust(pairFolder('billing', 1), 'push', '-q', 'origin', 'feat/pair-work@1')
+  gitMust(pairFolder('billing', 1), 'commit', '-q', '--amend', '-m', 'and rewritten here, so the two copies diverge')
+  for (const n of [1, 2]) gitMust(worktree('pair', 'billing'), 'worktree', 'remove', '--force', pairFolder('billing', n))
+
+  const r = rig(['restore', 'pair'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@1: branch feat\/pair-work@1 in the mirror of acme\/billing has diverged/)
+  assert.ok(fs.existsSync(pairFolder('billing', 2)), 'attempt 2 came back all the same')
+  assert.equal(rig(['attempt', '--dropped', 'done with it', '--work', 'pair']).code, 0)
+})
+
+test('--n will not take over a folder of an attempt\'s name that is something else', () => {
+  assert.equal(rig(['new', 'occupied', '--title', 'Occupied work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'occupied']).code, 0)
+  const mine = path.join(workRoot, 'occupied', 'billing@1')
+  fs.mkdirSync(mine)
+  fs.writeFileSync(path.join(mine, 'mine.txt'), 'mine\n')
+  const r = rig(['attempt', '--n', '2', '--work', 'occupied'], { cwd: worktree('occupied', 'billing') })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@1 already exists in the work folder and is not on feat\/occupied-work@1/)
+  assert.equal(record('occupied').attempts, undefined, 'nothing was recorded')
+  fs.rmSync(mine, { recursive: true })
+})
+
+test('an abandoned close refuses over an attempt folder off its branch, and otherwise ends the set with the work', () => {
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'occupied'], { cwd: worktree('occupied', 'billing') }).code, 0)
+  const two = path.join(workRoot, 'occupied', 'billing@2')
+  gitMust(two, 'checkout', '-q', '--detach')
+  fs.writeFileSync(path.join(two, 'precious.txt'), 'mid-rebase, say\n')
+  const r = rig(['close', '--abandoned', '--work', 'occupied'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@2: not on feat\/occupied-work@2, so rig cannot say what it holds/)
+  assert.ok(fs.existsSync(path.join(two, 'precious.txt')))
+
+  fs.rmSync(path.join(two, 'precious.txt'))
+  gitMust(two, 'checkout', '-q', 'feat/occupied-work@2')
+  const closed = rig(['close', '--abandoned', '--work', 'occupied'])
+  assert.equal(closed.code, 0, closed.out)
+  assert.equal(record('occupied').attempts[0].reason, 'the work was abandoned')
+})
+
 test('a forced close ends an open set with the work, so nothing reads it as open afterwards', () => {
   assert.equal(rig(['new', 'forced', '--title', 'Forced work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'forced']).code, 0)

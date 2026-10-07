@@ -518,13 +518,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return r.code === 0 ? null : firstLine(r)
     },
 
-    // Delete the mirror's copy of a branch, whatever it holds: an attempt that lost is discarded
-    // on purpose, which is what `--keep` and `--dropped` were told. The remote is never asked.
-    deleteLocal ({ org, repo, branch }) {
+    // Delete the mirror's copy of a branch while it is still at `expect`: an attempt that lost is
+    // discarded on purpose, which is what `--keep` and `--dropped` were told, but only as it was
+    // when they looked. A commit made on it since is refused, and the branch kept. The remote is
+    // never asked.
+    deleteLocal ({ org, repo, branch, expect }) {
       const mirror = mirrorPath(org, repo)
       if (!has(mirror, local(branch))) return null
-      const r = git(mirror, 'branch', '-D', branch)
-      return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
+      const r = git(mirror, 'update-ref', '-d', local(branch), expect)
+      return r.code === 0 ? null : `it has moved since ${expect.slice(0, 7)}`
     },
 
     // What a worktree's HEAD has of its own over the branches it was cut among: the commits no

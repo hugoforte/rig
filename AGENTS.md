@@ -763,7 +763,8 @@ skills. Only the work branch's PR is asked about, never a stage's.
 
 ```bash
 rig list                  # flags works whose PRs are merged and whose trees are clean
-rig close                 # refuses if anything is uncommitted, unpushed, or has an open PR
+rig close                 # refuses if anything is uncommitted, unpushed, has an open PR, is an open
+                          # set of attempts, or is in the work folder without being rig's
 rig close                 # on a work already closed elsewhere: clears this machine's copy only
 rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
@@ -799,10 +800,16 @@ past all of it and **records that it did** (`forcedAt`), because
 forcing is a decision and a work closed over an open pull request is otherwise
 indistinguishable from a bug — which is what `rig status` would call it.
 
+So does anything in the work folder that rig did not put there: a folder of your own notes, or a
+folder named for an attempt that is not on that attempt's branch. The close deletes the folder
+whole, and those would go with it, so the refusal names each one; move it out of the work folder,
+or `--force` past it (decision 209).
+
 **Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
 stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so
-those checks go, and uncommitted changes still refuse because unsaved work is the one thing
-a teardown can destroy. The ticket is told and left open — whether the problem is still worth
+those checks go, and uncommitted changes and the work folder's strays still refuse because
+unsaved work is the one thing a teardown can destroy. An open set of attempts is no refusal: it
+is recorded as dropped with the work. The ticket is told and left open — whether the problem is still worth
 solving is not rig's call — and open PRs are named and left alone, because closing someone's
 pull request is an outward-facing act rig does not take on its own.
 
