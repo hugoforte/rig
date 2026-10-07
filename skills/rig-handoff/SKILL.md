@@ -9,6 +9,8 @@ disable-model-invocation: true
 
 Write a handoff document summarising the current conversation so a fresh agent can continue the work, then print the prompt that continues it.
 
+Reply as rig's `AGENTS.md`'s "Replying to the user" says: the TL;DR and the user's action items first.
+
 ## Where it goes
 
 Run `rig status` from the current directory, with no `--work` flag: the work in hand is the one this conversation was standing in, and a flag would be a guess.

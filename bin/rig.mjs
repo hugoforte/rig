@@ -1678,6 +1678,11 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
 // What rig itself puts directly under a work folder; everything else there is a stray.
 const WORK_FOLDER = { agents: 'AGENTS.md', claude: 'CLAUDE.md', marker: '.rig' }
 const WORK_FOLDER_ENTRIES = Object.values(WORK_FOLDER)
+// The tool's AGENTS.md quotes this word for word, and a test holds the two together.
+const REPLY_RULE = 'Open every reply with a **TL;DR**: a few lines with what happened or the answer, then the ' +
+  'action items the user must take, if any — or "Nothing for you to do." Everything else follows below it, ' +
+  'for whoever wants to read on. A skill or prompt that sets its reply\'s shape keeps it: its opening lines ' +
+  'are the TL;DR, and they name the user\'s action items.'
 
 function regenerate (cfg, work) {
   const wd = workDir(cfg, work.id)
@@ -1727,9 +1732,7 @@ function regenerate (cfg, work) {
   }
   lines.push('## Replying to the user')
   lines.push('')
-  lines.push('Open every reply with a **TL;DR**: a few lines saying what happened, then the action items')
-  lines.push('the user must take, if any — or "Nothing for you to do." Everything else follows below it,')
-  lines.push('for whoever wants to read on.')
+  lines.push(REPLY_RULE)
   lines.push('')
   lines.push('## Rules in this folder')
   lines.push('')

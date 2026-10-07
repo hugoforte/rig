@@ -9,6 +9,8 @@ Read the story of the current work, find what it taught, and offer each lesson a
 
 Run it while the worktrees are still on disk, before `rig close`, because a lesson for a repo has to be committed in one. `rig next` offers it once a pull request is open. After a close, only the catalogue, the org doc and the tracker are left to write to. A late review is still worth doing.
 
+Reply as rig's `AGENTS.md`'s "Replying to the user" says. Here the TL;DR in step 3 is that opening, and the user's action item is saying **go**.
+
 ## 1. Read the story
 
 Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with the `--data <root>` `rig close` printed, when another data root keeps a copy of the work. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:

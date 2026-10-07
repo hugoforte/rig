@@ -7,6 +7,8 @@ description: Explain what a rig data root's works landed and why it was worth do
 
 Write the explanation of what landed, from the records rig already keeps. rig calls no model, so the prose is yours; the facts are rig's. Nothing you write is stored: the digest goes to the chat or a temp file, and the only thing this skill ever records is an outcome the user said **go** to.
 
+Reply as rig's `AGENTS.md`'s "Replying to the user" says: the TL;DR and the user's action items first, the digest below.
+
 ## 1. Pin the scope, the reader and the altitude
 
 - **Scope**: one work, a repo, an org, or a period (`since 2026-09-01`, "this month"). With none given, take the last 30 days.
