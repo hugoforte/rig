@@ -473,6 +473,115 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
     },
 
+    // Where a branch is, as the mirror has it: `local`, the copy a worktree commits to, and
+    // `remote`, the one last fetched. Each a sha, or null where there is no such copy. No fetch.
+    tips ({ org, repo, branch }) {
+      const mirror = mirrorPath(org, repo)
+      const sha = r => {
+        if (!fs.existsSync(mirror) || !has(mirror, r)) return null
+        const out = git(mirror, 'rev-parse', '--verify', '--quiet', `${r}^{commit}`)
+        return out.code === 0 ? out.out.trim() : null
+      }
+      return { local: sha(local(branch)), remote: sha(ref(branch)) }
+    },
+
+    // Whether every commit of `ancestor` is in `of`, both shas or refs the mirror knows.
+    ancestor ({ org, repo, ancestor, of }) {
+      return isAncestor(mirrorPath(org, repo), ancestor, of)
+    },
+
+    // An attempt's worktree: a new branch at `from`, a commit, in a new folder. `cut` makes the
+    // work branch off the remote HEAD and `cutHere` a stage in a worktree that exists; this is the
+    // third kind, a sibling of the branch it is an attempt at. Answers git's refusal, or null.
+    //
+    // git makes the branch before it checks it out, and leaves it when the checkout fails; one
+    // still where it was made, with no worktree on it, is taken back, so a cut that failed is no
+    // branch a later cut would refuse as an earlier set's. A failure after the worktree was made —
+    // a post-checkout hook — leaves an attempt like any other, said with git's complaint. git says
+    // what it is doing before why it stopped, so its reason is its last word.
+    cutAttempt ({ org, repo, branch, from, dest }) {
+      const mirror = mirrorPath(org, repo)
+      if (fs.existsSync(dest)) return `${dest} already exists`
+      git(mirror, 'worktree', 'prune')
+      step(`worktree ${path.basename(dest)} → ${branch}`)
+      const r = run('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, from], { env: NO_PROMPT_ENV })
+      if (r.code === 0) return null
+      const lines = (r.err || r.out).split('\n').map(l => l.trim()).filter(Boolean)
+      const reason = lines.find(l => /^(fatal|error):/.test(l)) || lines.at(-1) || `git exited ${r.code}`
+      const checkedOut = this.worktreesOn({ org, repo }).has(branch)
+      if (checkedOut && fs.existsSync(dest)) {
+        warn(`${branch}: cut, but git ended with an error after the checkout — ${reason}`)
+        return null
+      }
+      if (!checkedOut) git(mirror, 'update-ref', '-d', local(branch), from)
+      return reason
+    },
+
+    // Move `branch` forward to `to`, never anywhere else. In `dir`, the worktree that has it
+    // checked out, it is a fast-forward merge, which git refuses when it would not be one; with
+    // no worktree on it, the ref is set, here only after the same question has been asked, which
+    // also makes a branch that does not exist yet. Answers git's refusal, or null.
+    fastForward ({ org, repo, branch, to, dir = null }) {
+      const mirror = mirrorPath(org, repo)
+      const firstLine = r => ((r.err || r.out).split('\n').find(Boolean) || '').trim()
+      if (dir) {
+        const r = git(dir, 'merge', '--ff-only', '--quiet', to)
+        return r.code === 0 ? null : firstLine(r)
+      }
+      if (has(mirror, local(branch)) && !isAncestor(mirror, local(branch), to)) return `${branch} is not an ancestor of ${to.slice(0, 7)}`
+      const r = git(mirror, 'branch', '--force', '--no-track', branch, to)
+      return r.code === 0 ? null : firstLine(r)
+    },
+
+    // Delete the mirror's copy of a branch while it is still at `expect`: an attempt that lost is
+    // discarded on purpose, which is what `--keep` and `--dropped` were told, but only as it was
+    // when they looked. A commit made on it since is refused, and the branch kept. The remote is
+    // never asked.
+    deleteLocal ({ org, repo, branch, expect }) {
+      const mirror = mirrorPath(org, repo)
+      if (!has(mirror, local(branch))) return null
+      // `update-ref` asks no worktree, so a branch some worktree still has checked out would be
+      // deleted from under it, its HEAD left naming nothing.
+      const at = this.worktreesOn({ org, repo }).get(branch)
+      if (at) return `it is checked out in ${at}`
+      const r = git(mirror, 'update-ref', '-d', local(branch), expect)
+      return r.code === 0 ? null : `it has moved since ${expect.slice(0, 7)}`
+    },
+
+    // Which branch each of a mirror's worktrees has checked out, as a map from branch to folder.
+    // A detached worktree has no branch and is left out; so is a worktree whose folder is gone.
+    worktreesOn ({ org, repo }) {
+      const mirror = mirrorPath(org, repo)
+      const out = new Map()
+      if (!fs.existsSync(mirror)) return out
+      const r = git(mirror, 'worktree', 'list', '--porcelain')
+      if (r.code !== 0) return out
+      let dir = null
+      for (const line of r.out.split('\n')) {
+        if (line.startsWith('worktree ')) dir = line.slice('worktree '.length).trim()
+        else if (line.startsWith('branch refs/heads/') && dir && fs.existsSync(dir)) out.set(line.slice('branch refs/heads/'.length).trim(), path.normalize(dir))
+      }
+      return out
+    },
+
+    // What a worktree's HEAD has of its own over the branches it was cut among: the commits no
+    // copy of `others` holds, and the diff from where it left them. `others` are branch names;
+    // the copies that exist, here or on the remote, are the ones asked about. `commits` is null,
+    // with `error`, when git could not count.
+    own ({ dir, others }) {
+      const refs = others.flatMap(b => [local(b), ref(b)]).filter(r => has(dir, r))
+      const counted = git(dir, 'rev-list', '--count', 'HEAD', '--not', ...refs)
+      if (counted.code !== 0) return { commits: null, error: (counted.err || counted.out).split('\n')[0] }
+      const commits = Number(counted.out)
+      if (!commits) return { commits, files: 0, insertions: 0, deletions: 0 }
+      // Where it left them: the parent of its oldest commit of its own, along the first parent.
+      const mine = git(dir, 'rev-list', '--first-parent', 'HEAD', '--not', ...refs).out.split('\n').filter(Boolean)
+      const from = git(dir, 'rev-parse', '--verify', '--quiet', `${mine.at(-1)}^`)
+      const stat = git(dir, 'diff', '--shortstat', '--no-ext-diff', from.code === 0 ? from.out.trim() : mine.at(-1), 'HEAD').out
+      const count = re => Number(re.exec(stat)?.[1] ?? 0)
+      return { commits, files: count(/(\d+) files? changed/), insertions: count(/(\d+) insertions?/), deletions: count(/(\d+) deletions?/) }
+    },
+
     // Which of this work's stage branches the repo actually carries, and what each one sits
     // on. The branches are named by the work — its declared stages — so this asks about a
     // handful of refs rather than reading everything the mirror holds, which it shares with

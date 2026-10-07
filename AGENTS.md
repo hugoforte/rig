@@ -540,6 +540,42 @@ which puts the stage back as though it had never been withdrawn; the commit says
 
 A stage transition is **not a gate**. Stages are reported, never stopped at.
 
+**Attempts.** When it is not clear how a stage should be built, try it more than one way at once. This works on the work branch too, which is what a work with no stages does:
+
+```bash
+rig attempt feat/schema --n 3                  # cut three attempts here: feat/schema@1..3, in billing@1..3
+rig attempt feat/schema                        # compare them: commits, diff and checks, a line a repo
+rig attempt feat/schema --run                  # run each repo's checks in each, and keep each pass
+rig attempt feat/schema --keep 2 --why "…"     # fast-forward feat/schema to attempt 2, discard the rest
+rig attempt feat/schema --dropped "why"        # keep none of them
+```
+
+- **Cut where you stand, joined by name.** `--n` cuts in the repo whose worktree you are standing in, as `--cut` does. Run it in each repo the stage touches. `feat/schema@2` in two repos is one attempt. Each attempt is a whole checkout in `<repo>@<n>`, beside the repo's own folder, so it can be handed to an agent of its own.
+- **Where the attempts start.** They are cut from the branch's tip, or, for a stage nobody has started, from what `--cut` would cut it from.
+- **Limits on cutting.**
+  - `--n` takes from two to nine.
+  - A repo holds one open set at a time, because `<repo>@<n>` does not say which branch it is an attempt at.
+  - A new attempt never takes over a `<branch>@<n>` an earlier set left behind.
+  - `--n` refuses while the branch here and on the remote have diverged, since no attempt cut from either could be kept.
+  - `--n` never cuts afresh an attempt the set already counts: one cut on another machine and never pushed is named, and the rest are cut.
+  - `rig check --run` refuses inside an attempt's folder; `rig attempt --run` checks attempts.
+- **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, when the winner's copy here and the remote's have diverged, when a repo the set counts has no copy of the winner, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
+- **After `--keep`.** The branch moves in every repo that carries the winner, and an unstarted stage's branch is made there. The other folders and their branches are discarded. A copy someone pushed is named and left on the remote. The winner's pass becomes the repo's while its diff is unchanged. Nothing is pushed.
+- **What is recorded.** The record (`attempts` in `work.json`) keeps that the set existed, how many attempts were cut in each repo, the check passes while it is open, and how it ended. The reason goes in `notes.tsv`, with every attempt's head as evidence, since the losers' branches are deleted.
+- **An open set is a decision nobody has made yet.**
+  - `rig close` refuses while one is open, and `--abandoned` still refuses uncommitted changes in an attempt. A close forced or abandoned past an open set records the set as dropped with the work.
+  - `--dropped` works on a stage withdrawn from the plan and on a closed work, so a set can always be ended. Nothing else does: a withdrawn stage is landed by no PR.
+  - `--keep` and `--dropped` refuse while an attempt's folder is off its branch, such as mid-rebase, and while another worktree has an attempt's branch checked out.
+  - A set ended on another machine leaves its folders here on their branches; `rig close` and `rig tidy` remove them, refusing only over what is uncommitted in them.
+- **A stage nobody has started** has no branch to have moved, so `--keep` checks the stage below it instead and refuses when that has moved since the cut.
+- **Two machines.** `--n` and `--keep` fetch first. Attempts are cut from the newer of the branch's two copies, and a keep takes an attempt's remote copy where it is ahead.
+  - `rig detach` refuses a repo that carries an open set, here or in the mirror.
+  - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again. It names each attempt it could not put back, and why.
+  - `rig doctor` treats an open set's folders as the work's own, not as strays.
+  - `rig status` names each open set.
+  - `rig next` says how far an open set has got, and offers the comparison once every attempt has commits.
+- **Not a gate, and no phase.** A stage with an open set is a stage that has not landed.
+
 **The frontier.** The lowest stage still to land is the only stage that matters until it lands,
 so `rig next` leads with it and names the live stages stacked above it as waiting on it, rather
 than offering each one. A stage whose place in the order is a guess, or whose PR GitHub would
@@ -736,7 +772,8 @@ skills. Only the work branch's PR is asked about, never a stage's.
 
 ```bash
 rig list                  # flags works whose PRs are merged and whose trees are clean
-rig close                 # refuses if anything is uncommitted, unpushed, or has an open PR
+rig close                 # refuses if anything is uncommitted, unpushed, has an open PR, is an open
+                          # set of attempts, or is in the work folder without being rig's
 rig close                 # on a work already closed elsewhere: clears this machine's copy only
 rig close --abandoned     # stopped, not finished: the did-it-land checks are dropped
 ```
@@ -772,10 +809,16 @@ past all of it and **records that it did** (`forcedAt`), because
 forcing is a decision and a work closed over an open pull request is otherwise
 indistinguishable from a bug — which is what `rig status` would call it.
 
+So does anything in the work folder that rig did not put there: a folder of your own notes, or a
+folder named for an attempt that is not on that attempt's branch. The close deletes the folder
+whole, and those would go with it, so the refusal names each one; move it out of the work folder,
+or `--force` past it (decision 210).
+
 **Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
 stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so
-those checks go, and uncommitted changes still refuse because unsaved work is the one thing
-a teardown can destroy. The ticket is told and left open — whether the problem is still worth
+those checks go, and uncommitted changes and the work folder's strays still refuse because
+unsaved work is the one thing a teardown can destroy. An open set of attempts is no refusal: it
+is recorded as dropped with the work. The ticket is told and left open — whether the problem is still worth
 solving is not rig's call — and open PRs are named and left alone, because closing someone's
 pull request is an outward-facing act rig does not take on its own.
 
