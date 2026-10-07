@@ -200,6 +200,9 @@ skipped, and none waits. rig records the choice and what the agent decided.
    sessions, which are private; one that does not finds nothing and is named. `rig-learn`
    reads only what the command prints, through subagents.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
+6. **Replying to the user.** Open every reply with a **TL;DR**: a few lines with what happened or the answer, then the action items the user must take, if any — or "Nothing for you to do." Everything else follows below it, for whoever wants to read on. A skill or prompt that sets its reply's shape keeps it: its opening lines are the TL;DR, and they name the user's action items.
+
+   The generated work `AGENTS.md` carries that paragraph word for word, under `## Replying to the user`, from a work's next mutating command on, and each skill rig ships points here, so it holds whichever agent host is running.
 
 ## The catalogue
 
@@ -803,7 +806,7 @@ indistinguishable from a bug — which is what `rig status` would call it.
 So does anything in the work folder that rig did not put there: a folder of your own notes, or a
 folder named for an attempt that is not on that attempt's branch. The close deletes the folder
 whole, and those would go with it, so the refusal names each one; move it out of the work folder,
-or `--force` past it (decision 209).
+or `--force` past it (decision 210).
 
 **Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
 stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so

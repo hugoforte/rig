@@ -9,6 +9,8 @@ Edit the user documentation so it says how the product works now. The docs are t
 
 Run it once every pull request has merged and the work was seen working where it was deployed. Docs written before that describe what was meant to ship.
 
+Reply as rig's `AGENTS.md`'s "Replying to the user" says: the TL;DR and the user's action items first, the draft below.
+
 ## 1. Find the targets
 
 Run `rig status` from the work folder, or `rig status --work <id>` once it is closed, for the work's repos. Each repo's docs target is the `docs` field of its catalogue entry, which `rig catalog <repo>` prints: a path in the repo, or a page URL. While the work is open, `rig next` names them too.
