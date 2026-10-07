@@ -4700,10 +4700,12 @@ function cutAttempts (cfg, work, branch, flags) {
       if (!(e instanceof RigError)) throw e
       failed = e.message
     }
+    // Stopped at, not stepped over: a repo's count is the highest number cut there, so one cut
+    // past a gap would count an attempt that never was. The same command, run again, goes on.
     if (failed) {
-      warn(`${repo}: could not cut ${name} — ${failed}`)
+      warn(`${repo}: could not cut ${name} — ${failed}; nothing past it was cut`)
       current.exitCode = 1
-      continue
+      break
     }
     // Counted as soon as it is cut: the branch exists now, and a set that forgot it would refuse it
     // next time as an earlier set's. Its identity and secrets failing is said, not fatal.
@@ -4753,7 +4755,9 @@ function compareAttempts (cfg, work, set) {
     if (!mine.length) say(C.dim('  not cut in any repo'))
     for (const a of mine) {
       if (!a.here) {
-        say(`  ${a.folder}  ${C.dim(`not on this machine${a.remote ? ' — `rig restore` puts it back' : ''}`)}`)
+        say(`  ${a.folder}  ${C.dim(exists(a.dir)
+          ? `not on ${a.branch}, so rig cannot say what it holds — put it back on its branch`
+          : `not on this machine${a.remote ? ' — `rig restore` puts it back' : ''}`)}`)
         continue
       }
       const own = t.own({ dir: a.dir, others })

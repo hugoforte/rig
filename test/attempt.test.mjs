@@ -801,3 +801,29 @@ test('--keep refuses a winner the set counts in a repo where this machine has no
   assert.match(r.out, /ledger@1: feat\/halves-work@1 is in neither the mirror nor the remote — it was never pushed from the machine that cut it/)
   assert.equal(head(worktree('halves', 'billing')), was, 'billing did not move either')
 })
+
+test('a cut that fails part-way through --n stops there, so the set never counts an attempt that was not cut', () => {
+  assert.equal(rig(['new', 'gapped', '--title', 'Gapped work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'gapped']).code, 0)
+  const own = worktree('gapped', 'billing')
+  // A ref under the name git would make for attempt 2, which it then cannot.
+  gitMust(own, 'update-ref', 'refs/heads/feat/gapped-work@2/blocked', 'HEAD')
+
+  const r = rig(['attempt', '--n', '3', '--work', 'gapped'], { cwd: own })
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(record('gapped').attempts[0].repos, [{ repo: 'billing', count: 1 }])
+  assert.ok(!fs.existsSync(path.join(workRoot, 'gapped', 'billing@3')), 'nothing was cut past the failure')
+
+  gitMust(own, 'update-ref', '-d', 'refs/heads/feat/gapped-work@2/blocked')
+  const again = rig(['attempt', '--n', '3', '--work', 'gapped'], { cwd: own })
+  assert.equal(again.code, 0, again.out)
+  assert.deepEqual(record('gapped').attempts[0].repos, [{ repo: 'billing', count: 3 }])
+})
+
+test('the comparison says an attempt\'s folder is off its branch, not that it is elsewhere', () => {
+  const two = path.join(workRoot, 'gapped', 'billing@2')
+  gitMust(two, 'checkout', '-q', '--detach')
+  const r = rig(['attempt', '--work', 'gapped'])
+  assert.match(r.out, /billing@2 {2}not on feat\/gapped-work@2, so rig cannot say what it holds/)
+  gitMust(two, 'checkout', '-q', 'feat/gapped-work@2')
+})
