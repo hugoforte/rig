@@ -20,7 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { transcriptsFor, refusal } from './transcripts.mjs'
+import { SESSIONS_EXAMPLE, sessionsFor, sourcesProblem } from './sessions.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
@@ -2847,7 +2847,7 @@ cmds.detach = ({ flags, positional }) => {
 
   const { dirty } = trees(cfg).state({ dir: entry.path, base: entry.base })
   if (dirty && !flags.force) die(`${entry.repo} has uncommitted changes — commit, or pass --force`)
-  sayLiveSessions(cfg, work, [entry.path])
+  sayLiveSessions(cfg, work, entry.path)
 
   // Out of the worktree before it goes, for the reason `close` gives.
   if (standingIn(entry.path)) chdir(toolRoot())
@@ -3274,69 +3274,75 @@ cmds.dash = ({ flags }) => {
   if (r.code !== 0) warn(`could not open a browser (${(r.err || '').trim() || cmd}) — open the file above`)
 }
 
-// The work's own session transcripts, one path a line on stdout and nothing else there, for the
-// lesson review to read (decision 201). What is said about them goes to stderr beside it.
-// The workspaces are the work folder and its worktrees, so nothing of another work is found.
-function workTranscripts (cfg, work, workspaces = [workDir(cfg, work.id), ...work.repos.map(r => r.path)]) {
-  return transcriptsFor({
-    patterns: transcriptPatterns(cfg),
-    workspaces,
-    home: env().USERPROFILE || env().HOME || os.homedir(),
-  })
-}
-
-// The machine's transcript patterns, and why they cannot be read when they cannot: a misshapen
-// value is a mistake to name, never the same as having none. Named, not died on, except where
-// the transcripts are the whole answer (`rig status --transcripts`): a listing or a close must
-// not stop on a machine setting it only reads in passing. `rig doctor` names it too.
-function transcriptConfig (cfg) {
-  const t = cfg.transcripts
-  if (t === undefined || t === null) return { patterns: [] }
-  if (!Array.isArray(t) || !t.every(p => typeof p === 'string' && p.trim())) {
-    return { patterns: [], problem: `\`transcripts\` in ${localConfigFile()} must be a list of patterns, such as ["~/.claude/projects/{slug}/*.jsonl"]` }
+// Where this machine keeps its agent sessions, and why that cannot be read when it cannot: a
+// misshapen value is a mistake to name, never the same as having none. Named, not died on, except
+// where the sessions are the whole answer (`rig status --transcripts`): a listing or a close must
+// not stop on a machine setting it only reads in passing. `rig doctor` names it too. The
+// `transcripts` patterns `sessions` replaced placed a session by the folder its file was kept in,
+// which found one work's in ninety (hugoforte/rig#322), so they are named with what to write.
+// The file is named only in a problem: `rig doctor` asks before any root is in hand, and naming
+// the file needs one.
+function sessionConfig (cfg) {
+  if (cfg.transcripts !== undefined && cfg.sessions === undefined) {
+    return { sources: [], problem: `\`transcripts\` in ${localConfigFile()} gave way to \`sessions\` — write "sessions": ${SESSIONS_EXAMPLE}, a reader for each host` }
   }
-  return { patterns: t }
+  if (cfg.sessions === undefined || cfg.sessions === null) return { sources: [] }
+  const problem = sourcesProblem(cfg.sessions, localConfigFile())
+  return problem ? { sources: [], problem } : { sources: cfg.sessions }
 }
-const transcriptPatterns = cfg => transcriptConfig(cfg).patterns
 
-// Whether this machine could look for a session at all: a pattern that is refused finds nothing.
-const looksForSessions = cfg => transcriptPatterns(cfg).some(p => !refusal(p))
+// Whether this machine could look for a session at all.
+const looksForSessions = cfg => sessionConfig(cfg).sources.length > 0
+
+const workBranches = work => [work.branch, ...work.stages.map(s => s.branch)].filter(Boolean)
+
+// The work's own sessions (decision 201): every session on the machine is read to place it, and
+// only those that ran in `folder` or below it, on one of `branches`, or that name `folder` are
+// given back. One last written before the work began is not read, since it cannot be about it.
+function workSessions (cfg, work, { folder = workDir(cfg, work.id), branches = workBranches(work), since = work.createdAt || null } = {}) {
+  const home = env().USERPROFILE || env().HOME || os.homedir()
+  return sessionsFor({ sources: sessionConfig(cfg).sources, home, folder, branches, since })
+}
 
 // How long a session counts as still at work after it last wrote. A constant, not a setting,
 // until someone needs it to vary.
 const LIVE_SESSION_HOURS = 2
 
-// The sessions that wrote in one of `workspaces` lately, named before `close`, `detach` or
-// `tidy` takes a worktree from under them, and never refused on (decision 66): a clean worktree
-// a session is about to write into looks exactly like an abandoned one, and only the session can
-// say which. Said at the teardown, since rig speaks unasked nowhere earlier. The session running
-// this command is left out where the machine names the variable that carries its id
-// (`transcriptSession`): a host names a session's transcript, or its folder, by it.
-function sayLiveSessions (cfg, work, workspaces) {
+// The sessions at work lately in the work, or in the one worktree `folder` names, named before
+// `close`, `detach` or `tidy` takes a worktree from under them, and never refused on (decision
+// 66): a clean worktree a session is about to write into looks exactly like an abandoned one, and
+// only the session can say which. Said at the teardown, since rig speaks unasked nowhere earlier.
+// The session running this command is left out where the machine names the variable that carries
+// its id (`transcriptSession`): a host names a session, its file or its folder by it.
+function sayLiveSessions (cfg, work, folder = null) {
   const self = typeof cfg.transcriptSession === 'string' ? env()[cfg.transcriptSession] : null
-  const since = Date.now() - LIVE_SESSION_HOURS * 3600 * 1000
-  const ours = t => self && t.path.split(/[\\/]/).some(part => part === self || path.parse(part).name === self)
-  const { problem } = transcriptConfig(cfg)
+  const since = new Date(Date.now() - LIVE_SESSION_HOURS * 3600 * 1000).toISOString()
+  const ours = s => self && (s.session === self || s.path.split(/[\\/]/).some(part => part === self || path.parse(part).name === self))
+  const { problem } = sessionConfig(cfg)
   if (problem) return warn(`${problem} — sessions not checked`)
-  const { found, refused } = workTranscripts(cfg, work, workspaces)
-  for (const r of refused) warn(`transcripts: "${r.pattern}" finds nothing: ${r.why}`)
-  const live = found.filter(t => Date.parse(t.modifiedAt) >= since && !ours(t))
-  for (const t of live) {
-    const where = work.repos.find(r => r.path === t.workspace)?.repo || 'the work folder'
-    warn(`${where}: a session wrote ${path.basename(t.path)} ${relativeAge(t.modifiedAt)} — it may still be working there`)
+  // Each worktree first, so a session is named by the repo it is at work in; what is left is the
+  // work's by its folder or its branches.
+  const folders = folder ? [folder] : [...work.repos.map(r => r.path), workDir(cfg, work.id)]
+  const named = new Set()
+  for (const dir of folders) {
+    const where = work.repos.find(r => r.path === dir)?.repo || 'the work folder'
+    const branches = dir === workDir(cfg, work.id) ? workBranches(work) : []
+    for (const s of workSessions(cfg, work, { folder: dir, branches, since })) {
+      if (named.has(s.path) || ours(s)) continue
+      named.add(s.path)
+      warn(`${where}: a session wrote ${path.basename(s.path)} ${relativeAge(s.modifiedAt)} — it may still be working there`)
+    }
   }
-  if (live.length && !self) say(C.dim(`  one of them may be this session — \`transcriptSession\` in ${localConfigFile()} names the variable carrying its id`))
+  if (named.size && !self) say(C.dim(`  one of them may be this session — \`transcriptSession\` in ${localConfigFile()} names the variable carrying its id`))
 }
 
+// The work's own sessions, one path a line on stdout and nothing else there, for the lesson review
+// to read. What is said about them goes to stderr beside it.
 function sayTranscripts (cfg, work) {
-  const { problem } = transcriptConfig(cfg)
+  const { problem, sources } = sessionConfig(cfg)
   if (problem) die(problem)
-  const { found, refused } = workTranscripts(cfg, work)
-  for (const r of refused) aside(C.yellow(`! transcripts: "${r.pattern}" finds nothing: ${r.why}`))
-  if (!transcriptPatterns(cfg).length) {
-    aside(C.dim(`· no transcript locations on this machine — \`transcripts\` in ${localConfigFile()}, such as "~/.claude/projects/{slug}/*.jsonl"`))
-  }
-  for (const t of found) say(t.path)
+  if (!sources.length) aside(C.dim(`· no session locations on this machine — \`sessions\` in ${localConfigFile()}, such as ${SESSIONS_EXAMPLE}`))
+  for (const s of workSessions(cfg, work)) say(s.path)
 }
 
 // The gate lines `rig status` marks as the agent's: `designed` is the design stop.
@@ -5413,8 +5419,8 @@ function doctorSnapshot () {
     // bin/roots.mjs's to know, and a diagnostic riding on a config value had exactly one
     // reader — this one.
     strayOrgKeys: strayOrgKeys(loc),
-    // A `transcripts` value that is not a list of patterns, which close and list only warn of.
-    transcriptsProblem: transcriptConfig(cfg).problem || null,
+    // A `sessions` value rig cannot read, which close and list only warn of.
+    sessionsProblem: sessionConfig(cfg).problem || null,
     // Why there is no root in hand, when there is not. Carried rather than reworded:
     // bin/roots.mjs writes that sentence for a person and it already names the fix.
     selection: { error: selectionError },
@@ -5507,8 +5513,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--quick]                   look nothing up; recorded work still renders in full
        [--no-open]                 write the page and print the path, open nothing
   rig status                      live detail for the current work
-       [--transcripts]             only the work's own session transcripts, a path a line,
-                                   from the patterns in rig.local.json
+       [--transcripts]             only the work's own agent sessions, a path a line,
+                                   placed by where they ran, their branch or the work folder
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record

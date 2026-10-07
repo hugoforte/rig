@@ -193,12 +193,13 @@ skipped, and none waits. rig records the choice and what the agent decided.
    passed it. Neither refuses.
 
    The story includes the sessions that did the work, where this machine keeps them.
-   `rig status --transcripts` prints their paths, one a line on stdout: the sessions whose
-   workspace is the work folder or one of its worktrees, found through the patterns in
-   `rig.local.json`'s `transcripts` (`rig prompt setup` has Claude Code's). rig knows no agent
-   host. A pattern must place the workspace with `{slug}`, or it would read every work's
-   sessions, which are private; one that does not finds nothing and is named. `rig-learn`
-   reads only what the command prints, through subagents.
+   `rig status --transcripts` prints their paths, one a line on stdout: the sessions that ran
+   in the work folder or below it, ran on one of the work's branches, or name the work folder.
+   `rig.local.json`'s `sessions` says where each agent host keeps them and which reader reads
+   them (`rig prompt setup` has Claude Code's); `bin/` knows no host, and a reader under
+   `readers/` knows one. Every session is read to place it, and only the work's are printed,
+   since the rest are other work and often private. `rig-learn` reads only what the command
+   prints, through subagents.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 6. **Replying to the user.** Open every reply with a **TL;DR**: a few lines with what happened or the answer, then the action items the user must take, if any — or "Nothing for you to do." Everything else follows below it, for whoever wants to read on. A skill or prompt that sets its reply's shape keeps it: its opening lines are the TL;DR, and they name the user's action items.
 
@@ -753,14 +754,13 @@ abandoned, deletes no branch. Nothing else is ever auto-deleted.
 
 **A session still at work is named, not refused on.** A clean worktree a live session is about
 to write into looks exactly like an abandoned one. So before `rig close`, `rig detach` or
-`rig tidy` takes a worktree away, it names each session whose transcript was written there, or
-in the work folder, in the last two hours — found the way the lesson review finds them, through
-`rig.local.json`'s `transcripts` — and carries on: only that session can say whether it is
-done, and it is said at the teardown because rig speaks unasked nowhere earlier. Tell the user
+`rig tidy` takes a worktree away, it names each of the work's sessions written in the last two
+hours — found the way the lesson review finds them, through `rig.local.json`'s `sessions`, and
+named by the worktree it ran in or names — and carries on: only that session can say whether it
+is done, and it is said at the teardown because rig speaks unasked nowhere earlier. Tell the user
 which session was named, in so many words. The session running the command is left out where
 `transcriptSession` names the variable carrying its id; without it, one named may be this one,
-and the close says so. A session started in a subfolder of a worktree is not found, and a pattern
-refused as too wide is named, so silence is never read as no session. `rig list` does not look,
+and the close says so. `rig list` does not look,
 and says "(sessions not checked)" beside a work it would call safe to close, on a machine that
 could have.
 
