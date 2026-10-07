@@ -4566,6 +4566,19 @@ const attemptFolderNamesHere = (cfg, work) => attemptsOf(work)
 // that act on an attempt read. One git call a folder.
 const attemptFoldersHere = (cfg, work) => attemptFolderNamesHere(cfg, work).filter(a => branchIn(a.dir) === a.branch)
 
+// Folders of this machine that rig cut for a set which has since ended — on another machine,
+// whose keep or drop could not reach this disk — still on their attempt's branch. Not strays:
+// they are rig's own worktrees, and the teardowns remove them, refusing only over what is
+// uncommitted in them. A folder an open set claims is that set's.
+function endedFoldersHere (cfg, work) {
+  const open = new Set(attemptFolderNamesHere(cfg, work).map(a => a.folder))
+  const seen = new Set()
+  return attemptsOf(work, (work.attempts || []).filter(s => !openSets(work).includes(s)))
+    .filter(a => !open.has(a.folder) && !seen.has(a.folder) && seen.add(a.folder))
+    .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
+    .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch)
+}
+
 const uncommittedIn = dir => git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
 const branchIn = dir => git(dir, 'symbolic-ref', '-q', '--short', 'HEAD').out || null
 
@@ -4590,6 +4603,9 @@ function cutAttempts (cfg, work, branch, flags) {
   const entry = worktreeHere(work, '--n cuts the attempts in one repo')
   const { org, repo } = entry
   const t = trees(cfg)
+  // Fetched first, and cut from the newer copy: attempts cut from a copy the remote has moved past
+  // could never be kept, since a keep only fast-forwards.
+  if (!t.refresh({ org, repo })) warn(`${repo}: could not fetch — cutting from the copies this mirror last saw`)
   const elsewhere = openSets(work).find(s => s.branch !== branch && countIn(s, repo) > 0)
   if (elsewhere) die(`${repo} already holds the attempts at ${elsewhere.branch} — keep one or drop them first: \`rig attempt ${elsewhere.branch}\``)
   let set = openSet(work, branch)
@@ -4611,7 +4627,11 @@ function cutAttempts (cfg, work, branch, flags) {
   const own = t.tips({ org, repo, branch })
   const base = own.local || own.remote ? branch : stageBase(cfg, work, entry, branch)
   const at = base === branch ? own : t.tips({ org, repo, branch: base })
-  const from = at.local || at.remote || die(`${repo}: ${base} is in neither the mirror nor the remote — there is nothing to cut the attempts from`)
+  if (at.local && at.remote && !t.ancestor({ org, repo, ancestor: at.local, of: at.remote }) && !t.ancestor({ org, repo, ancestor: at.remote, of: at.local })) {
+    die(`${repo}: ${base} here and on the remote have diverged — bring them together, then cut the attempts`)
+  }
+  const behind = at.local && at.remote && at.local !== at.remote && t.ancestor({ org, repo, ancestor: at.local, of: at.remote })
+  const from = (behind ? at.remote : at.local || at.remote) || die(`${repo}: ${base} is in neither the mirror nor the remote — there is nothing to cut the attempts from`)
   if (!set) {
     set = { branch, count: 0, at: new Date().toISOString(), repos: [] }
     ;(work.attempts ||= []).push(set)
@@ -4638,8 +4658,14 @@ function cutAttempts (cfg, work, branch, flags) {
       current.exitCode = 1
       continue
     }
-    prepareWorktree(cfg, org, repo, dest)
+    // Counted as soon as it is cut: the branch exists now, and a set that forgot it would refuse it
+    // next time as an earlier set's. Its identity and secrets failing is said, not fatal.
     made.push(i)
+    try { prepareWorktree(cfg, org, repo, dest) } catch (e) {
+      if (!(e instanceof RigError)) throw e
+      warn(`${attemptFolder(repo, i)}: cut, but not made ready — ${e.message}`)
+      current.exitCode = 1
+    }
   }
   if (made.length) {
     set.count = Math.max(set.count, ...made)
@@ -4783,6 +4809,19 @@ const offBranch = (cfg, work, set) => attemptFolderNamesHere(cfg, { ...work, att
   .filter(a => branchIn(a.dir) !== a.branch)
   .map(a => `${a.folder}: not on ${a.branch}, so rig cannot say what it holds — put it back on its branch, or move it out of the work folder`)
 
+// The attempts whose branch some other worktree has checked out — the repo's own, switched to it
+// by hand — as refusals: deleting the branch would leave that worktree's HEAD naming nothing.
+function checkedOutElsewhere (cfg, attempts) {
+  const t = trees(cfg)
+  const on = new Map()
+  return attempts.flatMap(a => {
+    const key = `${a.entry.org}/${a.repo}`
+    if (!on.has(key)) on.set(key, t.worktreesOn({ org: a.entry.org, repo: a.repo }))
+    const at = on.get(key).get(a.branch)
+    return at && !sameDir(at, a.dir) ? [`${a.branch} is checked out in ${at} — switch that worktree off it first`] : []
+  })
+}
+
 // What a keep or a drop notes as its evidence: the pointers it was given, then every head the
 // attempts reached, since the branches go and the notes are the one place their commits are named
 // afterwards; with none at all, the record that held the set.
@@ -4827,7 +4866,7 @@ function keepAttempt (cfg, work, set, flags) {
   for (const a of all.filter(a => a.n !== n && a.here && uncommittedIn(a.dir))) {
     if (!flags.force) problems.push(`${a.folder}: uncommitted changes in an attempt that did not win — commit them, or pass --force to discard them`)
   }
-  problems.push(...offBranch(cfg, work, set))
+  problems.push(...offBranch(cfg, work, set), ...checkedOutElsewhere(cfg, all))
   if (problems.length) {
     warn(`not keeping attempt ${n} — nothing has moved:`)
     for (const p of problems) say(`    ${C.red('•')} ${p}`)
@@ -4858,9 +4897,16 @@ function keepAttempt (cfg, work, set, flags) {
     say(C.dim(`  ${repo}: attempt ${n} was never cut here, so ${set.branch} is where it was`))
   }
   discardAttempts(cfg, all, { force: a => a.n !== n && !!flags.force })
+  // A repo keeps one pass, read against the branch its worktree is on, so the winner's replaces it
+  // only where the worktree is on the kept branch, or where there was none to lose.
   for (const [repo, { n: _n, repo: _repo, ...pass }] of carried) {
     const entry = work.repos.find(r => r.repo === repo)
-    ensureBranchRecord(entry, work.branch, entry.base).verified = { ...pass, branch: set.branch }
+    const record = ensureBranchRecord(entry, work.branch, entry.base)
+    if (record.verified && !(exists(entry.path) && branchIn(entry.path) === set.branch)) {
+      say(C.dim(`  ${repo}: the pass attempt ${n} had is not carried — the one recorded for ${record.verified.branch} stands; \`rig check ${repo} --run\` on ${set.branch}`))
+      continue
+    }
+    record.verified = { ...pass, branch: set.branch }
   }
   set.kept = n
   set.keptAt = new Date().toISOString()
@@ -4879,7 +4925,7 @@ function dropAttempts (cfg, work, set, flags) {
   const pointers = evidenceOf(flags)
   const all = attemptTrees(cfg, work, set)
   const dirty = all.filter(a => a.here && uncommittedIn(a.dir))
-  const problems = offBranch(cfg, work, set)
+  const problems = [...offBranch(cfg, work, set), ...checkedOutElsewhere(cfg, all)]
   if (!flags.force) problems.push(...dirty.map(a => `${a.folder}: uncommitted changes — commit them, or pass --force to discard them`))
   if (problems.length) {
     warn(`not dropping the attempts at ${set.branch} — nothing was discarded:`)
@@ -5089,7 +5135,7 @@ function removeWorktrees (cfg, work, { force }) {
   let removedAll = true
   // An attempt's worktree is a worktree like a repo's, and its branch stays in the mirror: a
   // close forced or abandoned past an open set deletes no branch, as it deletes no other.
-  const attempts = attemptFolderNamesHere(cfg, work).map(a => ({ org: a.entry.org, repo: a.repo, dir: a.dir, name: a.folder }))
+  const attempts = [...attemptFolderNamesHere(cfg, work), ...endedFoldersHere(cfg, work)].map(a => ({ org: a.entry.org, repo: a.repo, dir: a.dir, name: a.folder }))
   for (const r of [...work.repos.map(r => ({ org: r.org, repo: r.repo, dir: r.path, name: r.repo })), ...attempts]) {
     if (!exists(r.dir)) continue
     const failed = trees(cfg).remove({ org: r.org, repo: r.repo, dir: r.dir, force })
@@ -5117,7 +5163,11 @@ function folderBlockers (cfg, work) {
     const n = uncommittedIn(a.dir)
     return n ? [{ repo: a.folder, kind: 'dirty', message: `${a.folder}: ${n} uncommitted change${n === 1 ? '' : 's'}` }] : []
   })
-  return [...open, ...folders, ...straysIn(cfg, work)]
+  const ended = endedFoldersHere(cfg, work).flatMap(a => {
+    const n = uncommittedIn(a.dir)
+    return n ? [{ repo: a.folder, kind: 'dirty', message: `${a.folder}: ${n} uncommitted change${n === 1 ? '' : 's'}, in an attempt whose set has ended` }] : []
+  })
+  return [...open, ...folders, ...ended, ...straysIn(cfg, work)]
 }
 
 // Whatever is directly under the work folder that rig did not put there: not a repo's worktree,
@@ -5125,7 +5175,7 @@ function folderBlockers (cfg, work) {
 function straysIn (cfg, work) {
   const wd = workDir(cfg, work.id)
   if (!exists(wd)) return []
-  const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES, ...attemptsOf(work).map(a => a.folder)])
+  const known = new Set([...work.repos.map(r => r.repo), ...WORK_FOLDER_ENTRIES, ...attemptsOf(work).map(a => a.folder), ...endedFoldersHere(cfg, work).map(a => a.folder)])
   return fs.readdirSync(wd).filter(e => !known.has(e))
     .map(e => ({ repo: e, kind: 'stray', message: `${e}: not one of the work's repos, so rig cannot say what it holds — move it out of the work folder` }))
 }
@@ -5739,7 +5789,8 @@ function doctorWork (cfg, id, root, roots) {
   out.contextDoc = contextDocFindings(work, root)
   const wd = workDir(cfg, id)
   if (!exists(wd)) return { ...out, folderMissing: true }
-  out.strays = straysIn(cfg, work).map(s => s.repo)
+  // As `rig close` reads them, so the two never disagree about a folder.
+  out.strays = folderBlockers(cfg, work).filter(b => b.kind === 'stray').map(b => b.repo)
   out.repos = work.repos.map(r => {
     const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
     return {
@@ -6071,7 +6122,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    carries it, discard the rest, and note why it won
        --dropped "why"             keep none: discard them all, the branch left as it was
        [--evidence <pointer,...>]  with --keep or --dropped: what the note points at
-       [--force]                   discard uncommitted changes in the attempts that lost
+       [--force]                   discard uncommitted changes in the attempts discarded
   rig setup [repo...]             run the catalogue's setup commands
   rig check [repo...] [--run]     print what verifies each repo — its test run, its lint,
                                   its build; --run runs them and exits non-zero on a failure,

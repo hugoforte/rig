@@ -155,8 +155,8 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
   // there is something to compare, and until then how far they have got is the whole answer.
   for (const a of attempts) {
     out.push(a.written >= a.count
-      ? offer('building', `the ${a.count} attempts at ${a.branch} each have commits — compare them, then keep one`, `rig attempt ${a.branch}`)
-      : offer('building', `${a.count} attempts at ${a.branch} are open — ${a.written} of ${a.count} have commits so far`))
+      ? offer('building', `the ${a.count} attempts at ${a.branch} each have commits here — compare them, then keep one`, `rig attempt ${a.branch}`)
+      : offer('building', `${a.count} attempts at ${a.branch} are open — ${a.written} of ${a.count} have commits here so far`))
   }
 
   // Every stage is in and a worktree is still on one of them. It is moved first, so it is not

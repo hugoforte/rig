@@ -525,8 +525,28 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     deleteLocal ({ org, repo, branch, expect }) {
       const mirror = mirrorPath(org, repo)
       if (!has(mirror, local(branch))) return null
+      // `update-ref` asks no worktree, so a branch some worktree still has checked out would be
+      // deleted from under it, its HEAD left naming nothing.
+      const at = this.worktreesOn({ org, repo }).get(branch)
+      if (at) return `it is checked out in ${at}`
       const r = git(mirror, 'update-ref', '-d', local(branch), expect)
       return r.code === 0 ? null : `it has moved since ${expect.slice(0, 7)}`
+    },
+
+    // Which branch each of a mirror's worktrees has checked out, as a map from branch to folder.
+    // A detached worktree has no branch and is left out; so is a worktree whose folder is gone.
+    worktreesOn ({ org, repo }) {
+      const mirror = mirrorPath(org, repo)
+      const out = new Map()
+      if (!fs.existsSync(mirror)) return out
+      const r = git(mirror, 'worktree', 'list', '--porcelain')
+      if (r.code !== 0) return out
+      let dir = null
+      for (const line of r.out.split('\n')) {
+        if (line.startsWith('worktree ')) dir = line.slice('worktree '.length).trim()
+        else if (line.startsWith('branch refs/heads/') && dir && fs.existsSync(dir)) out.set(line.slice('branch refs/heads/'.length).trim(), path.normalize(dir))
+      }
+      return out
     },
 
     // What a worktree's HEAD has of its own over the branches it was cut among: the commits no

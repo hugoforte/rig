@@ -92,14 +92,14 @@ test('rig status names the open set', () => {
 })
 
 test('rig next says how far the attempts have got, and offers the comparison once each has commits', () => {
-  assert.match(rig(['next', '--work', WORK]).out, /2 attempts at feat\/tried-work are open — 0 of 2 have commits so far/)
+  assert.match(rig(['next', '--work', WORK]).out, /2 attempts at feat\/tried-work are open — 0 of 2 have commits here so far/)
   commitWork(folder(1), 'one way')
   fs.writeFileSync(path.join(folder(1), 'BROKEN'), 'this way fails its checks\n')
   gitMust(folder(1), 'add', 'BROKEN')
   gitMust(folder(1), 'commit', '-qm', 'and it breaks')
   commitWork(folder(2), 'the other way')
   const out = rig(['next', '--work', WORK]).out
-  assert.match(out, /the 2 attempts at feat\/tried-work each have commits — compare them, then keep one/)
+  assert.match(out, /the 2 attempts at feat\/tried-work each have commits here — compare them, then keep one/)
   assert.match(out, /rig attempt feat\/tried-work/)
 })
 
@@ -448,6 +448,72 @@ test('an abandoned close refuses over an attempt folder off its branch, and othe
   const closed = rig(['close', '--abandoned', '--work', 'occupied'])
   assert.equal(closed.code, 0, closed.out)
   assert.equal(record('occupied').attempts[0].reason, 'the work was abandoned')
+})
+
+test('--dropped refuses while the repo\'s own worktree has an attempt\'s branch checked out', () => {
+  assert.equal(rig(['new', 'switched', '--title', 'Switched work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'switched']).code, 0)
+  const own = worktree('switched', 'billing')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'switched'], { cwd: own }).code, 0)
+  gitMust(own, 'worktree', 'remove', path.join(workRoot, 'switched', 'billing@1'))
+  gitMust(own, 'switch', '-q', 'feat/switched-work@1')
+  commitWork(own, 'made on the attempt, in the repo\'s own worktree')
+
+  const r = rig(['attempt', '--dropped', 'none', '--work', 'switched'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /feat\/switched-work@1 is checked out in .*billing — switch that worktree off it first/)
+  assert.equal(gitMust(own, 'branch', '--show-current'), 'feat/switched-work@1', 'its branch is still there')
+  gitMust(own, 'switch', '-q', 'feat/switched-work')
+  assert.equal(rig(['attempt', '--dropped', 'none', '--work', 'switched']).code, 0)
+})
+
+test('--n fetches first and cuts from the remote\'s copy where another machine pushed it further', () => {
+  const own = worktree('switched', 'billing')
+  gitMust(own, 'push', '-q', 'origin', 'feat/switched-work')
+  const elsewhere = path.join(m.tmp, 'third-machine')
+  gitMust(m.tmp, 'clone', '-q', '-b', 'feat/switched-work', m.bare('billing'), elsewhere)
+  commitWork(elsewhere, 'pushed from another machine')
+  gitMust(elsewhere, 'push', '-q', 'origin', 'feat/switched-work')
+
+  const r = rig(['attempt', '--n', '2', '--work', 'switched'], { cwd: own })
+  assert.equal(r.code, 0, r.out)
+  assert.equal(head(path.join(workRoot, 'switched', 'billing@1')), head(elsewhere))
+  commitWork(path.join(workRoot, 'switched', 'billing@1'), 'an attempt')
+  const kept = rig(['attempt', '--keep', '1', '--why', 'the only one', '--force', '--work', 'switched'])
+  assert.equal(kept.code, 0, kept.out)
+})
+
+test('a kept attempt\'s pass does not replace a pass the repo still has for the branch it is on', () => {
+  const own = worktree('switched', 'billing')
+  assert.equal(rig(['check', '--run', '--work', 'switched']).code, 0)
+  const before = record('switched').repos[0].branches[0].verified
+  assert.equal(before.branch, 'feat/switched-work')
+  assert.equal(rig(['stage', 'feat/switched-stage', '--delivers', 'a slice', '--work', 'switched']).code, 0)
+  assert.equal(rig(['attempt', 'feat/switched-stage', '--n', '2', '--work', 'switched'], { cwd: own }).code, 0)
+  commitWork(path.join(workRoot, 'switched', 'billing@1'), 'the slice')
+  assert.equal(rig(['attempt', 'feat/switched-stage', '--run', '--work', 'switched']).code, 0)
+
+  const r = rig(['attempt', 'feat/switched-stage', '--keep', '1', '--why', 'passes', '--work', 'switched'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: the pass attempt 1 had is not carried — the one recorded for feat\/switched-work stands/)
+  assert.deepEqual(record('switched').repos[0].branches[0].verified, before)
+})
+
+test('a set ended on another machine leaves folders the close removes, not strays it refuses on', () => {
+  assert.equal(rig(['new', 'ended', '--title', 'Ended work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'ended']).code, 0)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'ended'], { cwd: worktree('ended', 'billing') }).code, 0)
+  // What this machine reads once the other machine's drop is pulled: the set, ended.
+  const file = path.join(dataRoot, 'work', 'ended', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  w.attempts[0].droppedAt = '2026-10-07T00:00:00.000Z'
+  w.attempts[0].reason = 'dropped on another machine'
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  assert.doesNotMatch(rig(['doctor']).out, /unmanaged entry "billing@/)
+  const r = rig(['close', '--abandoned', '--work', 'ended'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'ended')))
 })
 
 test('a forced close ends an open set with the work, so nothing reads it as open afterwards', () => {
