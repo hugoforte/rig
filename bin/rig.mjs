@@ -22,6 +22,7 @@ import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, ST
 import { nextFor } from './next.mjs'
 import { READERS, SESSIONS_EXAMPLE, sessionFiles, sessionsBetween, sessionsFor, sourcesProblem } from './sessions.mjs'
 import { digest } from './extract.mjs'
+import { redact } from './redact.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
@@ -641,7 +642,7 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'note', 'close', 'backfill'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'note', 'struggle', 'close', 'backfill'])
 // `rig check` prints and writes nothing; `rig check --run` records what passed.
 const mutates = (name, flags) => MUTATING.has(name) || (name === 'check' && !!flags.run)
 
@@ -2782,20 +2783,25 @@ const NOTE_COLUMNS = ['at', 'stage', 'note', 'why', 'evidence', 'result']
 // not a pointer, and neither is anything with a space in it: a path with one is written `%20`.
 const isPointer = p => !/\s/.test(p) && (/^[0-9a-f]{7,40}$/i.test(p) || /^([\w.-]+\/[\w.-]+)?#\d+$/.test(p) || /[/\\:.]/.test(p))
 
-// The notes file, made with its header only by the command that finds it missing or empty, so
-// two sessions taking a work's first note at once cannot truncate each other's. A `.gitattributes`
-// beside it merges two machines' appends as both rows, rather than as a conflict at the end.
-function notesFile (id) {
-  const file = path.join(recordDir(id), 'notes.tsv')
+// A file of rows rig appends to — a work's notes, its struggles, a period's struggles — made with
+// its header only by the command that finds it missing or empty, so two sessions taking its first
+// row at once cannot truncate each other's. A `.gitattributes` beside it merges two machines'
+// appends as both rows, rather than as a conflict at the end.
+function rowsFile (dir, name, columns) {
+  const file = path.join(dir, name)
+  fs.mkdirSync(dir, { recursive: true })
   try {
-    fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`, { flag: 'wx' })
-    fs.writeFileSync(path.join(recordDir(id), '.gitattributes'), 'notes.tsv merge=union\n', { flag: 'a' })
+    fs.writeFileSync(file, `${columns.join('\t')}\n`, { flag: 'wx' })
+    fs.writeFileSync(path.join(dir, '.gitattributes'), `${name} merge=union\n`, { flag: 'a' })
   } catch (e) {
     if (e.code !== 'EEXIST') throw e
-    if (fs.statSync(file).size === 0) fs.writeFileSync(file, `${NOTE_COLUMNS.join('\t')}\n`)
+    if (fs.statSync(file).size === 0) fs.writeFileSync(file, `${columns.join('\t')}\n`)
   }
   return file
 }
+const notesFile = id => rowsFile(recordDir(id), 'notes.tsv', NOTE_COLUMNS)
+
+const appendRow = (file, row) => fs.appendFileSync(file, `${endsInNewline(file) ? '' : '\n'}${row.join('\t')}\n`)
 
 // Whether a file ends in a newline, read from its last byte alone, so a row is never glued onto
 // the end of one a hand left unfinished and the file is still never read.
@@ -2833,9 +2839,64 @@ cmds.note = ({ flags, positional }) => {
   if (work.closedAt) warn(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — this note comes after its story`)
   const row = [new Date().toISOString(), stage, note, why, pointers.join(','), cell('result', flags.result)]
   commitAs(work.id, note.length > 72 ? `${note.slice(0, 71)}…` : note)
-  const file = notesFile(work.id)
-  fs.appendFileSync(file, `${endsInNewline(file) ? '' : '\n'}${row.join('\t')}\n`)
+  appendRow(notesFile(work.id), row)
   ok(`${work.id}: noted`)
+}
+
+// A struggle: something that kept going wrong in a session — the user stepping in, a command
+// tried again and again, an assumption put right — one row each, for a retro to find what keeps
+// going wrong across works (decision 211). A work's are in `struggles.tsv` beside its context doc,
+// where a company retro reads everyone's; a period's are in `retro/<YYYY-MM>/<machine>.tsv` in the
+// user's own data root, for the sessions that belong to no work. Every machine appends its own
+// sessions' rows, so two never conflict. A row is the shape of the file, as a note is, and the
+// quote is redacted before it is written: it comes from a session, which holds whatever passed
+// through it.
+const STRUGGLE_COLUMNS = ['at', 'machine', 'host', 'session', 'kind', 'struggle', 'quote', 'fix']
+// `none` is a session read with nothing found, so it is not read again.
+const STRUGGLE_KINDS = ['correction', 'repeat', 'assumption', 'denial', 'error', 'limit', 'none']
+const FIX_KINDS = ['check', 'skill', 'instruction', 'config', 'rig-issue', 'none']
+const QUOTE_MAX = 200
+const machineName = () => os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
+
+cmds.struggle = ({ flags, positional }) => {
+  const one = (name, value) => {
+    if (value === true) die(`--${name} needs its text`)
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (/[\r\n\t]/.test(text)) die(`--${name} takes one line, with no tab — a struggle is one row`)
+    return text
+  }
+  const struggle = redact(positional.join(' ').trim())
+  if (/[\r\n\t]/.test(struggle)) die('the struggle takes one line, with no tab — a struggle is one row')
+  const kind = one('kind', flags.kind)
+  if (!STRUGGLE_KINDS.includes(kind)) die(`--kind is one of ${STRUGGLE_KINDS.join(', ')}`)
+  if (kind === 'none' && struggle) die('a none row says a session was read and nothing found — it takes no struggle')
+  if (kind !== 'none' && !struggle) die('rig struggle wants the struggle: what kept going wrong, in one line')
+  const session = one('session', flags.session)
+  if (!session) die('a struggle needs --session: the id of the session it showed up in, as `rig sessions` lists it')
+  const host = one('host', flags.host)
+  if (!READERS[host]) die(`--host is the reader that read the session: ${Object.keys(READERS).join(', ')}`)
+  const quote = redact(one('quote', flags.quote))
+  if (quote.length > QUOTE_MAX) die(`--quote is a short quote — ${QUOTE_MAX} characters at most, and this is ${quote.length}`)
+  const fix = one('fix', flags.fix) || 'none'
+  if (!FIX_KINDS.includes(fix)) die(`--fix is one of ${FIX_KINDS.join(', ')}`)
+  const row = [new Date().toISOString(), machineName(), host, session, kind, struggle, quote, fix]
+  const label = kind === 'none' ? `read ${session}` : struggle.length > 60 ? `${struggle.slice(0, 59)}…` : struggle
+
+  if (flags.period !== undefined) {
+    if (flags.work !== undefined) die('--period and --work are two places a struggle goes — name one')
+    const period = one('period', flags.period)
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) die(`--period is a month, such as 2026-09 — not "${period}"`)
+    // Never the root in hand by default: the sessions that belong to no work are the user's own,
+    // and the root in hand may be one a whole org reads.
+    if (!current.requestedData) die('--period writes into your own data root, which --data names — never one others can read')
+    commitAs(`retro ${period}`, label)
+    appendRow(rowsFile(path.join(dataRoot(), 'retro', period), `${machineName()}.tsv`, STRUGGLE_COLUMNS), row)
+    return ok(`retro ${period}: ${kind === 'none' ? 'read' : 'struggle'} recorded for ${machineName()}`)
+  }
+  const work = openWork(config(), flags)
+  commitAs(work.id, label)
+  appendRow(rowsFile(recordDir(work.id), 'struggles.tsv', STRUGGLE_COLUMNS), row)
+  ok(`${work.id}: ${kind === 'none' ? 'read' : 'struggle'} recorded`)
 }
 
 cmds.detach = ({ flags, positional }) => {
@@ -3466,6 +3527,8 @@ cmds.status = ({ flags }) => {
   // And the notes, which the lesson review and a pickup read as part of the story.
   const notes = path.join(recordDir(id), 'notes.tsv')
   if (exists(notes)) say(`notes ${recordUrl(id, 'notes.tsv') || `${notes} ${C.dim('(this machine only — the data root has no remote)')}`}`)
+  const struggles = path.join(recordDir(id), 'struggles.tsv')
+  if (exists(struggles)) say(`struggles ${recordUrl(id, 'struggles.tsv') || `${struggles} ${C.dim('(this machine only — the data root has no remote)')}`}`)
   say('')
   const checked = checkedRepos(work)
   work.repos.forEach((r, i) => {
@@ -5629,7 +5692,15 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --why "..."                 way, why, and a pointer at the evidence; commits the data root
        --evidence <pointer,...>    a SHA, a PR, file:line, a path or a URL — never prose
        [--stage <branch>] [--result "..."]
-  rig close [--force]             safety-checked teardown; a work that landed also loses
+  rig struggle "..."              append a row to the work's struggles: what kept going wrong
+       --kind <kind>               in a session, for a retro; commits the data root. A kind is
+       --session <id>              correction, repeat, assumption, denial, error, limit, or
+       --host <reader>             none for a session read with nothing found
+       [--quote "..."]             a short quote from the session, redacted before it is written
+       [--fix <kind>]              check, skill, instruction, config, rig-issue or none
+       [--period YYYY-MM]          into retro/<month>/<machine>.tsv in the root --data names,
+                                   for a session in no work, instead of the work's
+  rig close [--force]            safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
                                    checks are dropped, uncommitted changes still refuse,

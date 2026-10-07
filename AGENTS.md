@@ -383,6 +383,20 @@ begins with a dash goes after `--`. Rows are appended and never read
 to be written, so the hundredth costs what the first did, and the data root is committed.
 `rig status` names the file; the lesson review and a pickup read it.
 
+**The struggles are what a retro keeps instead of the sessions.** Sessions are deleted after a while
+and stay on the machine that ran them, so what they showed is kept as rows: one per thing that kept
+going wrong, with the session it was in, its kind, a short quote and the kind of fix it wants.
+
+```bash
+rig struggle "Wrote files through Bash heredocs" --kind repeat --session <id> --host claude-code --quote "…" --fix check
+rig struggle --kind none --session <id> --host claude-code    # read, and nothing found
+rig struggle "…" --kind correction --session <id> --host codex --period 2026-09 --data personal
+```
+
+A work's go in `struggles.tsv` beside its notes, written by the lesson review and the handoff; a
+session in no work goes in `retro/<month>/<machine>.tsv` in the user's own root, which `--data`
+must name. rig redacts the quote and the struggle before it writes them (DESIGN.md decision 211).
+
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never
 touches the branch, which was named from the first title and which the stack is read from, or
