@@ -1137,3 +1137,14 @@ test('review and design dates are compared as instants, and an unreadable review
   const garbage = nextFor({ ...reviewing({ adversarial: true, reviewedAt: 'yes' }), reviews: [{ repo: 'a', unresolved: 0 }] })
   assert.match(says(garbage), /the design chose an adversarial review/)
 })
+
+test('a month with no retro of this machine\'s sessions is offered last, with the listing that starts one (hugoforte/rig#322)', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], retroDue: { month: '2026-09', since: '2026-09-01', until: '2026-10-01' } })
+  assert.match(out.at(-1).says, /^2026-09 has no retro of this machine's sessions yet — the rig-retro skill/)
+  assert.equal(out.at(-1).command, 'rig sessions --since 2026-09-01 --until 2026-10-01')
+})
+
+test('no retro is offered to a user who keeps none, or whose last month is done', () => {
+  const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')] })
+  assert.ok(!out.some(o => /rig-retro/.test(o.says)))
+})

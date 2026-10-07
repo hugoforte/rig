@@ -233,7 +233,7 @@ export function doctorFindings (snap = {}) {
   for (const key of snap.strayOrgKeys || []) {
     out.push(warn(`${snap.localFile} has "${key}" — ignored; it lives in rig.json. Remove it.`))
   }
-  if (snap.transcriptsProblem) out.push(warn(`${snap.transcriptsProblem} — no session is found until it is`))
+  if (snap.sessionsProblem) out.push(warn(`${snap.sessionsProblem} — no session is found until it is`))
 
   // The two things everything below needs, reported before anything that needs them: doctor
   // used to reach the tool checkout first and die there when git was absent, saying nothing.

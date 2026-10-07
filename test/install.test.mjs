@@ -94,7 +94,7 @@ before(() => {
 
   // The clone source: this tool, as much of it as `npm install -g` and `rig help` need.
   source = path.join(tmp, 'source')
-  for (const d of ['bin', 'prompts', 'templates', 'skills']) fs.cpSync(path.join(ROOT, d), path.join(source, d), { recursive: true })
+  for (const d of ['bin', 'readers', 'prompts', 'templates', 'skills']) fs.cpSync(path.join(ROOT, d), path.join(source, d), { recursive: true })
   for (const f of ['package.json', '.gitignore']) fs.cpSync(path.join(ROOT, f), path.join(source, f))
   assert.equal(git(tmp, 'init', '-q', '-b', 'main', source).status, 0)
   assert.equal(git(source, 'add', '-A').status, 0)
