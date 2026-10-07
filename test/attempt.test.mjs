@@ -760,3 +760,44 @@ test('a cut whose checkout succeeded but whose post-checkout hook failed is stil
     gitMust(own, 'config', '--unset', 'core.hooksPath')
   }
 })
+
+test('folders a set ended on another machine left are its own, though an earlier ended set had the same names', () => {
+  assert.equal(rig(['new', 'twice', '--title', 'Twice work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'twice']).code, 0)
+  assert.equal(rig(['stage', 'feat/twice-stage', '--delivers', 'a slice', '--work', 'twice']).code, 0)
+  const own = worktree('twice', 'billing')
+  assert.equal(rig(['attempt', 'feat/twice-stage', '--n', '2', '--work', 'twice'], { cwd: own }).code, 0)
+  assert.equal(rig(['attempt', 'feat/twice-stage', '--dropped', 'neither', '--work', 'twice']).code, 0)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'twice'], { cwd: own }).code, 0)
+  // What this machine reads once another machine's keep of the second set is pulled.
+  const file = path.join(dataRoot, 'work', 'twice', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  w.attempts[1].kept = 1
+  w.attempts[1].keptAt = '2026-10-07T00:00:00.000Z'
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  assert.doesNotMatch(rig(['doctor']).out, /unmanaged entry "billing@/)
+  const r = rig(['close', '--abandoned', '--work', 'twice'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'twice')))
+})
+
+test('--keep refuses a winner the set counts in a repo where this machine has no copy of it, rather than keep half of it', () => {
+  assert.equal(rig(['new', 'halves', '--title', 'Halves work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'halves']).code, 0)
+  assert.equal(rig(['attach', 'ledger', '--work', 'halves']).code, 0)
+  const at = (repo, n) => path.join(workRoot, 'halves', `${repo}@${n}`)
+  for (const repo of ['billing', 'ledger']) {
+    assert.equal(rig(['attempt', '--n', '2', '--work', 'halves'], { cwd: worktree('halves', repo) }).code, 0)
+    commitWork(at(repo, 1), `${repo}, one way`)
+  }
+  // Ledger's half, cut on another machine and never pushed.
+  gitMust(worktree('halves', 'ledger'), 'worktree', 'remove', at('ledger', 1))
+  gitMust(worktree('halves', 'ledger'), 'branch', '-q', '-D', 'feat/halves-work@1')
+  const was = head(worktree('halves', 'billing'))
+
+  const r = rig(['attempt', '--keep', '1', '--why', 'one', '--work', 'halves'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /ledger@1: feat\/halves-work@1 is in neither the mirror nor the remote — it was never pushed from the machine that cut it/)
+  assert.equal(head(worktree('halves', 'billing')), was, 'billing did not move either')
+})

@@ -2929,7 +2929,7 @@ cmds.detach = ({ flags, positional }) => {
   const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
   if (!entry) die(`${name} is not attached to ${id}`)
   // An attempt belongs to its repo, and a repo detached would leave it nobody's: asked of the
-  // mirror as well as the folders, since the attempts may be on another machine.
+  // record, not the folders or the mirror, since the attempts may be on another machine.
   const attempts = openSets(work).flatMap(set => attemptTrees(cfg, work, set)).filter(a => a.repo === entry.repo)
   if (attempts.length) {
     const sets = [...new Set(attempts.map(a => a.set.branch))]
@@ -4562,9 +4562,10 @@ cmds.attempt = ({ flags, positional }) => {
   compareAttempts(cfg, work, set)
 }
 
-// The attempts of one open set this machine can see, in the repos that carry them: each with its
+// Every attempt of one open set the record counts, in each repo it was cut in: each with its
 // folder (`dir`, and `here` when it exists on the attempt's branch) and the mirror's copies of its
-// branch. A folder of the right name on another branch is not this attempt's.
+// branch, which are null for one cut on another machine and never pushed. A folder of the right
+// name on another branch is not this attempt's.
 //
 // `tip` is the newest copy: the remote's where it is ahead of this mirror's, as it is for an
 // attempt another machine pushed to, and this mirror's otherwise. `diverged` where neither copy
@@ -4580,7 +4581,7 @@ function attemptTrees (cfg, work, set) {
     const ahead = both && holds(tips.local, tips.remote)
     const diverged = both && !ahead && !holds(tips.remote, tips.local)
     return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, diverged, tip: ahead ? tips.remote : tips.local || tips.remote }
-  }).filter(a => a.here || a.tip)
+  })
 }
 
 // Every folder of this machine named for an attempt of an open set, whatever it has checked out:
@@ -4615,9 +4616,9 @@ function endedFoldersHere (cfg, work) {
   const open = new Set(attemptFolderNamesHere(cfg, work).map(a => a.folder))
   const seen = new Set()
   return attemptsOf(work, endedSets(work))
-    .filter(a => !open.has(a.folder) && !seen.has(a.folder) && seen.add(a.folder))
+    .filter(a => !open.has(a.folder))
     .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
-    .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch)
+    .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch && !seen.has(a.folder) && seen.add(a.folder))
 }
 
 const uncommittedIn = dir => git(dir, 'status', '--porcelain').out.split('\n').filter(Boolean).length
@@ -4898,7 +4899,7 @@ function keepAttempt (cfg, work, set, flags) {
   const problems = []
   const moves = winners.map(w => {
     const { org, repo, path: dir } = w.entry
-    if (!w.tip) { problems.push(`${w.folder}: ${w.branch} is in neither the mirror nor the remote — there is nothing to keep`); return { w } }
+    if (!w.tip) { problems.push(`${w.folder}: ${w.branch} is in neither the mirror nor the remote — it was never pushed from the machine that cut it; push it from there, then keep it`); return { w } }
     if (w.diverged) problems.push(`${w.folder}: ${w.branch} here and on the remote have diverged — bring them together, then keep it`)
     const target = t.tips({ org, repo, branch: set.branch })
     if (w.here && uncommittedIn(w.dir)) problems.push(`${w.folder}: uncommitted changes — commit them, or they are not part of what is kept`)
