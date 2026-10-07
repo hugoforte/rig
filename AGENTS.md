@@ -565,6 +565,7 @@ rig attempt feat/schema --dropped "why"        # keep none of them
   - `--dropped` works on a stage withdrawn from the plan and on a closed work, so a set can always be ended. Nothing else does: a withdrawn stage is landed by no PR.
   - `--keep` and `--dropped` refuse while an attempt's folder is off its branch, such as mid-rebase, and while another worktree has an attempt's branch checked out.
   - A set ended on another machine leaves its folders here on their branches; `rig close` and `rig tidy` remove them, refusing only over what is uncommitted in them.
+- **A stage nobody has started** has no branch to have moved, so `--keep` checks the stage below it instead and refuses when that has moved since the cut.
 - **Two machines.** `--n` and `--keep` fetch first. Attempts are cut from the newer of the branch's two copies, and a keep takes an attempt's remote copy where it is ahead.
   - `rig detach` refuses a repo that carries an open set, here or in the mirror.
   - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again.

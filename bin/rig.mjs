@@ -4859,6 +4859,15 @@ function keepAttempt (cfg, work, set, flags) {
     // commit made here, and a keep that left it behind could never be pushed.
     const moved = [target.local, target.remote].filter(Boolean).some(was => !t.ancestor({ org, repo, ancestor: was, of: w.tip }))
     if (moved) problems.push(`${repo}: ${set.branch} has moved since attempt ${n} was cut, so ${w.tip.slice(0, 7)} is not a fast-forward of it`)
+    // A stage nobody has started has no branch to have moved; what it sits on can have, and a
+    // keep would then start the stage off a base the stack has left behind.
+    if (!target.local && !target.remote) {
+      const below = stageBase(cfg, work, w.entry, set.branch)
+      const base = t.tips({ org, repo, branch: below })
+      if ([base.local, base.remote].filter(Boolean).some(was => !t.ancestor({ org, repo, ancestor: was, of: w.tip }))) {
+        problems.push(`${repo}: ${below}, which ${set.branch} sits on, has moved since attempt ${n} was cut — bring the attempt up to date with it first`)
+      }
+    }
     const on = exists(dir) && branchIn(dir) === set.branch
     if (on && uncommittedIn(dir)) problems.push(`${repo}: uncommitted changes on ${set.branch} — commit or stash them before it moves`)
     return { w, on }

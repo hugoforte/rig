@@ -21,6 +21,7 @@ const BRANCH = 'feat/tried-work'
 const STAGE = 'feat/tried-stage'
 const folder = n => path.join(workRoot, WORK, `billing@${n}`)
 const head = (dir, rev = 'HEAD') => gitMust(dir, 'rev-parse', rev)
+const hasBranchIn = (dir, branch) => git(dir, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`).status === 0
 const hasBranch = branch => git(worktree(WORK, 'billing'), 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`).status === 0
 const notes = () => fs.readFileSync(path.join(dataRoot, 'work', WORK, 'notes.tsv'), 'utf8')
 const here = () => ({ cwd: worktree(WORK, 'billing') })
@@ -499,6 +500,47 @@ test('a kept attempt\'s pass does not replace a pass the repo still has for the 
   assert.deepEqual(record('switched').repos[0].branches[0].verified, before)
 })
 
+test('--keep on a stage nobody has started refuses when the stage below has moved since the cut', () => {
+  const own = worktree('switched', 'billing')
+  const later = 'feat/switched-later'
+  assert.equal(rig(['stage', later, '--delivers', 'the next slice', '--work', 'switched']).code, 0)
+  const cut = rig(['attempt', later, '--n', '2', '--work', 'switched'], { cwd: own })
+  assert.equal(cut.code, 0, cut.out)
+  assert.match(cut.out, /from feat\/switched-stage/)
+  commitWork(path.join(workRoot, 'switched', 'billing@1'), 'the next slice')
+  gitMust(own, 'switch', '-q', 'feat/switched-stage')
+  commitWork(own, 'the stage below moves on')
+  gitMust(own, 'switch', '-q', 'feat/switched-work')
+
+  const r = rig(['attempt', later, '--keep', '1', '--why', 'first', '--work', 'switched'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: feat\/switched-stage, which feat\/switched-later sits on, has moved since attempt 1 was cut/)
+  assert.ok(!hasBranchIn(own, later), 'the stage was not started')
+})
+
+test('--keep refuses prose for evidence and a reason that would break the notes row', () => {
+  const later = 'feat/switched-later'
+  const prose = rig(['attempt', later, '--keep', '1', '--why', 'first', '--evidence', 'it just works', '--work', 'switched'])
+  assert.equal(prose.code, 1, prose.out)
+  assert.match(prose.out, /--evidence is a pointer/)
+  const tabbed = rig(['attempt', later, '--keep', '1', '--why', 'first\tsecond', '--work', 'switched'])
+  assert.equal(tabbed.code, 1, tabbed.out)
+  assert.match(tabbed.out, /--why takes one line, with no tab/)
+  assert.equal(rig(['attempt', later, '--dropped', 'the stage below moved', '--force', '--work', 'switched']).code, 0)
+})
+
+test('restore says when an open set\'s attempts were never pushed, so none can come back', () => {
+  const own = worktree('switched', 'billing')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'switched'], { cwd: own }).code, 0)
+  for (const n of [1, 2]) {
+    gitMust(own, 'worktree', 'remove', path.join(workRoot, 'switched', `billing@${n}`))
+    gitMust(own, 'branch', '-q', '-D', `feat/switched-work@${n}`)
+  }
+  const r = rig(['restore', 'switched'])
+  assert.match(r.out, /feat\/switched-work: 2 attempts are open and none could be put back — they were never pushed from the machine that cut them/)
+  assert.equal(rig(['attempt', '--dropped', 'lost with the other machine', '--work', 'switched']).code, 0)
+})
+
 test('a set ended on another machine leaves folders the close removes, not strays it refuses on', () => {
   assert.equal(rig(['new', 'ended', '--title', 'Ended work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'ended']).code, 0)
@@ -526,6 +568,17 @@ test('a forced close ends an open set with the work, so nothing reads it as open
   const [set] = record('forced').attempts
   assert.equal(set.reason, 'the work was closed past it with --force')
   assert.ok(set.droppedAt)
+})
+
+test('--dropped still ends a set a closed work holds open, as a record from before the close dropped it would', () => {
+  const file = path.join(dataRoot, 'work', 'forced', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete w.attempts[0].droppedAt
+  delete w.attempts[0].reason
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+  const r = rig(['attempt', '--dropped', 'ended after the close', '--work', 'forced'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(record('forced').attempts[0].reason, 'ended after the close')
 })
 
 test('a first close refuses over a folder rig did not put in the work folder', () => {
