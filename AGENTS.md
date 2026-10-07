@@ -200,6 +200,13 @@ skipped, and none waits. rig records the choice and what the agent decided.
    `readers/` knows one. Every session is read to place it, and only the work's are printed,
    since the rest are other work and often private. `rig-learn` reads only what the command
    prints, through subagents.
+
+   The one exception is a periodic retro, which is the user's own: `rig sessions --since <date>
+   [--until <date>]` lists every session on the machine in the period, a line each with the
+   works it belongs to (`-` for none), and `rig sessions --extract <path>` prints one as a
+   digest a reader can afford: what the user said, interrupts, denials, errors, irreversible
+   commands and gaps, with secrets redacted. Nothing is stored; read a digest through a
+   subagent, as with any session.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 6. **Replying to the user.** Open every reply with a **TL;DR**: a few lines with what happened or the answer, then the action items the user must take, if any — or "Nothing for you to do." Everything else follows below it, for whoever wants to read on. A skill or prompt that sets its reply's shape keeps it: its opening lines are the TL;DR, and they name the user's action items.
 

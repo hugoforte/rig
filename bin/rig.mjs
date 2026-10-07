@@ -20,7 +20,8 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { SESSIONS_EXAMPLE, sessionsFor, sourcesProblem } from './sessions.mjs'
+import { READERS, SESSIONS_EXAMPLE, sessionFiles, sessionsBetween, sessionsFor, sourcesProblem } from './sessions.mjs'
+import { digest } from './extract.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
@@ -3345,6 +3346,70 @@ function sayTranscripts (cfg, work) {
   for (const s of workSessions(cfg, work)) say(s.path)
 }
 
+// `--until 2026-10-01`: a full date, the first moment not in the period. Read as `--since` is,
+// for the reason it gives.
+function untilFlag (value) {
+  if (!value || value === true) return null
+  const at = /^\d{4}-\d{2}-\d{2}([T ]|$)/.test(String(value)) ? new Date(value) : new Date(NaN)
+  if (Number.isNaN(+at)) die(`--until wants a date like 2026-10-01 — not "${value}"`)
+  return at.toISOString()
+}
+
+// Every work in every data root this machine knows, with its branches, so a session can be
+// placed in whichever work it belongs to. A record that cannot be read is skipped and said.
+function everyWork (loc, cfg) {
+  const works = new Map()
+  const unreadable = []
+  for (const { loc: rootLoc } of doctorRootLocations(loc)) {
+    if (!exists(rootLoc.dataRoot)) continue
+    for (const id of listWorkIds(rootLoc.dataRoot)) {
+      if (works.has(id)) continue
+      try {
+        works.set(id, { id, branches: workBranches(loadWork(cfg, id, rootLoc.dataRoot)) })
+      } catch (e) {
+        if (!(e instanceof RigError)) throw e
+        unreadable.push(`${id} (${(e.cause ?? e).message})`)
+      }
+    }
+  }
+  sayUnreadable(unreadable)
+  return [...works.values()]
+}
+
+// Every agent session on this machine in a period, for a periodic retro (decision 210), one a
+// line: when it started, its reader, its id, whether it is a subagent's, the works it belongs to
+// and its path. `--extract <path>` prints one session as a redacted digest instead. The listing
+// is the one reading of sessions not narrowed to a work: the retro is the user's own, of their
+// own machine, printed to them and stored nowhere.
+cmds.sessions = ({ flags }) => {
+  const { loc } = selection()
+  const cfg = load(loc)
+  const { problem, sources } = sessionConfig(cfg)
+  if (problem) die(problem)
+  if (!sources.length) {
+    aside(C.dim(`· no session locations on this machine — \`sessions\` in ${localConfigFile()}, such as ${SESSIONS_EXAMPLE}`))
+    return
+  }
+  const home = env().USERPROFILE || env().HOME || os.homedir()
+  if (flags.extract !== undefined) {
+    if (flags.extract === true) die('--extract wants the path of a session, as `rig sessions` lists it')
+    const wanted = path.resolve(flags.extract).toLowerCase()
+    const file = sessionFiles({ sources, home }).find(f => path.resolve(f.path).toLowerCase() === wanted)
+    if (!file) die(`${flags.extract} is not one of this machine's sessions — \`rig sessions\` lists them`)
+    const text = readText(file.path)
+    const reader = READERS[file.reader]
+    say(digest({ meta: reader.meta(text), events: reader.events(text), reader: file.reader }).trimEnd())
+    return
+  }
+  const since = sinceFlag(flags.since) ?? new Date(Date.now() - 30 * 86400000).toISOString()
+  const until = untilFlag(flags.until)
+  if (until && until <= since) die('--until comes after --since')
+  if (!flags.since) aside(C.dim('· the last 30 days — --since and --until choose another period'))
+  const found = sessionsBetween({ sources, home, since, until, workRoot: cfg.workRoot, works: everyWork(loc, cfg) })
+  for (const s of found) say([s.startedAt, s.reader, s.session ?? '?', s.subagent ? 'subagent' : 'main', s.works.join(',') || '-', s.path].join('\t'))
+  aside(C.dim(`· ${found.length} session(s), ${found.filter(s => !s.works.length).length} of them in no work`))
+}
+
 // The gate lines `rig status` marks as the agent's: `designed` is the design stop.
 const STOP_OF_GATE = { designed: 'design' }
 const agentDecided = (work, gate) => (work.agentDecided || []).includes(STOP_OF_GATE[gate])
@@ -5515,6 +5580,10 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig status                      live detail for the current work
        [--transcripts]             only the work's own agent sessions, a path a line,
                                    placed by where they ran, their branch or the work folder
+  rig sessions                    every agent session on this machine in a period, a line
+                                  each: start, reader, id, main or subagent, works, path
+       [--since d] [--until d]     the period; the last 30 days unless said
+       [--extract <path>]          one session as a digest a reader can afford, redacted
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record

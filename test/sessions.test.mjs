@@ -305,3 +305,47 @@ test('list says both when it looked at neither the stages nor the sessions', () 
   assert.equal(m.rig(['stage', 'feat/listed-one', '--delivers', 'a slice', '--work', 'listed']).code, 0)
   assert.match(m.rig(['list']).out, /listed[\s\S]*?`rig close` would not refuse \(stages and sessions not checked\)/)
 })
+
+// ------------------------------------------------- rig sessions: a period, for a retro (decision 210)
+
+const listed = r => r.stdout.trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'))
+const PERIOD = ['--since', '2026-09-01', '--until', '2026-11-01']
+
+test('sessions lists every session on the machine in a period, each with the works it belongs to', () => {
+  setMachine({ sessions: hostSources })
+  const file = sessionIn(m.worktree('talked', 'billing'), 'period-in-work')
+  const r = m.rig(['sessions', ...PERIOD])
+  assert.equal(r.code, 0, r.out)
+  const row = listed(r).find(cells => cells[5] === file)
+  assert.deepEqual(row.slice(1, 5), ['claude-code', 'period-in-work', 'main', 'talked'])
+})
+
+test('a session that belongs to no work is listed too, as in none', () => {
+  const file = sessionIn(path.join(m.tmp, 'scratch'), 'period-no-work')
+  const row = listed(m.rig(['sessions', ...PERIOD])).find(cells => cells[5] === file)
+  assert.equal(row[4], '-')
+})
+
+test('a session that only names a work\'s folder is placed in that work', () => {
+  const file = sessionIn(path.join(m.tmp, 'tool'), 'period-naming', { text: `rig status in ${path.join(m.workRoot, 'talked')}` })
+  const row = listed(m.rig(['sessions', ...PERIOD])).find(cells => cells[5] === file)
+  assert.equal(row[4], 'talked')
+})
+
+test('a session outside the period is not listed', () => {
+  const file = sessionIn(path.join(m.tmp, 'scratch'), 'period-old', { at: '2026-06-01T10:00:00.000Z' })
+  assert.ok(!m.rig(['sessions', ...PERIOD]).stdout.includes(file))
+})
+
+test('sessions --extract prints one session as a redacted digest', () => {
+  const file = sessionIn(path.join(m.tmp, 'scratch'), 'extracted', { text: 'my token is sk-abcdefghijklmnopqrstuvwx' })
+  const r = m.rig(['sessions', '--extract', file])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.stdout, /USER: my token is \[redacted\]/)
+})
+
+test('sessions --extract refuses a file that is not one of this machine\'s sessions', () => {
+  const r = m.rig(['sessions', '--extract', machineFile])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /is not one of this machine's sessions/)
+})

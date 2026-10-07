@@ -71,16 +71,28 @@ const plain = p => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
 const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// Whether `text` names `folder`, as written raw, inside JSON with its backslashes doubled, with
-// forward slashes, or as Git Bash writes a drive (`/c/…`). Named means followed by a separator or
-// nothing a name goes on with, so `D:\w\refunds` is not named by `D:\w\refunds-old`.
-export function mentions (text, folder) {
+// A folder as a session may write it: raw, inside JSON with its backslashes doubled, with forward
+// slashes, or as Git Bash writes a drive (`/c/…`).
+function forms (folder) {
   const raw = folder.replace(/[\\/]+$/, '')
   const forward = raw.replace(/\\/g, '/')
-  const forms = new Set([raw, raw.replace(/\\/g, '\\\\'), forward])
+  const all = new Set([raw, raw.replace(/\\/g, '\\\\'), forward])
   const drive = /^([A-Za-z]):\//.exec(forward)
-  if (drive) forms.add(`/${drive[1].toLowerCase()}/${forward.slice(3)}`)
-  return new RegExp(`(?:${[...forms].map(escape).join('|')})(?![\\w.-])`, 'i').test(text)
+  if (drive) all.add(`/${drive[1].toLowerCase()}/${forward.slice(3)}`)
+  return [...all].map(escape).join('|')
+}
+
+// Whether `text` names `folder`, written any of those ways. Named means followed by a separator or
+// nothing a name goes on with, so `D:\w\refunds` is not named by `D:\w\refunds-old`.
+export function mentions (text, folder) {
+  return new RegExp(`(?:${forms(folder)})(?![\\w.-])`, 'i').test(text)
+}
+
+// Every folder name `text` names directly under `root`, in lower case: the works a session names,
+// when `root` is the work root, in one pass over the text however many works there are.
+export function namedUnder (text, root) {
+  const re = new RegExp(`(?:${forms(root)})(?:\\\\\\\\|\\\\|/)([\\w.-]+)`, 'gi')
+  return new Set([...text.matchAll(re)].map(m => m[1].toLowerCase()))
 }
 
 // Why a session is the work's, or null when it is not. The work is its folder, under which every
@@ -91,6 +103,36 @@ export function placed ({ meta, text }, { folder, branches = [] }) {
   if (meta.branches.some(b => branches.includes(b))) return 'on its branch'
   if (mentions(text, folder)) return 'names its folder'
   return null
+}
+
+// Every session on the machine that was at work between `since` and `until` (decision 210), as
+// `{ path, reader, session, subagent, startedAt, endedAt, works }`, oldest first. `works` are the
+// ids of the works it belongs to, placed as `placed` places one, from `works` (`{ id, branches }`)
+// under `workRoot`; none, for the sessions that belong to no work, which a periodic retro reads
+// too. Nothing is stored: this is the user's own machine, read for the user.
+export function sessionsBetween ({ sources = [], home, since, until = null, workRoot, works = [] }) {
+  const root = plain(workRoot)
+  const byBranch = new Map()
+  for (const w of works) for (const b of w.branches) byBranch.set(b, [...(byBranch.get(b) ?? []), w.id])
+  const known = new Map(works.map(w => [w.id.toLowerCase(), w.id]))
+  const out = []
+  for (const file of sessionFiles({ sources, home, since })) {
+    let text
+    try { text = fs.readFileSync(file.path, 'utf8') } catch { continue }
+    const meta = READERS[file.reader].meta(text)
+    const startedAt = meta.startedAt ?? file.modifiedAt
+    const endedAt = meta.endedAt ?? file.modifiedAt
+    if (endedAt < since || (until && startedAt >= until)) continue
+    const ids = new Set()
+    for (const cwd of meta.cwds) {
+      const rest = plain(cwd).startsWith(`${root}/`) ? plain(cwd).slice(root.length + 1).split('/')[0] : null
+      if (known.has(rest)) ids.add(known.get(rest))
+    }
+    for (const b of meta.branches) for (const id of byBranch.get(b) ?? []) ids.add(id)
+    for (const name of namedUnder(text, workRoot)) if (known.has(name)) ids.add(known.get(name))
+    out.push({ path: file.path, reader: file.reader, session: meta.session, subagent: meta.subagent, startedAt, endedAt, works: [...ids].sort() })
+  }
+  return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
 }
 
 // The work's sessions, as `{ path, reader, modifiedAt, session, subagent, why }`, oldest first.
