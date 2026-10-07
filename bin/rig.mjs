@@ -3759,6 +3759,18 @@ function docsTargets (work) {
   })
 }
 
+// Last calendar month, when a data root this machine knows keeps retros and none of them holds
+// this machine's for it; null otherwise. A root keeps retros once it has a `retro/` folder, which
+// the first `rig struggle --period` makes: until a user has run one, nothing is offered.
+function retroDue (now = new Date()) {
+  const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+  const until = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+  const month = since.toISOString().slice(0, 7)
+  const roots = doctorRootLocations(where()).map(r => r.loc.dataRoot).filter(root => root && exists(path.join(root, 'retro')))
+  if (!roots.length || roots.some(root => exists(path.join(root, 'retro', month, `${machineName()}.tsv`)))) return null
+  return { month, since: since.toISOString().slice(0, 10), until: until.toISOString().slice(0, 10) }
+}
+
 // The "what now" answer. Read-only, and a command you run — never a hook, and never fired
 // off the back of another command (decision 66). The gathering lives here; every decision
 // about what is worth offering is `bin/next.mjs`'s.
@@ -3780,6 +3792,7 @@ cmds.next = ({ flags }) => {
   const doc = exists(contextFile(work.id)) ? readText(contextFile(work.id)) : ''
   const handedOff = handoffAt(work.id)
   const offers = nextFor({
+    retroDue: retroDue(),
     work,
     repos,
     // The scaffolded stub, still standing where the design should be.

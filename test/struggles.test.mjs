@@ -89,3 +89,13 @@ test('a period\'s struggle names its root: the root in hand may be one a whole o
 test('a period is a month', () => {
   assert.match(struggle(...ROW, '--period', '2026-9', '--data', 'own').out, /--period is a month, such as 2026-09/)
 })
+
+test('next offers last month\'s retro once the user keeps retros, until this machine\'s is recorded', () => {
+  const now = new Date()
+  const last = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7)
+  const lastFile = path.join(m.dataRoot, 'retro', last, `${machine}.tsv`)
+  fs.rmSync(lastFile, { force: true })
+  assert.match(m.rig(['next', '--work', 'struggled']).out, new RegExp(`${last} has no retro of this machine's sessions yet`))
+  assert.equal(struggle('--kind', 'none', '--session', 's-9', '--host', 'claude-code', '--period', last, '--data', 'own').code, 0)
+  assert.doesNotMatch(m.rig(['next', '--work', 'struggled']).out, /has no retro of this machine's sessions/)
+})
