@@ -1725,6 +1725,12 @@ function regenerate (cfg, work) {
     lines.push(nestedOrgDoc(doc.body))
     lines.push('')
   }
+  lines.push('## Replying to the user')
+  lines.push('')
+  lines.push('Open every reply with a **TL;DR**: a few lines saying what happened, then the action items')
+  lines.push('the user must take, if any — or "Nothing for you to do." Everything else follows below it,')
+  lines.push('for whoever wants to read on.')
+  lines.push('')
   lines.push('## Rules in this folder')
   lines.push('')
   lines.push('- Add a repo with `rig attach <repo>` — **never** `git worktree add`.')

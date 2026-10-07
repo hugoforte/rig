@@ -59,6 +59,10 @@ test('with no org doc, the generated work file has no org section', () => {
   assert.doesNotMatch(generatedAgents(), /^## (acme|globex)$/m)
 })
 
+test('the generated work file has every reply lead with the user\'s action items (#325)', () => {
+  assert.match(generatedAgents(), /^## Replying to the user\n\nOpen every reply with a \*\*TL;DR\*\*: .* action items$/m)
+})
+
 test('an org\'s doc is inlined in the generated work file, its headings nested under the org', () => {
   fs.mkdirSync(path.dirname(orgDoc), { recursive: true })
   fs.writeFileSync(orgDoc, `---
@@ -102,7 +106,7 @@ test('a fence closes only on its own kind, so a fence inside it hides no heading
 })
 
 test('a fence the doc leaves open is closed before the rest of the file', () => {
-  assert.match(regenerateWith('## What we believe\n\n~~~\nunclosed\n'), /^unclosed\n~~~\n\n## Rules in this folder$/m)
+  assert.match(regenerateWith('## What we believe\n\n~~~\nunclosed\n'), /^unclosed\n~~~\n\n## Replying to the user$/m)
 })
 
 test('a doc saved with a byte-order mark keeps its frontmatter out of the file', () => {

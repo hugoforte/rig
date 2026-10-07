@@ -200,6 +200,10 @@ skipped, and none waits. rig records the choice and what the agent decided.
    sessions, which are private; one that does not finds nothing and is named. `rig-learn`
    reads only what the command prints, through subagents.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
+6. **Open every reply to the user with a TL;DR**: a few lines saying what happened, then the
+   action items the user must take, if any — or "Nothing for you to do." Everything else
+   follows below it, for whoever wants to read on. The generated work `AGENTS.md` says the same,
+   so it holds whichever agent host is running.
 
 ## The catalogue
 
