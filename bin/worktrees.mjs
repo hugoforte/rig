@@ -493,13 +493,20 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // An attempt's worktree: a new branch at `from`, a commit, in a new folder. `cut` makes the
     // work branch off the remote HEAD and `cutHere` a stage in a worktree that exists; this is the
     // third kind, a sibling of the branch it is an attempt at. Answers git's refusal, or null.
+    //
+    // git makes the branch before it checks it out, and leaves it when the checkout fails; one
+    // still where it was made is taken back, so a cut that failed is no branch a later cut
+    // would refuse as an earlier set's. git says what it is doing before why it stopped.
     cutAttempt ({ org, repo, branch, from, dest }) {
       const mirror = mirrorPath(org, repo)
       if (fs.existsSync(dest)) return `${dest} already exists`
       git(mirror, 'worktree', 'prune')
       step(`worktree ${path.basename(dest)} → ${branch}`)
       const r = run('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, from], { env: NO_PROMPT_ENV })
-      return r.code === 0 ? null : ((r.err || r.out).split('\n').find(Boolean) || '').trim()
+      if (r.code === 0) return null
+      git(mirror, 'update-ref', '-d', local(branch), from)
+      const lines = (r.err || r.out).split('\n').map(l => l.trim()).filter(Boolean)
+      return lines.find(l => /^(fatal|error):/.test(l)) || lines[0] || `git could not cut ${branch}`
     },
 
     // Move `branch` forward to `to`, never anywhere else. In `dir`, the worktree that has it

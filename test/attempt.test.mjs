@@ -6,6 +6,7 @@
 // so the suite stays offline and spawns no npm.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -589,4 +590,124 @@ test('a first close refuses over a folder rig did not put in the work folder', (
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /my-notes: not one of the work's repos, so rig cannot say what it holds/)
   assert.ok(fs.existsSync(path.join(workRoot, 'strayed', 'my-notes')), 'and nothing was deleted')
+})
+
+test('--keep refuses an attempt whose copy here and the remote\'s have diverged, rather than drop the remote\'s commits', () => {
+  assert.equal(rig(['new', 'diverged', '--title', 'Diverged work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'diverged']).code, 0)
+  const own = worktree('diverged', 'billing')
+  const one = path.join(workRoot, 'diverged', 'billing@1')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'diverged'], { cwd: own }).code, 0)
+  commitWork(one, 'started here')
+  gitMust(one, 'push', '-q', 'origin', 'feat/diverged-work@1')
+  const elsewhere = path.join(m.tmp, 'diverging-machine')
+  gitMust(m.tmp, 'clone', '-q', '-b', 'feat/diverged-work@1', m.bare('billing'), elsewhere)
+  commitWork(elsewhere, 'finished on another machine')
+  gitMust(elsewhere, 'push', '-q', 'origin', 'feat/diverged-work@1')
+  commitWork(one, 'carried on here, never pushed')
+  const was = head(own)
+
+  const r = rig(['attempt', '--keep', '1', '--why', 'first', '--work', 'diverged'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@1: feat\/diverged-work@1 here and on the remote have diverged/)
+  assert.equal(head(own), was, 'the branch did not move')
+})
+
+test('a cut git refuses leaves no attempt branch behind, and says git\'s reason', () => {
+  assert.equal(rig(['new', 'badcut', '--title', 'Badcut work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'badcut']).code, 0)
+  const own = worktree('badcut', 'billing')
+  // A tip no checkout can write: a tree with a `.git` folder in it, which git refuses everywhere.
+  const blob = spawnSync('git', ['-C', own, 'hash-object', '-w', '--stdin'], { input: 'x\n', encoding: 'utf8' }).stdout.trim()
+  const inner = spawnSync('git', ['-C', own, 'mktree'], { input: `100644 blob ${blob}\tx\n`, encoding: 'utf8' }).stdout.trim()
+  const outer = spawnSync('git', ['-C', own, 'mktree'], { input: `040000 tree ${inner}\t.git\n`, encoding: 'utf8' }).stdout.trim()
+  const bad = gitMust(own, 'commit-tree', outer, '-p', 'HEAD', '-m', 'unwritable')
+  gitMust(own, 'update-ref', 'refs/heads/feat/badcut-work', bad)
+
+  const r = rig(['attempt', '--n', '2', '--work', 'badcut'], { cwd: own })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /could not cut feat\/badcut-work@1 — (fatal|error): /)
+  assert.ok(!hasBranchIn(own, 'feat/badcut-work@1'), 'the branch git made before it refused is gone')
+  assert.equal(record('badcut').attempts, undefined, 'nothing was recorded')
+})
+
+test('--n will not cut afresh an attempt the set says was cut on another machine, and restore names it', () => {
+  assert.equal(rig(['new', 'recut', '--title', 'Recut work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'recut']).code, 0)
+  const own = worktree('recut', 'billing')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'recut'], { cwd: own }).code, 0)
+  // What this machine reads once the other machine's third cut is pulled: one it never pushed.
+  const file = path.join(dataRoot, 'work', 'recut', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  w.attempts[0].count = 3
+  w.attempts[0].repos = [{ repo: 'billing', count: 3 }]
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  const restored = rig(['restore', 'recut'])
+  assert.match(restored.out, /feat\/recut-work: billing@3 is not here, and was never pushed from the machine that cut it/)
+  const r = rig(['attempt', '--n', '3', '--work', 'recut'], { cwd: own })
+  assert.match(r.out, /billing@3: feat\/recut-work@3 was cut on another machine and never pushed — push it from there/)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'recut', 'billing@3')))
+  assert.ok(!hasBranchIn(own, 'feat/recut-work@3'), 'no second attempt 3 was made')
+})
+
+test('a folder an ended set left is that set\'s, though a newer set at another branch has an attempt of its name', () => {
+  assert.equal(rig(['new', 'reused', '--title', 'Reused work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'reused']).code, 0)
+  assert.equal(rig(['stage', 'feat/reused-stage', '--delivers', 'a slice', '--work', 'reused']).code, 0)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'reused'], { cwd: worktree('reused', 'billing') }).code, 0)
+  // What this machine reads once another machine's keep, and its new set on the stage, are pulled.
+  const file = path.join(dataRoot, 'work', 'reused', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  w.attempts[0].kept = 1
+  w.attempts[0].keptAt = '2026-10-07T00:00:00.000Z'
+  w.attempts.push({ branch: 'feat/reused-stage', count: 1, at: '2026-10-07T00:00:00.000Z', repos: [{ repo: 'billing', count: 1 }] })
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  const dropped = rig(['attempt', 'feat/reused-stage', '--dropped', 'none', '--work', 'reused'])
+  assert.equal(dropped.code, 0, dropped.out)
+  const closed = rig(['close', '--abandoned', '--work', 'reused'])
+  assert.equal(closed.code, 0, closed.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'reused')))
+})
+
+test('--n refuses while the branch here and on the remote have diverged, since no attempt cut from either could be kept', () => {
+  assert.equal(rig(['new', 'gaps', '--title', 'Gaps work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'gaps']).code, 0)
+  const own = worktree('gaps', 'billing')
+  commitWork(own, 'pushed')
+  gitMust(own, 'push', '-q', 'origin', 'feat/gaps-work')
+  gitMust(own, 'commit', '-q', '--amend', '-m', 'and rewritten here, so the two copies diverge')
+
+  const r = rig(['attempt', '--n', '2', '--work', 'gaps'], { cwd: own })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing: feat\/gaps-work here and on the remote have diverged — bring them together, then cut the attempts/)
+  assert.equal(record('gaps').attempts, undefined, 'nothing was recorded')
+  gitMust(own, 'push', '-q', '--force', 'origin', 'feat/gaps-work')
+})
+
+test('the comparison says an attempt\'s pass is stale once its diff has changed since it passed', () => {
+  const own = worktree('gaps', 'billing')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'gaps'], { cwd: own }).code, 0)
+  const one = path.join(workRoot, 'gaps', 'billing@1')
+  commitWork(one, 'an attempt')
+  assert.equal(rig(['attempt', '--run', '--work', 'gaps']).code, 0)
+  commitWork(one, 'and more since it passed')
+
+  const r = rig(['attempt', '--work', 'gaps'])
+  assert.match(r.out, /billing@1 {2}2 commits .* · checks stale — the diff changed since they passed/)
+})
+
+test('tidy clears the folders a closed work\'s ended set left, as the close that ran elsewhere would have', () => {
+  // What this machine reads once another machine's drop and close are pulled.
+  const file = path.join(dataRoot, 'work', 'gaps', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  w.attempts[0].droppedAt = '2026-10-07T00:00:00.000Z'
+  w.attempts[0].reason = 'dropped on another machine'
+  w.closedAt = w.abandonedAt = '2026-10-07T00:00:00.000Z'
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  const r = rig(['tidy'])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(!fs.existsSync(path.join(workRoot, 'gaps')))
 })

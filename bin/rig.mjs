@@ -20,7 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { attemptBranch, attemptFolder, openSet, openSets, attemptsOf, attemptsShapeProblem, attemptNumber, countIn } from './attempts.mjs'
+import { attemptBranch, attemptFolder, isOpen, openSet, openSets, attemptsOf, attemptsShapeProblem, attemptNumber, countIn } from './attempts.mjs'
 import { transcriptsFor, refusal } from './transcripts.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
@@ -2546,22 +2546,24 @@ function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
 
 // The open attempts whose folders are not here, put back beside their repos from the remote or
 // the mirror, and never cut again: a branch on neither was never pushed from the machine that cut
-// it, and an open set with none of its attempts here is said. Answers how many were put back and
-// how many git refused.
+// it, and is named, as is an open set with none of its attempts here. Answers how many were put
+// back, how many git refused, and how many were never pushed.
 function restoreAttempts (cfg, work) {
   const t = trees(cfg)
   const fetched = new Set()
   let restored = 0
   let refused = 0
+  let unpushed = 0
   for (const set of openSets(work)) {
     const refusedBefore = refused
+    const lost = []
     for (const a of attemptsOf(work, [set])) {
       const entry = work.repos.find(r => r.repo === a.repo)
       const dest = path.join(workDir(cfg, work.id), a.folder)
       if (exists(dest) || !exists(entry.path)) continue
       if (!fetched.has(a.repo)) { t.fetch({ org: entry.org, repo: entry.repo }); fetched.add(a.repo) }
       const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
-      if (!tips.local && !tips.remote) continue
+      if (!tips.local && !tips.remote) { lost.push(a.folder); continue }
       // One git refuses — a copy diverged from the remote's — is said, and the rest still come
       // back, as a repo's refusal is in `cmds.restore`.
       try {
@@ -2580,9 +2582,13 @@ function restoreAttempts (cfg, work) {
     if (!attemptFoldersHere(cfg, { ...work, attempts: [set] }).length) {
       const why = refused > refusedBefore ? 'git refused them, above' : 'they were never pushed from the machine that cut them'
       warn(`${set.branch}: ${set.count} attempts are open and none could be put back — ${why}; \`rig attempt ${set.branch} --dropped "why"\` ends the set`)
+    } else if (lost.length) {
+      const one = lost.length === 1
+      warn(`${set.branch}: ${lost.join(', ')} ${one ? 'is' : 'are'} not here, and ${one ? 'was' : 'were'} never pushed from the machine that cut ${one ? 'it' : 'them'}`)
     }
+    unpushed += lost.length
   }
-  return { restored, refused }
+  return { restored, refused, unpushed }
 }
 
 // Rebuild a work's folder from its record — every missing worktree, on the top of its stack,
@@ -2613,7 +2619,7 @@ cmds.restore = ({ flags, positional }) => {
   const attempts = restoreAttempts(cfg, work)
   regenerate(cfg, work)
   if (attempts.refused) warn(`${work.id}: ${attempts.refused} attempt${attempts.refused === 1 ? '' : 's'} could not be restored — see above`)
-  if (!missing.length && !attempts.restored && !attempts.refused) return ok(`${work.id}: every worktree is already here — ${workDir(cfg, work.id)}`)
+  if (!missing.length && !attempts.restored && !attempts.refused && !attempts.unpushed) return ok(`${work.id}: every worktree is already here — ${workDir(cfg, work.id)}`)
   if (!missing.length) return attempts.restored ? ok(`${work.id}: put back ${attempts.restored} attempt${attempts.restored === 1 ? '' : 's'} — cd ${workDir(cfg, work.id)}`) : undefined
   const left = missing.filter(r => !restored.includes(r))
   if (left.length) warn(`${work.id}: ${left.map(r => r.repo).join(', ')} could not be restored — see above`)
@@ -4543,24 +4549,36 @@ cmds.attempt = ({ flags, positional }) => {
 // branch. A folder of the right name on another branch is not this attempt's.
 //
 // `tip` is the newest copy: the remote's where it is ahead of this mirror's, as it is for an
-// attempt another machine pushed to, and this mirror's otherwise.
+// attempt another machine pushed to, and this mirror's otherwise. `diverged` where neither copy
+// holds the other, so neither is the attempt.
 function attemptTrees (cfg, work, set) {
   const t = trees(cfg)
   return attemptsOf(work, [set]).map(a => {
     const entry = work.repos.find(r => r.repo === a.repo)
     const dir = path.join(workDir(cfg, work.id), a.folder)
     const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
-    const ahead = tips.local && tips.remote && tips.local !== tips.remote && t.ancestor({ org: entry.org, repo: entry.repo, ancestor: tips.local, of: tips.remote })
-    return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, tip: ahead ? tips.remote : tips.local || tips.remote }
+    const holds = (ancestor, of) => t.ancestor({ org: entry.org, repo: entry.repo, ancestor, of })
+    const both = tips.local && tips.remote && tips.local !== tips.remote
+    const ahead = both && holds(tips.local, tips.remote)
+    const diverged = both && !ahead && !holds(tips.remote, tips.local)
+    return { ...a, entry, dir, here: exists(dir) && branchIn(dir) === a.branch, ...tips, diverged, tip: ahead ? tips.remote : tips.local || tips.remote }
   }).filter(a => a.here || a.tip)
 }
 
 // Every folder of this machine named for an attempt of an open set, whatever it has checked out:
 // what the teardowns and the stray check need, since a folder on a detached HEAD mid-rebase is
-// still that attempt's, and still holds whatever is uncommitted in it. No git call.
-const attemptFolderNamesHere = (cfg, work) => attemptsOf(work)
-  .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
-  .filter(a => exists(a.dir))
+// still that attempt's, and still holds whatever is uncommitted in it. All but one on the branch
+// an ended set cut under the same name, which is that set's — left by a keep or a drop on another
+// machine — and goes with it, whatever set is open now.
+function attemptFolderNamesHere (cfg, work) {
+  const ended = attemptsOf(work, endedSets(work))
+  return attemptsOf(work)
+    .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
+    .filter(a => exists(a.dir))
+    .filter(a => !ended.some(e => e.folder === a.folder && e.branch === branchIn(a.dir)))
+}
+
+const endedSets = work => (work.attempts || []).filter(s => !isOpen(s))
 
 // The same, only those on their attempt's branch: what doctor, the generated file and the commands
 // that act on an attempt read. One git call a folder.
@@ -4573,7 +4591,7 @@ const attemptFoldersHere = (cfg, work) => attemptFolderNamesHere(cfg, work).filt
 function endedFoldersHere (cfg, work) {
   const open = new Set(attemptFolderNamesHere(cfg, work).map(a => a.folder))
   const seen = new Set()
-  return attemptsOf(work, (work.attempts || []).filter(s => !openSets(work).includes(s)))
+  return attemptsOf(work, endedSets(work))
     .filter(a => !open.has(a.folder) && !seen.has(a.folder) && seen.add(a.folder))
     .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
     .filter(a => exists(a.dir) && branchIn(a.dir) === a.branch)
@@ -4643,7 +4661,12 @@ function cutAttempts (cfg, work, branch, flags) {
     if (exists(dest)) { step(`${attemptFolder(repo, i)} is already here`); continue }
     const tips = t.tips({ org, repo, branch: name })
     // An attempt of this set already cut — on another machine, or before its folder was deleted —
-    // is put back as it is rather than cut again over the top of it.
+    // is put back as it is rather than cut again over the top of it. One the set counts with no
+    // copy anywhere was never pushed, and a new one cut here would be a second attempt n.
+    if (i <= known && !tips.local && !tips.remote) {
+      warn(`${attemptFolder(repo, i)}: ${name} was cut on another machine and never pushed — push it from there; rig will not cut a second attempt ${i}`)
+      continue
+    }
     let failed
     try {
       failed = tips.local || tips.remote
@@ -4805,8 +4828,8 @@ function discardAttempts (cfg, attempts, { force = () => false } = {}) {
 // The set's folders that are not on their attempt's branch — a rebase stopped mid-way, a detached
 // checkout — as refusals: rig cannot say what such a folder holds, and deleting its branch from
 // under it would leave a rebase with nowhere to finish. Said as `rig close` says them.
-const offBranch = (cfg, work, set) => attemptFolderNamesHere(cfg, { ...work, attempts: [set] })
-  .filter(a => branchIn(a.dir) !== a.branch)
+const offBranch = (cfg, work, set) => attemptFolderNamesHere(cfg, work)
+  .filter(a => a.set === set && branchIn(a.dir) !== a.branch)
   .map(a => `${a.folder}: not on ${a.branch}, so rig cannot say what it holds — put it back on its branch, or move it out of the work folder`)
 
 // The attempts whose branch some other worktree has checked out — the repo's own, switched to it
@@ -4853,6 +4876,7 @@ function keepAttempt (cfg, work, set, flags) {
   const moves = winners.map(w => {
     const { org, repo, path: dir } = w.entry
     if (!w.tip) { problems.push(`${w.folder}: ${w.branch} is in neither the mirror nor the remote — there is nothing to keep`); return { w } }
+    if (w.diverged) problems.push(`${w.folder}: ${w.branch} here and on the remote have diverged — bring them together, then keep it`)
     const target = t.tips({ org, repo, branch: set.branch })
     if (w.here && uncommittedIn(w.dir)) problems.push(`${w.folder}: uncommitted changes — commit them, or they are not part of what is kept`)
     // Both copies: one pushed from elsewhere and fetched here has moved the branch as surely as a
@@ -6161,10 +6185,13 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --evidence <pointer,...>    a SHA, a PR, file:line, a path or a URL — never prose
        [--stage <branch>] [--result "..."]
   rig close [--force]             safety-checked teardown; a work that landed also loses
-                                  its merged branches, in the mirror and on the remote
+                                  its merged branches, in the mirror and on the remote;
+                                  open attempts refuse until one is kept or they are dropped
        --abandoned                 stop a work without finishing it: the did-it-land
-                                   checks are dropped, uncommitted changes still refuse,
-                                   the ticket is told and open PRs are left alone
+                                   checks are dropped and open attempts end with it;
+                                   uncommitted changes and folders rig did not put in the
+                                   work folder still refuse; the ticket is told and open
+                                   PRs are left alone
        on a work already closed: clears this machine's copy and
                                    nothing else — no record, ticket or remote is touched
   rig tidy [--dry-run]            clear every closed work whose folder is still on this
