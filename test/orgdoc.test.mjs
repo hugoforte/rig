@@ -12,6 +12,7 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { makeInstall, strip } from './harness.mjs'
 
 const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
@@ -59,6 +60,27 @@ test('with no org doc, the generated work file has no org section', () => {
   assert.doesNotMatch(generatedAgents(), /^## (acme|globex)$/m)
 })
 
+// The section's paragraph, whitespace folded, so a rewrap of the source is no change.
+const replyRule = () => {
+  const m = generatedAgents().match(/^## Replying to the user\n\n([\s\S]*?)\n\n## /m)
+  assert.ok(m, 'the generated work file has a Replying to the user section')
+  return m[1].replace(/\s+/g, ' ')
+}
+
+test('the generated work file opens every reply with what happened, then the user\'s action items, the rest below (#325)', () => {
+  const rule = replyRule()
+  assert.match(rule, /^Open every reply with a \*\*TL;DR\*\*: .*what happened or the answer, then the action items the user must take, if any — or "Nothing for you to do\." Everything else follows below it/)
+})
+
+test('a skill or prompt that sets its own reply shape keeps it, its opening naming the user\'s action items (#325)', () => {
+  assert.match(replyRule(), /A skill or prompt that sets its reply's shape keeps it: its opening lines are the TL;DR, and they name the user's action items\./)
+})
+
+test('the tool\'s AGENTS.md quotes the generated reply rule word for word (#325)', () => {
+  const toolAgents = fs.readFileSync(fileURLToPath(new URL('../AGENTS.md', import.meta.url)), 'utf8')
+  assert.ok(toolAgents.replace(/\s+/g, ' ').includes(replyRule()), 'AGENTS.md rule 6 and the generated section say the same')
+})
+
 test('an org\'s doc is inlined in the generated work file, its headings nested under the org', () => {
   fs.mkdirSync(path.dirname(orgDoc), { recursive: true })
   fs.writeFileSync(orgDoc, `---
@@ -102,7 +124,7 @@ test('a fence closes only on its own kind, so a fence inside it hides no heading
 })
 
 test('a fence the doc leaves open is closed before the rest of the file', () => {
-  assert.match(regenerateWith('## What we believe\n\n~~~\nunclosed\n'), /^unclosed\n~~~\n\n## Rules in this folder$/m)
+  assert.match(regenerateWith('## What we believe\n\n~~~\nunclosed\n'), /^unclosed\n~~~\n\n## Replying to the user$/m)
 })
 
 test('a doc saved with a byte-order mark keeps its frontmatter out of the file', () => {

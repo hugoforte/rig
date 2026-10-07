@@ -50,6 +50,14 @@ for (const name of skills) {
   })
 }
 
+test('every skill rig ships but the entry point sends its reply to AGENTS.md\'s Replying to the user (#325)', () => {
+  // The entry point reads AGENTS.md in full; the others are loaded on their own, often outside a
+  // work folder, where no generated file says it.
+  for (const name of skills.filter(n => n !== 'rig')) {
+    assert.match(fs.readFileSync(path.join(SKILLS, name, 'SKILL.md'), 'utf8'), /`AGENTS\.md`'s "Replying to the user"/, `skills/${name} points at it`)
+  }
+})
+
 test('the stops are listed once, in AGENTS.md, and the skill and prompts that stop point there', () => {
   // A work chooses which gates it stops at, so a list of stops copied into each prompt would be
   // one more place to go wrong the day the list changes.
