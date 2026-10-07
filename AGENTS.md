@@ -203,7 +203,7 @@ skipped, and none waits. rig records the choice and what the agent decided.
 
    The one exception is a periodic retro, which is the user's own: `rig sessions --since <date>
    [--until <date>]` lists every session on the machine in the period, a line each with the
-   works it belongs to (`-` for none), and `rig sessions --extract <path>` prints one as a
+   works it belongs to (`-` for none), and `rig sessions --extract <path>` prints one as an
    extract a reader can afford: what the user said, interrupts, denials, errors, irreversible
    commands and gaps, with secrets redacted. Nothing is stored; read an extract through a
    subagent, as with any session.

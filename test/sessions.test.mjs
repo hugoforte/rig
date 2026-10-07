@@ -69,6 +69,11 @@ test('the Claude Code reader says where a session ran, on which branches, and wh
   assert.deepEqual(where, { session: 'abc', subagent: false, startedAt: '2026-10-01T10:00:00.000Z', endedAt: '2026-10-01T11:00:00.000Z', cwds: ['C:\\w\\a'], branches: ['main', 'feat/x'], acted: undefined })
 })
 
+test('times written with an offset are the moments they are: started and ended are the earliest and latest instants', () => {
+  const text = [entry({ cwd: '/w/a', at: '2026-10-01T11:00:00.000Z' }), entry({ cwd: '/w/a', at: '2026-10-01T12:00:00+02:00' })].join('\n')
+  assert.deepEqual([meta(text).startedAt, meta(text).endedAt], ['2026-10-01T10:00:00.000Z', '2026-10-01T11:00:00.000Z'])
+})
+
 test('a line cut off mid-write is skipped, and the rest of the session still reads', () => {
   const text = [entry({ id: 'abc', cwd: '/w/a' }), '{"type":"user","cwd":"/w/b","message":"cut', entry({ id: 'abc', cwd: '/w/a', at: '2026-10-01T12:00:00.000Z' })].join('\n')
   assert.deepEqual([meta(text).cwds, meta(text).endedAt], [['/w/a'], '2026-10-01T12:00:00.000Z'])

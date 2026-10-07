@@ -24,6 +24,10 @@ const textOf = content => typeof content === 'string'
 const lastParagraph = text => text.trim().split(/\n\s*\n/).at(-1) ?? ''
 const distinct = list => [...new Set(list.filter(v => typeof v === 'string' && v))]
 
+// A timestamp as one UTC instant, so times written with an offset sort and compare as the
+// moments they are; one that does not parse is no time at all.
+const instant = s => { const t = Date.parse(s); return Number.isNaN(t) ? null : new Date(t).toISOString() }
+
 // What the finder needs to place a session: where it ran, on which branches, and when, from each
 // entry's own fields and never from a field nested in what a tool was given or gave back; and what
 // the session did — the user's words and what its tools were given — as `acted`, the text a work's
@@ -37,7 +41,7 @@ export function meta (text) {
   let session = null
   let subagent = false
   for (const e of entries(text)) {
-    if (typeof e.timestamp === 'string') at.push(e.timestamp)
+    if (typeof e.timestamp === 'string' && instant(e.timestamp)) at.push(instant(e.timestamp))
     if (typeof e.cwd === 'string') cwds.push(e.cwd)
     // A detached HEAD is no branch of anyone's.
     if (typeof e.gitBranch === 'string' && e.gitBranch !== 'HEAD') branches.push(e.gitBranch)

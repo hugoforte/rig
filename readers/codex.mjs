@@ -21,6 +21,10 @@ function * entries (text) {
 
 const distinct = list => [...new Set(list.filter(v => typeof v === 'string' && v))]
 
+// A timestamp as one UTC instant, so times written with an offset sort and compare as the
+// moments they are; one that does not parse is no time at all.
+const instant = s => { const t = Date.parse(s); return Number.isNaN(t) ? null : new Date(t).toISOString() }
+
 // What the finder needs to place a session: where it ran, on which branches, and when, from the
 // session's own entries — `session_meta` and each `turn_context` — and never from a field nested
 // in what a tool was given or gave back; and what the session did — the user's words and what
@@ -33,7 +37,7 @@ export function meta (text) {
   let head = null
   for (const e of entries(text)) {
     const p = e.payload ?? {}
-    if (typeof e.timestamp === 'string') at.push(e.timestamp)
+    if (typeof e.timestamp === 'string' && instant(e.timestamp)) at.push(instant(e.timestamp))
     if (e.type === 'session_meta' && !head) {
       head = p
       branches.push(p.git?.branch)
