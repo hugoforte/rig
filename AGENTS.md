@@ -556,8 +556,10 @@ rig attempt feat/schema --dropped "why"        # keep none of them
   - `--n` takes from two to nine.
   - A repo holds one open set at a time, because `<repo>@<n>` does not say which branch it is an attempt at.
   - A new attempt never takes over a `<branch>@<n>` an earlier set left behind.
+  - `--n` refuses while the branch here and on the remote have diverged, since no attempt cut from either could be kept.
+  - `--n` never cuts afresh an attempt the set already counts: one cut on another machine and never pushed is named, and the rest are cut.
   - `rig check --run` refuses inside an attempt's folder; `rig attempt --run` checks attempts.
-- **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
+- **Kept by a fast-forward, never a rewrite.** `--keep` checks every repo that carries the winner before any repo moves. It refuses when the branch has moved since the attempts were cut, when the winner's copy here and the remote's have diverged, and when an attempt holds uncommitted changes. `--force` discards those changes in the attempts that lost, never in the winner.
 - **After `--keep`.** The branch moves in every repo that carries the winner, and an unstarted stage's branch is made there. The other folders and their branches are discarded. A copy someone pushed is named and left on the remote. The winner's pass becomes the repo's while its diff is unchanged. Nothing is pushed.
 - **What is recorded.** The record (`attempts` in `work.json`) keeps that the set existed, how many attempts were cut in each repo, the check passes while it is open, and how it ended. The reason goes in `notes.tsv`, with every attempt's head as evidence, since the losers' branches are deleted.
 - **An open set is a decision nobody has made yet.**
@@ -568,7 +570,7 @@ rig attempt feat/schema --dropped "why"        # keep none of them
 - **A stage nobody has started** has no branch to have moved, so `--keep` checks the stage below it instead and refuses when that has moved since the cut.
 - **Two machines.** `--n` and `--keep` fetch first. Attempts are cut from the newer of the branch's two copies, and a keep takes an attempt's remote copy where it is ahead.
   - `rig detach` refuses a repo that carries an open set, here or in the mirror.
-  - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again.
+  - `rig restore` puts an attempt back only from a branch that exists, and never cuts one again. It names each attempt it could not put back, and why.
   - `rig doctor` treats an open set's folders as the work's own, not as strays.
   - `rig status` names each open set.
   - `rig next` says how far an open set has got, and offers the comparison once every attempt has commits.

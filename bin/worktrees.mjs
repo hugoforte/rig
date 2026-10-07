@@ -495,8 +495,10 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // third kind, a sibling of the branch it is an attempt at. Answers git's refusal, or null.
     //
     // git makes the branch before it checks it out, and leaves it when the checkout fails; one
-    // still where it was made is taken back, so a cut that failed is no branch a later cut
-    // would refuse as an earlier set's. git says what it is doing before why it stopped.
+    // still where it was made, with no worktree on it, is taken back, so a cut that failed is no
+    // branch a later cut would refuse as an earlier set's. A failure after the worktree was made —
+    // a post-checkout hook — leaves an attempt like any other, said with git's complaint. git says
+    // what it is doing before why it stopped, so its reason is its last word.
     cutAttempt ({ org, repo, branch, from, dest }) {
       const mirror = mirrorPath(org, repo)
       if (fs.existsSync(dest)) return `${dest} already exists`
@@ -504,9 +506,15 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       step(`worktree ${path.basename(dest)} → ${branch}`)
       const r = run('git', ['-C', mirror, 'worktree', 'add', '-b', branch, dest, from], { env: NO_PROMPT_ENV })
       if (r.code === 0) return null
-      git(mirror, 'update-ref', '-d', local(branch), from)
       const lines = (r.err || r.out).split('\n').map(l => l.trim()).filter(Boolean)
-      return lines.find(l => /^(fatal|error):/.test(l)) || lines[0] || `git could not cut ${branch}`
+      const reason = lines.find(l => /^(fatal|error):/.test(l)) || lines.at(-1) || `git exited ${r.code}`
+      const checkedOut = this.worktreesOn({ org, repo }).has(branch)
+      if (checkedOut && fs.existsSync(dest)) {
+        warn(`${branch}: cut, but git ended with an error after the checkout — ${reason}`)
+        return null
+      }
+      if (!checkedOut) git(mirror, 'update-ref', '-d', local(branch), from)
+      return reason
     },
 
     // Move `branch` forward to `to`, never anywhere else. In `dir`, the worktree that has it

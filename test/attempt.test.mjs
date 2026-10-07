@@ -711,3 +711,52 @@ test('tidy clears the folders a closed work\'s ended set left, as the close that
   assert.equal(r.code, 0, r.out)
   assert.ok(!fs.existsSync(path.join(workRoot, 'gaps')))
 })
+
+test('a set cut again at a branch whose last set was dropped has its folders read as its own', () => {
+  assert.equal(rig(['new', 'retried', '--title', 'Retried work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'retried']).code, 0)
+  const own = worktree('retried', 'billing')
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'retried'], { cwd: own }).code, 0)
+  assert.equal(rig(['attempt', '--dropped', 'neither', '--work', 'retried']).code, 0)
+  assert.equal(rig(['attempt', '--n', '2', '--work', 'retried'], { cwd: own }).code, 0)
+
+  const agents = fs.readFileSync(path.join(workRoot, 'retried', 'AGENTS.md'), 'utf8')
+  assert.ok(agents.includes('- Attempt 1 at `feat/retried-work`'), agents)
+  const r = rig(['check', '--run', '--work', 'retried'], { cwd: path.join(workRoot, 'retried', 'billing@1') })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /billing@1 is attempt 1 at feat\/retried-work/)
+})
+
+test('restore names an attempt whose folder is taken by a worktree on another branch, rather than guess why', () => {
+  const own = worktree('retried', 'billing')
+  const one = path.join(workRoot, 'retried', 'billing@1')
+  commitWork(one, 'pushed')
+  gitMust(one, 'push', '-q', 'origin', 'feat/retried-work@1')
+  gitMust(own, 'worktree', 'remove', one)
+  gitMust(own, 'worktree', 'add', '-q', '-b', 'feat/retried-other', one)
+
+  const r = rig(['restore', 'retried'])
+  assert.match(r.out, /billing@1: here on feat\/retried-other, not feat\/retried-work@1 — remove that worktree, then `rig restore`/)
+  gitMust(own, 'worktree', 'remove', one)
+  assert.equal(rig(['restore', 'retried']).code, 0)
+  assert.equal(gitMust(one, 'branch', '--show-current'), 'feat/retried-work@1')
+  assert.equal(rig(['attempt', '--dropped', 'done', '--work', 'retried']).code, 0)
+  gitMust(own, 'push', '-q', 'origin', '--delete', 'feat/retried-work@1')
+})
+
+test('a cut whose checkout succeeded but whose post-checkout hook failed is still an attempt, said with git\'s complaint', () => {
+  const own = worktree('retried', 'billing')
+  const hooks = path.join(m.tmp, 'failing-hooks')
+  fs.mkdirSync(hooks, { recursive: true })
+  fs.writeFileSync(path.join(hooks, 'post-checkout'), '#!/bin/sh\necho "the hook says no" >&2\nexit 1\n', { mode: 0o755 })
+  gitMust(own, 'config', 'core.hooksPath', hooks)
+  try {
+    const r = rig(['attempt', '--n', '2', '--work', 'retried'], { cwd: own })
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /feat\/retried-work@1: cut, but git ended with an error after the checkout — /)
+    for (const n of [1, 2]) assert.equal(gitMust(path.join(workRoot, 'retried', `billing@${n}`), 'branch', '--show-current'), `feat/retried-work@${n}`)
+    assert.equal(record('retried').attempts.at(-1).count, 2)
+  } finally {
+    gitMust(own, 'config', '--unset', 'core.hooksPath')
+  }
+})

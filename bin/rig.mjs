@@ -2546,8 +2546,9 @@ function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
 
 // The open attempts whose folders are not here, put back beside their repos from the remote or
 // the mirror, and never cut again: a branch on neither was never pushed from the machine that cut
-// it, and is named, as is an open set with none of its attempts here. Answers how many were put
-// back, how many git refused, and how many were never pushed.
+// it, and is named, as is a folder of an attempt's name on another branch, and an open set with
+// none of its attempts here, with why. Answers how many were put back, how many could not be, and
+// how many were never pushed.
 function restoreAttempts (cfg, work) {
   const t = trees(cfg)
   const fetched = new Set()
@@ -2557,10 +2558,22 @@ function restoreAttempts (cfg, work) {
   for (const set of openSets(work)) {
     const refusedBefore = refused
     const lost = []
+    let held = 0
+    let noRepo = 0
     for (const a of attemptsOf(work, [set])) {
       const entry = work.repos.find(r => r.repo === a.repo)
       const dest = path.join(workDir(cfg, work.id), a.folder)
-      if (exists(dest) || !exists(entry.path)) continue
+      // A repo restore could not put back has said so already.
+      if (!exists(entry.path)) { noRepo++; continue }
+      if (exists(dest)) {
+        const on = branchIn(dest)
+        if (on === a.branch) continue
+        warn(`${a.folder}: here on ${on || 'a detached HEAD'}, not ${a.branch} — remove that worktree, then \`rig restore\``)
+        current.exitCode = 1
+        held++
+        refused++
+        continue
+      }
       if (!fetched.has(a.repo)) { t.fetch({ org: entry.org, repo: entry.repo }); fetched.add(a.repo) }
       const tips = t.tips({ org: entry.org, repo: entry.repo, branch: a.branch })
       if (!tips.local && !tips.remote) { lost.push(a.folder); continue }
@@ -2580,7 +2593,12 @@ function restoreAttempts (cfg, work) {
       restored++
     }
     if (!attemptFoldersHere(cfg, { ...work, attempts: [set] }).length) {
-      const why = refused > refusedBefore ? 'git refused them, above' : 'they were never pushed from the machine that cut them'
+      const why = [
+        refused - held > refusedBefore && 'git refused them, above',
+        held && 'their folders are taken, above',
+        noRepo && 'their repo is not here',
+        lost.length && 'they were never pushed from the machine that cut them',
+      ].filter(Boolean).join('; ') || 'git could not check them out'
       warn(`${set.branch}: ${set.count} attempts are open and none could be put back — ${why}; \`rig attempt ${set.branch} --dropped "why"\` ends the set`)
     } else if (lost.length) {
       const one = lost.length === 1
@@ -4567,15 +4585,20 @@ function attemptTrees (cfg, work, set) {
 
 // Every folder of this machine named for an attempt of an open set, whatever it has checked out:
 // what the teardowns and the stray check need, since a folder on a detached HEAD mid-rebase is
-// still that attempt's, and still holds whatever is uncommitted in it. All but one on the branch
-// an ended set cut under the same name, which is that set's — left by a keep or a drop on another
-// machine — and goes with it, whatever set is open now.
+// still that attempt's, and still holds whatever is uncommitted in it. All but one off its own
+// branch and on the branch an ended set cut under the same name, which is that set's — left by a
+// keep or a drop on another machine — and goes with it, whatever set is open now. A set cut again
+// at the branch a dropped one was at has the same names, and its folders on them are its own.
 function attemptFolderNamesHere (cfg, work) {
   const ended = attemptsOf(work, endedSets(work))
   return attemptsOf(work)
     .map(a => ({ ...a, entry: work.repos.find(r => r.repo === a.repo), dir: path.join(workDir(cfg, work.id), a.folder) }))
     .filter(a => exists(a.dir))
-    .filter(a => !ended.some(e => e.folder === a.folder && e.branch === branchIn(a.dir)))
+    .filter(a => {
+      if (!ended.some(e => e.folder === a.folder)) return true
+      const on = branchIn(a.dir)
+      return on === a.branch || !ended.some(e => e.folder === a.folder && e.branch === on)
+    })
 }
 
 const endedSets = work => (work.attempts || []).filter(s => !isOpen(s))
