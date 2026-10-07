@@ -54,12 +54,13 @@ matching names within one folder level; a reader is the one rig ships for that h
 `readers/`. rig places each session by what it records — the folder it ran in, its branch, or a
 work folder it names — so a glob takes every session the host keeps, and only a work's own are
 ever printed. `transcriptSession` names the environment variable that carries the running
-session's id, so a session is never warned about itself. Claude Code's:
+session's id, so a session is never warned about itself. Claude Code's and Codex's:
 
 ```json
 "sessions": [
   { "glob": "~/.claude/projects/*/*.jsonl", "reader": "claude-code" },
-  { "glob": "~/.claude/projects/*/*/subagents/*.jsonl", "reader": "claude-code" }
+  { "glob": "~/.claude/projects/*/*/subagents/*.jsonl", "reader": "claude-code" },
+  { "glob": "~/.codex/sessions/*/*/*/*.jsonl", "reader": "codex" }
 ],
 "transcriptSession": "CLAUDE_CODE_SESSION_ID"
 ```

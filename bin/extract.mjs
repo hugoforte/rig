@@ -32,7 +32,8 @@ const irreversible = call => { const c = commandOf(call); return !!c && IRREVERS
 
 // A non-zero exit that says nothing went wrong: a search that found nothing, a comparison that
 // differed, a check reporting what it found. The readers asked for these to go.
-const benign = e => /^Exit code 1\s*$/.test(e.text.trim()) || (/^Exit code 1\b/.test(e.text) && /(^|[\s;&|(])(grep|rg|diff|test|\[)\s|rig doctor|node --test/.test(commandOf(e.call) ?? ''))
+// Hosts write the exit as `Exit code 1` or `Exit code: 1`.
+const benign = e => /^Exit code:? 1\s*$/.test(e.text.trim()) || (/\bExit code:? 1\b/.test(e.text) && /(^|[\s;&|(])(grep|rg|diff|test|\[)\s|rig doctor|node --test/.test(commandOf(e.call) ?? ''))
 
 const IDLE_MINUTES = 30
 const span = ms => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m` }

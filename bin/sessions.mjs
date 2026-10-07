@@ -16,8 +16,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import * as claudeCode from '../readers/claude-code.mjs'
+import * as codex from '../readers/codex.mjs'
 
-export const READERS = { 'claude-code': claudeCode }
+export const READERS = { 'claude-code': claudeCode, codex }
 
 export const SESSIONS_EXAMPLE = '[{ "glob": "~/.claude/projects/*/*.jsonl", "reader": "claude-code" }]'
 
