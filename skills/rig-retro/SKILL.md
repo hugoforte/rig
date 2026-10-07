@@ -13,7 +13,7 @@ Reply as rig's `AGENTS.md`'s "Replying to the user" says. Here the TL;DR in step
 
 - **Kind.** *Personal* reads every session on this machine, the ones in no work included. *Company* reads the struggle rows every work in one data root already holds, from every person and machine. With none named, personal.
 - **Period.** A calendar month, the last one by default: `--since <first day> --until <first day of the next>`.
-- **The root.** Personal: the user's own root, the one `rig doctor` lists with a `retro/` folder in it. With none, ask the user which root is theirs alone, and **stop for the answer**: a period's rows go there, and a root others read is never the default. Company: the root the user names; `rig use` lists them.
+- **The root.** Personal: the user's own root, the one whose `rig.json` says `"personal": true` and which has a `retro/` folder; `rig doctor` names each root's path. With none, ask the user which root is theirs alone, and **stop for the answer**: a period's rows go there, and rig refuses them in a root that does not say it is one person's. Once they name it, add `"personal": true` to that root's `rig.json`; the first row commits it. Company: the root the user names; `rig use` lists them.
 
 Say the kind, the period and the root in the first line of the answer.
 
@@ -34,15 +34,15 @@ A row whose `fix` is not `none` is a fix someone meant to make. Keep its struggl
 rig sessions --since <first day> --until <first day of the next>
 ```
 
-One session a line: start, reader, id, `main` or `subagent`, the works it belongs to (`-` for none), path. A work's struggles file (`rig status --work <id>` names it) and this period's `retro/<month>/` files already name some sessions: skip those, which another review or machine read.
+One session a line: start, reader, id, `main` or `subagent`, the works it belongs to (`-` for none), path. A session with a `read` row in a work's struggles file (`rig status --work <id>` names it) or in this period's `retro/<month>/` files was read already, by another review or machine: skip it.
 
-**Read the rest through subagents**, about twenty sessions each, never in this thread. Each subagent runs `rig sessions --extract <path>` for each session in its batch, reads the redacted digest, and reports in its reply (a subagent may not be able to write files) one line per struggle:
+**Read the rest through subagents**, about twenty sessions each, never in this thread. Each subagent runs `rig sessions --extract <path>` for each session in its batch, reads the redacted extract, and reports in its reply (a subagent may not be able to write files) one line per struggle:
 
 ```text
 <session id> · <kind> · <what kept going wrong, one line> · "<quote, 200 characters or fewer>" · <works, or ->
 ```
 
-The kinds are `correction` (the user stepping in), `repeat` (a command or approach tried again and again), `assumption` (something the agent took as true and had to put right), `denial`, `error` and `limit`, and `none` for a session with nothing to report. Count only what the digest shows. A subagent's own sessions are batched with their parent's.
+The kinds are `correction` (the user stepping in), `repeat` (a command or approach tried again and again), `assumption` (something the agent took as true and had to put right), `denial`, `error` and `limit`. A session with nothing to report gets no line, and is still a session read. Count only what the extract shows. A subagent's own sessions are batched with their parent's.
 
 ### Company
 
@@ -81,14 +81,14 @@ Say **go** for all of them, or name the numbers you want.
 
 ## 5. Record it
 
-On "go", one `rig struggle` per row, the text in single quotes. A session in a work goes on that work's record; a session in no work goes on the period's:
+On "go", one `rig struggle` per row, the text in single quotes. A struggle in a work's session goes on that work's record; one in a session in no work goes on the period's. Then every session read, struggles or none, gets a `read` row on the period's:
 
 ```bash
 rig struggle '…' --kind <kind> --session <id> --host <reader> --quote '…' --fix <kind> --work <id>
 rig struggle '…' --kind <kind> --session <id> --host <reader> --quote '…' --fix <kind> --period <YYYY-MM> --data <root>
-rig struggle --kind none --session <id> --host <reader> --period <YYYY-MM> --data <root>
+rig struggle --kind read --session <id> --host <reader> --period <YYYY-MM> --data <root>
 ```
 
-The reader is the second column of `rig sessions`. Every session read gets its row, `none` included: the period's file is how the next retro and `rig next` know it was read. Then make the fixes the user said **go** to.
+The reader is the second column of `rig sessions`. The period's `read` rows are how the next retro, on this machine or another, and `rig next` know the month was read. Then make the fixes the user said **go** to.
 
 The report itself goes to the chat, or to a file in the OS temp directory when it runs long — never into a data root or a repo.

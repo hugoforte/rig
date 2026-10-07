@@ -23,7 +23,7 @@ Run `rig status` from the work folder, or `rig status --work <id>` once the work
 
 - The sessions that did the work, when this machine keeps them: `rig status --transcripts` prints their paths, one a line: the sessions that ran in the work folder, ran on one of its branches, or name its folder, and no others. By the time a correction reaches a commit or a review thread it has been smoothed away; in the session it is still there.
   - **Read them through subagents**, a few files each, never in this thread: transcripts are large. Each subagent reports the user stepping in ("no, not like that"), a command tried more than once, and an assumption the agent made and later corrected, each with a short quote. Work from those findings, never the raw logs.
-  - **Skip a session the work's struggles already name.** `rig status` names `struggles.tsv` once there is one; a session in its `session` column was read already, on this machine or another.
+  - **Skip a session the work's struggles already mark `read`.** `rig status` names `struggles.tsv` once there is one; a session with a `read` row there was read already, on this machine or another.
   - **Read no transcript the command did not print.** Another work's sessions are other work, and often private.
   - **Read only the parts about this work.** A session that started in the tool's checkout or a repo's own, and only names the work folder, may have done other work before or after. Each subagent reports only what happened in this work's folder, on its branches or about its tickets, and drops a session that only mentions the work in passing, such as in a listing.
   - When it prints nothing, carry on without them. It says on stderr where this machine would name them.
@@ -75,7 +75,7 @@ Say **go** for all of them, or name the numbers you want.
 - <session id>: <kind> — <what kept going wrong> — "<short quote>" → fix: <kind>
 ```
 
-- **Struggles are the sessions' findings, as rows for a retro**, one a line: what kept going wrong, its kind (correction, repeat, assumption, denial, error, limit), a quote of 200 characters or fewer, and the kind of fix it wants. A session read with nothing found is a line too, `none`, so no review reads it again. They go into the work's data root, which everyone in the org can read, so the user sees each quote here before "go" records it. rig redacts what it recognises as a secret; leave out anything else that is private.
+- **Struggles are the sessions' findings, as rows for a retro**, one a line: what kept going wrong, its kind (correction, repeat, assumption, denial, error, limit), a quote of 200 characters or fewer, and the kind of fix it wants. Every session read gets a `read` line too, with or without struggles, so no review reads it again. They go into the work's data root, which everyone in the org can read, so the user sees each quote here before "go" records it. rig redacts what it recognises as a secret; leave out anything else that is private.
 
 - **The TL;DR is two or three actions, never more.** They are the lessons most worth keeping, each one a thing you would do on "go". Everything else stays in the detail, where the user can still name it.
 - **The outcome line is the work's outcome**, drafted from the story, the sessions included: what changed for someone and why that is good, in words a person outside the work can read, on one line, with no backticks or `$`. Leave it out when `rig status` already shows an outcome, or while a PR is still to merge. A bare "go" records it with the lessons; an answer naming numbers records it only if it also says "outcome". The user may correct it in their answer.
@@ -141,7 +141,7 @@ Once the lessons have landed, or the user says there are none, record the strugg
 
 ```bash
 rig struggle '…' --kind <kind> --session <id> --host <reader> --quote '…' --fix <kind>
-rig struggle --kind none --session <id> --host <reader>
+rig struggle --kind read --session <id> --host <reader>
 ```
 
 The reader is the host's: `claude-code` for a Claude Code session, `codex` for a Codex one; `rig struggle --help` lists them. Then:

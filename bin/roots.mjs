@@ -25,7 +25,7 @@ import { DEFAULT_FRESHNESS } from './freshness.mjs'
 // the org half, and a machine that wants to handle updates its own way overrides one key
 // locally rather than the whole object.
 const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness', 'sessions', 'transcripts', 'transcriptSession']
-const ORG_KEYS = ['orgs', 'tracker', 'writtenBy', 'freshness']
+const ORG_KEYS = ['orgs', 'tracker', 'writtenBy', 'freshness', 'personal']
 // The keys the org half owns outright. A copy in the machine file — `orgs` and `tracker`
 // were both written there by older versions of `init` — is dropped before the merge rather
 // than allowed to shadow the committed answer, and `rig doctor` says so.

@@ -8,8 +8,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { events, meta } from '../readers/codex.mjs'
-import { sessionsFor } from '../bin/sessions.mjs'
-import { digest } from '../bin/extract.mjs'
+import { readSessions, sessionsFor } from '../bin/sessions.mjs'
+import { extractOf } from '../bin/extract.mjs'
 
 const at = m => `2026-10-01T10:${String(m).padStart(2, '0')}:00.000Z`
 const line = (m, type, payload) => JSON.stringify({ timestamp: at(m), type, payload })
@@ -29,16 +29,24 @@ const text = (cwd, branch) => [
 ].join('\n')
 
 test('the Codex reader says where a session ran, on which branch, and when', () => {
-  assert.deepEqual(meta(text('/w/refunds', 'feat/refunds')), { session: 'cx-1', subagent: false, startedAt: at(0), endedAt: at(9), cwds: ['/w/refunds'], branches: ['feat/refunds'] })
+  const m = meta(text('/w/refunds', 'feat/refunds'))
+  assert.deepEqual({ ...m, acted: undefined }, { session: 'cx-1', subagent: false, startedAt: at(0), endedAt: at(9), cwds: ['/w/refunds'], branches: ['feat/refunds'], acted: undefined })
+})
+
+test('what a Codex session did is what the user said and what its tools were given, never what they printed', () => {
+  const m = meta(text('/w/refunds'))
+  assert.match(m.acted, /Fix the refund retry/)
+  assert.match(m.acted, /git push --force origin feat\/refunds/)
+  assert.doesNotMatch(m.acted, /rejected/)
 })
 
 test('the Codex reader gives the same events as any reader: prompts, calls, failures, interrupts, compactions', () => {
   assert.deepEqual(events(text('/w/refunds')).map(e => e.kind), ['prompt', 'call', 'error', 'interrupt', 'call', 'compact'])
 })
 
-test('a Codex call carries the shell command it ran, so the digest can tell an irreversible one', () => {
+test('a Codex call carries the shell command it ran, so the extract can tell an irreversible one', () => {
   const t = text('/w/refunds')
-  const d = digest({ meta: meta(t), events: events(t), reader: 'codex' })
+  const d = extractOf({ meta: meta(t), events: events(t), reader: 'codex' })
   assert.match(d, /ACTION git push --force origin feat\/refunds/)
   assert.match(d, /INTERRUPTED after: Shall I push it\?/)
 })
@@ -62,6 +70,6 @@ test('a Codex session filed by date is placed in the work it ran in', () => {
   const mine = path.join(dir, 'rollout-a.jsonl')
   fs.writeFileSync(mine, text(path.join(work, 'billing')))
   fs.writeFileSync(path.join(dir, 'rollout-b.jsonl'), text(path.join(home, 'w', 'other')))
-  const found = sessionsFor({ sources: [{ glob: '~/.codex/sessions/*/*/*/*.jsonl', reader: 'codex' }], home, folder: work })
+  const found = sessionsFor(readSessions({ sources: [{ glob: '~/.codex/sessions/*/*/*/*.jsonl', reader: 'codex' }], home }), { folder: work })
   assert.deepEqual(found.map(f => f.path), [mine])
 })

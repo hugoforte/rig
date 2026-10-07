@@ -1,15 +1,16 @@
-// One session as a digest a reader can afford (hugoforte/rig#322): what the user said and what
+// One session as an extract a reader can afford (hugoforte/rig#322): what the user said and what
 // the assistant had just said before it, the interrupts, denials and tool errors with the call
 // each answered, the irreversible actions, the host's limits, and the gaps. A pilot over one
 // machine's sessions shrank 461 MB of transcripts to 0.6 M characters this way, and six readers
 // read all of it in about five minutes. A reader under `readers/` turns a host's files into the
-// events; everything here is the same for every host. The whole digest is redacted last.
+// events; everything here is the same for every host. The whole extract is redacted last.
 import path from 'node:path'
 
 import { redact } from './redact.mjs'
 
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s)
-const flat = s => (s ?? '').replace(/\s+/g, ' ').trim()
+// Every field is redacted before it is clipped: a secret cut short no longer matches its rule.
+const flat = s => redact(s ?? '').replace(/\s+/g, ' ').trim()
 const hhmm = at => (at ?? '').slice(0, 16).replace('T', ' ')
 
 // What a host wraps around the user's text, which is no part of what they said.
@@ -48,7 +49,7 @@ function touched (events) {
   return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([dir]) => dir)
 }
 
-export function digest ({ meta, events, reader }) {
+export function extractOf ({ meta, events, reader }) {
   const lines = [
     `# session ${meta.session ?? '?'}${meta.subagent ? ' (a subagent)' : ''} — ${reader}`,
     `ran in: ${meta.cwds.join(', ') || '?'} · branches: ${meta.branches.join(', ') || '—'} · ${hhmm(meta.startedAt)} → ${hhmm(meta.endedAt)}`,
@@ -62,7 +63,7 @@ export function digest ({ meta, events, reader }) {
     if (e.at) last = e.at
     const ts = `[${hhmm(e.at)}]`
     if (e.kind === 'prompt') {
-      const said = e.text.replace(WRAPPERS, '').trim()
+      const said = redact(e.text.replace(WRAPPERS, '')).trim()
       if (!said) continue
       if (/^continue from where you left off/i.test(said)) { lines.push(`${ts} RESUMED: ${clip(flat(said), 200)}`); continue }
       if (e.after) lines.push(`${ts} (assistant had said: ${clip(flat(e.after), 300)})`)

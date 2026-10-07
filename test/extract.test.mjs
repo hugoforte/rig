@@ -1,11 +1,11 @@
-// One session as a digest a reader can afford, with its secrets taken out (hugoforte/rig#322).
-// A reader turns a host's file into events; the digest and the redaction are the same for every
+// One session as an extract a reader can afford, with its secrets taken out (hugoforte/rig#322).
+// A reader turns a host's file into events; the extract and the redaction are the same for every
 // host. The fixtures are synthetic, and so is every secret in them: none was ever real.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { events, meta } from '../readers/claude-code.mjs'
-import { digest } from '../bin/extract.mjs'
+import { extractOf } from '../bin/extract.mjs'
 import { redact } from '../bin/redact.mjs'
 
 // Claude Code's entries, one a line, as the host writes them.
@@ -47,14 +47,14 @@ test('a denial is told by the host\'s own marker, with the call it refused', () 
   assert.equal(denial.call.input.command, 'gh pr merge 7 --squash')
 })
 
-const d = digest({ meta: meta(text), events: events(text), reader: 'claude-code' })
+const d = extractOf({ meta: meta(text), events: events(text), reader: 'claude-code' })
 
-test('the digest says where and when the session ran, and the folders its tools touched', () => {
+test('the extract says where and when the session ran, and the folders its tools touched', () => {
   assert.match(d, /ran in: \/w\/refunds · branches: feat\/refunds · 2026-10-01 10:00 → 2026-10-01 10:53/)
   assert.match(d, /touched: \/w\/refunds\/billing\/src/)
 })
 
-test('the digest keeps what the user said, the interrupts, denials, errors and limits', () => {
+test('the extract keeps what the user said, the interrupts, denials, errors and limits', () => {
   for (const line of [/USER: Fix the refund retry/, /\(assistant had said: Shall I merge it\?\)/, /DENIED gh pr merge 7 --squash/, /INTERRUPTED after: Shall I merge it\?/, /TOOL ERROR npm test\n {4}Exit code 2 TypeError/, /COMMAND <command-name>\/rig/, /LIMIT API Error: 529/, /RESUMED: Continue from where you left off/]) {
     assert.match(d, line)
   }
@@ -73,14 +73,14 @@ test('a long gap between turns is marked', () => {
   assert.match(d, /— idle 41m —/)
 })
 
-test('the digest is redacted, what the user pasted included', () => {
+test('the extract is redacted, what the user pasted included', () => {
   assert.doesNotMatch(d, /sk-abcdefghijklmnopqrstuvwx|AKIAABCDEFGHIJKLMNOP/)
   assert.match(d, /here is the key \[redacted\] and \[redacted\]/)
 })
 
 test('a terminal\'s colours in a tool\'s output are left out', () => {
   const coloured = session([assistant(0, [call('c', 'Bash', { command: 'rig status' })]), user(1, result('c', 'Exit code 2\n\u001b[31m✗\u001b[0m not inside a work', true))])
-  assert.match(digest({ meta: meta(coloured), events: events(coloured), reader: 'claude-code' }), /Exit code 2 ✗ not inside a work/)
+  assert.match(extractOf({ meta: meta(coloured), events: events(coloured), reader: 'claude-code' }), /Exit code 2 ✗ not inside a work/)
 })
 
 test('redaction takes out each kind of secret a session was found to hold, and keeps the name it was given', () => {
@@ -93,11 +93,42 @@ test('redaction takes out each kind of secret a session was found to hold, and k
     ['Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.abcdefghijkl', 'Bearer [redacted]'],
     ['-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----', '[redacted]'],
     ['xoxb-1234567890-abcdefghij', '[redacted]'],
+    ['Authorization: Bearer abcdef0123456789opaque', 'Authorization: Bearer [redacted]'],
+    ['Authorization: Basic dXNlcjpodW50ZXIy', 'Authorization: Basic [redacted]'],
+    ['mysql -u root -pS3cret mydb', 'mysql -u root -p[redacted] mydb'],
+    ['psql --password hunter22 -h db', 'psql --password [redacted] -h db'],
+    ['DB_PASS=Tr0ub4dor', 'DB_PASS=[redacted]'],
+    ['MYSQL_PWD=Tr0ub4dor', 'MYSQL_PWD=[redacted]'],
+    ['SMTP_PASSPHRASE=correcthorse', 'SMTP_PASSPHRASE=[redacted]'],
+    ['redis://:pw0rd@cache:6379', 'redis://[redacted]@cache:6379'],
+    ['npm_abcdefghijklmnopqrstuvwxyz0123456789', '[redacted]'],
+    ['glpat-abcdefghijklmnopqrst', '[redacted]'],
+    ['ATATT3xFfGF0abcdefghijklmnopqrstuvwxyz', '[redacted]'],
+    ['https://hooks.slack.com/services/T000/B000/XXXXXXXX', '[redacted]'],
+    ['https://acct.blob.core.windows.net/c?sv=2024&sig=abcdefghijklmnop0123%3D', 'https://acct.blob.core.windows.net/c?sv=2024&sig=[redacted]'],
+    ['{"old_string":"\\"Password\\": \\"Tr0ub4dor&3xyz\\""}', '{"old_string":"\\"Password\\": \\"[redacted]\\""}'],
+    ['password: "correct horse battery"', 'password: "[redacted]"'],
+    ['github_pat_abcdefghijklmnopqrstuvwxyz', '[redacted]'],
+    ['sk_live_abcdefghij0123', '[redacted]'],
+    ['AIzaSyA0123456789abcdefghijklmnopqrstuv', '[redacted]'],
+    ['client_secret=0a1b2c3d4e5f6a7b8c9d', 'client_secret=[redacted]'],
   ]
-  for (const [secret, expected] of cases) assert.equal(redact(secret), expected)
+  for (const [secret, expected] of cases) assert.equal(redact(secret), expected, secret)
 })
 
-test('redaction leaves ordinary text alone', () => {
-  const ordinary = 'max_tokens=4096; the password reset page; git push origin feat/x'
-  assert.equal(redact(ordinary), ordinary)
+test('redaction leaves ordinary text alone: counts, code, and words that only name a secret', () => {
+  for (const ordinary of [
+    'max_tokens=4096; the password reset page; git push origin feat/x',
+    'max_tokens: 100000',
+    'const tokenizer = createTokenizer()',
+    'secret: always run the formatter',
+    'rig update --secrets-source=dotfiles',
+    'mkdir -p src/lib',
+  ]) assert.equal(redact(ordinary), ordinary)
+})
+
+test('a secret long enough to be clipped is redacted before the clip, so its start is not left behind', () => {
+  const long = `${'x'.repeat(2490)} sk-abcdefghijklmnopqrstuvwx`
+  const d = extractOf({ meta: meta(session([user(0, long)])), events: events(session([user(0, long)])), reader: 'claude-code' })
+  assert.doesNotMatch(d, /sk-abcdef/)
 })

@@ -83,69 +83,80 @@ function forms (folder) {
   return [...all].map(escape).join('|')
 }
 
-// Whether `text` names `folder`, written any of those ways. Named means followed by a separator or
-// nothing a name goes on with, so `D:\w\refunds` is not named by `D:\w\refunds-old`.
+// Whether `text` names `folder`, written any of those ways. Named means followed by a separator, a
+// full stop ending a sentence, or nothing a name goes on with, so `D:\w\refunds` is not named by
+// `D:\w\refunds-old`.
 export function mentions (text, folder) {
-  return new RegExp(`(?:${forms(folder)})(?![\\w.-])`, 'i').test(text)
+  return new RegExp(`(?:${forms(folder)})(?![\\w-]|\\.[\\w])`, 'i').test(text)
 }
 
 // Every folder name `text` names directly under `root`, in lower case: the works a session names,
 // when `root` is the work root, in one pass over the text however many works there are.
 export function namedUnder (text, root) {
-  const re = new RegExp(`(?:${forms(root)})(?:\\\\\\\\|\\\\|/)([\\w.-]+)`, 'gi')
+  const re = new RegExp(`(?:${forms(root)})(?:\\\\\\\\|\\\\|/)([\\w-]+(?:\\.[\\w-]+)*)`, 'gi')
   return new Set([...text.matchAll(re)].map(m => m[1].toLowerCase()))
 }
 
+const lastPart = p => plain(p).split('/').at(-1)
+
 // Why a session is the work's, or null when it is not. The work is its folder, under which every
-// worktree is, and its branches: the work branch and each stage's.
-export function placed ({ meta, text }, { folder, branches = [] }) {
+// worktree is; its branches, the work branch and each stage's; and its repos' names. A branch
+// places a session only where it ran in a checkout of one of those repos, since another repo, or
+// a project of the user's own, may carry a branch of the same name. A folder is looked for only in
+// what the session did (`meta.acted`), never in what its tools printed.
+export function placed (meta, { folder, branches = [], repos = [] }) {
   const root = plain(folder)
   if (meta.cwds.some(cwd => plain(cwd) === root || plain(cwd).startsWith(`${root}/`))) return 'ran there'
-  if (meta.branches.some(b => branches.includes(b))) return 'on its branch'
-  if (mentions(text, folder)) return 'names its folder'
+  const names = repos.map(r => r.toLowerCase())
+  if (meta.branches.some(b => branches.includes(b)) && meta.cwds.some(cwd => names.includes(lastPart(cwd)))) return 'on its branch'
+  if (mentions(meta.acted ?? '', folder)) return 'names its folder'
   return null
 }
 
-// Every session on the machine that was at work between `since` and `until` (decision 210), as
-// `{ path, reader, session, subagent, startedAt, endedAt, works }`, oldest first. `works` are the
-// ids of the works it belongs to, placed as `placed` places one, from `works` (`{ id, branches }`)
-// under `workRoot`; none, for the sessions that belong to no work, which a periodic retro reads
-// too. Nothing is stored: this is the user's own machine, read for the user.
-export function sessionsBetween ({ sources = [], home, since, until = null, workRoot, works = [] }) {
-  const root = plain(workRoot)
-  const byBranch = new Map()
-  for (const w of works) for (const b of w.branches) byBranch.set(b, [...(byBranch.get(b) ?? []), w.id])
-  const known = new Map(works.map(w => [w.id.toLowerCase(), w.id]))
+// Every session file the sources name, with what its reader says about it, as
+// `{ path, reader, modifiedAt, meta }`, oldest first. Read once, so a caller placing them in
+// several folders reads each file once. A file that cannot be read is no session of anyone's, and
+// is skipped.
+export function readSessions ({ sources = [], home, since = null }) {
   const out = []
   for (const file of sessionFiles({ sources, home, since })) {
     let text
     try { text = fs.readFileSync(file.path, 'utf8') } catch { continue }
-    const meta = READERS[file.reader].meta(text)
-    const startedAt = meta.startedAt ?? file.modifiedAt
-    const endedAt = meta.endedAt ?? file.modifiedAt
+    out.push({ ...file, meta: READERS[file.reader].meta(text) })
+  }
+  return out
+}
+
+// The work's sessions among `sessions`, as `{ path, reader, modifiedAt, session, subagent, why }`.
+export function sessionsFor (sessions, work) {
+  return sessions.flatMap(s => {
+    const why = placed(s.meta, work)
+    return why ? [{ path: s.path, reader: s.reader, modifiedAt: s.modifiedAt, session: s.meta.session, subagent: s.meta.subagent, why }] : []
+  })
+}
+
+// Every session on the machine that was at work between `since` and `until` (decision 210), as
+// `{ path, reader, session, subagent, startedAt, endedAt, works }`, oldest first. `works` are the
+// ids of the works it belongs to, placed as `placed` places one, from `works`
+// (`{ id, branches, repos }`) under `workRoot`; none, for the sessions that belong to no work,
+// which a periodic retro reads too. Nothing is stored: this is the user's own machine, read for
+// the user.
+export function sessionsBetween ({ sources = [], home, since, until = null, workRoot, works = [] }) {
+  const root = plain(workRoot)
+  const known = new Map(works.map(w => [w.id.toLowerCase(), w.id]))
+  const out = []
+  for (const { path: file, reader, modifiedAt, meta } of readSessions({ sources, home, since })) {
+    const startedAt = meta.startedAt ?? modifiedAt
+    const endedAt = meta.endedAt ?? modifiedAt
     if (endedAt < since || (until && startedAt >= until)) continue
     const ids = new Set()
     for (const cwd of meta.cwds) {
       const rest = plain(cwd).startsWith(`${root}/`) ? plain(cwd).slice(root.length + 1).split('/')[0] : null
       if (known.has(rest)) ids.add(known.get(rest))
     }
-    for (const b of meta.branches) for (const id of byBranch.get(b) ?? []) ids.add(id)
-    for (const name of namedUnder(text, workRoot)) if (known.has(name)) ids.add(known.get(name))
-    out.push({ path: file.path, reader: file.reader, session: meta.session, subagent: meta.subagent, startedAt, endedAt, works: [...ids].sort() })
+    for (const name of namedUnder(meta.acted ?? '', workRoot)) if (known.has(name)) ids.add(known.get(name))
+    for (const w of works) if (!ids.has(w.id) && placed({ ...meta, acted: '' }, { folder: path.join(workRoot, w.id), branches: w.branches, repos: w.repos })) ids.add(w.id)
+    out.push({ path: file, reader, session: meta.session, subagent: meta.subagent, startedAt, endedAt, works: [...ids].sort() })
   }
   return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-}
-
-// The work's sessions, as `{ path, reader, modifiedAt, session, subagent, why }`, oldest first.
-// A file that cannot be read is no session of anyone's, and is skipped.
-export function sessionsFor ({ sources = [], home, folder, branches = [], since = null }) {
-  const found = []
-  for (const file of sessionFiles({ sources, home, since })) {
-    let text
-    try { text = fs.readFileSync(file.path, 'utf8') } catch { continue }
-    const meta = READERS[file.reader].meta(text)
-    const why = placed({ meta, text }, { folder, branches })
-    if (why) found.push({ ...file, session: meta.session, subagent: meta.subagent, why })
-  }
-  return found
 }

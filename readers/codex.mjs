@@ -8,26 +8,52 @@
 // user and the agent said, an interrupted turn and a compaction; and `response_item` entries for
 // each tool call and its output, matched by `call_id`.
 
-const values = (text, key) => [...text.matchAll(new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`, 'g'))].map(m => JSON.parse(`"${m[1]}"`))
-const distinct = list => [...new Set(list.filter(Boolean))]
-
-function sessionMeta (text) {
-  const line = text.split('\n', 20).find(l => l.includes('"type":"session_meta"'))
-  try { return line ? JSON.parse(line).payload ?? {} : {} } catch { return {} }
+// Each entry that reads, one a line. A line cut off — the host killed mid-write — is skipped,
+// never the session.
+function * entries (text) {
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let e
+    try { e = JSON.parse(line) } catch { continue }
+    if (e && typeof e === 'object') yield e
+  }
 }
 
-// What the finder needs to place a session: where it ran, on which branches, and when.
+const distinct = list => [...new Set(list.filter(v => typeof v === 'string' && v))]
+
+// What the finder needs to place a session: where it ran, on which branches, and when, from the
+// session's own entries — `session_meta` and each `turn_context` — and never from a field nested
+// in what a tool was given or gave back; and what the session did — the user's words and what
+// its tools were given — as `acted`, the text a work's folder is looked for in.
 export function meta (text) {
-  const head = sessionMeta(text)
-  const at = values(text, 'timestamp').sort()
+  const at = []
+  const cwds = []
+  const branches = []
+  const acted = []
+  let head = null
+  for (const e of entries(text)) {
+    const p = e.payload ?? {}
+    if (typeof e.timestamp === 'string') at.push(e.timestamp)
+    if (e.type === 'session_meta' && !head) {
+      head = p
+      branches.push(p.git?.branch)
+    }
+    if (e.type === 'session_meta' || e.type === 'turn_context') cwds.push(p.cwd)
+    if (e.type === 'event_msg' && p.type === 'user_message') acted.push(p.message)
+    if (e.type === 'response_item' && p.type === 'function_call') acted.push(p.arguments)
+    if (e.type === 'response_item' && p.type === 'custom_tool_call') acted.push(p.input)
+  }
+  at.sort()
   return {
-    session: head.id ?? head.session_id ?? null,
+    session: head?.id ?? head?.session_id ?? null,
     // A session another agent spawned names its parent in the source it was started from.
-    subagent: typeof head.source === 'object' && head.source !== null && 'subagent' in head.source,
+    subagent: typeof head?.source === 'object' && head.source !== null && 'subagent' in head.source,
     startedAt: at[0] ?? null,
     endedAt: at.at(-1) ?? null,
-    cwds: distinct(values(text, 'cwd')),
-    branches: distinct(values(text, 'branch')).filter(b => b !== 'HEAD'),
+    cwds: distinct(cwds),
+    // A detached HEAD is no branch of anyone's.
+    branches: distinct(branches).filter(b => b !== 'HEAD'),
+    acted: acted.filter(a => typeof a === 'string').join('\n'),
   }
 }
 
@@ -61,9 +87,7 @@ export function events (text) {
   const out = []
   const calls = new Map()
   let said = ''
-  for (const line of text.split('\n')) {
-    let e
-    try { e = JSON.parse(line) } catch { continue }
+  for (const e of entries(text)) {
     const at = e.timestamp ?? null
     const p = e.payload ?? {}
     if (e.type === 'compacted') { out.push({ at, kind: 'compact' }); continue }

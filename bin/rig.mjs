@@ -20,8 +20,8 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { READERS, SESSIONS_EXAMPLE, sessionFiles, sessionsBetween, sessionsFor, sourcesProblem } from './sessions.mjs'
-import { digest } from './extract.mjs'
+import { READERS, SESSIONS_EXAMPLE, readSessions, sessionFiles, sessionsBetween, sessionsFor, sourcesProblem } from './sessions.mjs'
+import { extractOf } from './extract.mjs'
 import { redact } from './redact.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
@@ -2852,8 +2852,8 @@ cmds.note = ({ flags, positional }) => {
 // quote is redacted before it is written: it comes from a session, which holds whatever passed
 // through it.
 const STRUGGLE_COLUMNS = ['at', 'machine', 'host', 'session', 'kind', 'struggle', 'quote', 'fix']
-// `none` is a session read with nothing found, so it is not read again.
-const STRUGGLE_KINDS = ['correction', 'repeat', 'assumption', 'denial', 'error', 'limit', 'none']
+// `read` is a session read, with or without struggles found, so no review reads it again.
+const STRUGGLE_KINDS = ['correction', 'repeat', 'assumption', 'denial', 'error', 'limit', 'read']
 const FIX_KINDS = ['check', 'skill', 'instruction', 'config', 'rig-issue', 'none']
 const QUOTE_MAX = 200
 const machineName = () => os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
@@ -2869,8 +2869,8 @@ cmds.struggle = ({ flags, positional }) => {
   if (/[\r\n\t]/.test(struggle)) die('the struggle takes one line, with no tab — a struggle is one row')
   const kind = one('kind', flags.kind)
   if (!STRUGGLE_KINDS.includes(kind)) die(`--kind is one of ${STRUGGLE_KINDS.join(', ')}`)
-  if (kind === 'none' && struggle) die('a none row says a session was read and nothing found — it takes no struggle')
-  if (kind !== 'none' && !struggle) die('rig struggle wants the struggle: what kept going wrong, in one line')
+  if (kind === 'read' && struggle) die('a read row says a session was read — it takes no struggle')
+  if (kind !== 'read' && !struggle) die('rig struggle wants the struggle: what kept going wrong, in one line')
   const session = one('session', flags.session)
   if (!session) die('a struggle needs --session: the id of the session it showed up in, as `rig sessions` lists it')
   const host = one('host', flags.host)
@@ -2880,23 +2880,25 @@ cmds.struggle = ({ flags, positional }) => {
   const fix = one('fix', flags.fix) || 'none'
   if (!FIX_KINDS.includes(fix)) die(`--fix is one of ${FIX_KINDS.join(', ')}`)
   const row = [new Date().toISOString(), machineName(), host, session, kind, struggle, quote, fix]
-  const label = kind === 'none' ? `read ${session}` : struggle.length > 60 ? `${struggle.slice(0, 59)}…` : struggle
+  const label = kind === 'read' ? `read ${session}` : struggle.length > 60 ? `${struggle.slice(0, 59)}…` : struggle
 
   if (flags.period !== undefined) {
     if (flags.work !== undefined) die('--period and --work are two places a struggle goes — name one')
     const period = one('period', flags.period)
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) die(`--period is a month, such as 2026-09 — not "${period}"`)
-    // Never the root in hand by default: the sessions that belong to no work are the user's own,
-    // and the root in hand may be one a whole org reads.
+    // Never the root in hand by default, and only a root that says it is one person's: the
+    // sessions that belong to no work are the user's own, and a root a whole org reads is one
+    // `--data` away. The root says so in its own committed `rig.json`, so every machine agrees.
     if (!current.requestedData) die('--period writes into your own data root, which --data names — never one others can read')
+    if (config().personal !== true) die(`--period writes only into a data root that is yours alone, and ${current.requestedData} does not say it is — if no one else reads it, add "personal": true to its rig.json`)
     commitAs(`retro ${period}`, label)
     appendRow(rowsFile(path.join(dataRoot(), 'retro', period), `${machineName()}.tsv`, STRUGGLE_COLUMNS), row)
-    return ok(`retro ${period}: ${kind === 'none' ? 'read' : 'struggle'} recorded for ${machineName()}`)
+    return ok(`retro ${period}: ${kind === 'read' ? 'read' : 'struggle'} recorded for ${machineName()}`)
   }
   const work = openWork(config(), flags)
   commitAs(work.id, label)
   appendRow(rowsFile(recordDir(work.id), 'struggles.tsv', STRUGGLE_COLUMNS), row)
-  ok(`${work.id}: ${kind === 'none' ? 'read' : 'struggle'} recorded`)
+  ok(`${work.id}: ${kind === 'read' ? 'read' : 'struggle'} recorded`)
 }
 
 cmds.detach = ({ flags, positional }) => {
@@ -3358,13 +3360,15 @@ const looksForSessions = cfg => sessionConfig(cfg).sources.length > 0
 
 const workBranches = work => [work.branch, ...work.stages.map(s => s.branch)].filter(Boolean)
 
-// The work's own sessions (decision 201): every session on the machine is read to place it, and
-// only those that ran in `folder` or below it, on one of `branches`, or that name `folder` are
-// given back. One last written before the work began is not read, since it cannot be about it.
-function workSessions (cfg, work, { folder = workDir(cfg, work.id), branches = workBranches(work), since = work.createdAt || null } = {}) {
+// Every session on the machine last written since `since`, each read once, for a work's to be
+// picked out of (decision 209). Every one is read to place it, and only the work's are given back.
+function machineSessions (cfg, since) {
   const home = env().USERPROFILE || env().HOME || os.homedir()
-  return sessionsFor({ sources: sessionConfig(cfg).sources, home, folder, branches, since })
+  return readSessions({ sources: sessionConfig(cfg).sources, home, since })
 }
+
+// The work as the finder places a session in it: its folder, its branches and its repos' names.
+const placing = (cfg, work) => ({ folder: workDir(cfg, work.id), branches: workBranches(work), repos: work.repos.map(r => r.repo) })
 
 // How long a session counts as still at work after it last wrote. A constant, not a setting,
 // until someone needs it to vary.
@@ -3385,11 +3389,12 @@ function sayLiveSessions (cfg, work, folder = null) {
   // Each worktree first, so a session is named by the repo it is at work in; what is left is the
   // work's by its folder or its branches.
   const folders = folder ? [folder] : [...work.repos.map(r => r.path), workDir(cfg, work.id)]
+  // Read once, and placed in each folder from what was read.
+  const recent = machineSessions(cfg, since)
   const named = new Set()
   for (const dir of folders) {
     const where = work.repos.find(r => r.path === dir)?.repo || 'the work folder'
-    const branches = dir === workDir(cfg, work.id) ? workBranches(work) : []
-    for (const s of workSessions(cfg, work, { folder: dir, branches, since })) {
+    for (const s of sessionsFor(recent, dir === workDir(cfg, work.id) ? placing(cfg, work) : { folder: dir })) {
       if (named.has(s.path) || ours(s)) continue
       named.add(s.path)
       warn(`${where}: a session wrote ${path.basename(s.path)} ${relativeAge(s.modifiedAt)} — it may still be working there`)
@@ -3399,12 +3404,13 @@ function sayLiveSessions (cfg, work, folder = null) {
 }
 
 // The work's own sessions, one path a line on stdout and nothing else there, for the lesson review
-// to read. What is said about them goes to stderr beside it.
+// to read. What is said about them goes to stderr beside it. One last written before the work
+// began is not read, since it cannot be about it.
 function sayTranscripts (cfg, work) {
   const { problem, sources } = sessionConfig(cfg)
   if (problem) die(problem)
   if (!sources.length) aside(C.dim(`· no session locations on this machine — \`sessions\` in ${localConfigFile()}, such as ${SESSIONS_EXAMPLE}`))
-  for (const s of workSessions(cfg, work)) say(s.path)
+  for (const s of sessionsFor(machineSessions(cfg, work.createdAt || null), placing(cfg, work))) say(s.path)
 }
 
 // `--until 2026-10-01`: a full date, the first moment not in the period. Read as `--since` is,
@@ -3426,7 +3432,8 @@ function everyWork (loc, cfg) {
     for (const id of listWorkIds(rootLoc.dataRoot)) {
       if (works.has(id)) continue
       try {
-        works.set(id, { id, branches: workBranches(loadWork(cfg, id, rootLoc.dataRoot)) })
+        const work = loadWork(cfg, id, rootLoc.dataRoot)
+        works.set(id, { id, branches: workBranches(work), repos: work.repos.map(r => r.repo) })
       } catch (e) {
         if (!(e instanceof RigError)) throw e
         unreadable.push(`${id} (${(e.cause ?? e).message})`)
@@ -3439,7 +3446,7 @@ function everyWork (loc, cfg) {
 
 // Every agent session on this machine in a period, for a periodic retro (decision 210), one a
 // line: when it started, its reader, its id, whether it is a subagent's, the works it belongs to
-// and its path. `--extract <path>` prints one session as a redacted digest instead. The listing
+// and its path. `--extract <path>` prints one session as a redacted extract instead. The listing
 // is the one reading of sessions not narrowed to a work: the retro is the user's own, of their
 // own machine, printed to them and stored nowhere.
 cmds.sessions = ({ flags }) => {
@@ -3459,7 +3466,7 @@ cmds.sessions = ({ flags }) => {
     if (!file) die(`${flags.extract} is not one of this machine's sessions — \`rig sessions\` lists them`)
     const text = readText(file.path)
     const reader = READERS[file.reader]
-    say(digest({ meta: reader.meta(text), events: reader.events(text), reader: file.reader }).trimEnd())
+    say(extractOf({ meta: reader.meta(text), events: reader.events(text), reader: file.reader }).trimEnd())
     return
   }
   const since = sinceFlag(flags.since) ?? new Date(Date.now() - 30 * 86400000).toISOString()
@@ -3760,13 +3767,16 @@ function docsTargets (work) {
 }
 
 // Last calendar month, when a data root this machine knows keeps retros and none of them holds
-// this machine's for it; null otherwise. A root keeps retros once it has a `retro/` folder, which
-// the first `rig struggle --period` makes: until a user has run one, nothing is offered.
+// this machine's for it; null otherwise. A root keeps retros when its `rig.json` says it is one
+// person's and it has a `retro/` folder, which the first `rig struggle --period` makes: until a
+// user has run one, nothing is offered.
 function retroDue (now = new Date()) {
   const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
   const until = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
   const month = since.toISOString().slice(0, 7)
-  const roots = doctorRootLocations(where()).map(r => r.loc.dataRoot).filter(root => root && exists(path.join(root, 'retro')))
+  const roots = doctorRootLocations(where()).map(r => r.loc)
+    .filter(loc => loc.dataRoot && exists(path.join(loc.dataRoot, 'retro')) && readOrg(loc)?.personal === true)
+    .map(loc => loc.dataRoot)
   if (!roots.length || roots.some(root => exists(path.join(root, 'retro', month, `${machineName()}.tsv`)))) return null
   return { month, since: since.toISOString().slice(0, 10), until: until.toISOString().slice(0, 10) }
 }
@@ -5659,7 +5669,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig sessions                    every agent session on this machine in a period, a line
                                   each: start, reader, id, main or subagent, works, path
        [--since d] [--until d]     the period; the last 30 days unless said
-       [--extract <path>]          one session as a digest a reader can afford, redacted
+       [--extract <path>]          one session as an extract a reader can afford, redacted
   rig next                        what is available now on the current work
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record
@@ -5706,14 +5716,16 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --evidence <pointer,...>    a SHA, a PR, file:line, a path or a URL — never prose
        [--stage <branch>] [--result "..."]
   rig struggle "..."              append a row to the work's struggles: what kept going wrong
-       --kind <kind>               in a session, for a retro; commits the data root. A kind is
-       --session <id>              correction, repeat, assumption, denial, error, limit, or
-       --host <reader>             none for a session read with nothing found
+                                  in a session, for a retro; commits the data root
+       --kind <kind>               correction, repeat, assumption, denial, error or limit;
+                                   read, with no struggle, for a session read
+       --session <id>              the session's id, as rig sessions lists it
+       --host <reader>             the reader for its host: claude-code or codex
        [--quote "..."]             a short quote from the session, redacted before it is written
        [--fix <kind>]              check, skill, instruction, config, rig-issue or none
        [--period YYYY-MM]          into retro/<month>/<machine>.tsv in the root --data names,
-                                   for a session in no work, instead of the work's
-  rig close [--force]            safety-checked teardown; a work that landed also loses
+                                   one that says it is yours alone, instead of the work's
+  rig close [--force]             safety-checked teardown; a work that landed also loses
                                   its merged branches, in the mirror and on the remote
        --abandoned                 stop a work without finishing it: the did-it-land
                                    checks are dropped, uncommitted changes still refuse,

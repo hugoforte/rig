@@ -204,8 +204,8 @@ skipped, and none waits. rig records the choice and what the agent decided.
    The one exception is a periodic retro, which is the user's own: `rig sessions --since <date>
    [--until <date>]` lists every session on the machine in the period, a line each with the
    works it belongs to (`-` for none), and `rig sessions --extract <path>` prints one as a
-   digest a reader can afford: what the user said, interrupts, denials, errors, irreversible
-   commands and gaps, with secrets redacted. Nothing is stored; read a digest through a
+   extract a reader can afford: what the user said, interrupts, denials, errors, irreversible
+   commands and gaps, with secrets redacted. Nothing is stored; read an extract through a
    subagent, as with any session.
 5. **The repo set is mutable.** Attaching a fourth repo on day two is normal.
 6. **Replying to the user.** Open every reply with a **TL;DR**: a few lines with what happened or the answer, then the action items the user must take, if any — or "Nothing for you to do." Everything else follows below it, for whoever wants to read on. A skill or prompt that sets its reply's shape keeps it: its opening lines are the TL;DR, and they name the user's action items.
@@ -389,13 +389,13 @@ going wrong, with the session it was in, its kind, a short quote and the kind of
 
 ```bash
 rig struggle "Wrote files through Bash heredocs" --kind repeat --session <id> --host claude-code --quote "…" --fix check
-rig struggle --kind none --session <id> --host claude-code    # read, and nothing found
+rig struggle --kind read --session <id> --host claude-code    # read, so no review reads it again
 rig struggle "…" --kind correction --session <id> --host codex --period 2026-09 --data personal
 ```
 
 A work's go in `struggles.tsv` beside its notes, written by the lesson review and the handoff; a
 session in no work goes in `retro/<month>/<machine>.tsv` in the user's own root, which `--data`
-must name. rig redacts the quote and the struggle before it writes them (DESIGN.md decision 211).
+must name and whose `rig.json` must say `"personal": true`. rig redacts the quote and the struggle before it writes them (DESIGN.md decision 211).
 
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never

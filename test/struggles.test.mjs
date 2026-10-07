@@ -43,9 +43,9 @@ test('the quote is redacted before it is written, and so is the struggle', () =>
   assert.deepEqual([row[5], row[6]], ['Pasted the key [redacted] into chat', 'password: [redacted]'])
 })
 
-test('a session read with nothing found is a none row, with no struggle', () => {
-  assert.equal(struggle('--kind', 'none', '--session', 's-3', '--host', 'claude-code', '--work', 'struggled').code, 0)
-  assert.deepEqual(rows(workFile).at(-1).slice(3, 6), ['s-3', 'none', ''])
+test('a session read is a read row, with no struggle', () => {
+  assert.equal(struggle('--kind', 'read', '--session', 's-3', '--host', 'claude-code', '--work', 'struggled').code, 0)
+  assert.deepEqual(rows(workFile).at(-1).slice(3, 6), ['s-3', 'read', ''])
 })
 
 test('a row that would not be one row, or names no session, kind or reader, is refused', () => {
@@ -54,7 +54,7 @@ test('a row that would not be one row, or names no session, kind or reader, is r
     [['A struggle', '--kind', 'grumble', '--session', 's', '--host', 'claude-code'], /--kind is one of correction, repeat/],
     [['A struggle', '--kind', 'repeat', '--host', 'claude-code'], /needs --session/],
     [['A struggle', '--kind', 'repeat', '--session', 's', '--host', 'nobody'], /--host is the reader/],
-    [['A struggle', '--kind', 'none', '--session', 's', '--host', 'claude-code'], /takes no struggle/],
+    [['A struggle', '--kind', 'read', '--session', 's', '--host', 'claude-code'], /takes no struggle/],
     [['A struggle', '--kind', 'repeat', '--session', 's', '--host', 'claude-code', '--quote', 'x'.repeat(201)], /200 characters at most/],
     [['A struggle', '--kind', 'repeat', '--session', 's', '--host', 'claude-code', '--fix', 'pray'], /--fix is one of check/],
   ]
@@ -70,10 +70,18 @@ test('a row that would not be one row, or names no session, kind or reader, is r
 const machineFile = path.join(m.install, 'rig.local.json')
 const periodFile = path.join(m.dataRoot, 'retro', '2026-09', `${machine}.tsv`)
 
-test('a period\'s struggle goes into retro/<month>/<machine>.tsv in the root --data names', () => {
+test('a period\'s struggle is refused in a root that does not say it is one person\'s: a whole org may read it', () => {
   const cfg = JSON.parse(fs.readFileSync(machineFile, 'utf8'))
   delete cfg.dataRoot
   fs.writeFileSync(machineFile, JSON.stringify({ ...cfg, dataRoots: { own: { path: m.dataRoot } }, current: 'own' }, null, 2))
+  const r = struggle(...ROW, '--period', '2026-09', '--data', 'own')
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /does not say it is — if no one else reads it, add "personal": true to its rig\.json/)
+})
+
+test('a period\'s struggle goes into retro/<month>/<machine>.tsv in the root --data names', () => {
+  const orgFile = path.join(m.dataRoot, 'rig.json')
+  fs.writeFileSync(orgFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(orgFile, 'utf8')), personal: true }, null, 2))
   const r = struggle(...ROW, '--period', '2026-09', '--data', 'own')
   assert.equal(r.code, 0, r.out)
   assert.deepEqual(rows(periodFile).at(-1).slice(4, 6), ['repeat', 'Wrote files through Bash heredocs'])
@@ -96,6 +104,6 @@ test('next offers last month\'s retro once the user keeps retros, until this mac
   const lastFile = path.join(m.dataRoot, 'retro', last, `${machine}.tsv`)
   fs.rmSync(lastFile, { force: true })
   assert.match(m.rig(['next', '--work', 'struggled']).out, new RegExp(`${last} has no retro of this machine's sessions yet`))
-  assert.equal(struggle('--kind', 'none', '--session', 's-9', '--host', 'claude-code', '--period', last, '--data', 'own').code, 0)
+  assert.equal(struggle('--kind', 'read', '--session', 's-9', '--host', 'claude-code', '--period', last, '--data', 'own').code, 0)
   assert.doesNotMatch(m.rig(['next', '--work', 'struggled']).out, /has no retro of this machine's sessions/)
 })

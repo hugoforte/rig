@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { mentions, sessionFiles, sessionsFor, sourcesProblem } from '../bin/sessions.mjs'
+import { mentions, readSessions, sessionFiles, sessionsFor, sourcesProblem } from '../bin/sessions.mjs'
 import { meta } from '../readers/claude-code.mjs'
 import { billingInstall } from './billing-install.mjs'
 
@@ -34,7 +34,9 @@ const SOURCES = [{ glob: '~/.host/projects/*/*.jsonl', reader: 'claude-code' }]
 const work = path.join(home, 'w', 'refunds')
 const billing = path.join(work, 'billing')
 const BRANCH = 'feat/refunds'
-const found = (over = {}) => sessionsFor({ sources: SOURCES, home, folder: work, branches: [BRANCH], ...over }).map(s => s.path)
+const WORK = { folder: work, branches: [BRANCH], repos: ['billing'] }
+const placedIn = ({ since = null, ...over } = {}) => sessionsFor(readSessions({ sources: SOURCES, home, since }), { ...WORK, ...over })
+const found = over => placedIn(over).map(s => s.path)
 
 const inWork = session([{ cwd: work }])
 const inBilling = session([{ cwd: path.join(billing, 'src') }])
@@ -42,6 +44,19 @@ const onBranch = session([{ cwd: path.join(home, 'source', 'billing'), branch: B
 const naming = session([{ cwd: path.join(home, 'tool'), text: `cd ${billing} && npm test` }])
 const elsewhere = session([{ cwd: path.join(home, 'w', 'refunds-old') }])
 const namingOther = session([{ cwd: path.join(home, 'tool'), text: `ls ${path.join(home, 'w', 'refunds-old')}` }])
+const branchElsewhere = session([{ cwd: path.join(home, 'source', 'payroll'), branch: BRANCH }])
+
+// A session whose tools only printed the work's folder: a listing, or an extract of another session.
+const printed = (() => {
+  const dir = path.join(home, '.host', 'projects', `p${n++}`)
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'session.jsonl')
+  fs.writeFileSync(file, [
+    JSON.stringify({ type: 'assistant', sessionId: 'p', cwd: path.join(home, 'tool'), timestamp: '2026-10-01T10:00:00.000Z', message: { content: [{ type: 'tool_use', id: 't', name: 'Bash', input: { command: 'rig list' } }] } }),
+    JSON.stringify({ type: 'user', sessionId: 'p', cwd: path.join(home, 'tool'), timestamp: '2026-10-01T10:01:00.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: `ran in: ${billing}` }] } }),
+  ].join('\n') + '\n')
+  return file
+})()
 
 // ------------------------------------------------- the Claude Code reader
 
@@ -50,7 +65,18 @@ test('the Claude Code reader says where a session ran, on which branches, and wh
     entry({ id: 'abc', cwd: 'C:\\w\\a', branch: 'main', at: '2026-10-01T10:00:00.000Z' }),
     entry({ id: 'abc', cwd: 'C:\\w\\a', branch: 'feat/x', at: '2026-10-01T11:00:00.000Z' }),
   ].join('\n')
-  assert.deepEqual(meta(text), { session: 'abc', subagent: false, startedAt: '2026-10-01T10:00:00.000Z', endedAt: '2026-10-01T11:00:00.000Z', cwds: ['C:\\w\\a'], branches: ['main', 'feat/x'] })
+  const where = { ...meta(text), acted: undefined }
+  assert.deepEqual(where, { session: 'abc', subagent: false, startedAt: '2026-10-01T10:00:00.000Z', endedAt: '2026-10-01T11:00:00.000Z', cwds: ['C:\\w\\a'], branches: ['main', 'feat/x'], acted: undefined })
+})
+
+test('a line cut off mid-write is skipped, and the rest of the session still reads', () => {
+  const text = [entry({ id: 'abc', cwd: '/w/a' }), '{"type":"user","cwd":"/w/b","message":"cut', entry({ id: 'abc', cwd: '/w/a', at: '2026-10-01T12:00:00.000Z' })].join('\n')
+  assert.deepEqual([meta(text).cwds, meta(text).endedAt], [['/w/a'], '2026-10-01T12:00:00.000Z'])
+})
+
+test('a folder a tool was given in a nested field is not where the session ran', () => {
+  const text = [entry({ cwd: '/w/a' }), JSON.stringify({ type: 'assistant', cwd: '/w/a', message: { content: [{ type: 'tool_use', id: 't', name: 'mcp', input: { cwd: '/w/payroll', timestamp: '1999-01-01T00:00:00.000Z' } }] } })].join('\n')
+  assert.deepEqual([meta(text).cwds, meta(text).startedAt], [['/w/a'], '2026-10-01T10:00:00.000Z'])
 })
 
 test('a subagent\'s session is marked as one, under the id of the session that spawned it', () => {
@@ -73,12 +99,20 @@ test('a session that ran in the work folder, or any folder under it, is the work
   assert.deepEqual(found().filter(f => [inWork, inBilling].includes(f)).sort(), [inWork, inBilling].sort())
 })
 
-test('a session on one of the work\'s branches is the work\'s, wherever it ran', () => {
+test('a session on one of the work\'s branches is the work\'s, in another checkout of one of its repos', () => {
   assert.ok(found().includes(onBranch))
+})
+
+test('a branch of the same name in a repo the work does not have places nothing', () => {
+  assert.ok(!found().includes(branchElsewhere))
 })
 
 test('a session that ran elsewhere and names the work\'s folder is the work\'s', () => {
   assert.ok(found().includes(naming))
+})
+
+test('a session whose tools only printed the work\'s folder is not the work\'s', () => {
+  assert.ok(!found().includes(printed))
 })
 
 test('a work whose folder name begins the same is another work, whose sessions are never among them', () => {
@@ -87,7 +121,7 @@ test('a work whose folder name begins the same is another work, whose sessions a
 })
 
 test('each one says why it is the work\'s', () => {
-  const why = Object.fromEntries(sessionsFor({ sources: SOURCES, home, folder: work, branches: [BRANCH] }).map(s => [s.path, s.why]))
+  const why = Object.fromEntries(placedIn().map(s => [s.path, s.why]))
   assert.deepEqual([why[inWork], why[onBranch], why[naming]], ['ran there', 'on its branch', 'names its folder'])
 })
 
@@ -97,6 +131,8 @@ test('a folder is named however a session writes it: escaped in JSON, with forwa
     assert.ok(mentions(text, folder), text)
   }
   assert.ok(!mentions('C:\\Users\\me\\w\\refunds-old', folder))
+  assert.ok(mentions('I am working in C:\\Users\\me\\w\\refunds.', folder), 'a full stop ends the sentence, not the name')
+  assert.ok(!mentions('C:\\Users\\me\\w\\refunds.old', folder))
 })
 
 test('a session last written before the moment asked about is not read', () => {
@@ -117,7 +153,7 @@ test('they come oldest first', () => {
 })
 
 test('nothing configured finds nothing', () => {
-  assert.deepEqual(sessionsFor({ sources: [], home, folder: work }), [])
+  assert.deepEqual(sessionsFor(readSessions({ sources: [], home }), WORK), [])
 })
 
 test('a glob reaches every folder its * matches, a level a segment, and a file named twice is one session', () => {
@@ -242,6 +278,15 @@ test('close names a session that wrote in a worktree lately, and closes all the 
   assert.ok(!fs.existsSync(m.worktree('busy', 'billing')), 'it closed anyway')
 })
 
+test('a session with a line cut off mid-write stops no close, and is still named', () => {
+  assert.equal(m.rig(['new', 'cutoff', '--title', 'A work with a torn session', '--no-ticket', '--repos', 'billing']).code, 0)
+  const file = sessionIn(m.worktree('cutoff', 'billing'), 'torn')
+  fs.appendFileSync(file, '{"type":"user","cwd":"C:\\\\w\\\\x","message":"cut\n')
+  const r = m.rig(['close', '--work', 'cutoff'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /billing: a session wrote torn\.jsonl/)
+})
+
 test('a session that last wrote longer ago than the window is not named', () => {
   assert.equal(m.rig(['new', 'quiet', '--title', 'A work nobody is in', '--no-ticket', '--repos', 'billing']).code, 0)
   aged(sessionIn(m.worktree('quiet', 'billing'), 'old'), 3)
@@ -337,7 +382,7 @@ test('a session outside the period is not listed', () => {
   assert.ok(!m.rig(['sessions', ...PERIOD]).stdout.includes(file))
 })
 
-test('sessions --extract prints one session as a redacted digest', () => {
+test('sessions --extract prints one session as a redacted extract', () => {
   const file = sessionIn(path.join(m.tmp, 'scratch'), 'extracted', { text: 'my token is sk-abcdefghijklmnopqrstuvwx' })
   const r = m.rig(['sessions', '--extract', file])
   assert.equal(r.code, 0, r.out)
