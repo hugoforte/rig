@@ -1,7 +1,5 @@
 # rig
 
-A single ticket routinely touches four repos — a billing service, the integration hub that feeds it, an API and its web UI. Getting set up means finding them, cutting a branch in each with the same name, and holding the cross-repo picture in your head. Doing that by hand 51 times left a clone directory holding 51 worktrees across three different placement conventions, four redundant full clones, and one worktree pointing into a workspace that had already been deleted.
-
 rig is a cross-repo work harness: name a piece of work, attach the repos it touches, and rig gives you one folder with a worktree per repo, all on one shared branch. What is durable about that work — which repos, why, what was decided — lives in a committed **data root** beside the tool, and every command that changes a work commits it at that moment.
 
 ```powershell
