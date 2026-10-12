@@ -15,10 +15,10 @@ curl -fsSL https://raw.githubusercontent.com/hugoforte/rig/main/install.sh | sh
 Then one command starts a work:
 
 ```powershell
-rig new refund-double-charge --title "Refunds double-charge on retry" --key PROJ-42
+rig new search-filters --title "Add filters to search" --key PROJ-42
 ```
 
-From there: `rig attach billing` adds a repo, once per repo; `rig status` shows every worktree live; `rig next` says what is available now; `rig close` takes the worktrees away and keeps the record. Before the first work, `rig init` sets rig up once — see [Setting up](#setting-up) — and `rig doctor` checks the rest for you.
+From there: `rig attach api` adds a repo, once per repo; `rig status` shows every worktree live; `rig next` says what is available now; `rig close` takes the worktrees away and keeps the record. Before the first work, `rig init` sets rig up once — see [Setting up](#setting-up) — and `rig doctor` checks the rest for you.
 
 rig is developed with rig: every piece of work behind the commits in this repo has a record in a rig data root.
 
@@ -231,8 +231,8 @@ $env:RIG_DATA_ROOT = 'personal'     # a whole shell, until you close it
 **Mostly you never say which root.** A repo belongs to a data root from the first time you attach it — that is what the catalogue entry `rig attach` drafts *is* — and rig reads that binding back:
 
 ```powershell
-rig new refunds --repos Payments      # goes in whichever root catalogues Payments
-cd D:\code\Payments; rig list          # answers for that repo's root, wherever you cd'd from
+rig new search-filters --repos api   # goes in whichever root catalogues api
+cd D:\code\api; rig list             # answers for that repo's root, wherever you cd'd from
 ```
 
 **Which root a command reads**, first one that answers:
@@ -280,7 +280,7 @@ A catalogue entry may also say where the repo's user documentation lives, in `do
 
 ```powershell
 rig check                    # every attached repo, printed
-rig check billing --run      # run billing's
+rig check api --run          # run api's
 ```
 
 ### What a change reaches
@@ -291,7 +291,7 @@ behind that entry is, because an edge asserted by an entry the repo has moved on
 weaker claim.
 
 ```powershell
-rig impact billing
+rig impact api
 ```
 
 An item in `talks_to` can carry a `direction` beside its `how`. `downstream` means a change
