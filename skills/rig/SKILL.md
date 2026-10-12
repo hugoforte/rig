@@ -27,7 +27,7 @@ One command, and the only place to learn any of it: the version and record forma
 
 ## Step 3: Read the instructions
 
-Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig works — the three roots, the commands, the catalogue, the context doc, the rules. Continue only once you have read it. `rig help` lists every command with its flags.
+Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig works — the three roots, the commands, the catalogue, the context doc, the rules. Continue only once you have read it. `rig help --all` lists every command with its flags.
 
 ## Step 4: Route
 

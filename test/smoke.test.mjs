@@ -181,6 +181,23 @@ test('rig --help and rig -h are rig help', () => {
   }
 })
 
+test('bare rig help prints the commands a first work needs, and leaves the rest to --all', () => {
+  const r = rig(['help'])
+  assert.equal(r.code, 0, r.out)
+  const commands = [...r.out.matchAll(/^ {2}rig (\S+)/gm)].map(([, name]) => name)
+  assert.deepEqual([...new Set(commands)], ['init', 'new', 'attach', 'status', 'next', 'save', 'close', 'doctor', 'help'])
+})
+
+test('bare rig help says how to see every command', () => {
+  assert.match(rig(['help']).out, /`rig help --all` prints every command/)
+})
+
+test('rig help --all prints every command', () => {
+  const r = rig(['help', '--all'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /^ {2}rig backfill/m)
+})
+
 test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {
   const r = rig(['new', 'typo', '--titel', 'Typo', '--no-ticket'])
   assert.equal(r.code, 1)
@@ -225,6 +242,11 @@ test('new --no-ticket, ticket, list, status, close on a work with no repos', () 
   assert.equal(readJson(record).abandonedAt, undefined, 'a close that landed is not an abandonment')
   assert.match(doc(), /^Tickets: PROJ-9 · Status: Closed$/m)
   assert.ok(!fs.existsSync(path.join(workRoot, 't1')), 'work folder removed')
+})
+
+test('new with no repos names attach for a person before the interview for an agent', () => {
+  const r = rig(['new', 'bare', '--title', 'Bare work', '--no-ticket'])
+  assert.match(r.out, /rig attach <repo> --work bare\s+add one, once per repo\n\s+rig prompt select-repos\s+or have your agent choose them with you/)
 })
 
 test('a GitHub --key is recorded but never reaches the branch name', () => {
