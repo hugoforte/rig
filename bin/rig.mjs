@@ -1188,7 +1188,7 @@ function parseArgs (argv) {
     // Split at the first `=` only: a value may carry its own, as a title or a message can.
     const [raw, ...rest] = a.replace(/^-+/, '').split('=')
     const v = rest.length ? rest.join('=') : undefined
-    const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help\``))
+    const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help --all\``))
     if (v !== undefined) flags[k] = v
     else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !isFlag(argv[i + 1])) flags[k] = argv[++i]
     else flags[k] = true
@@ -5573,7 +5573,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
   rig prompt [name]               print an agent prompt
-  rig help [--all]                the commands a first work needs; --all, every command`
+  rig help [<command>] [--all]    the commands a first work needs; --all, every command;
+                                  a command, its own lines`
 
 // Flags any command may be given, said once in the prose under the usage rather than on each
 // line. A command that acts on no work still reads its data root from the one `--work` names.
@@ -5585,7 +5586,7 @@ const INTERNAL_FLAGS = { update: ['restarted'] }
 
 // What bare `rig help` prints: the commands a first work runs, from setting up to closing.
 // Everything else waits for `rig help --all` until a work needs it.
-const CORE_COMMANDS = new Set(['init', 'new', 'attach', 'status', 'next', 'save', 'close', 'doctor', 'help'])
+const CORE_COMMANDS = new Set(['init', 'new', 'attach', 'status', 'next', 'pr', 'save', 'close', 'doctor', 'prompt', 'help'])
 
 function usageOf (name) {
   const lines = []
@@ -5605,7 +5606,12 @@ const flagsOf = name => new Set([
   ...[...usageOf(name).matchAll(/(?<![\w-])(?:--([a-z][a-z-]*)|-([a-z])\b)/g)].map(([, long, short]) => long ?? SHORT_FLAGS[short]),
 ])
 
-cmds.help = ({ flags } = { flags: {} }) => {
+cmds.help = ({ flags, positional }) => {
+  const [name] = positional
+  if (name) {
+    say(usageOf(name) || die(`no command "${name}" — \`rig help --all\` lists them`))
+    return
+  }
   if (!flags.all) {
     say(`${C.bold('rig')} — cross-repo work harness
 
@@ -5667,7 +5673,7 @@ function invoke (argv) {
   // Returned rather than exited on: an in-process run has no process to exit, and a command
   // nobody recognised has nothing after it to run either way.
   if (!cmd) {
-    err(`unknown command "${cmdName}" — try \`rig help\`\n`)
+    err(`unknown command "${cmdName}" — try \`rig help --all\`\n`)
     return 1
   }
   current.command = cmdName

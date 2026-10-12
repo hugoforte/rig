@@ -185,7 +185,7 @@ test('bare rig help prints the commands a first work needs, and leaves the rest 
   const r = rig(['help'])
   assert.equal(r.code, 0, r.out)
   const commands = [...r.out.matchAll(/^ {2}rig (\S+)/gm)].map(([, name]) => name)
-  assert.deepEqual([...new Set(commands)], ['init', 'new', 'attach', 'status', 'next', 'save', 'close', 'doctor', 'help'])
+  assert.deepEqual([...new Set(commands)], ['init', 'new', 'attach', 'status', 'next', 'pr', 'save', 'close', 'doctor', 'prompt', 'help'])
 })
 
 test('bare rig help says how to see every command', () => {
@@ -196,6 +196,30 @@ test('rig help --all prints every command', () => {
   const r = rig(['help', '--all'])
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /^ {2}rig backfill/m)
+})
+
+test('rig help --help is rig help, not its own line', () => {
+  assert.match(rig(['help', '--help']).out, /`rig help --all` prints every command/)
+})
+
+test('rig help --all --help is rig help --all', () => {
+  assert.match(rig(['help', '--all', '--help']).out, /^ {2}rig backfill/m)
+})
+
+test('rig help names a command and prints that command\'s lines', () => {
+  const r = rig(['help', 'backfill'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /^ {2}rig backfill/)
+})
+
+test('rig help refuses a command that does not exist, pointing at --all', () => {
+  const r = rig(['help', 'dahs'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /no command "dahs" — `rig help --all` lists them/)
+})
+
+test('an unknown command points at the full list', () => {
+  assert.match(rig(['dahs']).out, /unknown command "dahs" — try `rig help --all`/)
 })
 
 test('a flag the command\'s usage does not name is refused with that usage, before anything is written', () => {
