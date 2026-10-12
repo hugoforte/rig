@@ -24,7 +24,7 @@ rig is developed with rig: every piece of work behind the commits in this repo h
 
 ## You, or your agent
 
-rig is built to be driven by an AI coding agent. The agent runs the commands and writes the work's notes; rig stops it at the few decisions that are yours — whether there is a ticket, which repos, whether the design is agreed — and `rig next` tells either of you what is available from where the work stands.
+rig is built to be driven by an AI coding agent. The agent runs the commands and writes the work's notes; rig stops it at the decisions that are yours — whether there is a ticket, which repos, whether the design is agreed, and later what the work taught and what the user docs should say — and `rig next` tells either of you what is available from where the work stands.
 
 - **On your own:** run the commands in [Setting up](#setting-up). Every one works by hand, and nothing below needs an agent.
 - **With an agent:** link rig's skills into your agent host — symlink each folder under `skills/` into its skills directory (`~/.claude/skills` for Claude Code) — and ask it to set rig up. It runs `rig prompt setup`, asks you a few questions, and ends in one `rig init`. Then start your agent inside a work's folder: rig writes an `AGENTS.md` there that tells it the rest.
