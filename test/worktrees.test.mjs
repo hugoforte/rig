@@ -589,3 +589,18 @@ test('standing answers nothing for a base the mirror does not have, rather than 
   assert.deepEqual(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'main' }), { behind: 0, conflicts: [] })
   assert.equal(trees().standing({ org: 'acme', repo: 'standing', branch: 'feat/standing', base: 'gone' }), null)
 })
+
+test('deleteLocal keeps a branch that has moved since it was read, and deletes one that has not (#321)', () => {
+  publish('acme', 'discards')
+  const dest = workDir('t-discard', 'discards')
+  trees().cut({ org: 'acme', repo: 'discards', branch: 'feat/lost@1', dest })
+  const read = gitMust(dest, 'rev-parse', 'HEAD')
+  gitMust(dest, 'commit', '-q', '--allow-empty', '-m', 'made after it was read')
+  const now = gitMust(dest, 'rev-parse', 'HEAD')
+  assert.equal(trees().remove({ org: 'acme', repo: 'discards', dir: dest }), null)
+
+  assert.match(trees().deleteLocal({ org: 'acme', repo: 'discards', branch: 'feat/lost@1', expect: read }), /it has moved since/)
+  assert.equal(gitMust(mirrorOf('acme', 'discards'), 'rev-parse', 'refs/heads/feat/lost@1'), now, 'the commit made since is kept')
+  assert.equal(trees().deleteLocal({ org: 'acme', repo: 'discards', branch: 'feat/lost@1', expect: now }), null)
+  assert.notEqual(git(mirrorOf('acme', 'discards'), 'rev-parse', '--verify', '--quiet', 'refs/heads/feat/lost@1').code, 0)
+})

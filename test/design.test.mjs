@@ -135,6 +135,14 @@ test('every line of the decision log is a decision, three cells wide and numbere
     'checks below would skip it, and a skipped row is an unenforced decision that looks enforced')
 })
 
+test('each decision number is used once, and they rise down the log', () => {
+  // Two PRs open at once each take the next number, and the merge of the second puts both rows
+  // under one number. Resolving that by keeping both rows passes every other check here. A gap
+  // is harmless: some numbers were never used.
+  const out = rows.flatMap((r, i) => i > 0 && Number(r.n) <= Number(rows[i - 1].n) ? [`${r.n} follows ${rows[i - 1].n}`] : [])
+  assert.deepEqual(out, [], 'renumber the later rows, and the references to them')
+})
+
 test('a cell claiming enforcement is readable end to end', () => {
   // The failure this catches is a cell filled in by hand in a shape the parser does not read: a
   // bare path with no title, curly quotes, a missing backtick, or a second reference after a

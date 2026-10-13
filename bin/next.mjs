@@ -81,13 +81,15 @@ const HEAVY = 3
 //   lastCommitAt   the newest commit on any of the work's branches checked out here, or null
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
+//   attempts       one `{ branch, count, written }` per open set of attempts: how many it has,
+//                  and how many of them have a commit of their own in a repo here
 //   retroDue       `{ month, since, until }` for last month, when the user's own root keeps
 //                  retros (`retro/`) and none holds this machine's for that month; else null
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false, retroDue = null } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], attempts = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false, retroDue = null } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
   // A month gone by with no retro of this machine's sessions, asked only of a user who has run
@@ -156,6 +158,14 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
   const dirty = repos.filter(r => r.dirty)
   if (dirty.length) {
     out.push(offer(phase, `uncommitted changes in ${dirty.map(r => r.repo).join(', ')} — commit them where they belong`))
+  }
+
+  // An open set of attempts is a decision still to be made. Once each has something of its own
+  // there is something to compare, and until then how far they have got is the whole answer.
+  for (const a of attempts) {
+    out.push(a.written >= a.count
+      ? offer('building', `the ${a.count} attempts at ${a.branch} each have commits here — compare them, then keep one`, `rig attempt ${a.branch}`)
+      : offer('building', `${a.count} attempts at ${a.branch} are open — ${a.written} of ${a.count} have commits here so far`))
   }
 
   // Every stage is in and a worktree is still on one of them. It is moved first, so it is not
