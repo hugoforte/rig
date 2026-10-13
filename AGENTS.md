@@ -771,7 +771,8 @@ skills. Only the work branch's PR is asked about, never a stage's.
 ## Closing
 
 ```bash
-rig list                  # flags works whose PRs are merged and whose trees are clean
+rig list                  # flags works whose PRs are merged and whose trees are clean; it does not
+                          # see open sets of attempts, so `rig close` can still refuse one it flags
 rig close                 # refuses if anything is uncommitted, unpushed, has an open PR, is an open
                           # set of attempts, or is in the work folder without being rig's
 rig close                 # on a work already closed elsewhere: clears this machine's copy only
