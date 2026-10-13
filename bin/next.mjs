@@ -81,13 +81,21 @@ const HEAVY = 3
 //   lastCommitAt   the newest commit on any of the work's branches checked out here, or null
 //   leftover       the work is closed and its folder is still on this machine — closed on
 //                  another one, whose close could not reach this disk
+//   retroDue       `{ month, since, until }` for last month, when the user's own root keeps
+//                  retros (`retro/`) and none holds this machine's for that month; else null
 //
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false, retroDue = null } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
+  // A month gone by with no retro of this machine's sessions, asked only of a user who has run
+  // one, which is what the `retro/` folder in their own root says. Not about this work: it is
+  // the one place rig is asked "what now" often enough to say it, and last, since it can wait.
+  const retro = retroDue && offer(phase,
+    `${retroDue.month} has no retro of this machine's sessions yet — the rig-retro skill reads them and checks whether last month's fixes held`,
+    `rig sessions --since ${retroDue.since} --until ${retroDue.until}`)
 
   // Terminal first: a stopped work has no next step, and saying so is a real answer. Bar one:
   // the copy of it still on this machine, which only this machine can clear.
@@ -109,6 +117,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
 
   if (!entries.length) {
     out.push(offer('planning', 'nothing is attached yet — pick the repos this touches', 'rig prompt select-repos'))
+    if (retro) out.push(retro)
     return out
   }
 
@@ -481,6 +490,8 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
   if (phase === 'landing' && !dirty.length && !stack.some(st => st.open) && !unknownStages(stack).length) {
     out.push(offer('landing', 'every PR is merged and nothing is uncommitted', 'rig close'))
   }
+
+  if (retro) out.push(retro)
 
   return out
 }

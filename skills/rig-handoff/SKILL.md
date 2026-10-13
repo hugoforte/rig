@@ -25,6 +25,8 @@ If it answers "not inside a work" but this conversation was about one — its fo
 
 When the work's folder is missing on this machine there is nothing here to push; go straight on to the handoff.
 
+Before the handoff, record what this session kept getting wrong, so a retro can find it after the session is gone: one row each with `rig struggle '<what kept going wrong>' --kind <kind> --session <this session's id> --host <the reader for this host> --fix <kind>`. Record no `read` row: this looks only at how the session went, and the lesson review and a retro still have its work to read. Write each struggle in your own words, about the tools and the process, naming no person, customer or system of theirs, and with no `--quote`: the work's root may be one a whole org reads, and nobody reviews these rows before they are pushed. This session's id is in the variable `transcriptSession` in `rig.local.json` names (Claude Code's is `CLAUDE_CODE_SESSION_ID`); `rig struggle --help` lists the readers. Count only what happened: the user stepping in, a command tried more than once, an assumption put right. Other sessions of the work are the lesson review's to read.
+
 Then write `handoff.md` beside that work's `context.md`. The `context` line of `rig status` names the file; the handoff sits in the same directory. Overwrite any `handoff.md` already there: the newest handoff is the only one the next agent wants, and the data root is git, so the old ones are one `git log` away. Then commit it:
 
 ```bash
