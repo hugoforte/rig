@@ -395,7 +395,7 @@ rig struggle "…" --kind correction --session <id> --host codex --period 2026-0
 
 A work's go in `struggles.tsv` beside its notes, written by the lesson review and the handoff; a
 session in no work goes in `retro/<month>/<machine>.tsv` in the user's own root, which `--data`
-must name and whose `rig.json` must say `"personal": true`. rig redacts the quote and the struggle before it writes them (DESIGN.md decision 211).
+must name and whose `rig.json` must say `"personal": true`. rig redacts the quote and the struggle before it writes them (DESIGN.md decision 212).
 
 **The title is prose, and correctable the same way.** `rig save --title` rewrites it in
 `work.json`, the context doc's `# <id> — <title>` heading and the generated `AGENTS.md`. It never

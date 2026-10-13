@@ -1172,7 +1172,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'land', 'by-agent', 'transcripts'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'land', 'by-agent', 'transcripts', 'all'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -1190,7 +1190,7 @@ function parseArgs (argv) {
     // Split at the first `=` only: a value may carry its own, as a title or a message can.
     const [raw, ...rest] = a.replace(/^-+/, '').split('=')
     const v = rest.length ? rest.join('=') : undefined
-    const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help\``))
+    const k = a.startsWith('--') ? raw : (SHORT_FLAGS[raw] || die(`unknown flag ${a} — try \`rig help --all\``))
     if (v !== undefined) flags[k] = v
     else if (!BOOL_FLAGS.has(k) && argv[i + 1] && !isFlag(argv[i + 1])) flags[k] = argv[++i]
     else flags[k] = true
@@ -2348,9 +2348,9 @@ cmds.new = ({ flags, positional }) => {
   if (repos.length) {
     for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent })
   } else {
-    say('No repos attached yet. Run the selection interview:')
-    say(C.dim('  rig prompt select-repos'))
-    say(C.dim(`  rig attach <repo> --work ${id}`))
+    say('No repos attached yet:')
+    say(`  ${C.dim(`rig attach <repo> --work ${id}`)}   add one, once per repo`)
+    say(`  ${C.dim('rig prompt select-repos')}   or have your agent choose them with you`)
   }
 }
 
@@ -2845,7 +2845,7 @@ cmds.note = ({ flags, positional }) => {
 
 // A struggle: something that kept going wrong in a session — the user stepping in, a command
 // tried again and again, an assumption put right — one row each, for a retro to find what keeps
-// going wrong across works (decision 211). A work's are in `struggles.tsv` beside its context doc,
+// going wrong across works (decision 212). A work's are in `struggles.tsv` beside its context doc,
 // where a company retro reads everyone's; a period's are in `retro/<YYYY-MM>/<machine>.tsv` in the
 // user's own data root, for the sessions that belong to no work. Every machine appends its own
 // sessions' rows, so two never conflict. A row is the shape of the file, as a note is, and the
@@ -3361,7 +3361,7 @@ const looksForSessions = cfg => sessionConfig(cfg).sources.length > 0
 const workBranches = work => [work.branch, ...work.stages.map(s => s.branch)].filter(Boolean)
 
 // Every session on the machine last written since `since`, each read once, for a work's to be
-// picked out of (decision 209). Every one is read to place it, and only the work's are given back.
+// picked out of (decision 210). Every one is read to place it, and only the work's are given back.
 function machineSessions (cfg, since) {
   const home = env().USERPROFILE || env().HOME || os.homedir()
   return readSessions({ sources: sessionConfig(cfg).sources, home, since })
@@ -3444,7 +3444,7 @@ function everyWork (loc, cfg) {
   return [...works.values()]
 }
 
-// Every agent session on this machine in a period, for a periodic retro (decision 210), one a
+// Every agent session on this machine in a period, for a periodic retro (decision 211), one a
 // line: when it started, its reader, its id, whether it is a subagent's, the works it belongs to
 // and its path. `--extract <path>` prints one session as a redacted extract instead. The listing
 // is the one reading of sessions not narrowed to a work: the retro is the user's own, of their
@@ -5624,7 +5624,7 @@ cmds.doctor = () => {
 }
 
 // Every command's usage, written once: the lines that start with its name and the indented
-// lines under each. `rig help` prints all of it, `rig <command> --help` prints that command's
+// lines under each. `rig help --all` prints all of it, `rig <command> --help` prints that command's
 // own lines, and the flags those lines name are the flags the command takes.
 const USAGE = `  rig init                        one-time setup; "rig prompt setup" asks the questions
        --data-repo owner/name      join that private data repo, or create it if absent
@@ -5743,7 +5743,9 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig doctor                      environment + consistency checks, over every data root
   rig update                      fast-forward the tool checkout and the data root,
                                   run pending record migrations, then the doctor checks
-  rig prompt [name]               print an agent prompt`
+  rig prompt [name]               print an agent prompt
+  rig help [<command>] [--all]    the commands a first work needs; --all, every command;
+                                  a command, its own lines`
 
 // Flags any command may be given, said once in the prose under the usage rather than on each
 // line. A command that acts on no work still reads its data root from the one `--work` names.
@@ -5752,6 +5754,10 @@ const COMMON_FLAGS = ['data', 'work', 'help']
 // Flags rig passes to itself and a person never types: `rig update`'s one hop into the code
 // that just arrived.
 const INTERNAL_FLAGS = { update: ['restarted'] }
+
+// What bare `rig help` prints: the commands a first work runs, from setting up to closing.
+// Everything else waits for `rig help --all` until a work needs it.
+const CORE_COMMANDS = new Set(['init', 'new', 'attach', 'status', 'next', 'pr', 'save', 'close', 'doctor', 'prompt', 'help'])
 
 function usageOf (name) {
   const lines = []
@@ -5771,7 +5777,21 @@ const flagsOf = name => new Set([
   ...[...usageOf(name).matchAll(/(?<![\w-])(?:--([a-z][a-z-]*)|-([a-z])\b)/g)].map(([, long, short]) => long ?? SHORT_FLAGS[short]),
 ])
 
-cmds.help = () => {
+cmds.help = ({ flags, positional }) => {
+  const [name] = positional
+  if (name) {
+    say(usageOf(name) || die(`no command "${name}" — \`rig help --all\` lists them`))
+    return
+  }
+  if (!flags.all) {
+    say(`${C.bold('rig')} — cross-repo work harness
+
+${[...CORE_COMMANDS].map(usageOf).join('\n')}
+
+\`rig help --all\` prints every command. Every command takes --help (or -h), which
+prints its own lines and runs nothing.`)
+    return
+  }
   say(`${C.bold('rig')} — cross-repo work harness
 
 ${USAGE}
@@ -5824,7 +5844,7 @@ function invoke (argv) {
   // Returned rather than exited on: an in-process run has no process to exit, and a command
   // nobody recognised has nothing after it to run either way.
   if (!cmd) {
-    err(`unknown command "${cmdName}" — try \`rig help\`\n`)
+    err(`unknown command "${cmdName}" — try \`rig help --all\`\n`)
     return 1
   }
   current.command = cmdName
@@ -5835,9 +5855,9 @@ function invoke (argv) {
     // Asking how a command is used never runs it, and neither does a flag its usage does not
     // name.
     const usage = usageOf(cmdName)
-    if (args.flags.help) {
-      if (usage) say(usage)
-      else cmds.help()
+    // `rig --help` and `rig help --help` are both `rig help`, not its usage line.
+    if (args.flags.help && cmdName !== 'help') {
+      say(usage)
       return 0
     }
     const takes = flagsOf(cmdName)

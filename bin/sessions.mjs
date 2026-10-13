@@ -135,7 +135,7 @@ export function sessionsFor (sessions, work) {
   })
 }
 
-// Every session on the machine that was at work between `since` and `until` (decision 210), as
+// Every session on the machine that was at work between `since` and `until` (decision 211), as
 // `{ path, reader, session, subagent, startedAt, endedAt, works }`, oldest first. `works` are the
 // ids of the works it belongs to, placed as `placed` places one, from `works`
 // (`{ id, branches, repos }`) under `workRoot`; none, for the sessions that belong to no work,

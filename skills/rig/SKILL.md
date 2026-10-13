@@ -7,7 +7,7 @@ description: Cross-repo work harness. Use when a ticket or task spans more than 
 
 `rig` assembles one git worktree per repo for a piece of **work**, all on one shared branch, and keeps that work's durable knowledge in a **data root** — a committed checkout holding the repo catalogue, the org docs, the work records and `rig.json`.
 
-rig documents itself, and this skill ships with it. It finds rig and routes you inside it, and restates nothing on purpose: `rig doctor`, `rig help` and `AGENTS.md` are always the current answer, and this file is not.
+rig documents itself, and this skill ships with it. It finds rig and routes you inside it, and restates nothing on purpose: `rig doctor`, `rig help --all` and `AGENTS.md` are always the current answer, and this file is not.
 
 ## Step 1: Find rig
 
@@ -27,7 +27,7 @@ One command, and the only place to learn any of it: the version and record forma
 
 ## Step 3: Read the instructions
 
-Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig works — the three roots, the commands, the catalogue, the context doc, the rules. Continue only once you have read it. `rig help` lists every command with its flags.
+Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig works — the three roots, the commands, the catalogue, the context doc, the rules. Continue only once you have read it. `rig help --all` lists every command with its flags.
 
 ## Step 4: Route
 

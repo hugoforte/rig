@@ -356,7 +356,7 @@ test('list says both when it looked at neither the stages nor the sessions', () 
   assert.match(m.rig(['list']).out, /listed[\s\S]*?`rig close` would not refuse \(stages and sessions not checked\)/)
 })
 
-// ------------------------------------------------- rig sessions: a period, for a retro (decision 210)
+// ------------------------------------------------- rig sessions: a period, for a retro (decision 211)
 
 const listed = r => r.stdout.trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'))
 const PERIOD = ['--since', '2026-09-01', '--until', '2026-11-01']
