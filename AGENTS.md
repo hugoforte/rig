@@ -812,7 +812,7 @@ indistinguishable from a bug — which is what `rig status` would call it.
 So does anything in the work folder that rig did not put there: a folder of your own notes, or a
 folder named for an attempt that is not on that attempt's branch. The close deletes the folder
 whole, and those would go with it, so the refusal names each one; move it out of the work folder,
-or `--force` past it (decision 210).
+or `--force` past it (decision 211).
 
 **Abandoning is a different answer, not a softer close.** `--abandoned` is for a work you
 stopped without finishing: an unmerged PR and unpushed commits are what that *looks like*, so
