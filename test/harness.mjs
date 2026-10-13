@@ -47,7 +47,7 @@ export const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'))
 // Everything a run of the tool needs that is not the tool: the code, the markdown it prints,
 // and the package.json it reads its version from.
 const copyTool = (dest, { gitignore = false } = {}) => {
-  for (const d of ['bin', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(dest, d), { recursive: true })
+  for (const d of ['bin', 'readers', 'prompts', 'templates']) fs.cpSync(path.join(SRC, d), path.join(dest, d), { recursive: true })
   fs.cpSync(path.join(SRC, 'package.json'), path.join(dest, 'package.json'))
   // The real tool gitignores rig.local.json; without that the machine's own config would read
   // as an uncommitted change and `rig update` would refuse to move a perfectly clean install.
