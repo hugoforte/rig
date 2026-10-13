@@ -4,6 +4,10 @@
 // Real git throughout, in the trees rig cut: the attempts are made by rig and written on by
 // hand, exactly as an agent in each folder would. The check commands are `node -e` one-liners,
 // so the suite stays offline and spawns no npm.
+//
+// The tests on one work are one story, each standing on what the one before left. Every repo a
+// test attaches is published in `before`, so a test run alone by `--test-name-pattern` at least
+// finds its repos; a red from such a run is still worth a run of the whole file.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -31,6 +35,8 @@ const here = () => ({ cwd: worktree(WORK, 'billing') })
 const CHECK = 'node -e "process.exit(require(\'fs\').existsSync(\'BROKEN\') ? 1 : 0)"'
 
 before(() => {
+  m.publish('ledger')
+  m.setVisibility('acme/ledger', 'private')
   assert.equal(rig(['new', WORK, '--title', 'Tried work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', WORK]).code, 0)
   fs.writeFileSync(path.join(dataRoot, 'catalog', 'acme', 'billing.md'), `---
@@ -289,8 +295,6 @@ test('a set on a stage withdrawn from the plan can still be dropped, and a new o
 })
 
 test('--keep moves the branch in every repo that carries the winner', () => {
-  m.publish('ledger')
-  m.setVisibility('acme/ledger', 'private')
   assert.equal(rig(['new', 'pair', '--title', 'Pair work', '--type', 'feat', '--no-ticket']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'pair']).code, 0)
   assert.equal(rig(['attach', 'ledger', '--work', 'pair']).code, 0)
