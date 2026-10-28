@@ -91,8 +91,10 @@ Then run the repo interview and attach what it selects:
 ```bash
 rig prompt select-repos     # read this and follow it
 rig attach billing
-rig attach orders-web
+rig attach your-org/orders-web   # owner/repo: that org alone, never a same-named repo in another
 ```
+
+A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 216).
 
 ## Stops
 
@@ -252,6 +254,15 @@ attaches anything for you.
 
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
 lint, its build. Both are commands, and the catalogue never holds a result.
+
+**Both are POSIX `sh`, on every machine.** One entry is read on Linux, macOS and Windows, so
+write it once, the POSIX way: `./scripts/check.sh`, `cd app && npm test`. On Windows rig runs it
+with the `sh` on PATH, else Git for Windows' `bin\sh.exe`, never cmd and never WSL; with neither,
+it refuses the commands and says so. A `$` inside double quotes is `sh`'s to expand, so a
+`powershell -Command` script goes in single quotes. On Windows the command runs as it would in
+Git Bash, path conversion included: an argument such as `/p:Configuration=Release` reaches a
+Windows program rewritten, so write it `//p:…` or start the command with `MSYS_NO_PATHCONV=1`
+(DESIGN.md decision 217).
 
 ```bash
 rig check                 # what verifies every repo in this work — printed, not run
@@ -859,7 +870,7 @@ every ticket the work and its stages hold that the work is open again. It reopen
 pull request. A work that landed — every PR merged, and closed neither forced nor abandoned — is
 refused, because that close closed its tickets and deleted its branches; a PR the close failed to
 record is asked of GitHub. Another data root holding the work open refuses it too. `rig next` never offers it: only the person who knows the close
-was a mistake can say so (DESIGN.md decision 216).
+was a mistake can say so (DESIGN.md decision 218).
 
 ## Agent skills
 
