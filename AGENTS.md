@@ -94,7 +94,7 @@ rig attach billing
 rig attach your-org/orders-web   # owner/repo: that org alone, never a same-named repo in another
 ```
 
-A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 216).
+A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 217).
 
 ## Stops
 
