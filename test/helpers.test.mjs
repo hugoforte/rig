@@ -281,7 +281,7 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('a catalogue command\'s sh off PATH is the bin\\sh.exe of the Git for Windows that git\'s exec path is in, or none', () => {
+test('a catalogue command\'s sh off PATH is the sh.exe of the Git for Windows that git\'s exec path is in, or none', () => {
   // Empty files again: which sh is decided from where files are, never from what is in them.
   const { root, layout } = programTree()
   const execPath = name => path.join(root, name, 'mingw64', 'libexec', 'git-core')
