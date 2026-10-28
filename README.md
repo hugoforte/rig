@@ -119,7 +119,7 @@ rig doctor
 rig new my-first-work --title "Trying rig"     # no prompt; a brief may be piped in
 cd C:\w\my-first-work
 rig attach some-repo                           # any repo in your org
-rig attach another-repo
+rig attach your-org/another-repo               # or say the org, when two of yours share a name
 rig status
 ```
 
