@@ -291,6 +291,9 @@ test('a catalogue command\'s sh off PATH is the sh.exe of the Git for Windows th
   assert.equal(gitForWindowsSh(execPath('wsl-only')), null, 'a bash.exe is never taken for a sh, so WSL\'s is never one')
   assert.equal(gitForWindowsSh(execPath('nothing-here')), null, 'a git with no Git for Windows around it has none to give')
   assert.equal(gitForWindowsSh(''), null, 'and a git that would not say where it is has none either')
+  layout('msys2', 'bin', 'sh.exe')
+  assert.equal(gitForWindowsSh(path.join(root, 'msys2', 'usr', 'lib', 'git-core')), null,
+    'an exec path in no Git for Windows layout is no place to climb out of looking for one')
   fs.rmSync(root, { recursive: true, force: true })
 })
 

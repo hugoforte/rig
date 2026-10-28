@@ -1138,6 +1138,8 @@ talks_to: []
 #   - repo: some-other-repo
 #     how: one line — what actually passes between them
 #     direction: downstream
+# How this repo is made ready, and how it is verified: commands run in its worktree, POSIX sh
+# on every machine, Windows included, so ./scripts/check.sh is written the same everywhere.
 setup: []
 check: []
 # Where this repo's user documentation lives: a path in the repo, or a page elsewhere.
@@ -3667,31 +3669,42 @@ cmds.status = ({ flags }) => {
 // search. Only a program called `sh` is taken, so WSL's `System32\bash.exe`, which fails without
 // a distro, is never one. Null when there is neither, which the caller refuses on rather than
 // falling back to cmd.
-function catalogShell (dir) {
+//
+// Git is asked with no cwd, as `onPath` asks, because where it lives does not depend on where a
+// run stands, and a repo whose worktree is not on this machine has nowhere to stand. Asked once
+// per PATH and exec path, which are all the answer depends on, rather than once per repo.
+const gitExecPaths = new Map()
+function catalogShell () {
   if (process.platform !== 'win32') return true
   if (onPath('sh')) return 'sh'
-  const r = exec('git', ['--exec-path'], { cwd: dir })
-  return gitForWindowsSh(r.code === 0 ? r.out : '')
+  const key = `${pickEnv('PATH')}\u0000${pickEnv('GIT_EXEC_PATH')}`
+  if (!gitExecPaths.has(key)) {
+    const r = spawnSync(gitProgram(), ['--exec-path'], { ...spawnDefaults(current.command), env: env() })
+    gitExecPaths.set(key, !r.error && r.status === 0 ? r.stdout.trim() : '')
+  }
+  return gitForWindowsSh(gitExecPaths.get(key))
 }
 
 // Git for Windows' `bin\sh.exe`, from git's exec path, `<Git>\mingw64\libexec\git-core`. It is
 // Git's launcher, as `cmd\git.exe` is: it puts Git's `usr\bin` on PATH for the shell it starts,
-// so a script's `cat` and `sed` are there too.
+// so a script's `cat` and `sed` are there too. Any other layout — MSYS2's `/usr/lib/git-core`,
+// say — is not Git for Windows, and three folders up from it is nowhere to trust a sh from.
 function gitForWindowsSh (execPath) {
-  if (!execPath) return null
-  const sh = path.join(path.resolve(execPath, '..', '..', '..'), 'bin', 'sh.exe')
+  const core = execPath && path.resolve(execPath)
+  if (!core || path.basename(core).toLowerCase() !== 'git-core' ||
+    path.basename(path.dirname(core)).toLowerCase() !== 'libexec') return null
+  const sh = path.join(path.resolve(core, '..', '..', '..'), 'bin', 'sh.exe')
   return exists(sh) ? sh : null
 }
 
 // The catalogue's commands for one repo, in that repo's worktree. `label` is the
 // frontmatter key they came from, so a failure names the thing that failed.
 function runCatalogCommands (dir, commands, label) {
-  const shell = catalogShell(dir)
+  const shell = catalogShell()
   if (!shell) {
-    // A command that never started is no verdict, as below, and the run still fails, since
-    // nothing it was asked to run ran.
+    // A command that never started is no verdict, as below; the caller says what that does
+    // to its exit code, as it does for a command that failed.
     warn(`${label} commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to (its bin\\sh.exe) — install Git for Windows, or put a sh on PATH`)
-    current.exitCode = 1
     return null
   }
   for (const c of commands) {

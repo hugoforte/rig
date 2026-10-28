@@ -257,7 +257,10 @@ lint, its build. Both are commands, and the catalogue never holds a result.
 write it once, the POSIX way: `./scripts/check.sh`, `cd app && npm test`. On Windows rig runs it
 with the `sh` on PATH, else Git for Windows' `bin\sh.exe`, never cmd and never WSL; with neither,
 it refuses the commands and says so. A `$` inside double quotes is `sh`'s to expand, so a
-`powershell -Command` script goes in single quotes (DESIGN.md decision 216).
+`powershell -Command` script goes in single quotes. On Windows the command runs as it would in
+Git Bash, path conversion included: an argument such as `/p:Configuration=Release` reaches a
+Windows program rewritten, so write it `//p:…` or start the command with `MSYS_NO_PATHCONV=1`
+(DESIGN.md decision 216).
 
 ```bash
 rig check                 # what verifies every repo in this work — printed, not run
