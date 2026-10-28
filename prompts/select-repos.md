@@ -86,6 +86,9 @@ Present the three parts and **stop**. The user confirms or edits the set. Only a
 rig attach <repo>        # one per selected repo, or --repos a,b,c on rig new
 ```
 
+Name a repo `owner/repo` when two of the data root's orgs have one of that name: a bare name
+takes the first org that has it.
+
 On a work that does not stop at the repo set (`AGENTS.md`'s "Stops"; `rig status` says), present
 the three parts and attach without waiting, with `--by-agent`, so the record says who chose.
 
