@@ -17,7 +17,7 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { makeInstall } from './harness.mjs'
 
 const { tmp, install, env, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
@@ -406,4 +406,51 @@ test('a pass recorded on a stage checked out is no pass for the work branch\'s P
   } finally {
     gitMust(dest, 'checkout', '-q', BRANCH)
   }
+})
+
+// One entry is read on every machine, so a command is POSIX sh on all of them, Windows
+// included, where `shell: true` would have been cmd (hugoforte/rig#342). An assignment ahead
+// of a command is sh and nothing cmd can start.
+test('a check command runs under sh on every machine, so an entry written the POSIX way passes on Windows too', () => {
+  correct('billing', ['shell=posix && echo "ran-under-$shell"'])
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /ran-under-posix/)
+})
+
+// Windows only, where a shell can be missing; everywhere else it is /bin/sh. Git for Windows is
+// found from git's exec path, `<Git>\mingw64\libexec\git-core`, and PATH is cut down to one of
+// its folders, with no MSYSTEM, as a PowerShell's is.
+const gitCore = process.platform === 'win32' && spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim()
+const gitRoot = gitCore && path.resolve(gitCore, '..', '..', '..')
+const onlyGit = (folder, extra = {}) => {
+  const cut = { ...env, ...extra }
+  for (const key of Object.keys(cut)) if (['PATH', 'MSYSTEM'].includes(key.toUpperCase())) delete cut[key]
+  cut.PATH = path.join(gitRoot, folder)
+  return cut
+}
+const noGitForWindows = { skip: !gitRoot || !fs.existsSync(path.join(gitRoot, 'bin', 'sh.exe')) }
+
+// PATH holds only Git's `cmd\` launcher, as Git's installer leaves PowerShell's, so no sh is on
+// it and the one rig runs is Git's own `bin\sh.exe`.
+test('with no sh on PATH on Windows, a check runs under the sh of the Git for Windows git belongs to', noGitForWindows, () => {
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], { ...SUBPROCESS, env: onlyGit('cmd') })
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /ran-under-posix/)
+})
+
+// No sh anywhere, and a git rig can run: PATH holds only the git binary in git's exec path,
+// which has no sh beside it, and that exec path is reached through a junction outside any Git for Windows, so git works
+// and says it lives nowhere with a sh beside it.
+test('with no sh to be found on Windows, a check is refused and not recorded, rather than run under cmd', { skip: noGitForWindows.skip || !fs.existsSync(path.join(gitCore, 'git.exe')) }, () => {
+  const before = billingBranch().verified
+  assert.ok(before, 'the run before this one recorded a pass, which a refused run must leave alone')
+  const elsewhere = path.join(tmp, 'no-git-for-windows', 'mingw64', 'libexec', 'git-core')
+  fs.mkdirSync(path.dirname(elsewhere), { recursive: true })
+  fs.symlinkSync(path.resolve(gitCore), elsewhere, 'junction')
+  const env = onlyGit(path.relative(gitRoot, gitCore), { GIT_EXEC_PATH: elsewhere })
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], { ...SUBPROCESS, env })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /check commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to/)
+  assert.deepEqual(billingBranch().verified, before, 'a check that never started is no verdict')
 })

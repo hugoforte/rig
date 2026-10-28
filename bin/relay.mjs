@@ -7,9 +7,12 @@
 // command handed one keeps its colour and its progress lines. Stdin is the command's own.
 import { spawn } from 'node:child_process'
 
+// The shell is rig's choice, passed as the second argument: `true` for the platform's own, or the
+// path of the POSIX sh it found on Windows (DESIGN.md decision 218).
 const command = process.argv[2]
+const shell = !process.argv[3] || process.argv[3] === 'true' ? true : process.argv[3]
 const ours = [process.stdout, process.stderr]
-const child = spawn(command, { shell: true, stdio: ['inherit', ...ours.map(s => s.isTTY ? 'inherit' : 'pipe')] })
+const child = spawn(command, { shell, stdio: ['inherit', ...ours.map(s => s.isTTY ? 'inherit' : 'pipe')] })
 
 ours.forEach((to, i) => {
   const from = child.stdio[i + 1]

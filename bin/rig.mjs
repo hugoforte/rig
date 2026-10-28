@@ -1181,6 +1181,8 @@ talks_to: []
 #   - repo: some-other-repo
 #     how: one line — what actually passes between them
 #     direction: downstream
+# How this repo is made ready, and how it is verified: commands run in its worktree, POSIX sh
+# on every machine, Windows included, so ./scripts/check.sh is written the same everywhere.
 setup: []
 check: []
 # Where this repo's user documentation lives: a path in the repo, or a page elsewhere.
@@ -3715,9 +3717,54 @@ cmds.status = ({ flags }) => {
   }
 }
 
+// The shell a catalogue command runs in: POSIX `sh` on every machine, because one entry is read
+// on all of them (decision 218). Off Windows that is what `shell: true` already starts. On
+// Windows `shell: true` is cmd, so rig names a `sh` instead, which Node starts as `sh -c`: the
+// one a spawn finds on PATH, as in Git Bash, else the one in the Git for Windows that rig's own
+// git belongs to, as from PowerShell, where Git's installer puts only `cmd\` on PATH. Git is
+// asked where it is rather than PATH searched for it, because PATH is not always readable the
+// way a spawn reads it (`programPath`): one `%NVM_HOME%` an installer left unexpanded ends that
+// search. Only a program called `sh` is taken, so WSL's `System32\bash.exe`, which fails without
+// a distro, is never one. Null when there is neither, which the caller refuses on rather than
+// falling back to cmd.
+//
+// Git is asked with no cwd, as `onPath` asks, because where it lives does not depend on where a
+// run stands, and a repo whose worktree is not on this machine has nowhere to stand. Asked once
+// per PATH and exec path, which are all the answer depends on, rather than once per repo.
+const gitExecPaths = new Map()
+function catalogShell () {
+  if (process.platform !== 'win32') return true
+  if (onPath('sh')) return 'sh'
+  const key = `${pickEnv('PATH')}\u0000${pickEnv('GIT_EXEC_PATH')}`
+  if (!gitExecPaths.has(key)) {
+    const r = spawnSync(gitProgram(), ['--exec-path'], { ...spawnDefaults(current.command), env: env() })
+    gitExecPaths.set(key, !r.error && r.status === 0 ? r.stdout.trim() : '')
+  }
+  return gitForWindowsSh(gitExecPaths.get(key))
+}
+
+// Git for Windows' `bin\sh.exe`, from git's exec path, `<Git>\mingw64\libexec\git-core`. It is
+// Git's launcher, as `cmd\git.exe` is: it puts Git's `usr\bin` on PATH for the shell it starts,
+// so a script's `cat` and `sed` are there too. Any other layout — MSYS2's `/usr/lib/git-core`,
+// say — is not Git for Windows, and three folders up from it is nowhere to trust a sh from.
+function gitForWindowsSh (execPath) {
+  const core = execPath && path.resolve(execPath)
+  if (!core || path.basename(core).toLowerCase() !== 'git-core' ||
+    path.basename(path.dirname(core)).toLowerCase() !== 'libexec') return null
+  const sh = path.join(path.resolve(core, '..', '..', '..'), 'bin', 'sh.exe')
+  return exists(sh) ? sh : null
+}
+
 // The catalogue's commands for one repo, in that repo's worktree. `label` is the
 // frontmatter key they came from, so a failure names the thing that failed.
 function runCatalogCommands (dir, commands, label) {
+  const shell = catalogShell()
+  if (!shell) {
+    // A command that never started is no verdict, as below; the caller says what that does
+    // to its exit code, as it does for a command that failed.
+    warn(`${label} commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to (its bin\\sh.exe) — install Git for Windows, or put a sh on PATH`)
+    return null
+  }
   for (const c of commands) {
     step(`${c}  ${C.dim(`(in ${path.basename(dir)})`)}`)
     // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
@@ -3726,8 +3773,8 @@ function runCatalogCommands (dir, commands, label) {
     // A command that never started, or was killed before it could exit, is no verdict, so the
     // answer is null rather than a failure: a check run must not clear a pass it never tested.
     // bin/relay.mjs stands between the command and rig's streams, so a reader that stops early
-    // costs the output and not the verdict.
-    const r = spawnSync(process.execPath, [path.join(MODULE_ROOT, 'bin', 'relay.mjs'), c], { cwd: dir, stdio: 'inherit', env: env() })
+    // costs the output and not the verdict; it starts the command in the shell named here.
+    const r = spawnSync(process.execPath, [path.join(MODULE_ROOT, 'bin', 'relay.mjs'), c, String(shell)], { cwd: dir, stdio: 'inherit', env: env() })
     if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
@@ -6696,7 +6743,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
+  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh,
   directionSection, directionBody, directionIsTodo, pullRequestSaid,
   spawnFailure,
   listing,

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
-  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, pullRequestSaid, run,
   spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
@@ -278,6 +278,22 @@ test('with MSYSTEM set the launcher is kept, because it is what gives git its ow
   layout('proper', 'mingw64', 'bin', 'git.exe')
   assert.equal(realGitFor(proper, 'MINGW64'), 'git',
     'the binary sets up its PATH only when MSYSTEM is unset, so here it could not start a hook')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('a catalogue command\'s sh off PATH is the sh.exe of the Git for Windows that git\'s exec path is in, or none', () => {
+  // Empty files again: which sh is decided from where files are, never from what is in them.
+  const { root, layout } = programTree()
+  const execPath = name => path.join(root, name, 'mingw64', 'libexec', 'git-core')
+  const sh = layout('git', 'bin', 'sh.exe')
+  assert.equal(gitForWindowsSh(execPath('git')), sh, 'Git for Windows\' own launcher for its shell')
+  layout('wsl-only', 'bin', 'bash.exe')
+  assert.equal(gitForWindowsSh(execPath('wsl-only')), null, 'a bash.exe is never taken for a sh, so WSL\'s is never one')
+  assert.equal(gitForWindowsSh(execPath('nothing-here')), null, 'a git with no Git for Windows around it has none to give')
+  assert.equal(gitForWindowsSh(''), null, 'and a git that would not say where it is has none either')
+  layout('msys2', 'bin', 'sh.exe')
+  assert.equal(gitForWindowsSh(path.join(root, 'msys2', 'usr', 'lib', 'git-core')), null,
+    'an exec path in no Git for Windows layout is no place to climb out of looking for one')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
