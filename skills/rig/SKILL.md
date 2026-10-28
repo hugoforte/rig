@@ -65,6 +65,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Leaving a work for another session | the `rig-handoff` skill |
 | Finished | `rig close`; if it names a session still at work, tell the user which |
 | Stopped without finishing | `rig close --abandoned` |
+| Closed or abandoned by mistake | `rig reopen <id>`, never a new work on the same ticket |
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
 
