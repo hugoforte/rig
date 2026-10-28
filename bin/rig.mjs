@@ -3657,9 +3657,43 @@ cmds.status = ({ flags }) => {
   }
 }
 
+// The shell a catalogue command runs in: POSIX `sh` on every machine, because one entry is read
+// on all of them (decision 216). Off Windows that is what `shell: true` already starts. On
+// Windows `shell: true` is cmd, so rig names a `sh` instead, which Node starts as `sh -c`: the
+// one a spawn finds on PATH, as in Git Bash, else the one in the Git for Windows that rig's own
+// git belongs to, as from PowerShell, where Git's installer puts only `cmd\` on PATH. Git is
+// asked where it is rather than PATH searched for it, because PATH is not always readable the
+// way a spawn reads it (`programPath`): one `%NVM_HOME%` an installer left unexpanded ends that
+// search. Only a program called `sh` is taken, so WSL's `System32\bash.exe`, which fails without
+// a distro, is never one. Null when there is neither, which the caller refuses on rather than
+// falling back to cmd.
+function catalogShell (dir) {
+  if (process.platform !== 'win32') return true
+  if (onPath('sh')) return 'sh'
+  const r = exec('git', ['--exec-path'], { cwd: dir })
+  return gitForWindowsSh(r.code === 0 ? r.out : '')
+}
+
+// Git for Windows' `bin\sh.exe`, from git's exec path, `<Git>\mingw64\libexec\git-core`. It is
+// Git's launcher, as `cmd\git.exe` is: it puts Git's `usr\bin` on PATH for the shell it starts,
+// so a script's `cat` and `sed` are there too.
+function gitForWindowsSh (execPath) {
+  if (!execPath) return null
+  const sh = path.join(path.resolve(execPath, '..', '..', '..'), 'bin', 'sh.exe')
+  return exists(sh) ? sh : null
+}
+
 // The catalogue's commands for one repo, in that repo's worktree. `label` is the
 // frontmatter key they came from, so a failure names the thing that failed.
 function runCatalogCommands (dir, commands, label) {
+  const shell = catalogShell(dir)
+  if (!shell) {
+    // A command that never started is no verdict, as below, and the run still fails, since
+    // nothing it was asked to run ran.
+    warn(`${label} commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to (its bin\\sh.exe) — install Git for Windows, or put a sh on PATH`)
+    current.exitCode = 1
+    return null
+  }
   for (const c of commands) {
     step(`${c}  ${C.dim(`(in ${path.basename(dir)})`)}`)
     // `inherit` and not a pipe, because a catalogue command is `npm install` or a test run
@@ -3667,7 +3701,7 @@ function runCatalogCommands (dir, commands, label) {
     // process for its output to reach whoever asked. The environment is still the run's.
     // A command that never started, or was killed before it could exit, is no verdict, so the
     // answer is null rather than a failure: a check run must not clear a pass it never tested.
-    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
+    const r = spawnSync(c, { cwd: dir, shell, stdio: 'inherit', env: env() })
     if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
@@ -6633,7 +6667,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor,
+  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh,
   directionSection, directionBody, directionIsTodo, pullRequestSaid,
   spawnFailure,
   listing,

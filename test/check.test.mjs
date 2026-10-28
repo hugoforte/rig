@@ -17,9 +17,10 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { makeInstall } from './harness.mjs'
 
-const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
+const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup, env: installEnv } = makeInstall({
   // Everything but `--run`, which opts back out below.
   inProcess: true,
   prefix: 'rig-check-',
@@ -387,4 +388,34 @@ test('a pass recorded on a stage checked out is no pass for the work branch\'s P
   } finally {
     gitMust(dest, 'checkout', '-q', BRANCH)
   }
+})
+
+// One entry is read on every machine, so a command is POSIX sh on all of them, Windows
+// included, where `shell: true` would have been cmd (hugoforte/rig#342). An assignment ahead
+// of a command is sh and nothing cmd can start.
+test('a check command runs under sh on every machine, so an entry written the POSIX way passes on Windows too', () => {
+  correct('billing', ['shell=posix && echo "ran-under-$shell"'])
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], SUBPROCESS)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /ran-under-posix/)
+})
+
+// No sh anywhere, and a git rig can run: PATH holds only git's own binary, `<Git>\mingw64\bin`,
+// and git's exec path is reached through a junction outside any Git for Windows, so git works
+// and says it lives nowhere with a sh beside it. Only Windows has a shell to be missing;
+// everywhere else it is /bin/sh.
+const gitCore = process.platform === 'win32' && spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim()
+const gitBin = gitCore && path.resolve(gitCore, '..', '..', 'bin')
+test('with no sh to be found on Windows, a check is refused and not recorded, rather than run under cmd', { skip: !gitBin || !fs.existsSync(path.join(gitBin, 'git.exe')) }, () => {
+  const before = billingBranch().verified
+  const elsewhere = path.join(tmp, 'no-git-for-windows', 'mingw64', 'libexec', 'git-core')
+  fs.mkdirSync(path.dirname(elsewhere), { recursive: true })
+  fs.symlinkSync(path.resolve(gitCore), elsewhere, 'junction')
+  const env = { ...installEnv, GIT_EXEC_PATH: elsewhere }
+  for (const key of Object.keys(env)) if (['PATH', 'MSYSTEM'].includes(key.toUpperCase())) delete env[key]
+  env.PATH = gitBin
+  const r = rig(['check', 'billing', '--work', 't1', '--run'], { ...SUBPROCESS, env })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /check commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to/)
+  assert.deepEqual(billingBranch().verified, before, 'a check that never started is no verdict')
 })

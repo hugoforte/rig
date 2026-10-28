@@ -253,6 +253,12 @@ attaches anything for you.
 `setup` is how a repo is made ready; `check` is how it is verified — its test run, its
 lint, its build. Both are commands, and the catalogue never holds a result.
 
+**Both are POSIX `sh`, on every machine.** One entry is read on Linux, macOS and Windows, so
+write it once, the POSIX way: `./scripts/check.sh`, `cd app && npm test`. On Windows rig runs it
+with the `sh` on PATH, else Git for Windows' `bin\sh.exe`, never cmd and never WSL; with neither,
+it refuses the commands and says so. A `$` inside double quotes is `sh`'s to expand, so a
+`powershell -Command` script goes in single quotes (DESIGN.md decision 216).
+
 ```bash
 rig check                 # what verifies every repo in this work — printed, not run
 rig check billing --run   # run billing's, in its worktree; non-zero if one fails
