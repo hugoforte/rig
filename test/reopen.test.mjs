@@ -11,7 +11,7 @@ import path from 'node:path'
 import { strip } from './harness.mjs'
 import { billingInstall } from './billing-install.mjs'
 
-const { dataRoot, workRoot, rig, gitMust, commitWork, github, setGithub, squashMergeAndDeleteBranch, seedIssue, seedPr, issueNumbered, worktree, record, cleanup } = billingInstall('rig-reopen-')
+const { dataRoot, workRoot, rig, gitMust, commitWork, github, setGithub, squashMergeAndDeleteBranch, seedIssue, seedJiraIssue, jiraIssue, seedPr, issueNumbered, worktree, record, cleanup } = billingInstall('rig-reopen-')
 
 after(cleanup)
 
@@ -115,10 +115,52 @@ test('reopen refuses a work whose PR merged, and changes nothing', () => {
   assert.deepEqual(record('landed'), was)
 })
 
+test('restore on a work that landed does not offer the reopen it would refuse', () => {
+  assert.doesNotMatch(rig(['restore', 'landed']).out, /rig reopen/)
+})
+
+test('reopen asks GitHub for a merged PR the close could not record, and refuses on it', () => {
+  assert.equal(rig(['new', 'unrecorded', '--title', 'Unrecorded work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'unrecorded']).code, 0)
+  const dest = worktree('unrecorded', 'billing')
+  commitWork(dest, 'unrecorded work')
+  gitMust(dest, 'push', '-q', 'origin', 'feat/unrecorded-work')
+  squashMergeAndDeleteBranch('billing', 'feat/unrecorded-work', 23)
+  seedPr({ branch: 'feat/unrecorded-work', number: 23, state: 'MERGED', url: 'https://github.com/acme/billing/pull/23', mergedAt: '2026-09-20T00:00:00Z' })
+  assert.equal(rig(['close', '--work', 'unrecorded']).code, 0)
+  // What a close leaves when GitHub would not give the PR's timing: the work landed, and its
+  // record holds no PR, with a warning to `rig backfill`.
+  const file = path.join(dataRoot, 'work', 'unrecorded', 'work.json')
+  const w = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete w.repos[0].branches[0].pr
+  fs.writeFileSync(file, JSON.stringify(w, null, 2))
+
+  const r = rig(['reopen', 'unrecorded'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /unrecorded landed — billing's PR #23 merged/)
+})
+
+test('a work abandoned with every PR merged reopens, since the abandon closed no ticket and deleted no branch', () => {
+  assert.equal(rig(['new', 'misread', '--title', 'Misread work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', 'misread']).code, 0)
+  const dest = worktree('misread', 'billing')
+  commitWork(dest, 'misread work')
+  gitMust(dest, 'push', '-q', 'origin', 'feat/misread-work')
+  seedPr({ branch: 'feat/misread-work', number: 24, state: 'MERGED', url: 'https://github.com/acme/billing/pull/24', mergedAt: '2026-09-20T00:00:00Z' })
+  assert.equal(rig(['close', '--abandoned', '--work', 'misread']).code, 0)
+  assert.equal(record('misread').repos[0].branches[0].pr.number, 24, 'the abandon recorded the merged PR')
+
+  const r = rig(['reopen', 'misread'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(record('misread').closedAt, undefined)
+})
+
 // ------------------------------------------------- a forced close
 
 test('reopen moves a forced close\'s mark into the history, so the next close is not called forced', () => {
+  seedIssue(13, 'forced past by mistake')
   assert.equal(rig(['new', 'forced', '--title', 'Forced work', '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['ticket', 'acme/billing#13', '--work', 'forced']).code, 0)
   assert.equal(rig(['attach', 'billing', '--work', 'forced']).code, 0)
   commitWork(worktree('forced', 'billing'), 'never pushed')
   assert.equal(rig(['close', '--force', '--work', 'forced']).code, 0)
@@ -132,6 +174,13 @@ test('reopen moves a forced close\'s mark into the history, so the next close is
 
 test('reopen puts back a branch that was never pushed, from the mirror', () => {
   assert.equal(gitMust(worktree('forced', 'billing'), 'log', '-1', '--format=%s'), 'never pushed')
+})
+
+test('the next close of a reopened forced work does not tell the ticket it was forced', () => {
+  const dest = worktree('forced', 'billing')
+  gitMust(dest, 'reset', '-q', '--hard', 'origin/main')
+  assert.equal(rig(['close', '--work', 'forced']).code, 0)
+  assert.match(issueNumbered(13).comments.at(-1), /^Closed by `rig close`\. /)
 })
 
 // ------------------------------------------------- attempts the close ended
@@ -154,6 +203,23 @@ test('a set dropped for its own reason stays dropped', () => {
   assert.equal(rig(['close', '--abandoned', '--work', 'paused']).code, 0)
   assert.equal(rig(['reopen', 'paused']).code, 0)
   assert.equal(record('paused').attempts[0].reason, 'neither was right')
+})
+
+// ------------------------------------------------- tickets
+
+test('a ticket the work and a stage both hold is told once, and a Jira one is told to move it back', () => {
+  seedIssue(14, 'held twice')
+  seedJiraIssue('PROJ-7', 'held in Jira')
+  assert.equal(rig(['new', 'told', '--title', 'Told work', '--type', 'chore', '--no-ticket']).code, 0)
+  assert.equal(rig(['ticket', 'acme/billing#14', '--work', 'told']).code, 0)
+  assert.equal(rig(['ticket', 'PROJ-7', '--work', 'told']).code, 0)
+  assert.equal(rig(['stage', 'feat/told-one', '--delivers', 'a slice', '--key', 'acme/billing#14', '--work', 'told']).code, 0)
+  assert.equal(rig(['close', '--abandoned', '--work', 'told']).code, 0)
+  const before = issueNumbered(14).comments.length
+
+  assert.equal(rig(['reopen', 'told']).code, 0)
+  const jira = jiraIssue('PROJ-7').comments.at(-1)
+  assert.deepEqual([issueNumbered(14).comments.length - before, /move this one yourself/.test(jira)], [1, true])
 })
 
 // ------------------------------------------------- a work with nothing attached

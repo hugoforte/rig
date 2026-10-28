@@ -416,7 +416,7 @@ rig init --data-repo me/rig-data --name personal   # add one
 ```
 
 Which root a command reads is the first of these that answers: `--data <name>`,
-`RIG_DATA_ROOT`, **the work it is about** (named by `--work` or `rig restore <id>`, else the
+`RIG_DATA_ROOT`, **the work it is about** (named by `--work`, `rig restore <id>` or `rig reopen <id>`, else the
 work folder it runs in), **the repo it is about** (named by `--repos`, then a data root's own
 checkout, then the repo checkout it runs in), then `current`. The middle two are the ones that
 matter: the root that holds a work's record is the root for that work, and a repo's catalogue entry — drafted by `rig attach` the
@@ -639,7 +639,7 @@ The record is portable and the work root is not: a second machine that clones th
 
 **A restore is not an attach, and writes nothing down.** `work.json` is byte-identical afterwards and nothing is committed. **It never recreates a branch**: one that the remote and the mirror have both lost — never pushed, or deleted with its closed PR — is named with its PR's state and left alone. Branches stacked on top that the record does not know are named in order; `rig stage <branch>` records them, and `--tip` checks out the top of the stack when it is one line. rig never picks between the branches of a fork.
 
-**A close on one machine leaves the folder on the others.** `rig close` tears down the machine it runs on and stamps `closedAt` into the record, and that is all the other machines hear. `rig doctor` names a closed work whose folder is still here; `rig tidy` clears every one, and `rig close` on such a work clears that one, which `rig next` offers when it is asked about one. Only this machine's copy goes — the worktrees, the folder and the mirror's copies of branches that landed — and nothing leaves the machine: no record change, no ticket comment, no remote branch deleted. Work that may exist only here — uncommitted changes, commits no branch or remote holds, and files in the work folder that are not one of its repos — refuses the close and makes `tidy` skip that work and name it; `tidy` never forces, `rig close --force` does. Doctor reports and never clears, so it stays the command you can always run. A closed record is no leftover while another data root holds an open record of the same id: the folder is that work's, and doctor names the two copies instead.
+**A close on one machine leaves the folder on the others.** `rig close` tears down the machine it runs on and stamps `closedAt` into the record, and that is all the other machines hear, until a `rig reopen` takes it out again and the folder still here is the reopened work's. `rig doctor` names a closed work whose folder is still here; `rig tidy` clears every one, and `rig close` on such a work clears that one, which `rig next` offers when it is asked about one. Only this machine's copy goes — the worktrees, the folder and the mirror's copies of branches that landed — and nothing leaves the machine: no record change, no ticket comment, no remote branch deleted. Work that may exist only here — uncommitted changes, commits no branch or remote holds, and files in the work folder that are not one of its repos — refuses the close and makes `tidy` skip that work and name it; `tidy` never forces, `rig close --force` does. Doctor reports and never clears, so it stays the command you can always run. A closed record is no leftover while another data root holds an open record of the same id: the folder is that work's, and doctor names the two copies instead.
 
 A handoff is addressed the same way. When a work has a `handoff.md`, `rig status` names it on the data root's remote, where the next machine can read it, and gives this machine's path only when there is no remote. The `rig-handoff` skill's continue prompt is that URL, `rig restore <id>` and the work id: nothing in it belongs to the machine that wrote it. Before it writes the handoff, the skill pushes the work's branches and checks that each landed.
 
@@ -856,8 +856,9 @@ overridden.
 ticket. It puts the record back to open, keeping what the close recorded in `reopened`, puts the
 worktrees back the way `rig restore` does, reopens a set of attempts the close dropped, and tells
 every ticket the work and its stages hold that the work is open again. It reopens no ticket and no
-pull request. A work whose every PR is recorded merged is refused, because its close closed its
-tickets and deleted its branches. `rig next` never offers it: only the person who knows the close
+pull request. A work that landed — every PR merged, and closed neither forced nor abandoned — is
+refused, because that close closed its tickets and deleted its branches; a PR the close failed to
+record is asked of GitHub. Another data root holding the work open refuses it too. `rig next` never offers it: only the person who knows the close
 was a mistake can say so (DESIGN.md decision 216).
 
 ## Agent skills

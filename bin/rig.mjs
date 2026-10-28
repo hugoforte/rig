@@ -1616,9 +1616,9 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
 
 // A stage's own tickets, told what became of the slice they were opened for.
 //
-// This is the one moment rig speaks to a tracker, and a stage's ticket is written back here
-// with every other rather than the moment its pull requests merge — one outward-facing act,
-// not a new rule about when rig speaks. A slice that landed closes its ticket; one that did
+// This is the one moment rig speaks to a tracker, bar a `rig reopen` undoing it, and a stage's
+// ticket is written back here with every other rather than the moment its pull requests merge —
+// one outward-facing act, not a new rule about when rig speaks. A slice that landed closes its ticket; one that did
 // not is commented on and left open, because whether the slice is still wanted is not rig's
 // answer any more than an abandoned work's is.
 //
@@ -2622,7 +2622,7 @@ function restoreAttempts (cfg, work) {
 cmds.restore = ({ flags, positional }) => {
   const cfg = config()
   const work = loadWork(cfg, findWorkId(cfg, positional[0] || flags.work))
-  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore (\`rig reopen ${work.id}\` if that was a mistake)`)
+  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore${landedPrs(work) ? '' : ` (\`rig reopen ${work.id}\` if that was a mistake)`}`)
   if (!work.repos.length) die(`${work.id} has no repos attached — there is nothing to restore`)
   restoreFolder(cfg, work, { tip: !!flags.tip, setup: !!flags.setup })
 }
@@ -2656,8 +2656,8 @@ function restoreFolder (cfg, work, { tip = false, setup = false } = {}) {
 
 // `from` becomes `to` in the record, in its place, or goes when there is no `to`. Wherever it
 // is held: the work's own tickets and every stage's, because an issue that moved has a new
-// number whichever list named it. Never the tracker: rig speaks to one only at `rig close`,
-// and a ticket the record stops naming is told nothing.
+// number whichever list named it. Never the tracker: rig speaks to one only at `rig close`
+// and at a `rig reopen` undoing one, and a ticket the record stops naming is told nothing.
 function correctTicket (cfg, work, from, to) {
   const held = [...new Set([work.tickets, ...work.stages.map(s => s.tickets || [])].flat())]
   if (!held.includes(from)) die(`${from} is not recorded on ${work.id} — it has ${held.join(', ') || 'no tickets'}`)
@@ -5501,6 +5501,20 @@ function closeHere (cfg, work, flags) {
   ok(`cleared this machine's copy of ${work.id} — it was ${stoppedOn(work)}, and its record is unchanged`)
 }
 
+// The work's PRs that landed, one `{ repo, number }` a repo, when `reopen` refuses a closed work
+// because it landed, else null. Only a close neither forced nor abandoned closes the tickets and
+// deletes the branches, and it does that only once every PR merged; an abandoned or forced
+// close of a work whose PRs all merged touched neither, and reopens. A stored PR is a merged
+// one's terminal facts (decision 60). `ask` answers for a repo the record holds none for.
+function landedPrs (work, ask = () => null) {
+  if (work.abandonedAt || work.forcedAt || !work.repos.length) return null
+  const prs = work.repos.map(r => {
+    const number = workBranch(r, work)?.pr?.number ?? ask(r)
+    return number ? { repo: r.repo, number } : null
+  })
+  return prs.every(Boolean) ? prs : null
+}
+
 // A close or an abandon undone, for one made by mistake (DESIGN.md decision 216): the record
 // back to open, with what the close recorded kept in `reopened`; the folder rebuilt the way
 // `restore` rebuilds one; and every ticket told. A work that landed is refused, since its close
@@ -5510,12 +5524,23 @@ cmds.reopen = ({ flags, positional }) => {
   const work = loadWork(cfg, findWorkId(cfg, positional[0] || flags.work))
   const id = work.id
   if (!work.closedAt) die(`${id} is open — there is nothing to reopen`)
-  // A stored PR is a merged one's terminal facts (decision 60). Some repos merged and some not
-  // is a work with something left to finish, which is what a reopen is for.
-  const merged = work.repos.filter(r => workBranch(r, work)?.pr)
-  if (merged.length && merged.length === work.repos.length) {
-    die(`${id} landed — ${merged.map(r => `${r.repo}'s PR #${workBranch(r, work).pr.number}`).join(', ')} merged; a new work on its ticket is the way on`)
+  // Copied into `reopened`, whose shape a record must have to be read at all.
+  if (typeof work.closedAt !== 'string' || Number.isNaN(Date.parse(work.closedAt))) {
+    die(`${id}: \`closedAt\` is ${JSON.stringify(work.closedAt)}, which is not a date — correct the record, then reopen it`)
   }
+  // This copy is closed, so an open holder is another root's: the copy a move left behind
+  // (decision 188), which reopening would make a second open record of one work.
+  const open = rootHoldingWork(where().roots, id).holders.find(h => h.open)
+  if (open) die(`data root "${open.name}" holds ${id} open already — this closed copy is the one a move left behind`)
+  // A close can land a work and still fail to record a PR, warning `rig backfill`; GitHub is
+  // asked for that repo's, and a GitHub that will not say refuses rather than guesses.
+  const landed = landedPrs(work, r => {
+    let pr = null
+    const error = trackerFailure(() => { pr = github().prForBranch(r.org, r.repo, work.branch) })
+    if (error) die(`GitHub would not say whether ${r.repo}'s PR merged (${error}), and ${id}'s close may have landed it — run this again once GitHub answers`)
+    return pr?.state === 'MERGED' ? pr.number : null
+  })
+  if (landed) die(`${id} landed — ${landed.map(p => `${p.repo}'s PR #${p.number}`).join(', ')} merged; a new work on its ticket is the way on`)
   const stopped = stoppedOn(work)
   // The close's dates move into the history rather than going: the story a reader wants later
   // includes the mistake. `forcedAt` goes with them, or the next close's ticket comment would
@@ -5551,7 +5576,7 @@ function reopenWriteBack (work, stopped) {
   const body = link => [opening, ...contextDocLines(work.id, link)].join('\n')
   for (const key of keys) {
     let notCommented
-    if (isJiraKey(key)) notCommented = trackerFailure(() => jira().commentIssue(key, body(true)))
+    if (isJiraKey(key)) notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
     else if (isGithubKey(key)) {
       const [repo, n] = key.split('#')
       notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
@@ -6470,7 +6495,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig reopen [<id>] [--setup]     undo a close or an abandon made by mistake: the record back
                                   to open, with the close kept in its history, the worktrees
                                   put back as rig restore would, and each ticket told; refused
-                                  for a work whose every PR merged
+                                  for a work that landed: every PR merged, and the close
+                                  neither forced nor abandoned
   rig tidy [--dry-run]            clear every closed work whose folder is still on this
                                   machine; one with work that exists only here is skipped
                                   and named; --dry-run changes nothing

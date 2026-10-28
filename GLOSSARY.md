@@ -117,7 +117,7 @@ The part of the lifecycle a work is in now: planning, designing, building, revie
 _Avoid_: stage (that is scope), status, step, state
 
 **Abandoned**:
-The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
+The recorded decision to stop a work without finishing it. Terminal, like closed, unless reopened, and distinct from closed: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
 _Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
 
 **Reopened**:

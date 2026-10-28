@@ -522,6 +522,20 @@ test('a work abandoned in the current root and open in another is the open one, 
   assert.equal(doctor.match(/only-here:/g)?.length, 1, 'said once, though two roots list it')
 })
 
+test('reopen refuses the abandoned copy a move left behind while another root holds the work open', (t) => {
+  const record = path.join(dataRoot, 'work', 'only-here', 'work.json')
+  const saved = fs.readFileSync(record, 'utf8')
+  const copy = path.join(second, 'work', 'only-here')
+  t.after(() => { fs.rmSync(copy, { recursive: true, force: true }); fs.writeFileSync(record, saved) })
+  fs.cpSync(path.dirname(record), copy, { recursive: true })
+  const abandoned = JSON.stringify({ ...JSON.parse(saved), closedAt: '2026-10-01T00:00:00Z', abandonedAt: '2026-10-01T00:00:00Z' })
+  fs.writeFileSync(record, abandoned)
+  const r = rig(['reopen', 'only-here', '--data', 'hugoforte'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /data root "personal" holds only-here open already/)
+  assert.equal(fs.readFileSync(record, 'utf8'), abandoned, 'the closed copy is left as it was')
+})
+
 test('a work moved, then closed, is closed in two roots: close says --data, commands ask for it, doctor and tidy name it', (t) => {
   assert.equal(rig(['new', 'moved-twice', '--title', 'Moved, then closed', '--no-ticket']).code, 0)
   const record = path.join(dataRoot, 'work', 'moved-twice', 'work.json')
