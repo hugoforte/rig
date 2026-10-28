@@ -643,7 +643,7 @@ function freshnessEpilogue (command) {
 
 // Commands that write records. The distinction drives the write refusal — an old rig must not
 // write a record format it has never seen — and the sync below.
-const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'plan', 'save', 'note', 'struggle', 'close', 'backfill'])
+const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'reopen', 'plan', 'save', 'note', 'struggle', 'close', 'backfill'])
 // `rig check` prints and writes nothing; `rig check --run` records what passed. `rig attempt`
 // compares and writes nothing; cutting, running, keeping and dropping each write the record.
 const mutates = (name, flags) => MUTATING.has(name) || (name === 'check' && !!flags.run) ||
@@ -829,6 +829,9 @@ function recordShapeProblem (w) {
   if (w.outcome !== undefined && w.outcome !== null &&
     !(isObject(w.outcome) && typeof w.outcome.text === 'string' && typeof w.outcome.at === 'string')) {
     return '`outcome` is not a statement with its date'
+  }
+  if (!isList(w.reopened) || !(w.reopened || []).every(r => isObject(r) && typeof r.at === 'string' && typeof r.closedAt === 'string')) {
+    return '`reopened` is not a list of reopenings, each with its date and the close it undid'
   }
   for (const field of ['stops', 'agentDecided']) {
     // Null is absent, as it is for `outcome`, and is the shape `rig list --json` gives it. The
@@ -1760,13 +1763,13 @@ function regenerate (cfg, work) {
 
 // ------------------------------------------------------ data root commits
 
-// The work a command is about, for the lock's holder: the id `rig new` and `rig restore` are
-// given, `--work`, or the work folder it runs in. Null for a command about no work — `init`,
+// The work a command is about, for the lock's holder: the id `rig new`, `rig restore` and `rig reopen`
+// are given, `--work`, or the work folder it runs in. Null for a command about no work — `init`,
 // which locks only its commit, or `backfill` over every work — and for a run whose folder has gone from under it:
 // the holder's work is a label, and no answer to it is worth failing a command for.
 function workInHand () {
   const { flags = {}, positional = [] } = current.args ?? {}
-  if (['new', 'restore'].includes(current.command) && positional[0]) return positional[0]
+  if (['new', 'restore', 'reopen'].includes(current.command) && positional[0]) return positional[0]
   if (typeof flags.work === 'string') return flags.work
   try { return findWorkId() } catch { return null }
 }
@@ -2619,8 +2622,13 @@ function restoreAttempts (cfg, work) {
 cmds.restore = ({ flags, positional }) => {
   const cfg = config()
   const work = loadWork(cfg, findWorkId(cfg, positional[0] || flags.work))
-  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore`)
+  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore (\`rig reopen ${work.id}\` if that was a mistake)`)
   if (!work.repos.length) die(`${work.id} has no repos attached — there is nothing to restore`)
+  restoreFolder(cfg, work, { tip: !!flags.tip, setup: !!flags.setup })
+}
+
+// The folder `restore` rebuilds, and `reopen` after it has put the record back to open.
+function restoreFolder (cfg, work, { tip = false, setup = false } = {}) {
   const missing = work.repos.filter(r => !exists(r.path))
   for (const r of work.repos) if (!missing.includes(r)) step(`${r.repo} is already here`)
   // One repo git refuses — a diverged branch, a clone that failed — is said and the rest are
@@ -2628,7 +2636,7 @@ cmds.restore = ({ flags, positional }) => {
   // refusal happened; a branch that is simply gone is a finding, reported and not a failure.
   const restored = missing.filter(r => {
     try {
-      return restoreRepo(cfg, work, r, { tip: !!flags.tip, setup: !!flags.setup })
+      return restoreRepo(cfg, work, r, { tip, setup })
     } catch (e) {
       if (!(e instanceof RigError)) throw e
       warn(`${r.repo}: ${e.message}`)
@@ -3052,7 +3060,7 @@ function repoState (cfg, entry, branch) {
 // The one ordering rule for works: least recently touched first, so the last line of
 // `rig list` is the work in hand. Every timestamp is already in the record — nothing is
 // stored for this, and neither git nor GitHub is asked to sort.
-const activityAt = work => [work.createdAt, work.closedAt, ...(work.repos || []).map(r => r.attachedAt)]
+const activityAt = work => [work.createdAt, work.closedAt, ...(work.reopened || []).map(r => r.at), ...(work.repos || []).map(r => r.attachedAt)]
   .filter(Boolean).sort().pop() || ''
 
 function relativeAge (iso) {
@@ -3165,6 +3173,7 @@ const workJson = (cfg, work, live) => ({
   agentDecided: work.agentDecided || [],
   abandonedAt: work.abandonedAt || null,
   closedAt: work.closedAt || null,
+  reopened: work.reopened || [],
   activityAt: activityAt(work) || null,
   repos: (work.repos || []).map(r => repoEntryJson(cfg, r, work.branch, live)),
 })
@@ -3598,6 +3607,8 @@ cmds.status = ({ flags }) => {
   say(`phase ${phaseLabel(phaseOf(work, verdict.repos))}`)
   for (const { gate, at } of gatesOf(work)) say(`  ${gate} ${at.slice(0, 10)}${agentDecided(work, gate) ? ' (agent decided)' : ''}`)
   if (work.agentDecided?.includes('repos')) say('  repos chosen (agent decided)')
+  // Not a gate: the record of a close undone, said with what the close had been.
+  for (const r of work.reopened || []) say(`  reopened ${String(r.at).slice(0, 10)} (${r.abandonedAt ? 'abandoned' : 'closed'} ${String(r.closedAt).slice(0, 10)})`)
   // Said whether or not the work chose, since absent is both and silence would say neither.
   say(`stops ${stopsLabel(work.stops ?? STOPPABLE)}`)
   if (work.outcome) say(`outcome ${work.outcome.text} ${C.dim(`(${work.outcome.at.slice(0, 10)})`)}`)
@@ -5286,7 +5297,7 @@ cmds.close = ({ flags }) => {
   // stay in the mirror, as a forced close's do.
   for (const set of openSets(work)) {
     set.droppedAt = new Date().toISOString()
-    set.reason = abandoned ? 'the work was abandoned' : 'the work was closed past it with --force'
+    set.reason = abandoned ? DROPPED_BY_CLOSE.abandoned : DROPPED_BY_CLOSE.forced
     delete set.passes
   }
   // A work that landed has no use for its branches, and every one it leaves in the mirror is
@@ -5424,6 +5435,10 @@ const stoppedOn = work => `${work.abandonedAt ? 'abandoned' : 'closed'} on ${Str
 // What a removed worktree takes with it, whatever its PR says.
 const IN_TREE_ONLY = new Set(['dirty', 'unbranched', 'stray'])
 
+// The reasons a close gives the sets of attempts it ends, and the only ones `reopen` reads as
+// the close's doing rather than a decision someone made about the set.
+const DROPPED_BY_CLOSE = { abandoned: 'the work was abandoned', forced: 'the work was closed past it with --force' }
+
 // What would lose something that exists only on this machine. A first close also refuses over
 // an open pull request and an unknown PR state, and those are questions about the work; a
 // leftover's work is settled, and its pull requests are on GitHub, not on this disk.
@@ -5484,6 +5499,66 @@ function closeHere (cfg, work, flags) {
     return
   }
   ok(`cleared this machine's copy of ${work.id} — it was ${stoppedOn(work)}, and its record is unchanged`)
+}
+
+// A close or an abandon undone, for one made by mistake (DESIGN.md decision 216): the record
+// back to open, with what the close recorded kept in `reopened`; the folder rebuilt the way
+// `restore` rebuilds one; and every ticket told. A work that landed is refused, since its close
+// closed the tickets and deleted the branches, so there is nothing left to reopen into.
+cmds.reopen = ({ flags, positional }) => {
+  const cfg = config()
+  const work = loadWork(cfg, findWorkId(cfg, positional[0] || flags.work))
+  const id = work.id
+  if (!work.closedAt) die(`${id} is open — there is nothing to reopen`)
+  // A stored PR is a merged one's terminal facts (decision 60). Some repos merged and some not
+  // is a work with something left to finish, which is what a reopen is for.
+  const merged = work.repos.filter(r => workBranch(r, work)?.pr)
+  if (merged.length && merged.length === work.repos.length) {
+    die(`${id} landed — ${merged.map(r => `${r.repo}'s PR #${workBranch(r, work).pr.number}`).join(', ')} merged; a new work on its ticket is the way on`)
+  }
+  const stopped = stoppedOn(work)
+  // The close's dates move into the history rather than going: the story a reader wants later
+  // includes the mistake. `forcedAt` goes with them, or the next close's ticket comment would
+  // say a close was forced that was not.
+  work.reopened = [...(work.reopened || []), {
+    at: new Date().toISOString(),
+    closedAt: work.closedAt,
+    ...(work.abandonedAt ? { abandonedAt: work.abandonedAt } : {}),
+    ...(work.forcedAt ? { forcedAt: work.forcedAt } : {}),
+  }]
+  delete work.closedAt
+  delete work.abandonedAt
+  delete work.forcedAt
+  // A set the close ended opens again; a set someone ended keeps the decision.
+  for (const set of (work.attempts || []).filter(s => s.droppedAt && Object.values(DROPPED_BY_CLOSE).includes(s.reason))) {
+    delete set.droppedAt
+    delete set.reason
+  }
+  commitAs(id)
+  if (work.repos.length) restoreFolder(cfg, work, { setup: !!flags.setup })
+  else fs.mkdirSync(workDir(cfg, id), { recursive: true })
+  saveWork(cfg, work)
+  reopenWriteBack(work, stopped)
+  ok(`reopened ${id} — it was ${stopped}`)
+}
+
+// Every ticket the work and its stages hold, told once that the close is undone. A comment and
+// nothing more: rig closed none of them for a work it reopens, and a stage's ticket closed
+// because its slice landed is still right to be closed.
+function reopenWriteBack (work, stopped) {
+  const keys = [...new Set([work.tickets || [], ...work.stages.map(s => s.tickets || [])].flat())]
+  const opening = `Reopened — \`rig reopen\` ran. The work was ${stopped} and is open again.`
+  const body = link => [opening, ...contextDocLines(work.id, link)].join('\n')
+  for (const key of keys) {
+    let notCommented
+    if (isJiraKey(key)) notCommented = trackerFailure(() => jira().commentIssue(key, body(true)))
+    else if (isGithubKey(key)) {
+      const [repo, n] = key.split('#')
+      notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
+    } else { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
+    if (notCommented) warn(`${key}: could not comment (${notCommented})`)
+    else step(`commented on ${key}`)
+  }
 }
 
 // Every leftover on this machine, cleared the way `rig close` clears one. Over every data root,
@@ -6392,6 +6467,10 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    PRs are left alone
        on a work already closed: clears this machine's copy and
                                    nothing else — no record, ticket or remote is touched
+  rig reopen [<id>] [--setup]     undo a close or an abandon made by mistake: the record back
+                                  to open, with the close kept in its history, the worktrees
+                                  put back as rig restore would, and each ticket told; refused
+                                  for a work whose every PR merged
   rig tidy [--dry-run]            clear every closed work whose folder is still on this
                                   machine; one with work that exists only here is skipped
                                   and named; --dry-run changes nothing
@@ -6527,7 +6606,7 @@ function invoke (argv) {
     if (args.flags.data === true) die('--data wants a data root name — `rig use` lists them')
     if (typeof args.flags.data === 'string') current.requestedData = args.flags.data
     // The work a command names is in the root that holds it, whatever folder it runs in.
-    const named = cmdName === 'restore' ? args.positional[0] || args.flags.work : args.flags.work
+    const named = ['restore', 'reopen'].includes(cmdName) ? args.positional[0] || args.flags.work : args.flags.work
     if (typeof named === 'string') current.requestedWork = named
     // `rig new --repos a,b` is the one command that names repos before there is a work folder
     // to anchor it, and it is the command whose choice of root matters most — it is the one

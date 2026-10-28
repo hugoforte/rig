@@ -333,7 +333,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `restore`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
+(`new`, `ticket`, `attach`, `detach`, `restore`, `reopen`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:
@@ -851,6 +851,14 @@ is now said the same way, with the reason in the comment and `--force` named in 
 differs is the record. `--abandoned` says the work ended unfinished, and the phase reads
 `abandoned`; a forced close reads `closed`, with `forcedAt` the only sign anything was
 overridden.
+
+**A close made by mistake is undone with `rig reopen <id>`**, never by a new work on the same
+ticket. It puts the record back to open, keeping what the close recorded in `reopened`, puts the
+worktrees back the way `rig restore` does, reopens a set of attempts the close dropped, and tells
+every ticket the work and its stages hold that the work is open again. It reopens no ticket and no
+pull request. A work whose every PR is recorded merged is refused, because its close closed its
+tickets and deleted its branches. `rig next` never offers it: only the person who knows the close
+was a mistake can say so (DESIGN.md decision 216).
 
 ## Agent skills
 

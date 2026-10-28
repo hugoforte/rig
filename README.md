@@ -185,6 +185,8 @@ The other way round, a work closed on one machine leaves its folder on every oth
 
 **Stopping a work you did not finish.** `rig close --abandoned` is the honest exit. It runs the same teardown and drops only the checks that ask whether the work landed — an unmerged PR and unpushed commits are what being abandoned looks like — while uncommitted changes, and anything in the work folder rig did not put there, still refuse, because unsaved work is the one thing a teardown can destroy. The ticket is told and left open, and open PRs are named and left alone.
 
+**Closed or abandoned by mistake.** `rig reopen <id>` undoes the close: the record is open again, with the close kept in its history, the worktrees come back the way `rig restore` puts them back, and every ticket is told the work is open again. A work whose every PR merged is refused, since there is nothing left to reopen into; start a new work on the ticket instead.
+
 ### Tickets
 
 Point an org at its tracker and `rig new` insists on a ticket decision: `--key PROJ-42` or `--key owner/repo#7` records an existing one, `--ticket` creates one (`--dry-run` previews it), `--no-ticket` records that you declined. Jira briefs are fetched for you; GitHub briefs arrive on stdin.

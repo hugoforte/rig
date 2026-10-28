@@ -120,6 +120,10 @@ _Avoid_: stage (that is scope), status, step, state
 The recorded decision to stop a work without finishing it. Terminal, like closed, and distinct from it: closed means the work landed. Recorded as a date, and the teardown is the same one — minus the checks that ask whether it landed, and keeping the one that protects uncommitted changes.
 _Avoid_: cancelled, dropped (that is a stage withdrawn from the plan), dead, stale
 
+**Reopened**:
+A close or an abandon undone because it was a mistake. The work is open again and its phase is derived as before; the close it undid is kept beside the date of the reopen, so the record still says what happened. Not a gate.
+_Avoid_: restored (that is a folder rebuilt from the record), revived, unclosed
+
 **Outcome**:
 What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
 _Avoid_: summary, result, release note
