@@ -1100,8 +1100,8 @@ const catalogEntryFor = (catalog, r) =>
 function draftEntries (work) {
   const attached = work?.repos || []
   if (!attached.length) return []
-  const draft = new Set(loadCatalog().filter(e => e.draft).map(e => e.repo.toLowerCase()))
-  return draft.size ? attached.filter(r => draft.has(r.repo.toLowerCase())).map(r => r.repo) : []
+  const drafts = loadCatalog().filter(e => e.draft)
+  return drafts.length ? attached.filter(r => catalogEntryFor(drafts, r)).map(r => r.repo) : []
 }
 
 // Which org a repo belongs to: the catalogue first, then GitHub, org by org. The language
@@ -1130,13 +1130,9 @@ function resolveOrg (cfg, { owner, name: repo }) {
 // its identity, its tracker and its catalogue folder (DESIGN.md decision 216).
 function resolveInOrg (cfg, owner, repo) {
   const named = `${owner}/${repo}`
-  const org = cfg.orgs.find(o => o.toLowerCase() === owner.toLowerCase())
-  if (!org) {
-    die(`"${named}": ${owner} is not one of this data root's orgs (${cfg.orgs.join(', ') || 'none configured'}) — ` +
-      'add it to `orgs` in rig.json, or name a repo in one of them')
-  }
+  const org = orgNamed(cfg, owner, named)
   const cat = catalogEntryFor(loadCatalog(), { org, repo })
-  if (cat) return { org: cat.org, repo: cat.repo }
+  if (cat) return { org, repo: cat.repo }
   let found = null
   const error = trackerFailure(() => { found = github().repo(org, repo) })
   if (error) {
@@ -1147,12 +1143,27 @@ function resolveInOrg (cfg, owner, repo) {
   return { org, repo: found.name, language: found.language }
 }
 
-// A repo as `rig attach` and `rig new --repos` take it: a bare name, or `owner/repo`.
+// The data root's org an `owner/repo`'s owner names, spelled as configured, or a refusal.
+function orgNamed (cfg, owner, named) {
+  const org = cfg.orgs.find(o => o.toLowerCase() === owner.toLowerCase())
+  if (org) return org
+  die(`"${named}": ${owner} is not one of this data root's orgs (${cfg.orgs.join(', ') || 'none configured'}) — ` +
+    'add it to `orgs` in rig.json, or name a repo in one of them')
+}
+
+// A repo as `rig attach`, `rig new --repos`, `rig detach` and `rig setup` take it: a bare
+// name, or `owner/repo`.
 function repoArgument (arg) {
   const parts = String(arg).split('/')
   if (parts.length === 1 && parts[0]) return { owner: null, name: parts[0] }
   if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], name: parts[1] }
   die(`"${arg}" is neither a repo name nor owner/repo`)
+}
+
+// Whether an argument names a repo of the work: by name, and by org as well when it says one.
+function namesRepo (arg, r) {
+  const { owner, name } = repoArgument(arg)
+  return name.toLowerCase() === r.repo.toLowerCase() && (!owner || owner.toLowerCase() === r.org?.toLowerCase())
 }
 
 function draftCatalogEntry (org, repo, stack) {
@@ -2279,6 +2290,13 @@ cmds.new = ({ flags, positional }) => {
   const stops = stopsFlag(flags)
   const byAgent = byAgentFlag(flags)
   if (byAgent && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
+  // What can be checked of the repos without GitHub is checked before the record exists, for
+  // the reason --parent is.
+  const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  for (const r of repos) {
+    const { owner } = repoArgument(r)
+    if (owner) orgNamed(cfg, owner, r)
+  }
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // A parent is this one ticket's, never a field, however Jira or rig.json spells it
   // (DESIGN.md decision 146).
@@ -2386,7 +2404,6 @@ cmds.new = ({ flags, positional }) => {
   say(`  tickets  ${ticketsLabel(work)}`)
   say('')
 
-  const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
     for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent })
   } else {
@@ -2582,7 +2599,7 @@ function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
     const on = tipBranch || top
     say(`  ${above.fork.length} open PRs land on ${on} and are not in the record: ${above.fork.map(pr).join(', ')} — rig will not pick between them`)
   }
-  offerSetup(findCatalog(repo), repo, dest, setup)
+  offerSetup(catalogEntryFor(loadCatalog(), entry), repo, dest, setup)
   return true
 }
 
@@ -3030,7 +3047,7 @@ cmds.detach = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const id = work.id
   const name = positional[0] || die('usage: rig detach <repo>')
-  const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
+  const entry = work.repos.find(r => namesRepo(name, r))
   if (!entry) die(`${name} is not attached to ${id}`)
   // An attempt belongs to its repo, and a repo detached would leave it nobody's: asked of the
   // record, not the folders or the mirror, since the attempts may be on another machine.
@@ -3719,11 +3736,12 @@ cmds.setup = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const targets = positional.length
-    ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
+    ? work.repos.filter(r => positional.some(p => namesRepo(p, r)))
     : work.repos
   if (!targets.length) die('no matching attached repos')
+  const catalog = loadCatalog()
   for (const r of targets) {
-    const cat = findCatalog(r.repo)
+    const cat = catalogEntryFor(catalog, r)
     if (!cat?.setup?.length) { warn(`${r.repo}: no setup commands in the catalogue`); continue }
     runCatalogCommands(r.path, cat.setup, 'setup')
   }
@@ -6049,8 +6067,9 @@ function doctorWork (cfg, id, root, roots) {
   if (!exists(wd)) return { ...out, folderMissing: true }
   // As `rig close` reads them, so the two never disagree about a folder.
   out.strays = folderBlockers(cfg, work).filter(b => b.kind === 'stray').map(b => b.repo)
+  let catalog = null
   out.repos = work.repos.map(r => {
-    const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
+    const cat = cfg.secrets?.[r.repo] === undefined ? catalogEntryFor(catalog ??= loadCatalog(root), r) : null
     return {
       repo: r.repo,
       worktreeMissing: !exists(r.path),
@@ -6339,7 +6358,7 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                   tracker is not told
   rig attach <repo> [--setup]     add a repo to the current work: a name, looked up in each
                                   org in turn, or owner/repo, in that org alone
-       [--by-agent]              the agent chose it, where the repo set is not a stop
+       [--by-agent]                the agent chose it, where the repo set is not a stop
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each
                                   on the top of its stack; a branch the remote and the
