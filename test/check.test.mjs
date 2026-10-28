@@ -421,16 +421,16 @@ test('with no sh on PATH on Windows, a check runs under the sh of the Git for Wi
   assert.match(r.out, /ran-under-posix/)
 })
 
-// No sh anywhere, and a git rig can run: PATH holds only git's own binary, `<Git>\mingw64\bin`,
-// and git's exec path is reached through a junction outside any Git for Windows, so git works
+// No sh anywhere, and a git rig can run: PATH holds only the git binary in git's exec path,
+// which has no sh beside it, and that exec path is reached through a junction outside any Git for Windows, so git works
 // and says it lives nowhere with a sh beside it.
-test('with no sh to be found on Windows, a check is refused and not recorded, rather than run under cmd', noGitForWindows, () => {
+test('with no sh to be found on Windows, a check is refused and not recorded, rather than run under cmd', { skip: noGitForWindows.skip || !fs.existsSync(path.join(gitCore, 'git.exe')) }, () => {
   const before = billingBranch().verified
   assert.ok(before, 'the run before this one recorded a pass, which a refused run must leave alone')
   const elsewhere = path.join(tmp, 'no-git-for-windows', 'mingw64', 'libexec', 'git-core')
   fs.mkdirSync(path.dirname(elsewhere), { recursive: true })
   fs.symlinkSync(path.resolve(gitCore), elsewhere, 'junction')
-  const env = onlyGit(path.join('mingw64', 'bin'), { GIT_EXEC_PATH: elsewhere })
+  const env = onlyGit(path.relative(gitRoot, gitCore), { GIT_EXEC_PATH: elsewhere })
   const r = rig(['check', 'billing', '--work', 't1', '--run'], { ...SUBPROCESS, env })
   assert.equal(r.code, 1, r.out)
   assert.match(r.out, /check commands not run: they are POSIX sh, and there is no sh on PATH nor in the Git for Windows that git belongs to/)
