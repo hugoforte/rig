@@ -1100,15 +1100,16 @@ const catalogEntryFor = (catalog, r) =>
 function draftEntries (work) {
   const attached = work?.repos || []
   if (!attached.length) return []
-  const draft = new Set(loadCatalog().filter(e => e.draft).map(e => e.repo.toLowerCase()))
-  return draft.size ? attached.filter(r => draft.has(r.repo.toLowerCase())).map(r => r.repo) : []
+  const drafts = loadCatalog().filter(e => e.draft)
+  return drafts.length ? attached.filter(r => catalogEntryFor(drafts, r)).map(r => r.repo) : []
 }
 
 // Which org a repo belongs to: the catalogue first, then GitHub, org by org. The language
 // comes along from GitHub for the catalogue stub `rig attach` drafts on first sight. Only "no
 // such repo" moves on to the next org: one GitHub would not answer for may have the repo, and
 // taking a later org's repo of the same name would be a confident wrong answer.
-function resolveOrg (cfg, repo) {
+function resolveOrg (cfg, { owner, name: repo }) {
+  if (owner) return resolveInOrg(cfg, owner, repo)
   const cat = findCatalog(repo)
   if (cat) return { org: cat.org, repo: cat.repo }
   for (const org of cfg.orgs) {
@@ -1121,6 +1122,48 @@ function resolveOrg (cfg, repo) {
     if (found) return { org, repo: found.name, language: found.language }
   }
   die(`cannot resolve "${repo}" in any of: ${cfg.orgs.join(', ')}`)
+}
+
+// A repo the command line named as `owner/repo`. The owner is the org, never a hint: same-named
+// repos in different orgs are normal, and the owner is how the user said which one, so no other
+// org is asked. It must be one of the data root's orgs, because the org is what gives a worktree
+// its identity, its tracker and its catalogue folder (DESIGN.md decision 217).
+function resolveInOrg (cfg, owner, repo) {
+  const named = `${owner}/${repo}`
+  const org = orgNamed(cfg, owner, named)
+  const cat = catalogEntryFor(loadCatalog(), { org, repo })
+  if (cat) return { org, repo: cat.repo }
+  let found = null
+  const error = trackerFailure(() => { found = github().repo(org, repo) })
+  if (error) {
+    die(`cannot resolve "${named}": could not ask GitHub whether ${org}/${repo} exists (${error}) — ` +
+      `authorise gh's token for ${org} (SAML SSO, for one), or catalogue the repo`)
+  }
+  if (!found) die(`cannot resolve "${named}": ${org} has no repo ${repo}`)
+  return { org, repo: found.name, language: found.language }
+}
+
+// The data root's org an `owner/repo`'s owner names, spelled as configured, or a refusal.
+function orgNamed (cfg, owner, named) {
+  const org = cfg.orgs.find(o => o.toLowerCase() === owner.toLowerCase())
+  if (org) return org
+  die(`"${named}": ${owner} is not one of this data root's orgs (${cfg.orgs.join(', ') || 'none configured'}) — ` +
+    'add it to `orgs` in rig.json, or name a repo in one of them')
+}
+
+// A repo as `rig attach`, `rig new --repos`, `rig detach` and `rig setup` take it: a bare
+// name, or `owner/repo`.
+function repoArgument (arg) {
+  const parts = String(arg).split('/')
+  if (parts.length === 1 && parts[0]) return { owner: null, name: parts[0] }
+  if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], name: parts[1] }
+  die(`"${arg}" is neither a repo name nor owner/repo`)
+}
+
+// Whether an argument names a repo of the work: by name, and by org as well when it says one.
+function namesRepo (arg, r) {
+  const { owner, name } = repoArgument(arg)
+  return name.toLowerCase() === r.repo.toLowerCase() && (!owner || owner.toLowerCase() === r.org?.toLowerCase())
 }
 
 function draftCatalogEntry (org, repo, stack) {
@@ -2247,6 +2290,13 @@ cmds.new = ({ flags, positional }) => {
   const stops = stopsFlag(flags)
   const byAgent = byAgentFlag(flags)
   if (byAgent && !flags.repos) die('--by-agent says the agent chose the repo set — pass it with --repos')
+  // What can be checked of the repos without GitHub is checked before the record exists, for
+  // the reason --parent is.
+  const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
+  for (const r of repos) {
+    const { owner } = repoArgument(r)
+    if (owner) orgNamed(cfg, owner, r)
+  }
   const fieldOverrides = (flags.field || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   // A parent is this one ticket's, never a field, however Jira or rig.json spells it
   // (DESIGN.md decision 146).
@@ -2354,7 +2404,6 @@ cmds.new = ({ flags, positional }) => {
   say(`  tickets  ${ticketsLabel(work)}`)
   say('')
 
-  const repos = (flags.repos || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   if (repos.length) {
     for (const r of repos) attachRepo(cfg, work, r, { setup: !!flags.setup, byAgent })
   } else {
@@ -2365,10 +2414,16 @@ cmds.new = ({ flags, positional }) => {
 }
 
 // Attaches to the record it is given — `rig new --repos a,b` passes the one it just built.
-// Answers whether the repo joined the work, which is what decides whether its neighbours are
-// worth naming: a repo already in the record joined it some other day.
+// Answers the repo's name when it joined the work, and false otherwise, which is what decides
+// whether its neighbours are worth naming: a repo already in the record joined it some other day.
 function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {}) {
-  const recorded = work.repos.find(r => r.repo.toLowerCase() === repoName.toLowerCase())
+  const wanted = repoArgument(repoName)
+  const recorded = work.repos.find(r => r.repo.toLowerCase() === wanted.name.toLowerCase())
+  // The worktree folder is the repo's name, so a work holds one repo of a name whatever its org.
+  if (recorded && wanted.owner && recorded.org?.toLowerCase() !== wanted.owner.toLowerCase()) {
+    die(`${work.id} already holds ${recorded.org}/${recorded.repo}, and a work holds one repo of a name — ` +
+      `open a separate work for ${repoName}`)
+  }
   if (recorded) {
     // The record is not the territory: a repo attached on another machine, or whose folder
     // was deleted, is put back rather than declared done (hugoforte/rig#99). Through the
@@ -2390,19 +2445,21 @@ function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {
       `and ${work.id} is in "${here}" — one work cannot span two data roots. ` +
       `Open a separate work there (\`rig new <id> --data ${elsewhere[0]}\`), or move this one.`)
   }
-  const { org, repo, language } = resolveOrg(cfg, repoName)
+  const { org, repo, language } = resolveOrg(cfg, wanted)
   const dest = path.join(workDir(cfg, work.id), repo)
   const { base } = trees(cfg).cut({ org, repo, branch: work.branch, dest })
   prepareWorktree(cfg, org, repo, dest)
 
   // Draft only for a repo the catalogue does not know: a hit means its file exists, or
   // that its frontmatter names a different path — a misconfiguration, not a gap to fill.
-  const known = findCatalog(repo)
+  // Matched by org as well as name, so another org's entry of the same name is not this one's.
+  const entry = () => catalogEntryFor(loadCatalog(), { org, repo })
+  const known = entry()
   if (!known && draftCatalogEntry(org, repo, language)) {
     warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh`)
   }
 
-  const cat = known || findCatalog(repo)
+  const cat = known || entry()
   // The base belongs to the branch it was cut from, not to the repo: a repo carries several
   // branches of one work once it has stages, each landing somewhere different.
   work.repos.push({
@@ -2416,7 +2473,7 @@ function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
   offerSetup(cat, repo, dest, setup)
-  return true
+  return repo
 }
 
 // What a worktree needs beyond its checkout, whether it was just cut or put back: the
@@ -2542,7 +2599,7 @@ function restoreRepo (cfg, work, entry, { tip = false, setup = false } = {}) {
     const on = tipBranch || top
     say(`  ${above.fork.length} open PRs land on ${on} and are not in the record: ${above.fork.map(pr).join(', ')} — rig will not pick between them`)
   }
-  offerSetup(findCatalog(repo), repo, dest, setup)
+  offerSetup(catalogEntryFor(loadCatalog(), entry), repo, dest, setup)
   return true
 }
 
@@ -2698,7 +2755,8 @@ cmds.attach = ({ flags, positional }) => {
   const name = positional[0] || die('usage: rig attach <repo>')
   const byAgent = byAgentFlag(flags)
   commitAs(work.id, name)
-  if (attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent })) offerNeighbours(work, name)
+  const repo = attachRepo(cfg, work, name, { setup: !!flags.setup, byAgent })
+  if (repo) offerNeighbours(work, repo)
 }
 
 // What else this repo travels with, said once, at the moment the repo set is being chosen.
@@ -2989,7 +3047,7 @@ cmds.detach = ({ flags, positional }) => {
   const work = openWork(cfg, flags)
   const id = work.id
   const name = positional[0] || die('usage: rig detach <repo>')
-  const entry = work.repos.find(r => r.repo.toLowerCase() === name.toLowerCase())
+  const entry = work.repos.find(r => namesRepo(name, r))
   if (!entry) die(`${name} is not attached to ${id}`)
   // An attempt belongs to its repo, and a repo detached would leave it nobody's: asked of the
   // record, not the folders or the mirror, since the attempts may be on another machine.
@@ -3680,11 +3738,12 @@ cmds.setup = ({ flags, positional }) => {
   const cfg = config()
   const work = openWork(cfg, flags)
   const targets = positional.length
-    ? work.repos.filter(r => positional.some(p => p.toLowerCase() === r.repo.toLowerCase()))
+    ? work.repos.filter(r => positional.some(p => namesRepo(p, r)))
     : work.repos
   if (!targets.length) die('no matching attached repos')
+  const catalog = loadCatalog()
   for (const r of targets) {
-    const cat = findCatalog(r.repo)
+    const cat = catalogEntryFor(catalog, r)
     if (!cat?.setup?.length) { warn(`${r.repo}: no setup commands in the catalogue`); continue }
     runCatalogCommands(r.path, cat.setup, 'setup')
   }
@@ -6010,8 +6069,9 @@ function doctorWork (cfg, id, root, roots) {
   if (!exists(wd)) return { ...out, folderMissing: true }
   // As `rig close` reads them, so the two never disagree about a folder.
   out.strays = folderBlockers(cfg, work).filter(b => b.kind === 'stray').map(b => b.repo)
+  let catalog = null
   out.repos = work.repos.map(r => {
-    const cat = cfg.secrets?.[r.repo] === undefined ? findCatalog(r.repo, root) : null
+    const cat = cfg.secrets?.[r.repo] === undefined ? catalogEntryFor(catalog ??= loadCatalog(root), r) : null
     return {
       repo: r.repo,
       worktreeMissing: !exists(r.path),
@@ -6298,7 +6358,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
                                    or a stage; the tracker is not told
   rig ticket --remove <key>       take a key off the record, wherever it is held; the
                                   tracker is not told
-  rig attach <repo> [--setup]     add a repo to the current work
+  rig attach <repo> [--setup]     add a repo to the current work: a name, looked up in each
+                                  org in turn, or owner/repo, in that org alone
        [--by-agent]                the agent chose it, where the repo set is not a stop
   rig detach <repo> [--force]     remove a repo from the current work
   rig restore [<id>] [--setup]    put a work's missing worktrees back from its record, each

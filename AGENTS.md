@@ -91,8 +91,10 @@ Then run the repo interview and attach what it selects:
 ```bash
 rig prompt select-repos     # read this and follow it
 rig attach billing
-rig attach orders-web
+rig attach your-org/orders-web   # owner/repo: that org alone, never a same-named repo in another
 ```
+
+A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 217).
 
 ## Stops
 
