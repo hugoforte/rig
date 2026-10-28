@@ -1127,7 +1127,7 @@ function resolveOrg (cfg, { owner, name: repo }) {
 // A repo the command line named as `owner/repo`. The owner is the org, never a hint: same-named
 // repos in different orgs are normal, and the owner is how the user said which one, so no other
 // org is asked. It must be one of the data root's orgs, because the org is what gives a worktree
-// its identity, its tracker and its catalogue folder (DESIGN.md decision 216).
+// its identity, its tracker and its catalogue folder (DESIGN.md decision 217).
 function resolveInOrg (cfg, owner, repo) {
   const named = `${owner}/${repo}`
   const org = orgNamed(cfg, owner, named)
@@ -3718,7 +3718,7 @@ cmds.status = ({ flags }) => {
 }
 
 // The shell a catalogue command runs in: POSIX `sh` on every machine, because one entry is read
-// on all of them (decision 217). Off Windows that is what `shell: true` already starts. On
+// on all of them (decision 218). Off Windows that is what `shell: true` already starts. On
 // Windows `shell: true` is cmd, so rig names a `sh` instead, which Node starts as `sh -c`: the
 // one a spawn finds on PATH, as in Git Bash, else the one in the Git for Windows that rig's own
 // git belongs to, as from PowerShell, where Git's installer puts only `cmd\` on PATH. Git is
@@ -3772,7 +3772,9 @@ function runCatalogCommands (dir, commands, label) {
     // process for its output to reach whoever asked. The environment is still the run's.
     // A command that never started, or was killed before it could exit, is no verdict, so the
     // answer is null rather than a failure: a check run must not clear a pass it never tested.
-    const r = spawnSync(c, { cwd: dir, shell, stdio: 'inherit', env: env() })
+    // bin/relay.mjs stands between the command and rig's streams, so a reader that stops early
+    // costs the output and not the verdict; it starts the command in the shell named here.
+    const r = spawnSync(process.execPath, [path.join(MODULE_ROOT, 'bin', 'relay.mjs'), c, String(shell)], { cwd: dir, stdio: 'inherit', env: env() })
     if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
