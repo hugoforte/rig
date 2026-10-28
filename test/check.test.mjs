@@ -17,9 +17,10 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { makeInstall } from './harness.mjs'
 
-const { tmp, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
+const { tmp, install, env, dataRoot, workRoot, remotesDir, rig, gitMust, cleanup } = makeInstall({
   // Everything but `--run`, which opts back out below.
   inProcess: true,
   prefix: 'rig-check-',
@@ -182,6 +183,24 @@ test('a failed run clears the pass recorded before', () => {
   assert.equal(billingBranch().verified, undefined)
   assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig check t1: cleared billing')
   correct('billing', ['git rev-parse --abbrev-ref HEAD'])
+})
+
+test('a reader that stops early loses the output and nothing else: the pass is recorded', async () => {
+  // `rig check billing --run | head`: the reader goes while the suite is still printing. Closed
+  // here before anything is written, so the check meets the closed pipe on every line it prints.
+  correct('billing', ['node -e "for (let i = 0; i < 2000; i++) process.stdout.write(String(i).padEnd(80))"'])
+  try {
+    const child = spawn(process.execPath, [path.join(install, 'bin', 'rig.mjs'), 'check', 'billing', '--work', 't1', '--run'],
+      { env, cwd: tmp, stdio: ['ignore', 'pipe', 'pipe'] })
+    child.stdout.destroy()
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk })
+    const code = await new Promise(resolve => child.on('close', resolve))
+    assert.equal(code, 0, stderr)
+    assert.equal(billingBranch().verified?.head, gitMust(path.join(workRoot, 't1', 'billing'), 'rev-parse', 'HEAD'), stderr)
+  } finally {
+    correct('billing', ['git rev-parse --abbrev-ref HEAD'])
+  }
 })
 
 test('list --json carries what each branch was verified at', () => {

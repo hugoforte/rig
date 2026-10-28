@@ -3667,7 +3667,9 @@ function runCatalogCommands (dir, commands, label) {
     // process for its output to reach whoever asked. The environment is still the run's.
     // A command that never started, or was killed before it could exit, is no verdict, so the
     // answer is null rather than a failure: a check run must not clear a pass it never tested.
-    const r = spawnSync(c, { cwd: dir, shell: true, stdio: 'inherit', env: env() })
+    // bin/relay.mjs stands between the command and rig's streams, so a reader that stops early
+    // costs the output and not the verdict.
+    const r = spawnSync(process.execPath, [path.join(MODULE_ROOT, 'bin', 'relay.mjs'), c], { cwd: dir, stdio: 'inherit', env: env() })
     if (r.error || r.status === null) { warn(`${label} command did not run: ${c}${r.error ? ` (${r.error.message})` : ''}`); return null }
     if (r.status !== 0) { warn(`${label} command failed: ${c}`); return false }
   }
