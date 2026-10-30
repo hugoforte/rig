@@ -536,7 +536,7 @@ test('reopen refuses the abandoned copy a move left behind while another root ho
   assert.equal(fs.readFileSync(record, 'utf8'), abandoned, 'the closed copy is left as it was')
 })
 
-test('a work moved, then closed, is closed in two roots: close says --data, commands ask for it, doctor and tidy name it', (t) => {
+test('a work moved, then closed, is closed in two roots: commands ask for --data, doctor and tidy name it', (t) => {
   assert.equal(rig(['new', 'moved-twice', '--title', 'Moved, then closed', '--no-ticket']).code, 0)
   const record = path.join(dataRoot, 'work', 'moved-twice', 'work.json')
   fs.cpSync(path.dirname(record), path.join(second, 'work', 'moved-twice'), { recursive: true })
@@ -545,7 +545,6 @@ test('a work moved, then closed, is closed in two roots: close says --data, comm
   t.after(() => fs.rmSync(path.join(workRoot, 'moved-twice'), { recursive: true, force: true }))
   const closed = rig(['close', '--work', 'moved-twice'])
   assert.equal(closed.code, 0, closed.out)
-  assert.match(strip(closed.out), /`rig save --work moved-twice --data personal -m "lessons reviewed" --learned`/)
   const status = rig(['status', '--work', 'moved-twice'])
   assert.equal(status.code, 1, status.out)
   assert.match(strip(status.out), /data roots hugoforte, personal each hold a record of work "moved-twice" — pass --data <name> to say which/)

@@ -448,7 +448,7 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
 
   // What landed and why it was worth doing, asked once everything has landed and the story is
   // still in hand. Above the close offer only because it reads as part of finishing; nothing it
-  // needs goes with the trees, and `rig close` names it again on the way out.
+  // needs goes with the trees, and it can still be recorded after the close.
   if (!work?.outcome && repos.length && merged.length === repos.length) {
     out.push(offer(phase,
       `what changed for someone, and why is that good? — a sentence or two; the ${work?.learnedAt ? 'rig-digest' : 'rig-learn'} skill drafts it`,

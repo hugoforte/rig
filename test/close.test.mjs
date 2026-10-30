@@ -297,33 +297,26 @@ test('an abandoned work keeps its branches, merged PR or not', () => {
   assert.equal(hasBranch(bare('billing'), 'feat/left-standing-work'), true)
 })
 
-test('a work whose lessons were reviewed closes without naming the review', () => {
-  landedWork('reviewed', 45)
-  assert.equal(rig(['save', '--work', 'reviewed', '-m', 'lessons reviewed', '--learned']).code, 0)
-  const r = rig(['close', '--work', 'reviewed'])
+// A close ends the conversation rather than starting another: an agent reads a line of its output
+// as something to offer, so the optional gates are not named there. `rig next` offers them while
+// the work is open, and each can still be recorded after the close.
+test('a landed work whose lessons were never reviewed closes without naming the review', () => {
+  landedWork('unlearned', 45)
+  const r = rig(['close', '--work', 'unlearned'])
   assert.equal(r.code, 0, r.out)
-  assert.doesNotMatch(r.out, /lessons never reviewed/)
+  assert.doesNotMatch(r.out, /lesson|rig-learn|--learned/i)
 })
 
 // ------------------------------------------------- the outcome
 
 // What changed for someone, and why that is good: a statement made once the work has landed,
-// which nothing can derive later. Named on the way out like the lesson review, and recordable
-// after the close for the same reason.
+// which nothing can derive later. Recordable after the close, like the lesson review.
 
-test('a work closing with nothing merged is not asked its outcome', () => {
-  assert.equal(rig(['new', 'unmerged', '--title', 'unmerged work', '--type', 'feat', '--no-ticket']).code, 0)
-  assert.equal(rig(['attach', 'billing', '--work', 'unmerged']).code, 0)
-  const r = rig(['close', '--work', 'unmerged', '--force'])
-  assert.equal(r.code, 0, r.out)
-  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
-})
-
-test('a work closing with no outcome is named, with the command that records one', () => {
+test('a landed work with no outcome closes without asking for one', () => {
   landedWork('untold', 46)
   const r = rig(['close', '--work', 'untold'])
   assert.equal(r.code, 0, r.out)
-  assert.match(strip(r.out), /no outcome recorded — what changed for someone, and why that is good: `rig save --work untold --outcome "…"`/)
+  assert.doesNotMatch(r.out, /outcome/i)
 })
 
 test('the outcome is recorded after the close, with its date', () => {
@@ -392,11 +385,11 @@ test('status names the QA evidence beside the context doc', () => {
   assert.match(strip(rig(['status', '--work', 'told']).out), /^qa .*qa\.md/m)
 })
 
-// The offer read end to end: the docs target comes out of the repo's catalogue entry, and a
-// work closed before the docs were done is told so on its way out, as with the lesson review.
+// The offer read end to end: the docs target comes out of the repo's catalogue entry, and `rig
+// next` offers the edit while the work is open; the close does not, as with the lesson review.
 const billingEntry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
 
-test('a landed work is offered the docs edit from its catalogue entry, and closing without it is named', () => {
+test('a landed work is offered the docs edit from its catalogue entry, and its close does not name it', () => {
   const entry = fs.readFileSync(billingEntry, 'utf8')
   try {
     fs.writeFileSync(billingEntry, entry.replace(/^docs: \[\]$/m, 'docs:\n  - Help centre: https://acme.example/help/billing'))
@@ -404,7 +397,7 @@ test('a landed work is offered the docs edit from its catalogue entry, and closi
     assert.match(strip(rig(['next', '--work', 'docsy']).out), /the rig-docs skill drafts the edit \(billing: `https:\/\/acme\.example\/help\/billing`\)/)
     const r = rig(['close', '--work', 'docsy'])
     assert.equal(r.code, 0, r.out)
-    assert.match(strip(r.out), /user docs never updated — the rig-docs skill, then `rig save --work docsy -m "user docs updated" --documented`/)
+    assert.doesNotMatch(r.out, /user docs|rig-docs|--documented/i)
   } finally {
     fs.writeFileSync(billingEntry, entry)
   }
@@ -479,8 +472,6 @@ test('abandoning drops the did-it-land checks that would refuse a close', () => 
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /unfinished business/)
   assert.match(r.out, /abandoned given-up/)
-  assert.doesNotMatch(r.out, /lessons never reviewed/, 'the command it would name refuses an abandoned work')
-  assert.doesNotMatch(r.out, /no outcome recorded/, 'nothing landed to say an outcome of')
 })
 
 test('an abandoned work refuses an outcome, and records nothing', () => {
