@@ -826,12 +826,18 @@ abandoned, deletes no branch. Nothing else is ever auto-deleted.
 work, run `rig close`, report what it did, and stop. Offer no lesson review, outcome, user-docs
 edit, retro or digest: each stays one request away, and each gate can be recorded after the
 close. `rig close` names none of them for that reason, and names only a catalogue entry still a
-draft, which is something wrong rather than a step to take. Once the close has succeeded,
-**settle the chat the work ran in**, unless the user said to keep it open; a close that refused
-leaves the work open, and the chat and its watches with it. rig cannot see the agent host, so this is the
+draft, which is something wrong rather than a step to take: pass that line on as information,
+not as an offer.
+
+Once the close has succeeded, **settle the chat the work ran in**, unless the user said to keep
+it open. An abandon (`--abandoned`) settles it too: the pull requests it leaves open stay open on
+GitHub, and only the chat stops watching them. rig cannot see the agent host, so this is the
 agent's: in T3 Code, stop watching the work's pull requests (`unwatch_pull_request`), then settle
-the thread (`t3_thread_organize` with `settle`), which takes effect when the turn ends. A host
-with no such action has nothing to do.
+the thread (`t3_thread_organize` with `settle`), which takes effect when the turn ends. Settle
+only the thread you are in, and only when it is the work's own; a close run from any other chat
+— several works closed from one conversation, or a work already closed elsewhere whose copy
+here is being cleared — settles nothing. A close that refused leaves the work open, and the chat
+and its watches with it. A host with no such action has nothing to do.
 
 **A session still at work is named, not refused on.** A clean worktree a live session is about
 to write into looks exactly like an abandoned one. So before `rig close`, `rig detach` or

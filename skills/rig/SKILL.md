@@ -63,8 +63,8 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | What landed, explained to someone: a work, a repo, an org or a period | the `rig-digest` skill; `rig dash` for the numbers and the list |
 | Landed and verified where it was deployed: the user docs | the `rig-docs` skill, then `rig save -m "user docs updated" --documented` |
 | Leaving a work for another session | the `rig-handoff` skill |
-| Finished | `rig close`; if it names a session still at work, tell the user which. Once it has closed, settle the chat the work ran in unless the user said to keep it (in T3 Code: `unwatch_pull_request` for its PRs, then `t3_thread_organize` with `settle`), and offer nothing more — no lessons, outcome, user docs, retro or digest unless asked (`AGENTS.md`'s "Closing") |
-| Stopped without finishing | `rig close --abandoned` |
+| Finished | `rig close`; if it names a session still at work, tell the user which. Once it has closed, settle this chat if it is the work's own and offer nothing more, as `AGENTS.md`'s "Closing" says |
+| Stopped without finishing | `rig close --abandoned`, then as for Finished |
 | Closed or abandoned by mistake | `rig reopen <id>`, never a new work on the same ticket |
 | A command died with "run `rig update`" | `rig update`, from the installed checkout |
 | Whose knowledge is in hand | `rig use` |
