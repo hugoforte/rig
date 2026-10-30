@@ -826,8 +826,9 @@ abandoned, deletes no branch. Nothing else is ever auto-deleted.
 work, run `rig close`, report what it did, and stop. Offer no lesson review, outcome, user-docs
 edit, retro or digest: each stays one request away, and each gate can be recorded after the
 close. `rig close` names none of them for that reason, and names only a catalogue entry still a
-draft, which is something wrong rather than a step to take. Then **settle the chat the work ran
-in**, unless the user said to keep it open. rig cannot see the agent host, so this is the
+draft, which is something wrong rather than a step to take. Once the close has succeeded,
+**settle the chat the work ran in**, unless the user said to keep it open; a close that refused
+leaves the work open, and the chat and its watches with it. rig cannot see the agent host, so this is the
 agent's: in T3 Code, stop watching the work's pull requests (`unwatch_pull_request`), then settle
 the thread (`t3_thread_organize` with `settle`), which takes effect when the turn ends. A host
 with no such action has nothing to do.
