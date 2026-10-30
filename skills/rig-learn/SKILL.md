@@ -1,6 +1,6 @@
 ---
 name: rig-learn
-description: Review what a rig work taught before it closes, and offer each lesson a home — an attached repo, the catalogue, the org doc, or rig itself. Use when `rig next` offers the lesson review, when a work's PRs are up or merged, or when asked what a work taught or to carry its lessons forward.
+description: Review what a rig work taught before it closes, and offer each lesson a home — an attached repo, the catalogue, the org doc, or rig itself. Use when the user takes up `rig next`'s offer of the lesson review, or asks what a work taught or to carry its lessons forward. Not on a close, unless asked.
 ---
 
 # rig-learn
@@ -13,7 +13,7 @@ Reply as rig's `AGENTS.md`'s "Replying to the user" says. Here the TL;DR in step
 
 ## 1. Read the story
 
-Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with the `--data <root>` `rig close` printed, when another data root keeps a copy of the work. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
+Run `rig status` from the work folder, or `rig status --work <id>` once the work has closed and the folder is gone — with `--data <root>` when another data root keeps a copy of the work and the command asks which. It names the context doc, the org doc of each org the work touches, the repos and each PR. Then read, in this order:
 
 - `context.md`, and `handoff.md` beside it if there is one. The design, and what happened since.
 - `notes.tsv` beside them, if there is one: every decision a session took along the way, each with why and a pointer at its evidence. A row whose result is `reverted`, or two rows about one thing, is a lesson looking for its home.
@@ -152,4 +152,4 @@ rig save -m "lessons reviewed" --learned --outcome '…'
 
 The agreed outcome goes in single quotes in place of `…`, which rig refuses as an outcome. Leave `--outcome` off when none was offered or the user did not agree it.
 
-This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone, and `--data <root>` where `rig close` named one. `rig next` stops offering the review, and `rig close` stops naming it.
+This commits the catalogue changes and any org doc edits with the rest of the data root, and records the gate. Pass `--work <id>` if the work folder is gone, and `--data <root>` where a command asked for one. `rig next` stops offering the review.

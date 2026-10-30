@@ -2866,8 +2866,8 @@ cmds.save = ({ flags }) => {
     work.reviewedAt = new Date().toISOString()
     ok(`${id}: adversarial review done`)
   }
-  // The lesson review. Allowed on a closed work, unlike the design gate: `close` names an
-  // unreviewed work on its way out, and the catalogue a lesson lands in is still there.
+  // The lesson review. Allowed on a closed work, unlike the design gate: it may be asked for after
+  // the close, and the catalogue a lesson lands in is still there.
   if (flags.learned) {
     if (work.abandonedAt) die(`${id} was abandoned — there is no finished story to learn from`)
     work.learnedAt = new Date().toISOString()
@@ -5436,22 +5436,11 @@ cmds.close = ({ flags }) => {
   if (stillDraft.length) {
     say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`${save} -m "catalogue corrections"\``))
   }
-  // The lesson review, named the same way and for the same reason. An abandoned work is not
-  // asked: `rig save --learned` refuses one, so naming it would hand over a command that dies.
-  if (!abandoned && !work.learnedAt) {
-    say(C.dim(`  lessons never reviewed — the rig-learn skill, then \`${save} -m "lessons reviewed" --learned\``))
-  }
-  // And the outcome, which `rig save --outcome` refuses an abandoned work for the same reason,
-  // and which a work that merged nothing has none of.
-  const landedAll = verdict.repos.length > 0 && verdict.repos.every(v => v.merged)
-  if (!abandoned && !work.outcome && landedAll) {
-    say(C.dim(`  no outcome recorded — what changed for someone, and why that is good: \`${save} --outcome "…"\``))
-  }
-  // And the user docs, where a repo says where they live: after the close is when a work is
-  // verified where it was deployed, and nothing else names them once the work is closed.
-  if (!abandoned && !work.documentedAt && landedAll && docsTargets(work).some(d => d.targets.length)) {
-    say(C.dim(`  user docs never updated — the rig-docs skill, then \`${save} -m "user docs updated" --documented\``))
-  }
+  // The optional gates — the lesson review, the outcome, the user docs — are not named here. A
+  // draft entry is something wrong; those are steps to take, and an agent reads a line of a
+  // close's output as one to offer, which turns the end of a work into the start of another
+  // conversation. `rig next` offers each while the work is open, and each is recorded after the
+  // close when asked for (decision 220).
   if (abandoned) {
     const open = verdict.repos.filter(v => v.pr && v.pr.state === 'OPEN')
     // Named rather than closed: closing someone's pull request is an outward-facing act, and

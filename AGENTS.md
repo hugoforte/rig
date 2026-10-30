@@ -166,8 +166,8 @@ skipped, and none waits. rig records the choice and what the agent decided.
    or two a person outside the work can read, stored as `outcome: { text, at }` by
    `rig save --outcome "…"`. It is a statement made once the work landed, which nothing can
    derive later; saying it again replaces it. `rig next` offers it once every PR has merged,
-   `rig close` names a work that merged everything and closes without one, and neither
-   refuses. `rig list --json` carries it for whatever renders what landed.
+   and nothing refuses without one; `rig close` does not ask (see "Closing"), and it can be
+   recorded after the close. `rig list --json` carries it for whatever renders what landed.
 
    A repo's record carries `branches[]` — one entry per branch of this work it holds, each
    with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
@@ -191,8 +191,8 @@ skipped, and none waits. rig records the choice and what the agent decided.
    review threads, failed checks, the commit log) and offers each lesson a home — an
    attached repo, the catalogue, the org doc, an issue on rig, or rig's philosophy page — a
    machine check before prose, and never a new rule. The org doc is the one home for prose
-   every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, and `rig close` names a work that never
-   passed it. Neither refuses.
+   every session reads, and "The org doc" below says why that is allowed. `rig save --learned` records the gate, after the close too. Nothing refuses without it, and
+   `rig close` does not ask.
 
    The story includes the sessions that did the work, where this machine keeps them.
    `rig status --transcripts` prints their paths, one a line on stdout: the sessions that ran
@@ -294,8 +294,8 @@ repo is still loaded in your head (rule 4).
 such as Confluence. rig knows a docs target and never edits one; the generated work file lists
 it beside `check`. Once every PR has merged, `rig next` offers the `rig-docs` skill for a work
 whose repos have a target, naming any attached repo with none and the file to say it in, and
-`rig save -m "user docs updated" --documented` records the gate. `rig close` names a work
-closing without it, as it names the lesson review. Nothing refuses without it.
+`rig save -m "user docs updated" --documented` records the gate, after the close too. Nothing
+refuses without it, and `rig close` does not ask.
 
 A work keeps its **QA evidence** in `qa.md` beside `context.md`: the steps walked on a deployed
 environment and what was seen. `rig status` names it. The user-docs edit and the digest read it,
@@ -821,6 +821,16 @@ its stack one PR at a time holds the same patches under new shas, so a copy the 
 not contain is compared by patch and by content: it goes when everything on it landed, and is
 kept otherwise, naming the first commit that did not. A close forced past a blocker, or
 abandoned, deletes no branch. Nothing else is ever auto-deleted.
+
+**A close ends the conversation; it does not start another.** When the user asks to close a
+work, run `rig close`, report what it did, and stop. Offer no lesson review, outcome, user-docs
+edit, retro or digest: each stays one request away, and each gate can be recorded after the
+close. `rig close` names none of them for that reason, and names only a catalogue entry still a
+draft, which is something wrong rather than a step to take. Then **settle the chat the work ran
+in**, unless the user said to keep it open. rig cannot see the agent host, so this is the
+agent's: in T3 Code, stop watching the work's pull requests (`unwatch_pull_request`), then settle
+the thread (`t3_thread_organize` with `settle`), which takes effect when the turn ends. A host
+with no such action has nothing to do.
 
 **A session still at work is named, not refused on.** A clean worktree a live session is about
 to write into looks exactly like an abandoned one. So before `rig close`, `rig detach` or
