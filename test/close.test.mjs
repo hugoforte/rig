@@ -304,7 +304,7 @@ test('a landed work whose lessons were never reviewed closes without naming the 
   landedWork('unlearned', 45)
   const r = rig(['close', '--work', 'unlearned'])
   assert.equal(r.code, 0, r.out)
-  assert.doesNotMatch(r.out, /rig-learn|--learned/)
+  assert.doesNotMatch(r.out, /lesson|rig-learn|--learned/i)
 })
 
 // ------------------------------------------------- the outcome
@@ -316,7 +316,7 @@ test('a landed work with no outcome closes without asking for one', () => {
   landedWork('untold', 46)
   const r = rig(['close', '--work', 'untold'])
   assert.equal(r.code, 0, r.out)
-  assert.doesNotMatch(r.out, /--outcome/)
+  assert.doesNotMatch(r.out, /outcome/i)
 })
 
 test('the outcome is recorded after the close, with its date', () => {
@@ -397,7 +397,7 @@ test('a landed work is offered the docs edit from its catalogue entry, and its c
     assert.match(strip(rig(['next', '--work', 'docsy']).out), /the rig-docs skill drafts the edit \(billing: `https:\/\/acme\.example\/help\/billing`\)/)
     const r = rig(['close', '--work', 'docsy'])
     assert.equal(r.code, 0, r.out)
-    assert.doesNotMatch(r.out, /rig-docs|--documented/)
+    assert.doesNotMatch(r.out, /user docs|rig-docs|--documented/i)
   } finally {
     fs.writeFileSync(billingEntry, entry)
   }

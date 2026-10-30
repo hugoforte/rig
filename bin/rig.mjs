@@ -2814,8 +2814,8 @@ cmds.save = ({ flags }) => {
   if (title === true || title === '') die('--title needs the title')
   if (typeof title === 'string' && /[\r\n]/.test(title)) die('--title takes the title in one line — it is a heading and a PR title')
   const outcome = typeof flags.outcome === 'string' ? flags.outcome.trim() : flags.outcome
-  // `rig next` and `rig close` offer `--outcome "…"`, and an offered command gets run as
-  // written, so the placeholder is no outcome either.
+  // `rig next` offers `--outcome "…"`, and an offered command gets run as written, so the
+  // placeholder is no outcome either.
   if (outcome === true || (typeof outcome === 'string' && /^[\s….]*$/.test(outcome))) die('--outcome needs the outcome: what changed for someone, and why that is good, in a sentence or two')
   if (typeof outcome === 'string' && /[\r\n]/.test(outcome)) die('--outcome takes one line — it is read as one entry in a list of what landed')
   const stops = stopsFlag(flags)
@@ -5431,9 +5431,9 @@ cmds.close = ({ flags }) => {
   // the work from the folder it is run in. Printing the bare command would hand over one that
   // dies with "not inside a work". `--data` too where another root keeps a copy, since two
   // closed copies are a pick `rig save` will not make (decision 191).
-  const save = `rig save --work ${id}${rootHoldingWork(where().roots, id).holders.length > 1 ? ` --data ${where().name}` : ''}`
   const stillDraft = draftEntries(work)
   if (stillDraft.length) {
+    const save = `rig save --work ${id}${rootHoldingWork(where().roots, id).holders.length > 1 ? ` --data ${where().name}` : ''}`
     say(C.dim(`  catalogue still a draft for ${stillDraft.join(', ')} — correct ${stillDraft.length > 1 ? 'them' : 'it'} and \`${save} -m "catalogue corrections"\``))
   }
   // The optional gates — the lesson review, the outcome, the user docs — are not named here. A
