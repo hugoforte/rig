@@ -272,44 +272,49 @@ test('PATH is searched as a spawn searches it, and an entry it cannot read that 
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-// A link pointing at itself: a junction on Windows, which needs no privilege to make, and a
-// symlink elsewhere, which ignores the type. Everything through it is refused for real, and the
-// refusal is no "no such file". The search reads PATH the Windows way, so off Windows an entry
-// counts as fully qualified only with the `//` a UNC path starts with.
-const unreadableEntry = root => {
-  const loop = path.join(root, 'loop')
-  fs.symlinkSync(loop, loop, 'junction')
-  assert.throws(() => fs.statSync(path.join(loop, 'git.com'), { throwIfNoEntry: false }),
-    'stat has to refuse this entry, or the tests that read it prove nothing')
-  return loop
+// A folder stat refuses, with the error seen for real: `UNKNOWN: unknown error, stat
+// 'C:\nvm4w\nodejs\git.com'`, a link an SSH session may not traverse, on every git call of every
+// command. This one call is replaced because Windows gave no other way to get that refusal: a
+// junction to itself, a junction cycle and a folder denied by ACL all read as no such file, and
+// the real one needs a session like that one. The search reads PATH the Windows way, so off
+// Windows an entry counts as fully qualified only with the `//` a UNC path starts with.
+const refusedEntry = (t, root) => {
+  const refused = path.join(root, 'refused')
+  fs.mkdirSync(refused)
+  const stat = fs.statSync
+  t.mock.method(fs, 'statSync', (file, ...rest) => {
+    if (String(file).includes(`${path.sep}refused${path.sep}`)) {
+      throw Object.assign(new Error(`UNKNOWN: unknown error, stat '${file}'`), { code: 'UNKNOWN' })
+    }
+    return stat(file, ...rest)
+  })
+  return refused
 }
 const pathEntry = dir => process.platform === 'win32' ? dir : `/${dir}`
 
-test('a PATH entry stat refuses ends the search rather than killing the run', () => {
-  // Seen as `UNKNOWN: unknown error, stat 'C:\nvm4w\nodejs\git.com'`, a symlink an SSH session
-  // may not traverse, on every git call of every command. No platform gate: only `realGitFor`
-  // is Windows-only, and this is what it asks.
+test('a PATH entry stat refuses ends the search rather than killing the run', t => {
+  // No platform gate: only `realGitFor` is Windows-only, and this is what it asks.
   const { root, layout } = programTree()
-  const loop = pathEntry(unreadableEntry(root))
+  const refused = pathEntry(refusedEntry(t, root))
   const own = layout('own', 'git.exe')
   const ownEntry = pathEntry(path.dirname(own))
 
-  assert.equal(programPath('git', loop), null, 'the entry says nothing, so nothing can be said')
-  assert.equal(programPath('git', [loop, ownEntry].join(';')), null,
+  assert.equal(programPath('git', refused), null, 'the entry says nothing, so nothing can be said')
+  assert.equal(programPath('git', [refused, ownEntry].join(';')), null,
     'and the program there may be the one the spawn runs, so the next one along is not the answer')
-  assert.equal(programPath('git', [ownEntry, loop].join(';')), own,
+  assert.equal(programPath('git', [ownEntry, refused].join(';')), own,
     'an entry after the one the spawn takes its git from is never read')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('a PATH entry stat refuses keeps plain git, ahead of the launcher but not after it', onWindows, () => {
+test('a PATH entry stat refuses keeps plain git, ahead of the launcher but not after it', onWindows, t => {
   const { root, layout } = programTree()
-  const loop = unreadableEntry(root)
+  const refused = refusedEntry(t, root)
   const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
   const real = layout('proper', 'mingw64', 'bin', 'git.exe')
 
-  assert.equal(realGitFor([loop, proper].join(';')), 'git', 'the spawn is left to search for itself')
-  assert.equal(realGitFor([proper, loop].join(';')), real, 'the launcher came first, so the saving stands')
+  assert.equal(realGitFor([refused, proper].join(';')), 'git', 'the spawn is left to search for itself')
+  assert.equal(realGitFor([proper, refused].join(';')), real, 'the launcher came first, so the saving stands')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
