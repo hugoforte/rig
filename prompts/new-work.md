@@ -95,6 +95,8 @@ link points at, so the ticket has to stand on its own.
 
 ## After
 
+Name the chat for the work, as `AGENTS.md`'s "Naming the chat" says.
+
 Continue with the repo interview: `rig prompt select-repos`.
 
 Once the repos are attached, name the problem the work addresses. The work's orgs are

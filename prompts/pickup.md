@@ -6,7 +6,7 @@ You are picking up a work another session left. It wrote down what it did so tha
 
 Bring the trail up to date first, so you read the last session's and not an older one:
 
-1. `rig restore <id>`, even where the work's folder is already here: it fast-forwards the data root, so the handoff and the record are the ones the last session pushed, and changes nothing else where the folder is in place.
+1. `rig restore <id>`, even where the work's folder is already here: it fast-forwards the data root, so the handoff and the record are the ones the last session pushed, and changes nothing else where the folder is in place. Then name the chat for the work, as `AGENTS.md`'s "Naming the chat" says.
 2. In each worktree, bring the branch `rig status` names up to what was pushed: `git fetch origin`, then `git merge --ff-only origin/<branch>`. One that will not fast-forward means this machine has commits the last session never saw: stop and ask the user, and never force.
 
 Then `rig status` from the work folder, and read, in this order:
