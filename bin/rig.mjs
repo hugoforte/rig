@@ -216,6 +216,12 @@ function realGitFor (searchPath, msystem = '') {
 // gone, which is how a quoted entry holding a `;` arrives, split in two. A directory with an
 // apostrophe in its name goes with them, and costs only the saving.
 //
+// So does an entry stat refuses with anything but "no such file": a link the session may not
+// traverse, an untrusted mount point, whatever else Windows has that libuv calls UNKNOWN. libuv
+// asks `GetFileAttributesW` and walks on when that fails, but stat is a different call, which
+// opens the file, so its refusal does not say the spawn was refused too. Plain `git` is right
+// whichever it was, and walking on is right only if the two agreed.
+//
 // A directory called `git.exe` is no program to the spawn, which walks on past it, and so
 // does this.
 //
@@ -231,7 +237,9 @@ function programPath (name, searchPath) {
     if (/["']/.test(dir) || !FULLY_QUALIFIED.test(dir)) return null
     for (const ext of ['.com', '.exe']) {
       const candidate = path.join(dir, name + ext)
-      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate
+      let stat
+      try { stat = fs.statSync(candidate, { throwIfNoEntry: false }) } catch { return null }
+      if (stat?.isFile()) return candidate
     }
   }
   return null
@@ -6837,7 +6845,7 @@ export {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
-  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh,
+  spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor, programPath, gitForWindowsSh,
   directionSection, directionBody, directionIsTodo, pullRequestSaid,
   spawnFailure,
   listing,

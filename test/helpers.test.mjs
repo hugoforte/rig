@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
-  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, programPath, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, pullRequestSaid, run,
   spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
@@ -269,6 +269,52 @@ test('PATH is searched as a spawn searches it, and an entry it cannot read that 
     'a relative entry is read against where the run stands, which is no part of this answer')
   assert.equal(searching(`"${split}"`, proper), 'git',
     'a quoted entry holding a ; is one directory to the spawn, and not one this reads')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+// A folder stat refuses, with the error seen for real: `UNKNOWN: unknown error, stat
+// 'C:\nvm4w\nodejs\git.com'`, a link an SSH session may not traverse, on every git call of every
+// command. This one call is replaced because Windows gave no other way to get that refusal: a
+// junction to itself, a junction cycle and a folder denied by ACL all read as no such file, and
+// the real one needs a session like that one. The search reads PATH the Windows way, so off
+// Windows an entry counts as fully qualified only with the `//` a UNC path starts with.
+const refusedEntry = (t, root) => {
+  const refused = path.join(root, 'refused')
+  fs.mkdirSync(refused)
+  const stat = fs.statSync
+  t.mock.method(fs, 'statSync', (file, ...rest) => {
+    if (String(file).includes(`${path.sep}refused${path.sep}`)) {
+      throw Object.assign(new Error(`UNKNOWN: unknown error, stat '${file}'`), { code: 'UNKNOWN' })
+    }
+    return stat(file, ...rest)
+  })
+  return refused
+}
+const pathEntry = dir => process.platform === 'win32' ? dir : `/${dir}`
+
+test('a PATH entry stat refuses ends the search rather than killing the run', t => {
+  // No platform gate: only `realGitFor` is Windows-only, and this is what it asks.
+  const { root, layout } = programTree()
+  const refused = pathEntry(refusedEntry(t, root))
+  const own = layout('own', 'git.exe')
+  const ownEntry = pathEntry(path.dirname(own))
+
+  assert.equal(programPath('git', refused), null, 'the entry says nothing, so nothing can be said')
+  assert.equal(programPath('git', [refused, ownEntry].join(';')), null,
+    'and the program there may be the one the spawn runs, so the next one along is not the answer')
+  assert.equal(programPath('git', [ownEntry, refused].join(';')), own,
+    'an entry after the one the spawn takes its git from is never read')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('a PATH entry stat refuses keeps plain git, ahead of the launcher but not after it', onWindows, t => {
+  const { root, layout } = programTree()
+  const refused = refusedEntry(t, root)
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+
+  assert.equal(realGitFor([refused, proper].join(';')), 'git', 'the spawn is left to search for itself')
+  assert.equal(realGitFor([proper, refused].join(';')), real, 'the launcher came first, so the saving stands')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
