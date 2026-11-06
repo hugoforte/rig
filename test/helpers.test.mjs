@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
   anyTrackerConfigured, orgForJiraKey, ticketsLabel,
-  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
+  spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, programPath, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, pullRequestSaid, run,
   spawnFailure, repoOfRemote, webUrlOf,
 } from '../bin/rig.mjs'
@@ -269,6 +269,47 @@ test('PATH is searched as a spawn searches it, and an entry it cannot read that 
     'a relative entry is read against where the run stands, which is no part of this answer')
   assert.equal(searching(`"${split}"`, proper), 'git',
     'a quoted entry holding a ; is one directory to the spawn, and not one this reads')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+// A link pointing at itself: a junction on Windows, which needs no privilege to make, and a
+// symlink elsewhere, which ignores the type. Everything through it is refused for real, and the
+// refusal is no "no such file". The search reads PATH the Windows way, so off Windows an entry
+// counts as fully qualified only with the `//` a UNC path starts with.
+const unreadableEntry = root => {
+  const loop = path.join(root, 'loop')
+  fs.symlinkSync(loop, loop, 'junction')
+  assert.throws(() => fs.statSync(path.join(loop, 'git.com'), { throwIfNoEntry: false }),
+    'stat has to refuse this entry, or the tests that read it prove nothing')
+  return loop
+}
+const pathEntry = dir => process.platform === 'win32' ? dir : `/${dir}`
+
+test('a PATH entry stat refuses ends the search rather than killing the run', () => {
+  // Seen as `UNKNOWN: unknown error, stat 'C:\nvm4w\nodejs\git.com'`, a symlink an SSH session
+  // may not traverse, on every git call of every command. No platform gate: only `realGitFor`
+  // is Windows-only, and this is what it asks.
+  const { root, layout } = programTree()
+  const loop = pathEntry(unreadableEntry(root))
+  const own = layout('own', 'git.exe')
+  const ownEntry = pathEntry(path.dirname(own))
+
+  assert.equal(programPath('git', loop), null, 'the entry says nothing, so nothing can be said')
+  assert.equal(programPath('git', [loop, ownEntry].join(';')), null,
+    'and the program there may be the one the spawn runs, so the next one along is not the answer')
+  assert.equal(programPath('git', [ownEntry, loop].join(';')), own,
+    'an entry after the one the spawn takes its git from is never read')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('a PATH entry stat refuses keeps plain git, ahead of the launcher but not after it', onWindows, () => {
+  const { root, layout } = programTree()
+  const loop = unreadableEntry(root)
+  const proper = path.dirname(layout('proper', 'cmd', 'git.exe'))
+  const real = layout('proper', 'mingw64', 'bin', 'git.exe')
+
+  assert.equal(realGitFor([loop, proper].join(';')), 'git', 'the spawn is left to search for itself')
+  assert.equal(realGitFor([proper, loop].join(';')), real, 'the launcher came first, so the saving stands')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
