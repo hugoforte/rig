@@ -96,6 +96,22 @@ rig attach your-org/orders-web   # owner/repo: that org alone, never a same-name
 
 A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 217).
 
+### Naming the chat
+
+Once `rig new` has succeeded, or `rig restore` on a pickup, **name the chat for the work**, so it
+reads as that work from its first turn and not from its first handoff. rig cannot see the agent
+host, so this is the agent's: in T3 Code, `t3_thread_update` with `rename` and the title
+`RIG - [KEY] Short description`.
+
+- **Key**: the first entry on `rig status`'s `tickets` line, with a GitHub issue (`owner/repo#N`)
+  written `repo#N`. A work with no ticket uses its id.
+- **Description**: the work's title cut to about five words, leading with the product when the
+  work is about one. It must not end in a number, which a handoff would read as its count.
+
+A title already in that form stays as it is, count and all. Name only the chat you are in, and
+only when it is the work's own; one that starts several works or is passing through names nothing.
+A host with no such action has nothing to do.
+
 ## Stops
 
 A **stop** is a gate where the agent waits for the human. A work has five:

@@ -67,6 +67,19 @@ test('the stops are listed once, in AGENTS.md, and the skill and prompts that st
   }
 })
 
+test('the chat\'s title is set out once, in AGENTS.md, and starting or picking up a work points there (#363)', () => {
+  // A host's handoff counts up from this form, so a copy of it in each prompt that drifted would
+  // leave threads the handoff no longer recognises.
+  const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
+  assert.match(agents, /^### Naming the chat$/m)
+  assert.match(agents, /`RIG - \[KEY\] Short description`/)
+  for (const file of ['skills/rig/SKILL.md', 'prompts/new-work.md', 'prompts/pickup.md']) {
+    const text = fs.readFileSync(path.join(ROOT, file), 'utf8')
+    assert.match(text, /AGENTS\.md`?'s "Naming the chat"/, `${file} points at the rule`)
+    assert.doesNotMatch(text, /RIG - \[/, `${file} does not copy the form`)
+  }
+})
+
 test('every prompt rig sends someone to is one it ships', () => {
   const prompts = fs.readdirSync(path.join(ROOT, 'prompts')).map(f => f.replace(/\.md$/, ''))
   const sources = [

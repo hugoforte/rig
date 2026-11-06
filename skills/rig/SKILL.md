@@ -33,11 +33,11 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 
 | The request | Start here |
 |---|---|
-| Start a piece of work | `rig prompt new-work`, then `rig prompt select-repos` |
+| Start a piece of work | `rig prompt new-work`, then `rig prompt select-repos`; name the chat for the work, as `AGENTS.md`'s "Naming the chat" says |
 | Which repos does it touch | `rig prompt select-repos` |
 | First run on this machine | `rig prompt setup` |
 | Standing in a work, what now | `rig next` |
-| Picking up a work someone else left | `rig prompt pickup`: the handoff, the context doc and `rig status` are the trail, and the trail is authoritative |
+| Picking up a work someone else left | `rig prompt pickup`: the handoff, the context doc and `rig status` are the trail, and the trail is authoritative; it names the chat too |
 | A work whose folder is not on this machine | `rig restore <id>` |
 | Closed works whose folders are still here | `rig tidy` (`--dry-run` to preview) |
 | Where has this work got to | `rig status` |
