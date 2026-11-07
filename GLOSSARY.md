@@ -109,8 +109,12 @@ A repo whose checks last passed at the diff it carries now. `rig check --run` re
 _Avoid_: green, tested, passing (that is the run, not the record)
 
 **Reading page**:
-One self-contained HTML file for one big pull request, a work branch's, a stage's or any other's, written by the `rig-pr-page` skill and published with `rig page --publish` to the data root's Pages site: its parts and connections, its behaviour before and after, and every changed file, linked both ways. A snapshot of one commit, and a companion to the PR's body. Offered, never required.
+One self-contained HTML file for one big pull request, a work branch's, a stage's, an adopted one's or any other's, written by the `rig-pr-page` skill and published with `rig page --publish` to the data root's Pages site: its parts and connections, its behaviour before and after, and every changed file, linked both ways. A snapshot of one commit, and a companion to the PR's body. Offered, never required.
 _Avoid_: review page, PR site, docs (that is the user docs), preview
+
+**Adopted PR**:
+A pull request of a work's on a branch that is neither the work branch nor a stage, such as a layer of a stack GitHub holds, checked out outside the work's worktrees, which `rig page <url> --adopt` records as the work's. Its branch is recorded, so a new PR on it is adopted too. For its reading page it is the work's like a stage's; it lands nowhere rig lands anything.
+_Avoid_: side PR, imported PR, stage (a stage merges into the work branch)
 
 **Adversarial review**:
 A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.
