@@ -207,7 +207,25 @@ export async function checkPage (file, { chrome = findChrome(), shots = null } =
     await sleep(120)
     expect(`search finds "${word}"`, await ev(`document.querySelectorAll('#results a').length`) >= 1, null)
     await shot('wide-search')
+
+    // Text with an escaped character, found by search, reads as the character.
+    const escaped = ids.find(id => /&(lt|gt|amp);/.test(page.ent[id].html))
+    if (escaped) {
+      const found = await ev(`(function () { const d = document.createElement('div'); d.innerHTML = ${JSON.stringify(page.ent[escaped].html)}; const t = d.textContent; const at = t.search(/[<>&]/); return t.slice(Math.max(0, at - 8), at + 4) })()`)
+      await ev(`(function () { const q = document.getElementById('q'); q.value = ${JSON.stringify(found)}; q.dispatchEvent(new Event('input')) })()`)
+      await sleep(120)
+      const text = await ev(`document.getElementById('results').textContent`)
+      expect('search shows an escaped character once', text.includes(found) && !/&(lt|gt|amp);/.test(text), text.slice(0, 200))
+    }
     await ev(`(function () { const q = document.getElementById('q'); q.value = ''; q.dispatchEvent(new Event('input')) })()`)
+
+    // Addresses a reader can type: none is an entity, and none may break the page.
+    for (const hash of ['constructor', 'toString', '100%', '%E0%A4%A']) {
+      await send('Page.navigate', { url: `${url}#${hash}` })
+      await sleep(250)
+      const at = await state()
+      expect(`#${hash} shows the front page`, at.tab === 'start' && !at.open, at)
+    }
 
     await size(390, 844, true)
     await send('Page.navigate', { url: `${url}#${page.tabs.at(-1).id}` })

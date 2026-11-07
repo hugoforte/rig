@@ -36,6 +36,21 @@ test('gh adapter: prByNumber reads a PR outside any work, a fork\'s branch with 
   assert.throws(() => canned(() => ({ code: 1, err: 'gh: Forbidden (HTTP 403)' })).github.prByNumber('acme', 'platform', 5), /403/)
 })
 
+test('gh adapter: commitExists asks the repo, reads 404 and 422 as no, and throws on anything else', () => {
+  const { calls, github } = canned(() => 'abc\n')
+  assert.equal(github.commitExists('acme', 'platform', 'abc'), true)
+  assert.equal(calls[0][1], 'repos/acme/platform/commits/abc')
+  assert.equal(canned(() => ({ code: 1, err: 'gh: Not Found (HTTP 404)' })).github.commitExists('acme', 'platform', 'abc'), false)
+  assert.equal(canned(() => ({ code: 1, err: 'gh: No commit found for SHA: abc (HTTP 422)' })).github.commitExists('acme', 'platform', 'abc'), false)
+  assert.throws(() => canned(() => ({ code: 1, err: 'gh: Bad gateway (HTTP 502)' })).github.commitExists('acme', 'platform', 'abc'), /502/)
+})
+
+test('gh adapter: editPr sends only the body when it is given only the body', () => {
+  const { calls, github } = canned(() => '')
+  github.editPr('acme', 'platform', 3, { body: 'b' })
+  assert.deepEqual(calls[0], ['pr', 'edit', '3', '--repo', 'acme/platform', '--body', 'b'])
+})
+
 test('gh adapter: prForBranch carries the size of the diff, on the same call', () => {
   const { calls, github } = canned(() => '[{"number":12,"state":"OPEN","url":"u","additions":40,"deletions":2,"changedFiles":3}]')
   const pr = github.prForBranch('acme', 'platform', 'feat/x')

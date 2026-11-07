@@ -100,7 +100,7 @@ The queue writes to the journal and then holds the reading. The other order is q
 # decision/no-database: A flat file, not a database
 sub: One writer, a few hundred lines at most
 
-Tidewatch has no database today. A flat file needs nothing installed on a station's box.
+Tidewatch has no database today. A flat file needs nothing installed on a station's box, where size < 1 MB & it stays readable.
 
 # test/crash-mid-append: A crash in the middle of an append
 sub: tests/test_journal.py

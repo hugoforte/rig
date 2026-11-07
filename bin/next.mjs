@@ -75,9 +75,10 @@ const HEAVY = 3
 //                  null where GitHub would not say. A failing one also carries its `base` and
 //                  `behind`, how many commits the base has that the branch does not, read off
 //                  a fresh fetch; null where git could not count them
-//   pages          one `pageSaying` fact per repo whose work-branch PR is open: its size, whether
-//                  a reading page is due, the page recorded, the PR's head, and `why` no page can
-//                  be published, where one is due and none exists
+//   pages          one `pageSaying` fact per open work-branch PR, open stage PR and pushed work
+//                  branch with no PR yet: its size, whether a reading page is due, the page recorded
+//                  for that PR, its head, and `why` no page can be published or the `warning` that
+//                  it would be public, where one is due and none exists
 //   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
 //                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
 //                  --run` recorded

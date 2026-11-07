@@ -160,6 +160,7 @@
 (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
   var E = D.ent;
+  function isEnt(id) { return Object.prototype.hasOwnProperty.call(E, id); }
   var TABS = D.tabs.map(function (t) { return t.id; });
   var HOME = { part: 'map', flow: 'flows', decision: 'decisions', test: 'tests', risk: 'risks', open: 'open', word: 'words', file: 'files', sec: 'files' };
   var KIND = { part: 'Map', flow: 'Behaviour', decision: 'Decisions', test: 'Tests', risk: 'Risks', open: 'Open items', word: 'Words', file: 'Files', sec: 'Sections' };
@@ -178,15 +179,16 @@
 
   // Where the page is, in its address: a tab, an entity, or an entity read from a tab.
   function parse() {
-    var h = decodeURIComponent(location.hash.slice(1));
+    var h;
+    try { h = decodeURIComponent(location.hash.slice(1)); } catch (e) { return { tab: 'start', ent: null }; }
     if (!h) return { tab: 'start', ent: null };
     if (TABS.indexOf(h) >= 0) return { tab: h, ent: null };
     var at = h.indexOf('~');
     if (at > 0 && TABS.indexOf(h.slice(0, at)) >= 0) {
       var id = h.slice(at + 1);
-      return { tab: h.slice(0, at), ent: E[id] ? id : null };
+      return { tab: h.slice(0, at), ent: isEnt(id) ? id : null };
     }
-    if (E[h]) return { tab: HOME[E[h].kind], ent: h };
+    if (isEnt(h)) return { tab: HOME[E[h].kind], ent: h };
     return { tab: 'start', ent: null };
   }
   function addr(t, id) { return id ? t + '~' + encodeURIComponent(id) : t; }
@@ -349,12 +351,19 @@
   $('snapshot').innerHTML = 'A snapshot of ' + ext(D.pr, 'PR #' + D.number) + ' at ' + ext(D.repo + '/tree/' + D.head, '<code>' + SHORT + '</code>') + ', built ' + esc(D.builtAt) + '. ' + ext(D.compare, 'What has changed since?');
   $('nav').innerHTML = D.tabs.map(function (t) { return '<a data-tab="' + t.id + '" href="#' + t.id + '">' + t.label + (t.count ? ' <small>' + t.count + '</small>' : '') + '</a>'; }).join('');
 
-  // Search over titles and text.
+  // Search over titles and text, as text: an entity's markup parsed, inertly, and read back, so that
+  // what is escaped below is escaped once.
+  function textOf(html) {
+    var t = document.createElement('template');
+    t.innerHTML = html;
+    t.content.querySelectorAll('*').forEach(function (n) { n.append(' '); });
+    return t.content.textContent;
+  }
   var index = null;
   function search(q) {
     q = q.trim().toLowerCase();
     if (!q) { $('results').classList.remove('on'); showTab(tab); return; }
-    if (!index) index = Object.keys(E).map(function (k) { return [k, E[k].title.toLowerCase(), E[k].html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')]; });
+    if (!index) index = Object.keys(E).map(function (k) { return [k, E[k].title.toLowerCase(), textOf(E[k].html).replace(/\s+/g, ' ')]; });
     var hits = [];
     index.forEach(function (r) {
       var t = r[1].indexOf(q), b = r[2].toLowerCase().indexOf(q);

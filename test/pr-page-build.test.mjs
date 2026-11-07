@@ -192,6 +192,93 @@ test('a docs-only PR gets its sections as linked entities, its own links resolve
   }
 })
 
+// ------------------------------------------------- what the adversarial review found
+
+const small = extra => `---\ntitle: T\n---\n\n${extra}\n`
+
+test('a repo dir whose origin is not the PR\'s repo fails the build, naming both', () => {
+  assert.throws(() => build(SOURCE, { pr: 'https://github.com/example-harbour/lighthouse/pull/41' }), /origin is example-harbour\/tidewatch.*example-harbour\/lighthouse/)
+})
+
+test('a repo dir with no origin fails the build, since nothing ties it to the PR', () => {
+  const other = prRepo()
+  try {
+    spawnSync('git', ['-C', other.repo, 'remote', 'remove', 'origin'], { encoding: 'utf8' })
+    assert.throws(() => build(SOURCE, { repoDir: other.repo, head: other.headSha }), /no origin/)
+  } finally {
+    other.clean()
+  }
+})
+
+test('an origin in any of git\'s spellings, and any casing, matches the PR', () => {
+  const other = prRepo()
+  try {
+    for (const url of ['git@github.com:Example-Harbour/TideWatch.git', 'ssh://git@github.com/example-harbour/tidewatch', 'https://github.com/example-harbour/tidewatch/']) {
+      spawnSync('git', ['-C', other.repo, 'remote', 'set-url', 'origin', url], { encoding: 'utf8' })
+      assert.ok(build(SOURCE, { repoDir: other.repo, head: other.headSha }).html, url)
+    }
+  } finally {
+    other.clean()
+  }
+})
+
+test('generated section slugs never collide, whatever the headings, and a preface keeps `top`', () => {
+  const docs = prRepo({ head: { 'docs/steps.md': '## Step\n\na\n\n## Step\n\nb\n\n## Step 1\n\nc\n', 'docs/preface.md': 'Before any heading.\n\n# Top\n\nbody\n' }, removed: [] })
+  try {
+    const { ent } = dataOf(build(small('Sum.'), { repoDir: docs.repo, head: docs.headSha }).html)
+    assert.deepEqual(ent['file/docs/steps.md'].sections, ['sec/docs/steps.md#step', 'sec/docs/steps.md#step-1', 'sec/docs/steps.md#step-1-1'])
+    assert.deepEqual(ent['file/docs/preface.md'].sections, ['sec/docs/preface.md#top', 'sec/docs/preface.md#top-1'])
+  } finally {
+    docs.clean()
+  }
+})
+
+test('a title holding a template marker leaves the page whole', () => {
+  const { html } = build(SOURCE.replace('title: Retries that survive a restart', 'title: The {{DATA}} and {{HEAD}} markers'))
+  assert.equal(dataOf(html).title, 'The {{DATA}} and {{HEAD}} markers')
+  assert.match(html, /<title>The \{\{DATA\}\} and \{\{HEAD\}\} markers/)
+})
+
+test('a citation holding single braces is still checked', () => {
+  assert.match(problemsOf(small('{{tidewatch/queue.py:999 ~ x = {a}; y}}')), /tidewatch\/queue\.py:999 is out of range/)
+})
+
+test('a citation left unclosed is reported rather than shown', () => {
+  assert.match(problemsOf(small('See {{tidewatch/queue.py:12 ~ def enqueue')), /unclosed \{\{ in start/)
+})
+
+test('a citation a table cell would split is checked, and its pipe stays in it', () => {
+  assert.match(problemsOf(small('| a |\n|---|\n| {{tidewatch/queue.py:999 ~ x|y}} |')), /tidewatch\/queue\.py:999 is out of range/)
+  assert.match(problemsOf(small('| a |\n|---|\n| {{tidewatch/queue.py:12 ~ def|enqueue}} |')), /tidewatch\/queue\.py:12 should hold "def\|enqueue"/)
+})
+
+test('a term that is also an HTML entity\'s name does not break the entity', () => {
+  const { ent } = dataOf(build(withEntity('a < b & c, and lt alone.\n\n# word/lt: lt\naka: lt, amp\n\nA term.')).html)
+  const text = ent['open/added'].html
+  assert.match(text, /a &lt; b &amp; c, and <a [^>]*data-e="word\/lt"[^>]*>lt<\/a> alone/)
+})
+
+test('a term holding a character that escapes still links', () => {
+  const { ent } = dataOf(build(withEntity('Read Q&A first.\n\n# word/qa: Q&A\n\nA term.')).html)
+  assert.match(ent['open/added'].html, /<a [^>]*data-e="word\/qa"[^>]*>Q&amp;A<\/a>/)
+})
+
+test('a name every object inherits is no entity and no kind', () => {
+  assert.match(problemsOf(small('See [[constructor]] and [[toString]].')), /dead link constructor/)
+  assert.match(problemsOf(`${SOURCE}\n# constructor/x: A thing\n`), /unknown kind "constructor"/)
+})
+
+test('the page\'s totals follow renames, as the offer\'s size and GitHub\'s do', () => {
+  const clock = 'import time\n\ndef now():\n    return time.time()\n'
+  const renamed = prRepo({ head: { 'tidewatch/time_source.py': clock }, removed: ['tidewatch/clock.py'] })
+  try {
+    const { size } = dataOf(build(small('Sum.'), { repoDir: renamed.repo, head: renamed.headSha }).html)
+    assert.deepEqual(size, { lines: 0, files: 1 })
+  } finally {
+    renamed.clean()
+  }
+})
+
 // ------------------------------------------------- the click-through
 
 // Only where Chrome is on the machine. Not on CI, whose images' sandboxes differ: the checker is

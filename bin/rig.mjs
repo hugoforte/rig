@@ -20,7 +20,7 @@ import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
 import { phaseOf, phaseLabel, statusLine, gatesOf, contradictions, STOPPABLE, STOP_WORDS } from './phase.mjs'
 import { nextFor } from './next.mjs'
-import { pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageLinkable, pageRegion, prFromUrl, pageMoved, pageSaying, pageSourceAllowed, sizeWords } from './prpage.mjs'
+import { pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageLinkable, pageRegion, pageRegionRemoved, prFromUrl, pageMoved, pageSaying, pageSourceAllowed, sizeWords } from './prpage.mjs'
 import { attemptBranch, attemptFolder, isOpen, openSet, openSets, attemptsOf, attemptsShapeProblem, attemptNumber, countIn } from './attempts.mjs'
 import { READERS, SESSIONS_EXAMPLE, readSessions, sessionFiles, sessionsBetween, sessionsFor, sourcesProblem } from './sessions.mjs'
 import { extractOf } from './extract.mjs'
@@ -830,8 +830,8 @@ function recordShapeProblem (w) {
       if (b.verified !== undefined && !(isObject(b.verified) && ['branch', 'head', 'base', 'patchId', 'at'].every(k => typeof b.verified[k] === 'string'))) {
         return `\`verified\` of ${r.repo} is not a pass with its branch, head, base, patch-id and date`
       }
-      if (b.page !== undefined && !(isObject(b.page) && ['url', 'head', 'at'].every(k => typeof b.page[k] === 'string'))) {
-        return `\`page\` of ${r.repo} is not a reading page with its url, head and date`
+      if (b.page !== undefined && !(isObject(b.page) && ['url', 'head', 'at'].every(k => typeof b.page[k] === 'string') && Number.isInteger(b.page.number))) {
+        return `\`page\` of ${r.repo} is not a reading page with its url, head, PR number and date`
       }
     }
   }
@@ -1402,9 +1402,9 @@ function visibilityOf (spec) {
 
 // A data root with no remote is private: nobody but this machine can read it. One GitHub does
 // not host answers `elsewhere`, since nothing says who can read it.
-function dataRootVisibility () {
-  if (!dataRemoteUrl()) return 'private'
-  const spec = dataRootSpec()
+function dataRootVisibility (root = dataRoot()) {
+  if (!dataRemoteUrl(root)) return 'private'
+  const spec = dataRootSpec(root)
   return spec ? visibilityOf(spec) : 'elsewhere'
 }
 
@@ -1416,8 +1416,8 @@ const dataRootSpec = (root = dataRoot()) => /^https:\/\/github\.com\/([^/]+\/[^/
 // path in it, and GitHub keeps a body's edit history, so a link published cannot be taken back.
 // A data root hosted elsewhere is never linked. Null when GitHub would not say for either side,
 // which callers treat as no.
-function mayLink (spec) {
-  const [here, root] = [visibilityOf(spec), dataRootVisibility()]
+function mayLink (spec, dataRootDir = dataRoot()) {
+  const [here, root] = [visibilityOf(spec), dataRootVisibility(dataRootDir)]
   if (root === 'elsewhere') return false
   return here && root ? REACH.indexOf(here) <= REACH.indexOf(root) : null
 }
@@ -3283,7 +3283,7 @@ function repoEntryJson (cfg, entry, branch, live) {
     base: br.base,
     ...(br.pr ? { pr: { ...br.pr, state: 'MERGED', recorded: true } } : {}),
     ...(br.verified ? { verified: { branch: br.verified.branch, head: br.verified.head, base: br.verified.base, patchId: br.verified.patchId, at: br.verified.at } } : {}),
-    ...(br.page ? { page: { url: br.page.url, head: br.page.head, at: br.page.at } } : {}),
+    ...(br.page ? { page: { url: br.page.url, head: br.page.head, number: br.page.number, at: br.page.at } } : {}),
   }))
   const stored = (entry.branches || []).find(br => br.branch === branch)?.pr
   if (stored) {
@@ -3740,7 +3740,7 @@ cmds.status = ({ flags }) => {
     if (checked.includes(r)) say(`  checks  ${verificationLabel(r.repo, verificationOf(cfg, r, work))}`)
     say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     const page = workBranch(r, work)?.page
-    if (page) say(`  page    at ${page.head.slice(0, 7)} ${page.url}`)
+    if (page && page.number === v.pr?.number) say(`  page    at ${page.head.slice(0, 7)} ${page.url}`)
     say('')
   })
   // The contradictions that need a lookup fire here, because this is the command that has
@@ -4082,7 +4082,7 @@ cmds.next = ({ flags }) => {
         if (r.pr?.state !== 'OPEN') return false
         const spec = repoSpec(work.repos[i])
         const link = mayLink(spec)
-        return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link }))
+        return link !== null && !prSaysRecord(r.pr, prText(work, stack, { spec, link, number: r.pr.number }))
       }).map(r => r.repo),
     pages: work.closedAt ? [] : pagesForNext(cfg, work, repos, states, stack),
     replaced: replacedStages(cfg, work, stack),
@@ -4212,7 +4212,7 @@ const pullRequestProse = id => (exists(contextFile(id)) ? pullRequestSaid(readTe
 //
 // Written for one repo, `spec`: which tickets its merge closes, and whether the context doc may
 // be linked from it (`link`, from `mayLink`), are both questions about that repo.
-function prBody (work, stack, { spec, link }) {
+function prBody (work, stack, { spec, link, number }) {
   const lines = []
   if (work.title) lines.push(work.title, '')
   const fixes = closedByPr(work, stack, spec)
@@ -4225,9 +4225,10 @@ function prBody (work, stack, { spec, link }) {
   // work, written at different times, would disagree in the one place a reviewer reads first.
   const delivers = pullRequestProse(work.id)
   const direction = delivers ? '' : directionProse(work.id)
-  // Asked each time, in case the repo has widened since the page was published.
+  // Asked each time, in case the repo has widened since the page was published. A page is its own
+  // PR's: one opening on the same branch has no page yet.
   const page = workBranch(work.repos.find(r => repoSpec(r).toLowerCase() === spec.toLowerCase()), work)?.page
-  if (page && pageLinkable(page.url, link)) lines.push(pageLine(page), '')
+  if (page && page.number === number && pageLinkable(page.url, link)) lines.push(pageLine(page), '')
   if (delivers) lines.push(delivers, '')
   if (direction) lines.push('## Direction', '', direction, '')
 
@@ -4260,7 +4261,7 @@ const repoSpec = entry => `${entry.org}/${entry.repo}`
 // Everything `rig pr` writes into one repo's pull request, rendered from the record as it
 // stands. The one renderer for opening a PR, refreshing it, and asking whether an open one has
 // gone stale, so the three cannot disagree about what the PR should say.
-const prText = (work, stack, { spec, link }) => ({ title: work.title || work.id, body: prBody(work, stack, { spec, link }) })
+const prText = (work, stack, { spec, link, number }) => ({ title: work.title || work.id, body: prBody(work, stack, { spec, link, number }) })
 
 // Which release a work PR asks for, and why — "a minor release (the branch prefix `feat/`)" —
 // as the `version` check's own `bumpFor` reads it (decision 130). Null on a repo that does not
@@ -4371,13 +4372,20 @@ function pageSiteOf (entry, { root = dataRoot(), fresh = false } = {}) {
   return pageSite({ spec, visibility: visibilityOf(spec), root: answer })
 }
 
+// The page recorded for this very PR. One recorded for another number, closed since and the branch
+// opened again, says nothing about this one.
+function pageOf (entry, branch, pr) {
+  const page = branchRecord(entry, branch)?.page
+  return page && page.number === pr?.number ? page : null
+}
+
 // One open PR, as `pageSaying` reads it, on the work branch or a stage. The site is asked about
 // only where the answer would be said, or where the caller already has it.
 function pageFact (cfg, work, entry, pr, branch = work.branch, placed = null) {
   const threshold = pageThresholdOf(cfg.prPage, entry)
   const size = pageSize(pr)
   const due = pageDue(size, threshold)
-  const page = branchRecord(entry, branch)?.page ?? null
+  const page = pageOf(entry, branch, pr)
   const fact = { repo: branch === work.branch ? entry.repo : `${entry.repo} (${branch})`, size, threshold, due, page, prHead: pr?.head ?? null }
   if (due && !page) {
     const { why, warning } = placed || pageSiteOf(entry)
@@ -4474,7 +4482,7 @@ function pagePrs (cfg, work, entries) {
 function pageReport (cfg, work, { entry, branch, pr, error }) {
   const stage = branch !== work.branch
   const label = stage ? `${entry.repo} (${branch})` : entry.repo
-  const base = { repo: entry.repo, label, spec: repoSpec(entry), stage, page: branchRecord(entry, branch)?.page ?? null }
+  const base = { repo: entry.repo, label, spec: repoSpec(entry), stage, page: pageOf(entry, branch, pr) }
   if (error) return { ...base, pr: null, error }
   const placed = pageSiteOf(entry)
   const fact = pageFact(cfg, work, entry, pr, branch, placed)
@@ -4515,6 +4523,7 @@ function readBuiltPage (file, expected) {
   if (file === true) die('--publish names the built page: `rig page --publish <file>`')
   const built = path.resolve(cwd(), file)
   if (!exists(built)) die(`${built} does not exist — the rig-pr-page skill builds it`)
+  if (!fs.statSync(built).isFile()) die(`${built} is not a file — --publish names the built page`)
   const html = readText(built)
   const metas = pageMetas(html)
   if (!metas.pr || !metas.head) die(`${built} does not say which PR and head it describes (\`rig:pr\`, \`rig:head\`) — the rig-pr-page skill builds it`)
@@ -4524,8 +4533,14 @@ function readBuiltPage (file, expected) {
 // The one write: one path of the data root's site. Judged here, at the write and from a fresh look,
 // rather than trusted from an earlier one or from the skill, because this is the line that keeps a
 // page from reaching further than its code unless the person said so with `--public`. Dies with
-// nothing written where it will not do, and warns whenever what it wrote is public.
+// nothing written where it will not do, and warns whenever what it wrote is public. The visibility
+// judged is that of the repo the page claims, so its head must be a commit of that repo: otherwise a
+// private repo's code could go up under a public PR's name.
 function writePage (entry, number, html, head, { root, allowPublic = false } = {}) {
+  let present = false
+  const unknown = trackerFailure(() => { present = github().commitExists(entry.org, entry.repo, head) })
+  if (unknown) die(`${entry.repo}: GitHub would not say whether ${head.slice(0, 7)} is a commit of ${repoSpec(entry)} (${unknown}) — nothing published`)
+  if (!present) die(`${entry.repo}: the page is at ${head.slice(0, 7)}, which is not a commit of ${repoSpec(entry)}, so it was built from other code — nothing published`)
   const placed = pageSiteOf(entry, { ...(root ? { root } : {}), fresh: true })
   if (placed.why) die(`${entry.repo}: no reading page — ${placed.why}. Nothing published`)
   if (placed.needsPublicFlag && !allowPublic) die(`${entry.repo}: ${placed.warning}. Nothing published`)
@@ -4552,26 +4567,34 @@ function publishPage (cfg, work, entries, { publish: file, public: allowPublic }
     open.find(r => r.pr.url.toLowerCase() === wanted) || die(`${built} describes ${said}, which is no open PR of ${work.id} (${open.map(r => r.pr.url).join(', ')}) — nothing published`))
   const { entry, branch, pr } = target
   const url = writePage(entry, pr.number, html, metas.head, { allowPublic: allowPublic === true })
-  const page = { url, head: metas.head, at: new Date().toISOString() }
+  const page = { url, head: metas.head, number: pr.number, at: new Date().toISOString() }
   ensureBranchRecord(entry, branch, branch === work.branch ? entry.base : null).page = page
   commitAs(work.id, `reading page ${entry.repo} ${metas.head.slice(0, 7)}`)
   saveWork(cfg, work)
   const saying = pageSaying({ repo: entry.repo, due: false, page, prHead: pr.head })
   if (saying) step(saying.says)
   // A link no PR of this repo may carry is printed, so a page is never published and left unfound.
-  if (!pageLinkable(url, mayLink(repoSpec(entry)))) return step(`PR #${pr.number} may not carry that link, since its host may name the data root, so posting it is yours to decide: ${pageLine(page)}`)
-  if (branch === work.branch) return step(`\`rig pr --refresh\` carries the link into PR #${pr.number}; a new page can take a minute to serve`)
-  linkStagePr(entry, pr, page)
+  const linkable = pageLinkable(url, mayLink(repoSpec(entry)))
+  if (!linkable) step(unlinkable(pr.number, page))
+  if (branch !== work.branch) return linkStagePr(entry, branch, pr.number, page, linkable)
+  if (linkable) step(`\`rig pr --refresh\` carries the link into PR #${pr.number}; a new page can take a minute to serve`)
 }
 
-// The stage PR's body keeps everything it said, and gains or moves the marked region. Idempotent;
-// a link it could not write is printed.
-function linkStagePr (entry, pr, page) {
-  const body = pageRegion(pr.body, page)
-  if (body === pr.body) return
-  const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, { title: pr.title, body }))
-  if (failed) return warn(`${entry.repo}: could not write the link into PR #${pr.number} (${failed}) — ${pageLine(page)}`)
-  step(`PR #${pr.number} carries the link`)
+const unlinkable = (number, page) => `PR #${number} may not carry that link, since its host may name the data root, so posting it is yours to decide: ${pageLine(page)}`
+
+// The stage PR's body keeps everything it said, and gains or moves the marked region, or loses it
+// where the link may no longer go. Idempotent. Read again here, since the upload took a while and
+// someone may have edited it, and only the body is sent. A link it could not write is printed.
+function linkStagePr (entry, branch, number, page, linkable) {
+  let fresh = null
+  const unread = trackerFailure(() => { fresh = github().prForBranch(entry.org, entry.repo, branch) })
+  if (unread || fresh?.number !== number) return warn(`${entry.repo}: could not read PR #${number} to write its link${unread ? ` (${unread})` : ''} — ${pageLine(page)}`)
+  const body = linkable ? pageRegion(fresh.body, page) : pageRegionRemoved(fresh.body)
+  if (body === (fresh.body ?? '')) return
+  const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, number, { body }))
+  if (failed) return warn(`${entry.repo}: could not write the link into PR #${number} (${failed}) — ${pageLine(page)}`)
+  if (linkable) step(`PR #${number} carries the link`)
+  else step(`PR #${number}'s old link is taken out`)
 }
 
 const isUrl = text => /^https?:\/\//.test(text ?? '')
@@ -4596,29 +4619,38 @@ function pageRootForOrg (org) {
 // the person to post.
 function pageOutside (text, flags) {
   const named = prFromUrl(text) || die(`${text} is not a GitHub pull request's URL`)
-  const entry = { org: named.org, repo: named.repo }
-  const { root, rigJson } = pageRootForOrg(named.org)
   let pr = null
   const failed = trackerFailure(() => { pr = github().prByNumber(named.org, named.repo, named.number) })
   if (failed) die(`GitHub would not say what ${named.url} is (${failed})`)
   if (!pr) die(`GitHub has no pull request at ${named.url}`)
+  // GitHub's spelling from here on, not whatever was typed: it goes into the page's path.
+  const { org, repo: name } = prFromUrl(pr.url) || named
+  const entry = { org, repo: name }
+  const spec = repoSpec(entry)
+  const { root, rigJson } = pageRootForOrg(org)
+  const notOpen = pr.state && pr.state !== 'OPEN' ? `${spec}#${pr.number} is ${pr.state.toLowerCase()}` : null
   if (flags.publish !== undefined) {
     const { html, metas } = readBuiltPage(flags.publish, (wanted, built, said) => wanted === pr.url.toLowerCase() || die(`${built} describes ${said}, not ${pr.url} — nothing published`))
     const url = writePage(entry, pr.number, html, metas.head, { root, allowPublic: flags.public === true })
-    say(pageLine({ url, head: metas.head }))
-    step(`recorded nowhere, and nothing was posted to ${pr.url}: the link is yours to post`)
+    const page = { url, head: metas.head }
+    say(pageLine(page))
+    if (notOpen) step(notOpen)
+    const moved = pageSaying({ repo: `${spec}#${pr.number}`, due: false, page, prHead: pr.head })
+    if (moved) step(moved.says)
+    if (pageLinkable(url, mayLink(spec, root))) step(`recorded nowhere, and nothing was posted to ${pr.url}: the link is yours to post`)
+    else step(`recorded nowhere, and nothing was posted to ${pr.url}. ${unlinkable(pr.number, page)}`)
     return
   }
   const threshold = pageThresholdOf(rigJson.prPage, entry, loadCatalog(root))
   const size = pageSize(pr)
   const placed = pageSiteOf(entry, { root })
   const report = {
-    repo: named.repo,
-    label: `${repoSpec(entry)}#${pr.number}`,
-    spec: repoSpec(entry),
+    repo: name,
+    label: `${spec}#${pr.number}`,
+    spec,
     outside: true,
     page: null,
-    pr: { number: pr.number, url: pr.url, head: pr.head, base: pr.base, branch: pr.branch },
+    pr: { number: pr.number, url: pr.url, head: pr.head, base: pr.base, branch: pr.branch, state: pr.state },
     size,
     threshold,
     due: pageDue(size, threshold),
@@ -4629,6 +4661,7 @@ function pageOutside (text, flags) {
     source: null,
   }
   if (flags.json) return say(JSON.stringify([report], null, 2))
+  if (notOpen) step(notOpen)
   sayReport(report)
 }
 
@@ -4661,7 +4694,7 @@ function refreshPrs (work, stack) {
     if (prError) { warn(`${entry.repo}: GitHub would not say whether a PR is open (${prError}) — nothing refreshed`); continue }
     if (pr?.state !== 'OPEN') { step(`${entry.repo}: no open PR — nothing to refresh`); continue }
     const spec = repoSpec(entry)
-    const text = prText(work, stack, { spec, link: linkOrSay(spec) })
+    const text = prText(work, stack, { spec, link: linkOrSay(spec), number: pr.number })
     if (prSaysRecord(pr, text)) { step(`${entry.repo}: PR #${pr.number} is already up to date`); continue }
     const failed = trackerFailure(() => github().editPr(entry.org, entry.repo, pr.number, text))
     if (failed) { warn(`${entry.repo}: could not refresh PR #${pr.number} (${failed})`); continue }

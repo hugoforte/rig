@@ -823,8 +823,12 @@ rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
   `rig pr`; `--publish` refuses with it. With no site, the line says how to turn Pages on from
   `gh-pages`, and that on a personal account the site is public. rig turns nothing on itself. The line
   stays out of PR bodies.
-- **The link.** `--publish` records `page: { url, head, at }`, since a private site cannot be read
-  back. A private site's host is a random `*.pages.github.io` name and its path names only the repo
+- **The page's own word.** The site is judged by the repo the page says it describes, so `--publish`
+  refuses a page whose `rig:head` is not a commit of that repo, and the build refuses a `--repo-dir`
+  whose origin is not it. A page says it describes one PR, and it is that number's: a new PR on the
+  same branch has no page until it gets its own.
+- **The link.** `--publish` records `page: { url, head, number, at }`, since a private site cannot be
+  read back. A private site's host is a random `*.pages.github.io` name and its path names only the repo
   the PR is in, so that link goes into any PR, a public one too, where only the data root's readers
   can open it. Any other host may name the data root, a public site's `<owner>.github.io/<repo>` above
   all, so it goes by the context doc's rule above; where that says no, `--publish` prints the link and
@@ -832,9 +836,9 @@ rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
   - **The work branch's PR:** `rig pr` and `rig pr --refresh` write `Reading page, at \`abc1234\`:
     <url>` near the top of the body, which `rig next`'s comparison offers like any other change.
   - **A stage PR's** body is not rig's and `rig pr --refresh` leaves it alone, so `--publish` writes
-    the line into a marked region (`rig:reading-page`) at its top, replaced in place when published
-    again, with everything around it left as written. A link it may not write, or could not, is
-    printed.
+    the line into a marked region (`rig:reading-page`) at its very top, replaced in place when
+    published again and taken out where the link may no longer go, with everything else left as
+    written. A link it may not write, or could not, is printed.
   - **A PR by URL:** rig records nothing, writes nothing to the PR, and prints the link for the
     person to post. The data root is the one that holds the PR's org; none refuses, two ask for
     `--data`.

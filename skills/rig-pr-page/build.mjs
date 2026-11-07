@@ -26,7 +26,7 @@ export class PageBuildError extends Error {
 }
 
 // The kinds an agent writes, and the tab each lives on. `file` and `sec` come from the diff.
-const WRITTEN = { part: 'map', flow: 'flows', decision: 'decisions', test: 'tests', risk: 'risks', open: 'open', word: 'words' }
+const WRITTEN = Object.assign(Object.create(null), { part: 'map', flow: 'flows', decision: 'decisions', test: 'tests', risk: 'risks', open: 'open', word: 'words' })
 const TABS = [['start', 'Start'], ['map', 'Map'], ['flows', 'Behaviour'], ['decisions', 'Decisions'], ['tests', 'Tests'], ['risks', 'Risks'], ['open', 'Open items'], ['words', 'Words'], ['files', 'Files']]
 const META = /^(sub|group|status|uses|files|aka|pill):\s*(.*)$/
 const STATUSES = ['new', 'changed', 'removed', 'unchanged']
@@ -52,7 +52,18 @@ function prParts (url) {
   return { repo: m[1], number: Number(m[2]) }
 }
 
-// What the diff holds: one `{ path, change, added, removed }` a file, and how big it all is.
+// Why this checkout is not the PR's repo, or null when it is. A slip this catches early; `rig page
+// --publish` holds the line by asking GitHub whether the page's head is in the PR's repo.
+function originProblem (git, repoDir, repo) {
+  const origin = git('remote', 'get-url', 'origin')?.trim()
+  if (!origin) return `${repoDir} has no origin, so nothing ties it to ${repo}`
+  const names = url => /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/*$/.exec(url)?.slice(1, 3).join('/') ?? url
+  const [have, want] = [names(origin), names(repo)]
+  return have.toLowerCase() === want.toLowerCase() ? null : `--repo-dir's origin is ${have}, and --pr is in ${want}: the page would describe other code`
+}
+
+// What the diff holds: one `{ path, change, added, removed }` a file, a rename being one of each, so
+// that both ends can be read, and how big it all is, as GitHub counts a PR, with renames paired.
 function changedFiles (git, base, head) {
   const numstat = git('diff', '--numstat', '--no-renames', '-z', base, head)
   const status = git('diff', '--name-status', '--no-renames', '-z', base, head)
@@ -72,7 +83,8 @@ function changedFiles (git, base, head) {
       binary: added === '-',
     }
   })
-  return { files, size: { lines: files.reduce((n, f) => n + f.added + f.removed, 0), files: files.length } }
+  const paired = (git('-c', 'diff.renames=true', 'diff', '--numstat', base, head) ?? '').split('\n').filter(Boolean).map(row => row.split('\t'))
+  return { files, size: { lines: paired.reduce((n, [added, removed]) => n + (Number(added) || 0) + (Number(removed) || 0), 0), files: paired.length } }
 }
 
 // The source: `title:` and `start:` in its frontmatter, the summary, then `# kind/id: Title`
@@ -119,21 +131,24 @@ const blobUrl = (repo, sha, file, line) => `${repo}/blob/${sha}/${file.split('/'
 // A changed markdown file's sections, as entities a reviewer can open and link to.
 function docSections (file, text) {
   const sections = []
-  const seen = new Map()
+  const taken = new Set()
+  const unique = base => {
+    let slug = base
+    for (let n = 1; taken.has(slug); n++) slug = `${base}-${n}`
+    taken.add(slug)
+    return slug
+  }
   let cur = null
   let fence = false
   text.replace(/\r\n/g, '\n').split('\n').forEach((line, index) => {
     if (fenceAt(line)) fence = !fence
     const m = fence ? null : /^(#{1,3}) (.+)$/.exec(line)
     if (m) {
-      const base = slugOf(m[2]) || 'section'
-      const n = seen.get(base) || 0
-      seen.set(base, n + 1)
-      cur = { level: m[1].length, title: m[2].replace(/[`*]/g, '').trim(), slug: n ? `${base}-${n}` : base, line: index + 1, md: [] }
+      cur = { level: m[1].length, title: m[2].replace(/[`*]/g, '').trim(), slug: unique(slugOf(m[2]) || 'section'), line: index + 1, md: [] }
       sections.push(cur)
     } else {
       if (!cur && line.trim()) {
-        cur = { level: 1, title: path.posix.basename(file), slug: 'top', line: index + 1, md: [] }
+        cur = { level: 1, title: path.posix.basename(file), slug: unique('top'), line: index + 1, md: [] }
         sections.push(cur)
       }
       if (cur) cur.md.push(line)
@@ -151,9 +166,8 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
     for (const term of [...(e.kind === 'word' ? [e.title] : []), ...list(e.meta?.aka)]) if (!terms.has(term)) terms.set(term, id)
   }
   const termRe = terms.size
-    ? new RegExp(`(?<![\\w-])(${[...terms.keys()].sort((a, b) => b.length - a.length).map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\w-])`, 'g')
+    ? new RegExp(`(?<![\\w-])(${[...terms.keys()].sort((a, b) => b.length - a.length).map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\w-])`, 'g')
     : null
-  const unesc = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 
   const link = (id, label, ctx, cls = 'w') => {
     if (id === ctx.eid) return label
@@ -162,15 +176,26 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
   }
   const ext = (url, label, cls = '') => `<a class="ext${cls ? ` ${cls}` : ''}" target="_blank" rel="noopener noreferrer" href="${attr(url)}">${label}</a>`
 
-  // The first mention of a declared term in this entity, in escaped text.
-  const linkTerms = (escaped, ctx) => {
-    if (!termRe || ctx.nolink) return escaped
-    return escaped.replace(termRe, (match) => {
-      const id = terms.get(unesc(match))
-      if (!id || id === ctx.eid || ctx.seen.has(id)) return match
+  // Plain text, escaped, with the first mention of a declared term in this entity linked. Matched
+  // before escaping, so a term can never match inside an entity the escaping wrote.
+  const linkTerms = (raw, ctx) => {
+    if (!termRe || ctx.nolink) return esc(raw)
+    let out = ''
+    let at = 0
+    for (const m of raw.matchAll(termRe)) {
+      const id = terms.get(m[0])
+      if (!id || id === ctx.eid || ctx.seen.has(id)) continue
       ctx.seen.add(id)
-      return link(id, match, ctx)
-    })
+      out += esc(raw.slice(at, m.index)) + link(id, esc(m[0]), ctx)
+      at = m.index + m[0].length
+    }
+    return out + esc(raw.slice(at))
+  }
+
+  // Plain text between the format's own marks: a `{{` here is a citation nothing could read.
+  const plain = (raw, ctx) => {
+    if (!ctx.doc && raw.includes('{{')) problems.push(`unclosed {{ in ${ctx.eid}: ${raw.slice(raw.indexOf('{{'), raw.indexOf('{{') + 60)}`)
+    return linkTerms(raw, ctx)
   }
 
   const citation = (spec, ctx) => {
@@ -206,7 +231,7 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
     return ext(blobUrl(repo, head, file), label)
   }
 
-  const INLINE = /`(?<code>[^`]+)`|\[\[(?<wiki>[^\]|]+)(?:\|(?<wikil>[^\]]+))?\]\]|\{\{(?<cite>[^}]+)\}\}|\[(?<lt>[^\]]+)\]\((?<lu>[^)\s]+)\)|\*\*(?<b>.+?)\*\*|(?<![\w*])\*(?!\s)(?<i>[^*]+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(?<u>[^_]+?)(?<!\s)_(?![\w_])/g
+  const INLINE = /`(?<code>[^`]+)`|\[\[(?<wiki>[^\]|]+)(?:\|(?<wikil>[^\]]+))?\]\]|\{\{(?<cite>.+?)\}\}|\[(?<lt>[^\]]+)\]\((?<lu>[^)\s]+)\)|\*\*(?<b>.+?)\*\*|(?<![\w*])\*(?!\s)(?<i>[^*]+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(?<u>[^_]+?)(?<!\s)_(?![\w_])/g
 
   const inline = (text, ctx) => {
     let out = ''
@@ -215,7 +240,7 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
       const g = m.groups
       // A repo's doc is only text: its braces and double brackets stay as they are written.
       if (ctx.doc && (g.wiki !== undefined || g.cite !== undefined)) continue
-      out += linkTerms(esc(text.slice(at, m.index)), ctx)
+      out += plain(text.slice(at, m.index), ctx)
       at = m.index + m[0].length
       if (g.code !== undefined) {
         const id = !ctx.nolink && terms.get(g.code)
@@ -240,16 +265,23 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
         out += `<em>${inline(g.i ?? g.u, ctx)}</em>`
       }
     }
-    return out + linkTerms(esc(text.slice(at)), ctx)
+    return out + plain(text.slice(at), ctx)
   }
 
   const cells = line => {
     const out = []
     let cur = ''
     let code = false
-    for (const ch of line.trim().replace(/^\|/, '').replace(/\|$/, '')) {
+    let marks = 0
+    const row = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i]
+      const two = row.slice(i, i + 2)
       if (ch === '`') code = !code
-      if (ch === '|' && !code) { out.push(cur.trim()); cur = '' } else cur += ch
+      // A citation's or a link's own `|` belongs to it.
+      if (!code && (two === '{{' || two === '[[')) marks++
+      if (!code && marks && (two === '}}' || two === ']]')) marks--
+      if (ch === '|' && !code && !marks) { out.push(cur.trim()); cur = '' } else cur += ch
     }
     out.push(cur.trim())
     return out
@@ -339,6 +371,8 @@ function renderer ({ ent, problems, repo, head, baseSha, blobLines, secIds, warn
 export function buildPage ({ source, pr, head, base, branch, repoDir, builtAt = new Date().toISOString().slice(0, 10) }) {
   const { repo, number } = prParts(pr)
   const git = gitIn(repoDir)
+  const elsewhere = originProblem(git, repoDir, repo)
+  if (elsewhere) throw new PageBuildError([elsewhere])
   const headSha = git('rev-parse', '--verify', '--quiet', `${head}^{commit}`)?.trim()
   if (!headSha) throw new PageBuildError([`git has no commit ${head} in ${repoDir}: fetch it, or build where it is checked out`])
   const baseRef = [`origin/${base}`, base].find(ref => git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`))
@@ -362,7 +396,7 @@ export function buildPage ({ source, pr, head, base, branch, repoDir, builtAt = 
   }
 
   // Every entity first, since any of them may link any other.
-  const ent = {}
+  const ent = Object.create(null)
   const add = (id, e) => {
     if (ent[id]) problems.push(`duplicate ${id}`)
     ent[id] = e
@@ -408,7 +442,7 @@ export function buildPage ({ source, pr, head, base, branch, repoDir, builtAt = 
   const fileIsThere = name => changed.has(name) || !!blobLines(headSha, name)
   const { blocks, link, ext } = renderer({ ent, problems, repo, head: headSha, baseSha, blobLines, secIds, warnings })
 
-  const back = {}
+  const back = Object.create(null)
   const rendered = (eid, doc, lines) => {
     const ctx = { eid, doc, seen: new Set(), mentions: new Set(), nolink: false }
     return { html: blocks(lines, ctx), ctx }
@@ -479,11 +513,9 @@ export function buildPage ({ source, pr, head, base, branch, repoDir, builtAt = 
   }
   // Parsed from the element's text, never run, so only a closing tag could end it early.
   const json = JSON.stringify(data).replace(/</g, '\\u003c')
-  const fill = { TITLE: esc(`${parsed.title} · PR #${number}`), PR: attr(pr), HEAD: headSha }
-  let html = fs.readFileSync(path.join(HERE, 'template.html'), 'utf8')
-  for (const [key, value] of Object.entries(fill)) html = html.replaceAll(`{{${key}}}`, () => value)
-  // Last and once, since the data may hold anything, the marker's own spelling included.
-  html = html.replace('{{DATA}}', () => json)
+  const fill = { TITLE: esc(`${parsed.title} · PR #${number}`), PR: attr(pr), HEAD: headSha, DATA: json }
+  // One pass, so nothing filled in is read as a marker: a title may say `{{DATA}}`.
+  const html = fs.readFileSync(path.join(HERE, 'template.html'), 'utf8').replace(/\{\{(TITLE|PR|HEAD|DATA)\}\}/g, (_, key) => fill[key])
   return { html, data, warnings }
 }
 

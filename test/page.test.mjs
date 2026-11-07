@@ -560,6 +560,170 @@ test('--publish by URL refuses a page of another PR', () => {
   assert.match(r.out, /describes https:\/\/github\.com\/acme\/orders\/pull\/56/)
 })
 
+// ------------------------------------------------- what the adversarial review found
+
+test('--publish refuses a page whose head is not a commit of the PR\'s repo, on either route, and writes nothing', () => {
+  const branch = workWithPr('other-code')
+  const foreign = 'c'.repeat(40)
+  const state = github()
+  state.repos['acme/billing'].commitsAbsent = [foreign]
+  state.repos['acme/orders'].commitsAbsent = [foreign]
+  setGithub(state)
+  const was = writes('acme/rig-data').length
+  const r = rig(['page', 'billing', '--work', 'other-code', '--publish', pageFile({ pr: prOf(branch).url, head: foreign })])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /ccccccc, which is not a commit of acme\/billing.*nothing published/i)
+  assert.equal(rig(['page', OUTSIDE, '--publish', pageFile({ pr: OUTSIDE, head: foreign })]).code, 1)
+  assert.equal(writes('acme/rig-data').length, was)
+  assert.equal(record('other-code').repos[0].branches.find(b => b.branch === branch).page, undefined)
+})
+
+test('a head GitHub would not answer for is refused too, and never read as there', () => {
+  const branch = 'feat/other-code'
+  const state = github()
+  state.repos['acme/billing'].commitLookupFails = 'gh: Bad gateway (HTTP 502)'
+  setGithub(state)
+  try {
+    const r = rig(['page', 'billing', '--work', 'other-code', '--publish', pageFile({ pr: prOf(branch).url })])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /GitHub would not say.*502/)
+  } finally {
+    const clear = github()
+    delete clear.repos['acme/billing'].commitLookupFails
+    setGithub(clear)
+  }
+})
+
+test('by URL, an address that names a more private data root says the link may name it', () => {
+  const url = 'https://github.com/acme/refunds/pull/77'
+  const state = github()
+  state.repos['acme/refunds'].visibility = 'public'
+  setGithub(state)
+  setPages('acme/rig-data', { ...SITE, public: true, url: 'https://acme.github.io/rig-data/' })
+  try {
+    const r = rig(['page', url, '--publish', pageFile({ pr: url })])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /may not carry that link, since its host may name the data root/)
+    assert.doesNotMatch(r.out, /the link is yours to post/)
+  } finally {
+    setPages('acme/rig-data', SITE)
+  }
+})
+
+test('a republish a stage PR may no longer carry takes the old link out of its body, and prints the line', () => {
+  const id = 'staged-widened'
+  const stage = stagedWork(id)
+  const pr = prOf(stage).url
+  assert.equal(rig(['page', '--work', id, '--publish', pageFile({ pr })]).code, 0)
+  assert.match(prOf(stage).body, /rig:reading-page/)
+  setPages('acme/rig-data', { ...SITE, url: 'https://docs.acme.example.invalid/' })
+  try {
+    withVisibility('acme/billing', 'public', () => {
+      const r = rig(['page', '--work', id, '--publish', pageFile({ pr })])
+      assert.equal(r.code, 0, r.out)
+      assert.equal(prOf(stage).body, 'What a person wrote.', 'the region goes, and the text stays')
+      assert.match(r.out, /may not carry that link.*docs\.acme\.example\.invalid/)
+    })
+  } finally {
+    setPages('acme/rig-data', SITE)
+  }
+})
+
+test('an edit made to a stage PR while the page uploads survives the link, its title included', () => {
+  const id = 'staged-edited'
+  const stage = stagedWork(id)
+  const state = github()
+  state.afterPutPage = { spec: 'acme/billing', number: prOf(stage).number, change: { body: 'Edited meanwhile.', title: 'Retitled meanwhile' } }
+  setGithub(state)
+  assert.equal(rig(['page', '--work', id, '--publish', pageFile({ pr: prOf(stage).url })]).code, 0)
+  assert.match(prOf(stage).body, /Edited meanwhile\.$/)
+  assert.equal(prOf(stage).title, 'Retitled meanwhile')
+})
+
+test('a page belongs to its PR\'s number: a new PR on the branch gets no old link, and is offered its own', () => {
+  const branch = workWithPr('reopened')
+  assert.equal(rig(['page', 'billing', '--work', 'reopened', '--publish', pageFile({ pr: prOf(branch).url })]).code, 0)
+  assert.equal(record('reopened').repos[0].branches.find(b => b.branch === branch).page.number, prOf(branch).number)
+  const state = github()
+  const prs = state.repos['acme/billing'].prs
+  const old = prs.find(p => p.branch === branch)
+  old.state = 'CLOSED'
+  const number = Math.max(...prs.map(p => p.number)) + 1
+  prs.push({ ...old, number, url: `https://github.com/acme/billing/pull/${number}`, state: 'OPEN', body: 'x', title: 'reopened' })
+  setGithub(state)
+
+  const said = rig(['next', '--work', 'reopened']).out
+  assert.match(said, /this PR is 1,240 lines across 31 files/, 'offered its own')
+  rig(['pr', '--refresh', '--work', 'reopened'])
+  const fresh = github().repos['acme/billing'].prs.find(p => p.number === number)
+  assert.doesNotMatch(fresh.body, /Reading page/)
+  assert.equal(JSON.parse(rig(['page', '--work', 'reopened', '--json']).out)[0].page, null)
+})
+
+test('by URL, a PR not open is said, and a head the PR has moved past is said at the publish', () => {
+  const url = 'https://github.com/acme/refunds/pull/77'
+  const state = github()
+  Object.assign(state.repos['acme/refunds'].prs[0], { state: 'MERGED', head: NEWER })
+  setGithub(state)
+  assert.match(rig(['page', url]).out, /acme\/refunds#77 is merged/)
+  assert.equal(JSON.parse(rig(['page', url, '--json']).out)[0].pr.state, 'MERGED')
+  const r = rig(['page', url, '--publish', pageFile({ pr: url, head: HEAD })])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /is merged/)
+  assert.match(r.out, /head has moved past its reading page \(page at aaaaaaa, PR at bbbbbbb\)/)
+})
+
+test('--publish naming a directory is refused in plain words', () => {
+  const r = rig(['page', OUTSIDE, '--publish', tmp])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /is not a file/)
+  assert.doesNotMatch(r.out, /EISDIR/)
+})
+
+test('a URL\'s typed casing goes no further than the lookup: the path uses GitHub\'s names', () => {
+  const typed = 'https://github.com/ACME/Orders/pull/55'
+  const r = rig(['page', typed, '--publish', pageFile({ pr: OUTSIDE })])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(writes('acme/rig-data').at(-1).path, 'rig-pr-pages/acme/orders/55/index.html')
+  assert.equal(JSON.parse(rig(['page', typed, '--json']).out)[0].spec, 'acme/orders')
+})
+
+test('a write the site refuses says so and records nothing', () => {
+  const branch = workWithPr('put-refused')
+  const state = github()
+  state.repos['acme/rig-data'].pagePutFails = 'gh: Resource not accessible (HTTP 403)'
+  setGithub(state)
+  try {
+    const r = rig(['page', 'billing', '--work', 'put-refused', '--publish', pageFile({ pr: prOf(branch).url })])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, /could not publish to acme\/rig-data \(gh: Resource not accessible \(HTTP 403\)\) — nothing recorded/)
+    assert.equal(record('put-refused').repos[0].branches.find(b => b.branch === branch).page, undefined)
+  } finally {
+    const clear = github()
+    delete clear.repos['acme/rig-data'].pagePutFails
+    setGithub(clear)
+  }
+})
+
+test('a link GitHub refuses says so and prints the line, and the page stays recorded', () => {
+  const id = 'staged-refused'
+  const stage = stagedWork(id)
+  const state = github()
+  state.repos['acme/billing'].editPrFails = 'gh: Resource not accessible (HTTP 403)'
+  setGithub(state)
+  try {
+    const r = rig(['page', '--work', id, '--publish', pageFile({ pr: prOf(stage).url })])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /could not write the link into PR #\d+ \(gh: Resource not accessible \(HTTP 403\)\) — Reading page, at `aaaaaaa`:/)
+    assert.equal(prOf(stage).body, 'What a person wrote.')
+    assert.ok(record(id).repos[0].branches.find(b => b.branch === stage).page)
+  } finally {
+    const clear = github()
+    delete clear.repos['acme/billing'].editPrFails
+    setGithub(clear)
+  }
+})
+
 // ------------------------------------------------- the record
 
 test('a work with no PR has nothing to measure, and --publish refuses', () => {

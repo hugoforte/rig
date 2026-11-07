@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { PAGE_DEFAULTS, pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageSaying, pageSourceAllowed, pageLinkable, pageRegion, prFromUrl } from '../bin/prpage.mjs'
+import { PAGE_DEFAULTS, pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageSaying, pageSourceAllowed, pageLinkable, pageRegion, pageRegionRemoved, prFromUrl } from '../bin/prpage.mjs'
 
 // ------------------------------------------------- how big is big
 
@@ -173,6 +173,37 @@ test('a stage PR\'s link is a region at the top of its body, leaving the rest as
   assert.equal(moved.match(/<!-- rig:reading-page -->/g).length, 1, 'one opening marker')
   assert.match(pageRegion('', page), /^<!-- rig:reading-page -->/)
   assert.match(pageRegion(null, page), /^<!-- rig:reading-page -->/)
+})
+
+test('only a region at the very start of the body, with markers on whole lines, is rig\'s to replace', () => {
+  const page = { url: 'https://wandering-otter-1a2b3c.pages.github.io/p/', head: 'a'.repeat(40) }
+  const region = /^<!-- rig:reading-page -->\nReading page, at `aaaaaaa`: \S+\n<!-- \/rig:reading-page -->\n\n/
+  // A person writing about the markers, an orphan opening, and a region moved down the body.
+  for (const body of [
+    'Intro\n\nThe marker is `<!-- rig:reading-page -->`.\n\nMY TEXT\n\nand it closes with `<!-- /rig:reading-page -->`.',
+    '<!-- rig:reading-page -->\nMY TEXT\n\n<!-- rig:reading-page -->\nold\n<!-- /rig:reading-page -->',
+    'Mine.\n\n<!-- rig:reading-page -->\nold\n<!-- /rig:reading-page -->',
+    '<!-- rig:reading-page --> on one line <!-- /rig:reading-page -->\n\nMine.',
+  ]) {
+    const out = pageRegion(body, page)
+    assert.match(out, region, body)
+    assert.ok(out.endsWith(body), `everything it said is still there: ${out}`)
+  }
+})
+
+test('a region GitHub handed back with CRLF line ends is still found', () => {
+  const page = { url: 'https://wandering-otter-1a2b3c.pages.github.io/p/', head: 'b'.repeat(40) }
+  const out = pageRegion('<!-- rig:reading-page -->\r\nold\r\n<!-- /rig:reading-page -->\r\n\r\nMine.', page)
+  assert.equal(out.match(/rig:reading-page -->/g).length, 2, 'one region, not two')
+  assert.match(out, /at `bbbbbbb`/)
+  assert.match(out, /Mine\.$/)
+})
+
+test('taking the region out leaves what the person wrote, and only that', () => {
+  const page = { url: 'https://wandering-otter-1a2b3c.pages.github.io/p/', head: 'a'.repeat(40) }
+  assert.equal(pageRegionRemoved(pageRegion('Mine.', page)), 'Mine.')
+  assert.equal(pageRegionRemoved(pageRegion('', page)), '')
+  assert.equal(pageRegionRemoved('Mine, naming <!-- rig:reading-page -->.'), 'Mine, naming <!-- rig:reading-page -->.')
 })
 
 test('a PR by URL gives its org, repo and number, and anything else is refused', () => {

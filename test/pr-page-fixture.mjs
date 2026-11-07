@@ -166,6 +166,7 @@ export function prRepo ({ head = HEAD, removed = REMOVED } = {}) {
     }
   }
   git('init', '-q', '-b', 'main')
+  git('remote', 'add', 'origin', 'https://github.com/example-harbour/tidewatch.git')
   write(BASE)
   git('add', '-A')
   git('commit', '-qm', 'Tidewatch as it stood')

@@ -99,7 +99,7 @@ Any kind takes `sub`, a one-line description, and `aka`, terms whose first menti
 node <this skill's folder>/build.mjs <source> --out <tmp>/dist.html --pr <pr.url> --head <pr.head> --base <pr.base> --branch <pr.branch> --repo-dir <worktree>
 ```
 
-Keep `dist.html` outside the data root and the work folder. A failed build lists every dead link, moved or out-of-range citation, duplicate id and connection to nothing. Fix the source until it builds, and read each `note:` it prints.
+`--repo-dir` must be a checkout of the PR's repo: the build compares its origin, and `rig page --publish` refuses a page whose head is not a commit of that repo. Keep `dist.html` outside the data root and the work folder. A failed build lists every dead link, moved or out-of-range citation, duplicate id and connection to nothing. Fix the source until it builds, and read each `note:` it prints.
 
 ## 5. Click through it
 
@@ -126,6 +126,6 @@ Then the link:
 - **The work branch's PR:** `rig pr --refresh` puts it in the body.
 - **A stage PR:** `--publish` has already put it in a marked region at the top of the body, and left the rest as written.
 - **A PR outside any work:** `rig page <url> --publish <tmp>/dist.html`. It records nothing, writes nothing to the PR, and prints the link. Give the user that line to post: posting it is theirs.
-- **`--publish` printed "may not carry that link":** the site's address may name the data root in a more visible PR. Give the user the line; whether to post it is theirs.
+- **`--publish` printed "may not carry that link", on either route:** the site's address may name the data root in a more visible PR. Give the user the line and say so; whether to post it is theirs.
 
 The page is a snapshot of one commit, and says so with a link to what has changed since. When the PR's head moves, `rig next` says so; a rebuild starts again from step 1.

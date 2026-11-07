@@ -109,15 +109,23 @@ export const pageLine = page => `Reading page, at \`${page.head.slice(0, 7)}\`: 
 // by the context doc's rule: `link` is `mayLink`'s answer, and null there means no.
 export const pageLinkable = (url, link) => /^https:\/\/[a-z0-9-]+\.pages\.github\.io(\/|$)/i.test(url) || link === true
 
-const REGION = /<!-- rig:reading-page -->[\s\S]*?<!-- \/rig:reading-page -->/
+// Only what rig writes: at the very start of the body, the markers on lines of their own around one
+// line. Anywhere else, or any other shape, the words are the person's, who may be writing about them.
+const REGION = /^<!-- rig:reading-page -->\r?\n[^\r\n]*\r?\n<!-- \/rig:reading-page -->(?=\r?\n|$)/
 
 // A body rig does not own, a stage PR's, with the page's line in a marked region at its top: the
-// region replaced in place if it is there, and everything around it left as written.
+// region replaced in place if it is there, and everything else left as written.
 export function pageRegion (body, page) {
   const region = `<!-- rig:reading-page -->\n${pageLine(page)}\n<!-- /rig:reading-page -->`
   const text = body ?? ''
   if (REGION.test(text)) return text.replace(REGION, () => region)
   return text ? `${region}\n\n${text}` : region
+}
+
+// That body with rig's region taken out, for a link it may no longer carry.
+export function pageRegionRemoved (body) {
+  const text = body ?? ''
+  return REGION.test(text) ? text.replace(REGION, '').replace(/^(\r?\n)+/, '') : text
 }
 
 // The org, repo and number of a GitHub pull request's URL, or null for anything else.
