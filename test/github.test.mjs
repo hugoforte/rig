@@ -17,6 +17,66 @@ const canned = reply => {
   return { calls, github: githubViaGh({ exec }) }
 }
 
+test('gh adapter: pagesSite reads where a repo publishes and who can read it, and null for none', () => {
+  const { calls, github } = canned(() => '{"url":"https://example.invalid/s/","public":false,"branch":"gh-pages","path":"/","build":"legacy"}')
+  assert.deepEqual(github.pagesSite('acme', 'platform'), { url: 'https://example.invalid/s/', public: false, branch: 'gh-pages', path: '/', build: 'legacy' })
+  assert.equal(calls[0][1], 'repos/acme/platform/pages')
+  assert.equal(canned(() => ({ code: 1, err: 'gh: Not Found (HTTP 404)' })).github.pagesSite('acme', 'platform'), null)
+})
+
+test('gh adapter: pagesSite throws where GitHub would not say, and never reads that as no site', () => {
+  assert.throws(() => canned(() => ({ code: 1, err: 'gh: Forbidden (HTTP 403)' })).github.pagesSite('acme', 'platform'), /403/)
+})
+
+test('gh adapter: prForBranch carries the size of the diff, on the same call', () => {
+  const { calls, github } = canned(() => '[{"number":12,"state":"OPEN","url":"u","additions":40,"deletions":2,"changedFiles":3}]')
+  const pr = github.prForBranch('acme', 'platform', 'feat/x')
+  assert.deepEqual([pr.additions, pr.deletions, pr.changedFiles], [40, 2, 3])
+  assert.equal(calls.length, 1)
+})
+
+test('gh adapter: putPage writes one path on the named branch, through the contents API, naming the blob it replaces', () => {
+  const inputs = []
+  const replies = ['abc123', 'commit1']
+  const calls = []
+  const exec = (args, opts) => {
+    calls.push(args)
+    inputs.push(opts?.input)
+    return { status: 0, stdout: replies.shift(), stderr: '' }
+  }
+  githubViaGh({ exec }).putPage('acme', 'platform', { branch: 'gh-pages', path: 'rig-pr-pages/acme/platform/12/index.html', content: '<p>é</p>', message: 'a page' })
+  assert.match(calls[0].join(' '), /repos\/acme\/platform\/contents\/rig-pr-pages\/acme\/platform\/12\/index\.html\?ref=gh-pages/)
+  assert.ok(calls[0].includes('Accept: application/vnd.github.object+json'), 'a blob over 1MB still answers with its sha')
+  assert.deepEqual(calls[1].slice(0, 4), ['api', '-X', 'PUT', 'repos/acme/platform/contents/rig-pr-pages/acme/platform/12/index.html'])
+  assert.ok(calls[1].includes('--input'), 'through stdin: a page is longer than a command line may be')
+  const body = JSON.parse(inputs[1])
+  assert.deepEqual([body.branch, body.message, body.sha], ['gh-pages', 'a page', 'abc123'])
+  assert.equal(Buffer.from(body.content, 'base64').toString('utf8'), '<p>é</p>')
+})
+
+test('gh adapter: putPage names no blob for a new page, and fails with gh\'s own error', () => {
+  const inputs = []
+  const exec = (args, opts) => {
+    inputs.push(opts?.input)
+    return args.includes('PUT')
+      ? { status: 1, stdout: '', stderr: 'gh: Resource not accessible (HTTP 403)' }
+      : { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }
+  }
+  assert.throws(() => githubViaGh({ exec }).putPage('acme', 'platform', { branch: 'gh-pages', path: 'a.html', content: 'x', message: 'm' }), /not accessible/)
+  assert.equal(JSON.parse(inputs[1]).sha, undefined)
+})
+
+test('in-memory adapter: pagesSite answers from the repo\'s `pages`, and putPage keeps what it wrote', () => {
+  const site = { url: 'https://example.invalid/s/', public: false, branch: 'gh-pages', path: '/', build: 'legacy' }
+  const state = { repos: { 'acme/a': { pages: site }, 'acme/b': {}, 'acme/c': { pagesLookupFails: 'HTTP 403' } } }
+  const github = githubInMemory(state)
+  assert.deepEqual(github.pagesSite('acme', 'a'), site)
+  assert.equal(github.pagesSite('acme', 'b'), null)
+  assert.throws(() => github.pagesSite('acme', 'c'), GithubError)
+  github.putPage('acme', 'a', { branch: 'gh-pages', path: 'p/index.html', content: 'x', message: 'm' })
+  assert.deepEqual(state.repos['acme/a'].pageWrites, [{ branch: 'gh-pages', path: 'p/index.html', content: 'x', message: 'm' }])
+})
+
 test('gh adapter: createIssue reads the issue number from the URL gh prints', () => {
   const { calls, github } = canned(() => 'https://github.com/acme/platform/issues/12\n')
   assert.equal(github.createIssue('acme/platform', 'A title', 'A body'), 12)
@@ -40,9 +100,9 @@ test('gh adapter: prForBranch parses the newest PR from gh\'s JSON', () => {
   const { calls, github } = canned(() => '[{"number":12,"state":"MERGED","baseRefName":"main","headRefOid":"abc123","mergeCommit":{"oid":"def456"},"url":"https://github.com/acme/platform/pull/12","createdAt":"2026-01-02T00:00:00Z","mergedAt":"2026-01-03T00:00:00Z","title":"A title","body":"A body","labels":[{"id":"L1","name":"release:minor","color":"0e8a16"}]}]')
   assert.deepEqual(github.prForBranch('acme', 'platform', 'feat/x'),
     { number: 12, state: 'MERGED', base: 'main', head: 'abc123', merge: 'def456', url: 'https://github.com/acme/platform/pull/12',
-      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z', title: 'A title', body: 'A body', labels: ['release:minor'] })
+      openedAt: '2026-01-02T00:00:00Z', mergedAt: '2026-01-03T00:00:00Z', title: 'A title', body: 'A body', labels: ['release:minor'], additions: null, deletions: null, changedFiles: null })
   assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'acme/platform', '--head', 'feat/x',
-    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels', '--limit', '1'])
+    '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels,additions,deletions,changedFiles', '--limit', '1'])
 })
 
 test('gh adapter: labels lists the names of every label a repo has, across pages', () => {

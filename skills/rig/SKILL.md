@@ -49,6 +49,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Every stage still to land has passed its review | `rig stage --land`, then hand over at the work branch's PR; stop at a stage instead when its review raised a design question |
 | Put it up for review | write the context doc's `## Pull request` section (what the work delivers: Summary, Evidence, Merge Danger), with your PR-body skill if you have one, then `rig pr` |
 | The PR says what the work used to be | `rig pr --refresh` |
+| A big PR: help a reviewer read it, or its page is behind its head | the `rig-pr-page` skill; `rig page` says whether one is due and where it can go |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |
 | Deploy order, rollout, UAT | `rig plan`, `rig plan --refresh` |
 | How is a repo verified, and is it verified at this patch | `rig check [--run]`; `rig status` says each repo's on its `checks` line |

@@ -26,6 +26,7 @@
 
 import { phaseOf, STOP_WORDS, STOPPABLE } from './phase.mjs'
 import { backToWorkBranch, nextStage, onLandedStage, unknownStages } from './stages.mjs'
+import { pageSaying } from './prpage.mjs'
 
 // One offer: the phase it belongs to, a line saying what is available, and the command that
 // does it. `command` is null when there is nothing to type — agreeing a design is a
@@ -74,6 +75,9 @@ const HEAVY = 3
 //                  null where GitHub would not say. A failing one also carries its `base` and
 //                  `behind`, how many commits the base has that the branch does not, read off
 //                  a fresh fetch; null where git could not count them
+//   pages          one `pageSaying` fact per repo whose work-branch PR is open: its size, whether
+//                  a reading page is due, the page recorded, the PR's head, and `why` no page can
+//                  be published, where one is due and none exists
 //   verification   one `{ repo, state }` per attached repo whose catalogue entry has a `check`:
 //                  `verified`, `stale`, `unverified` or `unknown` against the pass `rig check
 //                  --run` recorded
@@ -89,7 +93,7 @@ const HEAVY = 3
 // Returns the offers in the order they became available, most immediate first. An empty list
 // means there is genuinely nothing to suggest, which `rig next` says out loud rather than
 // inventing something.
-export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], attempts = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false, retroDue = null } = {}) {
+export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten = false, planExists = false, planStale = false, prStale = [], stack = [], attempts = [], replaced = [], drafts = [], neighbours = [], bumps = [], unstacked = [], reviews = [], pages = [], docs = [], verification = [], handoffAt = null, lastCommitAt = null, leftover = false, retroDue = null } = {}) {
   const phase = phaseOf(work, repos)
   const out = []
   // A month gone by with no retro of this machine's sessions, asked only of a user who has run
@@ -309,6 +313,13 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
   // merge together (decision 152).
   if (unstacked.length) {
     out.push(offer('reviewing', `${unstacked.join(', ')}: the open stage PRs are not a GitHub stack`, 'rig stage --link'))
+  }
+
+  // A big PR's reading page: offered, or why there can be none, or that the PR has moved past it.
+  // A report and an offer, and so in nothing the hand-over below waits on.
+  for (const fact of pages) {
+    const saying = pageSaying(fact)
+    if (saying) out.push(offer('reviewing', saying.says, saying.command))
   }
 
   // After the PR is open, three steps in the order they run, each waiting for the one before
