@@ -2,7 +2,7 @@
 // Clicks through a built reading page in headless Chrome, whatever the page is about: every tab,
 // an entity from each, a followed link, back, forward, close, a deep link, search, a phone's width,
 // and that nothing reaches the network. Exits 0 when all of it holds, 1 when something does not,
-// and 2 when there is no Chrome to ask, which says nothing about the page.
+// and 2 when there is no Chrome to ask, or it will not run, which says nothing about the page.
 //
 //   node check.mjs <dist.html> [--shots <dir>]
 //
@@ -32,6 +32,9 @@ export function findChrome (env = process.env) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+// Chrome would not run, or stopped running, so the check has nothing to say about the page.
+class BrowserUnavailable extends Error {}
+
 // One browser and one page, over the pipe: fd 3 to Chrome, fd 4 from it, NUL between messages.
 async function openBrowser (chrome, onProblem) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-pr-page-chrome-'))
@@ -40,6 +43,19 @@ async function openBrowser (chrome, onProblem) {
   let sessionId = null
   let buffer = ''
   const waiting = new Map()
+  let gone = null
+  let closing = false
+  const giveUp = reason => {
+    if (gone || closing) return
+    gone = new BrowserUnavailable(reason)
+    for (const settle of waiting.values()) settle({ gone })
+    waiting.clear()
+    fs.rmSync(profile, { recursive: true, force: true })
+  }
+  browser.on('error', e => giveUp(`could not start ${chrome}: ${e.message}`))
+  browser.on('exit', (code, signal) => giveUp(`${chrome} exited before the check finished (${signal ?? `code ${code}`})`))
+  // Writing to a browser that has died raises EPIPE here; its 'exit' is what reports it.
+  browser.stdio[3].on('error', () => {})
   browser.stdio[4].setEncoding('utf8')
   browser.stdio[4].on('data', chunk => {
     buffer += chunk
@@ -57,8 +73,9 @@ async function openBrowser (chrome, onProblem) {
     }
   })
   const send = (method, params = {}) => new Promise((resolve, reject) => {
+    if (gone) return reject(gone)
     const id = ++seq
-    waiting.set(id, m => (m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result)))
+    waiting.set(id, m => (m.gone ? reject(m.gone) : m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result)))
     browser.stdio[3].write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`)
   })
   const { targetId } = await send('Target.createTarget', { url: 'about:blank' })
@@ -69,6 +86,7 @@ async function openBrowser (chrome, onProblem) {
   return {
     send,
     close: () => {
+      closing = true
       browser.kill()
       // Chrome can still hold the profile for a moment after the kill.
       setTimeout(() => { try { fs.rmSync(profile, { recursive: true, force: true }) } catch { /* the OS's temp dir clears it */ } }, 300).unref()
@@ -221,7 +239,15 @@ async function main (argv) {
     process.stderr.write('no Chrome found: set CHROME to the browser, or say the page was not clicked through\n')
     return 2
   }
-  const { results, problems } = await checkPage(file, { chrome, shots })
+  let checked
+  try {
+    checked = await checkPage(file, { chrome, shots })
+  } catch (e) {
+    if (!(e instanceof BrowserUnavailable)) throw e
+    process.stderr.write(`${e.message}: set CHROME to a working browser, or say the page was not clicked through\n`)
+    return 2
+  }
+  const { results, problems } = checked
   process.stdout.write(`${results.join('\n')}\n`)
   const failed = results.filter(r => r.startsWith('FAIL')).length
   process.stdout.write(problems.length ? `\n${problems.length} problem${problems.length === 1 ? '' : 's'}:\n${problems.join('\n')}\n` : `\nall good: ${results.length - failed} checks\n`)

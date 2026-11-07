@@ -197,6 +197,19 @@ test('a docs-only PR gets its sections as linked entities, its own links resolve
 // Only where Chrome is on the machine. Not on CI, whose images' sandboxes differ: the checker is
 // a tool an author runs, and a red build over a browser's sandbox would say nothing about rig.
 const chrome = process.env.CI ? null : findChrome()
+for (const [name, browser, says] of [
+  ['that cannot start', path.join(os.tmpdir(), 'rig-no-such-chrome'), /could not start/],
+  // Node refuses Chrome's flags and exits at once, on every platform CI runs.
+  ['that exits early', process.execPath, /exited before the check finished/],
+]) {
+  test(`a browser ${name} exits 2 and says so, which says nothing about the page`, { timeout: 30000 }, () => {
+    const r = spawnSync(process.execPath, [CHECK, PAGE_SOURCE], { encoding: 'utf8', timeout: 25000, env: { ...process.env, CHROME: browser } })
+    assert.equal(r.status, 2, r.stderr)
+    assert.match(r.stderr, says)
+    assert.doesNotMatch(r.stderr, /\n\s+at /, 'a sentence, not a stack trace')
+  })
+}
+
 test('the built page clicks through in headless Chrome', { skip: chrome ? false : 'no Chrome here, or on CI', timeout: 90000 }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-pr-page-check-'))
   try {
