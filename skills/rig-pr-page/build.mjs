@@ -55,6 +55,7 @@ function prParts (url) {
 // Why this checkout is not the PR's repo, or null when it is. A slip this catches early; `rig page
 // --publish` holds the line by asking GitHub whether the page's head is in the PR's repo.
 function originProblem (git, repoDir, repo) {
+  if (!fs.existsSync(repoDir)) return `${repoDir} is not there: --repo-dir names the PR's worktree`
   const origin = git('remote', 'get-url', 'origin')?.trim()
   if (!origin) return `${repoDir} has no origin, so nothing ties it to ${repo}`
   const names = url => /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/*$/.exec(url)?.slice(1, 3).join('/') ?? url
@@ -473,21 +474,23 @@ export function buildPage ({ source, pr, head, base, branch, repoDir, builtAt = 
     if (e.kind === 'part') e.usedBy = Object.keys(ent).filter(other => ent[other].kind === 'part' && ent[other].uses.includes(id))
   }
 
-  // What has not been discussed is said on the page and to the author, rather than left to look
-  // as though someone had read it.
+  const summaryCtx = { eid: 'start', doc: null, seen: new Set(), mentions: new Set(), nolink: false }
+  const summary = blocks(parsed.summary, summaryCtx)
+  for (const target of summaryCtx.mentions) if (!ent[target]) problems.push(`dead link ${target} in the summary`)
+  for (const id of parsed.start) if (!ent[id]) problems.push(`dead link ${id} in \`start:\``)
+
+  // What has not been discussed is said on the page and to the author, rather than left to look as
+  // though someone had read it. A markdown file's sections come from the diff, so they are its text
+  // and no one's word about it: it is discussed when the author's writing mentions it or one of them.
+  const authorMentions = id => summaryCtx.mentions.has(id) || (back[id] || []).some(by => !['file', 'sec'].includes(ent[by].kind))
   for (const f of files) {
     const id = `file/${f.path}`
-    const discussed = (back[id] || []).some(by => !['file', 'sec'].includes(ent[by].kind)) || ent[id].html || ent[id].sections?.length
+    const discussed = ent[id].html || [id, ...(ent[id].sections ?? [])].some(authorMentions)
     if (!discussed) {
       ent[id].pill = 'not discussed'
       warnings.push(`nothing on the page mentions ${f.path}`)
     }
   }
-
-  const summaryCtx = { eid: 'start', doc: null, seen: new Set(), mentions: new Set(), nolink: false }
-  const summary = blocks(parsed.summary, summaryCtx)
-  for (const target of summaryCtx.mentions) if (!ent[target]) problems.push(`dead link ${target} in the summary`)
-  for (const id of parsed.start) if (!ent[id]) problems.push(`dead link ${id} in \`start:\``)
 
   if (problems.length) throw new PageBuildError([...new Set(problems)].sort())
 

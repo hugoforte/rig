@@ -86,6 +86,8 @@
   table { border-collapse: collapse; font-size: 13.5px; width: 100%; }
   th, td { text-align: left; vertical-align: top; padding: 6px 8px; border: 1px solid var(--line); }
   th { background: var(--panel2); }
+  /* `anywhere` counts toward a column's narrowest width, so a table squeezes code to a letter a line. Here `.tw` scrolls instead. */
+  th code, td code { overflow-wrap: normal; }
 
   /* The reading pane: a right column on a wide screen, the whole screen below the header on a narrow one. */
   #pane { position: fixed; top: var(--head); right: 0; bottom: 0; left: 0; z-index: 3; display: none; flex-direction: column; background: var(--panel); }

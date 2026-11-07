@@ -35,11 +35,19 @@ It answers with one entry a PR: the PR (`url`, `head`, `base`, `branch`), its `s
 
 ## 2. Read the change
 
-**Outside a work,** bring the PR's head into a worktree of its own, outside rig's work root (`gh pr checkout <n> --worktree <path>`); that path is `--repo-dir` below.
+**Outside a work,** bring the PR's head into a worktree of its own, outside rig's work root and any checkout you are using. These work from anywhere, a fork's PR included. `<tmp>` must be absolute, since `git -C` reads a relative path from inside the clone. `<tmp>/head` is `--repo-dir` below:
 
-Read the whole diff (`git diff <merge-base> <head>` in the repo's worktree), its commits, the PR body and the ticket. Read until you can say what each changed file is for. The test: you could tell someone what breaks if this PR is reverted.
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/<org>/<repo>.git <tmp>/clone
+git -C <tmp>/clone fetch origin pull/<n>/head
+git -C <tmp>/clone worktree add --detach <tmp>/head <pr.head>
+```
 
-**Write for everyone who can read the repo, as for the PR body** (`AGENTS.md`'s "What it says in public"). Even on a private site, what it holds is about code others read, and a page outlives the choice of who reads the site. The page may state only what the diff, the commits, the PR body and a ticket in the same repo already state. The context doc, the notes, other works and private systems inform you and stay out of the page.
+Read the whole diff (`git diff <merge-base> <head>` in the repo's worktree), its commits, the PR body, its review comments, and the ticket. Review comments are the inline threads and the conversation (`gh api repos/<org>/<repo>/pulls/<n>/comments`, `gh pr view <n> --repo <org>/<repo> --comments`). Read until you can say what each changed file is for. The test: you could tell someone what breaks if this PR is reverted.
+
+**Write for everyone who can read the repo, as for the PR body** (`AGENTS.md`'s "What it says in public"). Even on a private site, what it holds is about code others read, and a page outlives the choice of who reads the site. The page may state only what the diff, the commits, the PR body, its review comments and a ticket in the same repo already state. The context doc, the notes, other works and private systems inform you and stay out of the page. **A ticket in another tracker stays out too:** the people who can read the repo need not be the people who can read that tracker, so it informs you as the notes do. What the PR body or a review comment repeats from it is in, by that route. Mark anything you inferred as inferred, on the page.
+
+**A stacked PR's page describes its diff against its base.** `pr.base` is the branch below it, not `main`, and the page's files and citations follow from that. Where this PR meets the one below, link that PR, and its page if it has one, rather than describing its changes again.
 
 ## 3. Write the source
 
@@ -91,7 +99,7 @@ Any kind takes `sub`, a one-line description, and `aka`, terms whose first menti
 - `@step Title`, then its paragraph, numbers the steps of a `flow`.
 - `@before text`, `@after text` and `@note text` are callouts.
 
-**The bar:** the source is written when every changed file is mentioned by something, grouped as one `part` where the changes are mechanical, every `part`'s connections are in `uses`, every behaviour change has a `flow`, and what is unsettled is an `open` item rather than prose. The build lists any file nothing mentions, and the page marks it "not discussed".
+**The bar:** the source is written when every changed file is mentioned by something, grouped as one `part` where the changes are mechanical, every `part`'s connections are in `uses`, every behaviour change has a `flow`, and what is unsettled is an `open` item rather than prose. The build lists any file nothing mentions, and the page marks it "not discussed". A markdown file's sections are its own text, so they do not count: it is discussed when your summary or an entity you wrote mentions it or one of its sections, or it has a note.
 
 ## 4. Build it
 
@@ -107,7 +115,7 @@ node <this skill's folder>/build.mjs <source> --out <tmp>/dist.html --pr <pr.url
 node <this skill's folder>/check.mjs <tmp>/dist.html --shots <tmp>/shots
 ```
 
-It opens every tab, follows links, goes back and forward, searches, and tries a phone's width. Done when it ends `all good`. Then look at the map and a walkthrough among the screenshots, since the checker cannot tell you the page reads well. With no Chrome it exits 2: tell the user the page was not clicked through.
+It opens every tab, follows links, goes back and forward, opens a walkthrough, searches, and tries a phone's width. Done when it ends `all good`. Then look at `wide-tab-map.png` and `wide-walkthrough.png` among the screenshots, since the checker cannot tell you the page reads well; a page with no map or no walkthrough has no such shot. With no Chrome it exits 2: tell the user the page was not clicked through.
 
 ## 6. Publish and link it
 
