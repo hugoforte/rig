@@ -42,7 +42,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # This job is where a built page's JavaScript runs: test/pr-page-build.test.mjs clicks through
+      # one in the Chrome the image carries, and with this set a missing browser fails rather than
+      # skips. Standard library only, so nothing is installed for it.
       - run: node --test
+        env:
+          RIG_REQUIRE_CHROME: '1'
 
   shard:
     strategy:

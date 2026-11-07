@@ -24,7 +24,8 @@
 // GitHub and Jira are the in-memory adapters selected by `RIG_FAKE_GITHUB` and
 // `RIG_FAKE_TWG`, each naming a JSON state file the tool reads on start and writes back on
 // exit. Pass `github`/`twg` to seed one; read the file back to see what the tool did. The
-// real `gh` and `twg` are never spawned.
+// real `gh` and `twg` are never spawned; test/page-publish-gh.test.mjs, which is about the spawn,
+// drops the in-memory GitHub and puts a stand-in `gh` first on PATH.
 //
 // Below `makeInstall` is what drives an installation through a *sequence* rather than one
 // command: `scenario` walks a machine through named steps with nothing restored between

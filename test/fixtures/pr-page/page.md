@@ -102,6 +102,11 @@ sub: One writer, a few hundred lines at most
 
 Tidewatch has no database today. A flat file needs nothing installed on a station's box, where size < 1 MB & it stays readable.
 
+| Choice | Held by | Needs | Why not |
+|---|---|---|---|
+| A flat file | `RetryQueueJournalWriter` | `appendOneLineAndFlushToDisk` | Nothing against it here |
+| A database | `RetryQueueDatabaseWriter` | `installAndMigrateOnEveryStation` | One writer does not need it |
+
 # test/crash-mid-append: A crash in the middle of an append
 sub: tests/test_journal.py
 

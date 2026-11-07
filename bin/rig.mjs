@@ -485,8 +485,10 @@ function adapterResolver (envVar, viaCli, inMemory) {
       if (resolved) return resolved
       const file = env()[envVar]
       if (!file) {
-        const spawnCli = (args, { env: extra } = {}) =>
-          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: { ...env(), ...extra } })
+        // `env` is additions to the run's; anything else an adapter asks for, stdin above all, reaches
+        // the spawn as it was asked.
+        const spawnCli = (args, { env: extra, ...opts } = {}) =>
+          spawnSync(CLI_FOR[envVar], args, { ...spawnDefaults(current.command), cwd: current.cwd, env: { ...env(), ...extra }, ...opts })
         return (resolved = viaCli({ exec: spawnCli }))
       }
       fake = { file, state: exists(file) ? readJson(file) : {} }

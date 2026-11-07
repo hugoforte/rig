@@ -1,5 +1,6 @@
 // The shipped reading page's machinery: `skills/rig-pr-page/build.mjs` over an invented PR, and,
-// on a machine with Chrome, `check.mjs` clicking through what it built. No test here publishes.
+// on a machine with Chrome and on CI's Ubuntu job, `check.mjs` clicking through what it built. No
+// test here publishes; test/page-publish-gh.test.mjs takes a publish through the real spawn.
 import { test, after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -13,7 +14,8 @@ import { findChrome } from '../skills/rig-pr-page/check.mjs'
 import { PAGE_SOURCE, PR_URL, prRepo, DOCS_ONLY } from './pr-page-fixture.mjs'
 import { pageMetas } from '../bin/prpage.mjs'
 
-const CHECK = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'rig-pr-page', 'check.mjs')
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const CHECK = path.join(ROOT, 'skills', 'rig-pr-page', 'check.mjs')
 const SOURCE = fs.readFileSync(PAGE_SOURCE, 'utf8')
 
 let fixture
@@ -92,6 +94,28 @@ test('a changed file nothing discusses is reported and marked, and does not fail
   const { html, warnings } = build(trimmed)
   assert.ok(warnings.some(w => /tidewatch\/gauge\.py/.test(w)), warnings.join('\n'))
   assert.equal(dataOf(html).ent['file/tidewatch/gauge.py'].pill, 'not discussed')
+})
+
+test('a changed markdown file\'s own sections do not make it discussed', () => {
+  const { html, warnings } = build(small('Sum.'))
+  const { ent } = dataOf(html)
+  assert.ok(ent['file/docs/operations.md'].sections.length, 'its sections are on the page')
+  assert.equal(ent['file/docs/operations.md'].pill, 'not discussed')
+  assert.ok(warnings.some(w => /nothing on the page mentions docs\/operations\.md/.test(w)), warnings.join('\n'))
+})
+
+test('a changed markdown file is discussed by a mention of it or of a section, in an entity or the summary, or by a note', () => {
+  for (const [how, source] of [
+    ['a section mentioned by an entity', small('Sum.\n\n# open/o: O\n\nSee [[sec/docs/operations.md#restarting]].')],
+    ['the file mentioned by an entity', small('Sum.\n\n# open/o: O\n\nSee [[file/docs/operations.md]].')],
+    ['the file mentioned by the summary', small('Sum, with [[file/docs/operations.md]].')],
+    ['a section mentioned by the summary', small('Sum, with [[sec/docs/operations.md#restarting]].')],
+    ['a note on the file', small('Sum.\n\n# file/docs/operations.md: A note\n\nWhat changed.')],
+  ]) {
+    const { html, warnings } = build(source)
+    assert.equal(dataOf(html).ent['file/docs/operations.md'].pill, undefined, how)
+    assert.ok(!warnings.some(w => /docs\/operations\.md/.test(w)), `${how}: ${warnings.join('\n')}`)
+  }
 })
 
 test('a note under a file\'s own heading joins the entity generated for it', () => {
@@ -210,6 +234,11 @@ test('a repo dir with no origin fails the build, since nothing ties it to the PR
   }
 })
 
+test('a repo dir that is not there fails the build saying so, not that it has no origin', () => {
+  const nowhere = path.join(os.tmpdir(), 'rig-no-such-repo-dir')
+  assert.throws(() => build(SOURCE, { repoDir: nowhere }), e => e instanceof PageBuildError && e.problems.join('\n').includes(`${nowhere} is not there`))
+})
+
 test('an origin in any of git\'s spellings, and any casing, matches the PR', () => {
   const other = prRepo()
   try {
@@ -281,9 +310,34 @@ test('the page\'s totals follow renames, as the offer\'s size and GitHub\'s do',
 
 // ------------------------------------------------- the click-through
 
-// Only where Chrome is on the machine. Not on CI, whose images' sandboxes differ: the checker is
-// a tool an author runs, and a red build over a browser's sandbox would say nothing about rig.
-const chrome = process.env.CI ? null : findChrome()
+// The Ubuntu job of `.github/workflows/test.yml` sets RIG_REQUIRE_CHROME, because this is the one
+// test that runs the template's JavaScript: there a missing browser fails, so a skip can never pass
+// for coverage. Other CI jobs skip, since one job holding the line is enough and each browser start
+// costs a shard its time; a machine outside CI runs it where it has Chrome.
+const clickThrough = (env, find) => {
+  if (env.RIG_REQUIRE_CHROME) return { chrome: find(), skip: false }
+  const chrome = env.CI ? null : find()
+  return { chrome, skip: chrome ? false : 'no Chrome here, or on a CI job that does not ask for it' }
+}
+
+test('a job that requires Chrome fails without it, and any other job skips', () => {
+  const none = () => null
+  const some = () => 'chrome'
+  assert.deepEqual(clickThrough({ RIG_REQUIRE_CHROME: '1', CI: 'true' }, none), { chrome: null, skip: false })
+  assert.deepEqual(clickThrough({ RIG_REQUIRE_CHROME: '1', CI: 'true' }, some), { chrome: 'chrome', skip: false })
+  assert.equal(clickThrough({ CI: 'true' }, some).chrome, null)
+  assert.ok(clickThrough({ CI: 'true' }, some).skip)
+  assert.ok(clickThrough({}, none).skip)
+  assert.deepEqual(clickThrough({}, some), { chrome: 'chrome', skip: false })
+})
+
+test('the Ubuntu job asks for Chrome, on the step that runs the suite', () => {
+  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'test.yml'), 'utf8')
+  const job = yml.slice(yml.indexOf('\n  test:'), yml.indexOf('\n  shard:'))
+  assert.match(job, /- run: node --test\r?\n\s+env:\r?\n\s+RIG_REQUIRE_CHROME: /)
+})
+
+const browser = clickThrough(process.env, findChrome)
 for (const [name, browser, says] of [
   ['that cannot start', path.join(os.tmpdir(), 'rig-no-such-chrome'), /could not start/],
   // Node refuses Chrome's flags and exits at once, on every platform CI runs.
@@ -297,14 +351,25 @@ for (const [name, browser, says] of [
   })
 }
 
-test('the built page clicks through in headless Chrome', { skip: chrome ? false : 'no Chrome here, or on CI', timeout: 90000 }, () => {
+test('the built page clicks through in headless Chrome', { skip: browser.skip, timeout: 90000 }, () => {
+  assert.ok(browser.chrome, 'RIG_REQUIRE_CHROME is set and no Chrome was found, so the template\'s JavaScript would go unrun')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-pr-page-check-'))
   try {
     const file = path.join(dir, 'dist.html')
+    const shots = path.join(dir, 'shots')
     fs.writeFileSync(file, build().html)
-    const r = spawnSync(process.execPath, [CHECK, file], { encoding: 'utf8', timeout: 80000 })
+    const r = spawnSync(process.execPath, [CHECK, file, '--shots', shots], { encoding: 'utf8', timeout: 80000 })
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`)
     assert.match(r.stdout, /all good/)
+    assert.match(r.stdout, /ok +a walkthrough opens with its steps/)
+    assert.match(r.stdout, /ok +code in a table keeps its words whole on a phone/)
+    // An entity and the tab called Open items once shared a name, and so one file.
+    const taken = ['wide-load', 'wide-tab-start', 'wide-tab-map', 'wide-tab-open', 'wide-entity', 'wide-walkthrough', 'phone-tab', 'phone-open', 'phone-table']
+    const images = taken.map(name => fs.readFileSync(path.join(shots, `${name}.png`)))
+    for (const name of ['wide-tab-open', 'wide-entity', 'wide-walkthrough']) {
+      const at = taken.indexOf(name)
+      assert.equal(images.filter(image => image.equals(images[at])).length, 1, `${name} is a shot of its own`)
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
   }
