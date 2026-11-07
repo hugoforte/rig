@@ -133,7 +133,8 @@ export function stageState (stage, perRepo = []) {
     open: prs.some(r => r.pr.state === OPEN),
     landed: repos.length > 0 && !unknown.length && repos.every(r => r.pr && r.pr.state === MERGED),
     prUnknown: unknown.length ? unknown : null,
-    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null })),
+    // The title, the body and the size are for a stage PR's reading page.
+    prs: prs.map(r => ({ repo: r.repo, number: r.pr.number, state: r.pr.state, url: r.pr.url, base: r.pr.base ?? null, head: r.pr.head ?? null, merge: r.pr.merge ?? null, title: r.pr.title ?? null, body: r.pr.body ?? null, additions: r.pr.additions ?? null, deletions: r.pr.deletions ?? null, changedFiles: r.pr.changedFiles ?? null })),
   }
 }
 

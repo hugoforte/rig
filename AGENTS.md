@@ -233,7 +233,8 @@ skipped, and none waits. rig records the choice and what the agent decided.
 ## The catalogue
 
 One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`repo`,
-`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `docs`) plus prose.
+`org`, `stack`, `role`, `talks_to`, `setup`, `check`, `docs`, and optionally `pr_page_lines` and
+`pr_page_files`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
 answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
@@ -638,7 +639,7 @@ rig next        # what is available on the current work, read off live state
 
 It reads the repos, the branches, the PRs and the gates, and names what is available —
 pick up a handoff, attach something, record the design gate, run the checks, push, open a PR,
-work through its review threads, the adversarial review, hand the PR over, scaffold a rollout
+write a big PR's reading page, work through its review threads, the adversarial review, hand the PR over, scaffold a rollout
 plan, review what the work taught, say its outcome, close.
 
 Two things it will never do, and both are the point:
@@ -777,6 +778,78 @@ one. `rig next` compares each open PR with that text and offers the refresh when
 the way it offers `rig plan --refresh`. The whole title and body are rig's, so an edit made on
 GitHub is lost to the next refresh: put what should last in the context doc.
 
+**A big PR is offered a reading page.** A page is one self-contained HTML file for one PR: its
+parts and connections, how it behaves before and after, what was decided, tested and left open,
+and every changed file, all linked both ways. It takes judgement, so the `rig-pr-page` skill writes
+it, and rig measures, publishes and links.
+
+```bash
+rig page                               # each PR's size, whether a page is due, where it goes or why not, whether the head passed it
+rig page --json                        # the same, for the skill
+rig page --publish dist.html           # write the built page to the data root's site, and record its head on that PR's branch
+rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
+```
+
+- **When.** Due at 500 changed lines or 20 changed files, whichever comes first. `pr_page_lines` and
+  `pr_page_files` in a catalogue entry, or `prPage.<org>` in `rig.json` (`{ "lines": 800, "files":
+  30 }`), move it per measure, the repo over the org; `off` drops a measure. A value that is neither
+  is warned about and passed over.
+- **Which PRs.** The work branch's and each open stage PR, offered by `rig next` and `rig page`,
+  each recorded on its own branch and addressed by its own number. A stage's page is found from the
+  page itself, so `--publish` needs no branch named. Any other PR goes by its URL.
+- **How it is measured.** An open PR by GitHub's numbers, which ride on the lookup rig already makes.
+  A pushed work branch with no PR by git against the base: `rig pr` says that before it opens the
+  PR, and opens it whatever the answer, and `rig next` offers it. git's count is an estimate, said
+  as "about": `rig next` has not fetched, so a base that moved since the last fetch changes the
+  merge base, and GitHub can pair renames differently. A page's address is its PR's number, so the
+  page itself follows the PR.
+- **Where.** Only ever the data root's GitHub Pages site. A private repo's Pages is on the open
+  internet outside Enterprise Cloud, so the site's own field decides and the repo's visibility proves
+  nothing: only an exact `public: false` is a private site. rig reads it at the write, in
+  `rig page --publish`, and not from the skill.
+  - **A private site:** a private data root may hold a public repo's page, whose readers are fewer
+    than the code's. Below public a page must reach no further than its code: no data root wider than
+    the repo, and one owner.
+  - **A public site, public code:** it publishes, and warns that the page is public. `rig page` says
+    so before the write, and `rig next`'s offer says it too.
+  - **A public site, other code:** `--publish` refuses, since a published page cannot be taken back
+    from the internet, unless `--public` is passed, when it warns and publishes. **`--public` is the
+    person's word for that one page. An agent never passes it on its own.**
+  - The site must serve the root of a `gh-pages` branch: `main` would commit into the branch the data
+    root's checkout works on and serve every record on it, so that is refused, and the line says what
+    to change. Pages sit at `rig-pr-pages/<org>/<repo>/<number>/index.html`, and nothing else on the
+    branch is touched.
+- **Nowhere to publish** means no page and one plain line saying why, from `rig page`, `rig next` and
+  `rig pr`; `--publish` refuses with it. With no site, the line says how to turn Pages on from
+  `gh-pages`, and that on a personal account the site is public. rig turns nothing on itself. The line
+  stays out of PR bodies.
+- **The page's own word.** The site is judged by the repo the page says it describes, so `--publish`
+  refuses a page whose `rig:head` is not a commit of that repo, and the build refuses a `--repo-dir`
+  whose origin is not it. A page says it describes one PR, and it is that number's: a new PR on the
+  same branch has no page until it gets its own.
+- **The link.** `--publish` records `page: { url, head, number, at }`, since a private site cannot be
+  read back. A private site's host is a random `*.pages.github.io` name and its path names only the repo
+  the PR is in, so that link goes into any PR, a public one too, where only the data root's readers
+  can open it. Any other host may name the data root, a public site's `<owner>.github.io/<repo>` above
+  all, so it goes by the context doc's rule above; where that says no, `--publish` prints the link and
+  no body carries it.
+  - **The work branch's PR:** `rig pr` and `rig pr --refresh` write `Reading page, at \`abc1234\`:
+    <url>` near the top of the body, which `rig next`'s comparison offers like any other change.
+  - **A stage PR's** body is not rig's and `rig pr --refresh` leaves it alone, so `--publish` writes
+    the line into a marked region (`rig:reading-page`) at its very top, replaced in place when
+    published again and taken out where the link may no longer go, with everything else left as
+    written. A link it may not write, or could not, is printed.
+  - **A PR by URL:** rig records nothing, writes nothing to the PR, and prints the link for the
+    person to post. The data root is the one that holds the PR's org; none refuses, two ask for
+    `--data`.
+- **Staleness.** The page carries `rig:head`, and `--publish` records that. `rig next` and `rig page`
+  say when a PR's head has passed it, naming both commits. A reader sees the commit in the PR's line
+  and in a bar on every view of the page, with a link to GitHub's comparison from that commit to
+  the branch. A rebuild checks every citation again and fails on one that moved.
+
+**Not a gate.** None of this holds up the hand-over or a landing, and nothing refuses for want of a
+page. Closing a work leaves its pages where they are.
+
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.
 
@@ -913,7 +986,8 @@ was a mistake can say so (DESIGN.md decision 219).
 the work's record; `skills/rig-learn` runs the lesson review before a close, and drafts the
 work's outcome; `skills/rig-digest` explains what landed, from `rig list --json`, at the
 altitude asked for, and drafts outcomes for landed works with none; `skills/rig-docs` keeps the
-user docs true once a work has landed; `skills/rig-retro` looks back over a month for what keeps
+user docs true once a work has landed; `skills/rig-pr-page` writes a big PR's reading page, with
+the template and tools it ships beside its `SKILL.md`; `skills/rig-retro` looks back over a month for what keeps
 going wrong across works, from this machine's sessions or a data root's struggles, and checks
 whether last month's fixes held. All are shipped, never linked: whatever manages a
 machine symlinks `skills/*` into its agent hosts' skills directories. Every skill but the entry

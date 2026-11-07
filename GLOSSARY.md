@@ -108,6 +108,10 @@ _Avoid_: out of date, behind (that is a count), conflict (that is a merge that c
 A repo whose checks last passed at the diff it carries now. `rig check --run` records a pass with the patch it ran at; a diff that changed since makes it **stale**, and a repo with no pass recorded is **not verified**. A fact about a patch, not about a head: a rebase that leaves the diff alone keeps it.
 _Avoid_: green, tested, passing (that is the run, not the record)
 
+**Reading page**:
+One self-contained HTML file for one big pull request, a work branch's, a stage's or any other's, written by the `rig-pr-page` skill and published with `rig page --publish` to the data root's Pages site: its parts and connections, its behaviour before and after, and every changed file, linked both ways. A snapshot of one commit, and a companion to the PR's body. Offered, never required.
+_Avoid_: review page, PR site, docs (that is the user docs), preview
+
 **Adversarial review**:
 A review of a work's pull request by a reviewer told to find what is wrong with it, who fixes what it finds and pushes. Whether a work gets one is decided at the design gate; that it happened is the reviewed gate. Distinct from the review threads already on the PR, which are read off GitHub.
 _Avoid_: hardening, second review, audit

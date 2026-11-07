@@ -911,6 +911,38 @@ const reviewing = (over = {}) => ({
   repos: [repo('a', { pr: { number: 4, state: 'OPEN' }, pushed: true })],
 })
 
+const bigPr = over => ({ repo: 'a', size: { lines: 1240, files: 31 }, threshold: { lines: 500, files: 20 }, due: true, page: null, prHead: 'b'.repeat(40), ...over })
+
+test('a big open PR is offered a reading page, with the skill that writes it', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }], pages: [bigPr()] })
+  const offered = out.find(o => /reading page/.test(o.says))
+  assert.match(offered.says, /a: this PR is 1,240 lines across 31 files/)
+  assert.match(offered.says, /the rig-pr-page skill/)
+  assert.equal(offered.command, 'rig page')
+})
+
+test('a big PR with no safe place for a page says why, in one line, with nothing to run', () => {
+  const out = nextFor({ ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }], pages: [bigPr({ why: 'acme/a is public: it has no Pages site' })] })
+  const said = out.find(o => /no reading page/.test(o.says))
+  assert.equal(said.says, 'a: no reading page — acme/a is public: it has no Pages site')
+  assert.equal(said.command, null)
+})
+
+test('a head moved past the page is said, and a current page or a small PR says nothing', () => {
+  const page = { head: 'a'.repeat(40), url: 'https://example.invalid/p/' }
+  const base = { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }] }
+  assert.match(says(nextFor({ ...base, pages: [bigPr({ page })] })), /head has moved past its reading page \(page at aaaaaaa, PR at bbbbbbb\)/)
+  assert.doesNotMatch(says(nextFor({ ...base, pages: [bigPr({ page, prHead: page.head })] })), /reading page/)
+  assert.doesNotMatch(says(nextFor({ ...base, pages: [bigPr({ due: false })] })), /reading page/)
+})
+
+test('a reading page is no gate: the hand-over is offered with one due, moved, or impossible', () => {
+  const base = { ...reviewing({ adversarial: false }), reviews: [{ repo: 'a', unresolved: 0 }] }
+  for (const page of [bigPr(), bigPr({ why: 'nowhere' }), bigPr({ page: { head: 'a'.repeat(40), url: 'https://example.invalid/p/' } })]) {
+    assert.match(says(nextFor({ ...base, pages: [page] })), /ready for a human reviewer/)
+  }
+})
+
 test('an open PR with unresolved review threads is offered the review, with no command', () => {
   const out = nextFor({ ...reviewing(), reviews: [{ repo: 'a', unresolved: 2 }] })
   const resolve = out.find(o => /unresolved review thread/.test(o.says))

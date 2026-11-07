@@ -8,13 +8,18 @@
 //   auth()                              'ok' | 'unauthenticated' | 'missing'; never throws
 //   repo(org, name)                     { name, language, visibility } with GitHub's canonical name, or null;
 //                                       visibility is 'public', 'internal' or 'private', or null when not said
-//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels } newest PR, or null
+//   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels, additions, deletions, changedFiles } newest PR, or null
+//   prByNumber(org, name, number)       { number, state, base, branch, head, url, title, body, additions, deletions, changedFiles }, or null;
+//                                       `branch` is `owner:branch` for a PR from a fork
+//   commitExists(org, name, sha)        true when that commit is in the repo; false when GitHub says not
+//   pagesSite(org, name)                { url, public, branch, path, build }: its GitHub Pages site, or null for none
+//   putPage(org, name, { branch, path, content, message })   write one file on a branch, through the contents API
 //   labels(org, name)                   every label's name
 //   prTimeline(org, name, number)       { firstCommitAt, firstReviewAt, approvedAt }, or null
 //   prReview(org, name, number)         { unresolved, checks }: the PR's unresolved review threads and its
 //                                       head commit's check rollup (null where none are set up), or null
 //   createPr(org, name, { branch, base, title, body })   { number, url } for the new PR
-//   editPr(org, name, number, { title, body })
+//   editPr(org, name, number, { title, body })   a title left out stays as it is
 //   stacks(org, name)                   [{ number, open, base, prs, openPrs }] every GitHub stack
 //   prReadiness(org, name, number)      { draft, decision, requested, mergeable, head, checks }:
 //                                       whether a PR is ready to merge, or null where GitHub
@@ -79,7 +84,7 @@ const MERGE_QUEUE_QUERY = 'query($owner: String!, $name: String!, $branch: Strin
 
 const STACKS_JQ = '.[] | {number, open, base: .base.ref, prs: [.pull_requests[].number], openPrs: [.pull_requests[] | select(.state == "open") | .number]}'
 
-const spawnGh = (args, { env } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env } })
+const spawnGh = (args, { env, input } = {}) => spawnSync('gh', args, { encoding: 'utf8', env: { ...process.env, ...env }, input })
 
 export function githubViaGh ({ exec = spawnGh } = {}) {
   const { run: gh, must, refused } = cliRunner('gh', exec, fail)
@@ -112,15 +117,51 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // commit landed from one somebody pushed to after the merge. `mergeCommit` is the commit it
     // landed as, and the only way to tell a stage that was squashed from one that was merged.
     // `title` and `body` are what `rig next` and `rig pr --refresh` compare with what `rig pr`
-    // would write now.
+    // would write now. `additions`, `deletions` and `changedFiles` are how big the reviewer's
+    // diff is, which says whether a reading page is due.
     prForBranch (org, name, branch) {
       const out = must(['pr', 'list', '--repo', `${org}/${name}`, '--head', branch,
-        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels', '--limit', '1'])
+        '--state', 'all', '--json', 'number,state,baseRefName,headRefOid,mergeCommit,url,createdAt,mergedAt,title,body,labels,additions,deletions,changedFiles', '--limit', '1'])
       if (!out) return null
       const prs = parseJson(out, 'gh pr list')
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(out)}`)
       const [pr] = prs
-      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: (pr.labels || []).map(l => l.name) } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: (pr.labels || []).map(l => l.name), additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null } : null
+    },
+    // A PR named by its number rather than its branch, for one outside any work. gh says it has no
+    // such PR in words, with no HTTP status.
+    prByNumber (org, name, number) {
+      const args = ['pr', 'view', String(number), '--repo', `${org}/${name}`, '--json', 'number,state,baseRefName,headRefName,headRefOid,url,title,body,additions,deletions,changedFiles,isCrossRepository,headRepositoryOwner']
+      const r = gh(args)
+      if (r.code !== 0) {
+        if (/Could not resolve to a PullRequest/.test(r.err)) return null
+        refused(args, r)
+      }
+      const pr = parseJson(r.out, 'gh pr view')
+      return { number: pr.number, state: pr.state, base: pr.baseRefName || null, branch: pr.isCrossRepository ? `${pr.headRepositoryOwner?.login}:${pr.headRefName}` : pr.headRefName, head: pr.headRefOid || null, url: pr.url, title: pr.title ?? null, body: pr.body ?? null, additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null }
+    },
+    // GitHub answers 404 or 422 for a commit it does not have. Anything else is not knowing.
+    commitExists (org, name, sha) {
+      const args = ['api', `repos/${org}/${name}/commits/${sha}`, '--jq', '.sha']
+      const r = gh(args)
+      if (r.code === 0) return true
+      if (/\(HTTP 40?4\)|\(HTTP 422\)/.test(r.err)) return false
+      refused(args, r)
+    },
+    // Where a repo's GitHub Pages site publishes from and who can read it. `public` is the answer
+    // that matters: a private repo's site is on the open internet outside Enterprise Cloud.
+    pagesSite (org, name) {
+      const out = unless404(['api', `repos/${org}/${name}/pages`, '--jq', '{url: .html_url, public: .public, branch: .source.branch, path: .source.path, build: .build_type}'])
+      return out ? parseJson(out, 'gh api pages') : null
+    },
+    // One file on a branch, and nothing else on it, with no checkout. A blob over 1MB answers the
+    // first call with its sha only under the `object` media type. The second goes through stdin,
+    // because a page is longer than a command line may be.
+    putPage (org, name, { branch, path, content, message }) {
+      const at = `repos/${org}/${name}/contents/${path}`
+      const sha = unless404(['api', `${at}?ref=${branch}`, '-H', 'Accept: application/vnd.github.object+json', '--jq', '.sha'])
+      const body = { message, branch, content: Buffer.from(content, 'utf8').toString('base64'), ...(sha ? { sha } : {}) }
+      must(['api', '-X', 'PUT', at, '--input', '-', '--jq', '.commit.sha'], { input: JSON.stringify(body) })
     },
     // Every label a repo has, by name. `rig pr` asks whether any is a `release:` label, which is
     // what says the repo releases the way rig does.
@@ -214,7 +255,7 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
     // The one write rig makes to a pull request that is already open: `rig pr --refresh`
     // rewriting its title and body.
     editPr (org, name, number, { title, body }) {
-      must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, '--title', title, '--body', body])
+      must(['pr', 'edit', String(number), '--repo', `${org}/${name}`, ...(title === undefined ? [] : ['--title', title]), '--body', body])
     },
     // Every GitHub stack a repo has, open or merged, by the endpoint the gh-stack extension
     // itself reads. GitHub's REST reference does not list it, so an answer it will not give —
@@ -343,7 +384,7 @@ export function githubInMemory (state, { env } = {}) {
       // re-opened as a new one must show the open one to the close safety check.
       const pr = (lookup(`${org}/${name}`)?.repo.prs || [])
         .filter(p => p.branch === branch).sort((a, b) => b.number - a.number)[0]
-      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: pr.labels || [] } : null
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, head: pr.head || null, merge: pr.merge || null, url: pr.url, openedAt: pr.openedAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: pr.labels || [], additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null } : null
     },
     labels (org, name) {
       ask(`${org}/${name}`)
@@ -413,6 +454,40 @@ export function githubInMemory (state, { env } = {}) {
       ask(`${org}/${name}`)
       return (lookup(`${org}/${name}`)?.repo.mergeQueues || []).includes(branch)
     },
+    prByNumber (org, name, number) {
+      ask(`${org}/${name}`)
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, branch: pr.branch, head: pr.head || null, url: pr.url, title: pr.title ?? null, body: pr.body ?? null, additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null } : null
+    },
+    // Every commit is there but a repo's `commitsAbsent`; `commitLookupFails` is GitHub not saying.
+    commitExists (org, name, sha) {
+      ask(`${org}/${name}`)
+      const repo = lookup(`${org}/${name}`)?.repo
+      if (repo?.commitLookupFails) fail(repo.commitLookupFails)
+      return !(repo?.commitsAbsent || []).includes(sha)
+    },
+    // A repo's `pages` is its site, absent where it has none; `pagesLookupFails` is one GitHub
+    // will not say for, carrying gh's message.
+    pagesSite (org, name) {
+      ask(`${org}/${name}`)
+      const repo = lookup(`${org}/${name}`)?.repo
+      if (repo?.pagesLookupFails) fail(repo.pagesLookupFails)
+      return repo?.pages ?? null
+    },
+    // What was written stays on the repo as `pageWrites`, the only trace a fake site has;
+    // `pagePutFails` is a site that refuses, and the state's `afterPutPage` a PR someone edits while
+    // the write is going on.
+    putPage (org, name, write) {
+      ask(`${org}/${name}`)
+      const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
+      if (found.repo.pagePutFails) fail(found.repo.pagePutFails)
+      found.repo.pageWrites = [...(found.repo.pageWrites || []), write]
+      if (state.afterPutPage) {
+        const { spec, number, change } = state.afterPutPage
+        Object.assign(lookup(spec).repo.prs.find(p => p.number === number), change)
+        delete state.afterPutPage
+      }
+    },
     createPr (org, name, { branch, base, title, body }) {
       signedIn()
       const found = lookup(`${org}/${name}`) || fail(`${org}/${name}: no such repo (in-memory GitHub)`)
@@ -429,7 +504,9 @@ export function githubInMemory (state, { env } = {}) {
       signedIn()
       const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
       if (!pr) fail(`${org}/${name}#${number}: no such pull request (in-memory GitHub)`)
-      Object.assign(pr, { title, body })
+      const refusal = lookup(`${org}/${name}`)?.repo.editPrFails
+      if (refusal) fail(refusal)
+      Object.assign(pr, { ...(title === undefined ? {} : { title }), body })
     },
     stacks (org, name) {
       ask(`${org}/${name}`)

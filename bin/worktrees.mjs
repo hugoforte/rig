@@ -214,6 +214,19 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
       return fs.existsSync(mirror) && toRemote(mirror, 'fetch', '--prune', 'origin').code === 0
     },
 
+    // How big a pushed branch's PR would be: lines added and removed and files changed since it
+    // left the base, the way GitHub counts a PR, with renames followed whatever the machine's git
+    // config says. Null where git could not say, such as a branch not fetched.
+    size ({ org, repo, branch, base }) {
+      const mirror = mirrorPath(org, repo)
+      const from = git(mirror, 'merge-base', ref(base), ref(branch))
+      if (from.code !== 0) return null
+      const diff = git(mirror, '-c', 'diff.renames=true', 'diff', '--numstat', from.out, ref(branch))
+      if (diff.code !== 0) return null
+      const rows = diff.out.split('\n').filter(Boolean).map(row => row.split('\t'))
+      return { lines: rows.reduce((n, [added, removed]) => n + (Number(added) || 0) + (Number(removed) || 0), 0), files: rows.length }
+    },
+
     // How a pushed branch stands against the base it is about to land on, both as the remote
     // has them: `behind`, the commits the base has that the branch lacks, and `conflicts`, the
     // files a merge of the two would conflict in, found without touching any worktree
