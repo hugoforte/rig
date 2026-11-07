@@ -28,6 +28,14 @@ test('gh adapter: pagesSite throws where GitHub would not say, and never reads t
   assert.throws(() => canned(() => ({ code: 1, err: 'gh: Forbidden (HTTP 403)' })).github.pagesSite('acme', 'platform'), /403/)
 })
 
+test('gh adapter: prByNumber reads a PR outside any work, a fork\'s branch with its owner, and null for none', () => {
+  const pr = '{"number":5,"state":"OPEN","baseRefName":"main","headRefName":"feat/x","headRefOid":"abc","url":"u","title":"t","body":"b","additions":9,"deletions":1,"changedFiles":2,"isCrossRepository":false,"headRepositoryOwner":{"login":"acme"}}'
+  assert.equal(canned(() => pr).github.prByNumber('acme', 'platform', 5).branch, 'feat/x')
+  assert.equal(canned(() => pr.replace('"isCrossRepository":false', '"isCrossRepository":true').replace('"login":"acme"', '"login":"friend"')).github.prByNumber('acme', 'platform', 5).branch, 'friend:feat/x')
+  assert.equal(canned(() => ({ code: 1, err: 'GraphQL: Could not resolve to a PullRequest with the number of 5.' })).github.prByNumber('acme', 'platform', 5), null)
+  assert.throws(() => canned(() => ({ code: 1, err: 'gh: Forbidden (HTTP 403)' })).github.prByNumber('acme', 'platform', 5), /403/)
+})
+
 test('gh adapter: prForBranch carries the size of the diff, on the same call', () => {
   const { calls, github } = canned(() => '[{"number":12,"state":"OPEN","url":"u","additions":40,"deletions":2,"changedFiles":3}]')
   const pr = github.prForBranch('acme', 'platform', 'feat/x')

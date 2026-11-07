@@ -1,6 +1,6 @@
 ---
 name: rig-pr-page
-description: Write a linked reading page for a big pull request, so a reviewer can click through the change instead of reading it top to bottom. Use when `rig next` or `rig pr` offers a reading page, when one needs rebuilding because the PR's head moved past it, or when asked for a reading page for a PR.
+description: Write a linked reading page for a big pull request, so a reviewer can click through the change instead of reading it top to bottom. Use when `rig next` or `rig pr` offers a reading page, when one needs rebuilding because the PR's head moved past it, or when asked for a reading page for any PR, a colleague's by its URL included.
 ---
 
 # rig-pr-page
@@ -13,23 +13,33 @@ Reply as rig's `AGENTS.md`'s "Replying to the user" says: the page's URL and the
 
 ## 1. Ask rig what this PR is
 
-From the work folder:
+From the work folder, for the work branch's PR and each open stage PR:
 
 ```bash
-rig page <repo> --json
+rig page --json
 ```
 
-It answers with the PR (`url`, `head`, `base`, `branch`), its `size` against its `threshold`, `site`, `why`, `page` (one already recorded), `stale`, and `source`, the file to write.
+For a PR outside any work, from anywhere:
 
-- **`site` is null: stop.** `why` is the reason no safe place exists. Tell the user that one line and write no page: a page is never published more widely than the code, and nothing here can make it safe.
-- **`source` is null:** the data root is wider than the code, so keep the source in a temporary folder of your own, outside the data root and the work folder.
+```bash
+rig page https://github.com/<org>/<repo>/pull/<n> --json
+```
+
+It answers with one entry a PR: the PR (`url`, `head`, `base`, `branch`), its `size` against its `threshold`, `site`, `why`, `page` (one already recorded), `stale`, and `source`, the file to write. Take the entry for the PR at hand, and write one page per PR.
+
+- **`site` is null: stop.** `why` is the reason there is nowhere to publish, and it says what to change where something can be. Tell the user that one line and write no page: a page goes only to the data root's site, and rig turns no Pages site on for itself.
+- **`warning` is set:** the site is public. Tell the user that line before you write anything. Where `site.needsPublicFlag` is true the code is not public, so stop and ask, as step 6 says.
+- **`source` is null:** there is no work to keep it with, or the data root is wider than the code. Keep the source in a temporary folder of your own, outside the data root and the work folder.
 - **A `source` that exists:** this is a rebuild. Update it for what changed since `page.head`.
+- **A branch with no PR yet:** a page is addressed by its PR's number, so open the PR first and write the page before asking for a review.
 
 ## 2. Read the change
 
+**Outside a work,** bring the PR's head into a worktree of its own, outside rig's work root (`gh pr checkout <n> --worktree <path>`); that path is `--repo-dir` below.
+
 Read the whole diff (`git diff <merge-base> <head>` in the repo's worktree), its commits, the PR body and the ticket. Read until you can say what each changed file is for. The test: you could tell someone what breaks if this PR is reverted.
 
-**Write for everyone who can read the repo, as for the PR body** (`AGENTS.md`'s "What it says in public"). The page may state only what the diff, the commits, the PR body and a ticket in the same repo already state. The context doc, the notes, other works and private systems inform you and stay out of the page.
+**Write for everyone who can read the repo, as for the PR body** (`AGENTS.md`'s "What it says in public"). Even on a private site, what it holds is about code others read, and a page outlives the choice of who reads the site. The page may state only what the diff, the commits, the PR body and a ticket in the same repo already state. The context doc, the notes, other works and private systems inform you and stay out of the page.
 
 ## 3. Write the source
 
@@ -104,10 +114,18 @@ It opens every tab, follows links, goes back and forward, searches, and tries a 
 Only when the user asked for the page or `rig next` offered it on a work you are carrying out:
 
 ```bash
-rig page <repo> --publish <tmp>/dist.html
-rig pr --refresh
+rig page --publish <tmp>/dist.html
 ```
 
-`--publish` judges the site again at the write and refuses one wider than the code, writes one path on its `gh-pages` branch, and records the page's URL and head. `rig pr --refresh` puts the link in the PR's body. A site can take a minute to serve a new file.
+`--publish` finds the PR from the page, judges the data root's site again at the write, writes one path on its `gh-pages` branch, and records the page's URL and head on that PR's branch. A site can take a minute to serve a new file.
+
+**`--public` is the person's word, for one page, and never yours.** On a public site, a page of public code goes up with a warning. A page of code that is not public is refused, because a published page cannot be taken back from the internet, and `--public` is what lets it through. Pass it only when the user has told you to publish this page publicly, having seen the warning. A standing delegation, a stop being off or an earlier page is no such word. Without it, report the refusal and leave the page unpublished.
+
+Then the link:
+
+- **The work branch's PR:** `rig pr --refresh` puts it in the body.
+- **A stage PR:** `--publish` has already put it in a marked region at the top of the body, and left the rest as written.
+- **A PR outside any work:** `rig page <url> --publish <tmp>/dist.html`. It records nothing, writes nothing to the PR, and prints the link. Give the user that line to post: posting it is theirs.
+- **`--publish` printed "may not carry that link":** the site's address may name the data root in a more visible PR. Give the user the line; whether to post it is theirs.
 
 The page is a snapshot of one commit, and says so with a link to what has changed since. When the PR's head moves, `rig next` says so; a rebuild starts again from step 1.

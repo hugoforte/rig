@@ -784,40 +784,67 @@ and every changed file, all linked both ways. It takes judgement, so the `rig-pr
 it, and rig measures, publishes and links.
 
 ```bash
-rig page            # the PR's size, whether a page is due, where it can go or why not, whether the head passed it
-rig page --json     # the same, for the skill
-rig page billing --publish dist.html   # write the built page to its site and record its head
+rig page                               # each PR's size, whether a page is due, where it goes or why not, whether the head passed it
+rig page --json                        # the same, for the skill
+rig page --publish dist.html           # write the built page to the data root's site, and record its head on that PR's branch
+rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
 ```
 
-- **When.** Due at 500 changed lines or 20 changed files, whichever comes first, as GitHub counts
-  the PR's diff. `pr_page_lines` and `pr_page_files` in a catalogue entry, or `prPage.<org>` in
-  `rig.json` (`{ "lines": 800, "files": 30 }`), move it per measure, the repo over the org; `off`
-  drops a measure. A value that is neither is warned about and passed over. `rig pr` says the size
-  beside the PR it opens or finds open, and `rig next` offers the page once the PR is open.
-- **Where.** A page is never readable by more people than the code. rig reads each candidate's
-  Pages site at the write, in `rig page --publish`, not from the skill: **a private repo's Pages can
-  be public**, so the site's own `public` field decides, and one that does not say reads as public.
-  The repo's own site comes first, since its readers are the code's: a restricted site always, a
-  public one only on a public repo. Then the data root's, only where it, its site and the repo are
-  all at one visibility, and, below public, have one owner. A narrower data root would be named by
-  the link, which is the context doc's rule above, and a wider one would outreach the code.
-  Either must publish from the root of a `gh-pages` branch. Pages sit at
-  `rig-pr-pages/<org>/<repo>/<number>/index.html`, and nothing else on the branch is touched.
-- **No safe place** means no page and one plain line saying why, from `rig page`, `rig next` and
-  `rig pr`; `--publish` refuses with it. That covers a public repo with no site of its own beside a
-  private data root, a data root with no remote or off GitHub, and a repo GitHub would not answer
-  for. The line stays out of the PR body, which is public and becomes release notes.
-- **The link.** `--publish` records `page: { url, head, host, at }` on the work branch's record,
-  since a private site cannot be read back. `rig pr` and `rig pr --refresh` write `Reading page, at
-  \`abc1234\`: <url>` near the top of the body, which `rig next`'s comparison offers like any other
-  change. A page on the data root's site loses its line if the repo has since become more visible.
+- **When.** Due at 500 changed lines or 20 changed files, whichever comes first. `pr_page_lines` and
+  `pr_page_files` in a catalogue entry, or `prPage.<org>` in `rig.json` (`{ "lines": 800, "files":
+  30 }`), move it per measure, the repo over the org; `off` drops a measure. A value that is neither
+  is warned about and passed over.
+- **Which PRs.** The work branch's and each open stage PR, offered by `rig next` and `rig page`,
+  each recorded on its own branch and addressed by its own number. A stage's page is found from the
+  page itself, so `--publish` needs no branch named. Any other PR goes by its URL.
+- **How it is measured.** An open PR by GitHub's numbers, which ride on the lookup rig already makes.
+  A pushed work branch with no PR by git against the base: `rig pr` says that before it opens the
+  PR, and opens it whatever the answer, and `rig next` offers it. git's count is an estimate, said
+  as "about": `rig next` has not fetched, so a base that moved since the last fetch changes the
+  merge base, and GitHub can pair renames differently. A page's address is its PR's number, so the
+  page itself follows the PR.
+- **Where.** Only ever the data root's GitHub Pages site. A private repo's Pages is on the open
+  internet outside Enterprise Cloud, so the site's own field decides and the repo's visibility proves
+  nothing: only an exact `public: false` is a private site. rig reads it at the write, in
+  `rig page --publish`, and not from the skill.
+  - **A private site:** a private data root may hold a public repo's page, whose readers are fewer
+    than the code's. Below public a page must reach no further than its code: no data root wider than
+    the repo, and one owner.
+  - **A public site, public code:** it publishes, and warns that the page is public. `rig page` says
+    so before the write, and `rig next`'s offer says it too.
+  - **A public site, other code:** `--publish` refuses, since a published page cannot be taken back
+    from the internet, unless `--public` is passed, when it warns and publishes. **`--public` is the
+    person's word for that one page. An agent never passes it on its own.**
+  - The site must serve the root of a `gh-pages` branch: `main` would commit into the branch the data
+    root's checkout works on and serve every record on it, so that is refused, and the line says what
+    to change. Pages sit at `rig-pr-pages/<org>/<repo>/<number>/index.html`, and nothing else on the
+    branch is touched.
+- **Nowhere to publish** means no page and one plain line saying why, from `rig page`, `rig next` and
+  `rig pr`; `--publish` refuses with it. With no site, the line says how to turn Pages on from
+  `gh-pages`, and that on a personal account the site is public. rig turns nothing on itself. The line
+  stays out of PR bodies.
+- **The link.** `--publish` records `page: { url, head, at }`, since a private site cannot be read
+  back. A private site's host is a random `*.pages.github.io` name and its path names only the repo
+  the PR is in, so that link goes into any PR, a public one too, where only the data root's readers
+  can open it. Any other host may name the data root, a public site's `<owner>.github.io/<repo>` above
+  all, so it goes by the context doc's rule above; where that says no, `--publish` prints the link and
+  no body carries it.
+  - **The work branch's PR:** `rig pr` and `rig pr --refresh` write `Reading page, at \`abc1234\`:
+    <url>` near the top of the body, which `rig next`'s comparison offers like any other change.
+  - **A stage PR's** body is not rig's and `rig pr --refresh` leaves it alone, so `--publish` writes
+    the line into a marked region (`rig:reading-page`) at its top, replaced in place when published
+    again, with everything around it left as written. A link it may not write, or could not, is
+    printed.
+  - **A PR by URL:** rig records nothing, writes nothing to the PR, and prints the link for the
+    person to post. The data root is the one that holds the PR's org; none refuses, two ask for
+    `--data`.
 - **Staleness.** The page carries `rig:head`, and `--publish` records that. `rig next` and `rig page`
-  say when the PR's head has passed it, naming both commits. A reader sees the commit in the body's
-  line and in a bar on every view of the page, with a link to GitHub's comparison from that commit to
+  say when a PR's head has passed it, naming both commits. A reader sees the commit in the PR's line
+  and in a bar on every view of the page, with a link to GitHub's comparison from that commit to
   the branch. A rebuild checks every citation again and fails on one that moved.
 
-**Not a gate.** None of this holds up the hand-over, and nothing refuses for want of a page. Only
-the work branch's PR gets one. Closing a work leaves its page where it is.
+**Not a gate.** None of this holds up the hand-over or a landing, and nothing refuses for want of a
+page. Closing a work leaves its pages where they are.
 
 rig opens the *work branch's* PR, never a stage's. A stage is reviewed on its own, in the repo
 it touches, and rig would have to guess which of the stack you meant.

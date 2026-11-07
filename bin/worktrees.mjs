@@ -221,6 +221,19 @@ export function worktrees ({ mirrorRoot, remotes, run, step = () => {}, warn = (
     // mirror lacks. When git will not try the merge, as for unrelated histories, `conflicts` is
     // null and `error` says why, since no answer is not the same as a clean one. Call `fetch`
     // first, or the base is the one this mirror last saw.
+    // How big a pushed branch's PR would be: lines added and removed and files changed since it
+    // left the base, the way GitHub counts a PR, with renames followed whatever the machine's git
+    // config says. Null where git could not say, such as a branch not fetched.
+    size ({ org, repo, branch, base }) {
+      const mirror = mirrorPath(org, repo)
+      const from = git(mirror, 'merge-base', ref(base), ref(branch))
+      if (from.code !== 0) return null
+      const diff = git(mirror, '-c', 'diff.renames=true', 'diff', '--numstat', from.out, ref(branch))
+      if (diff.code !== 0) return null
+      const rows = diff.out.split('\n').filter(Boolean).map(row => row.split('\t'))
+      return { lines: rows.reduce((n, [added, removed]) => n + (Number(added) || 0) + (Number(removed) || 0), 0), files: rows.length }
+    },
+
     standing ({ org, repo, branch, base }) {
       const mirror = mirrorPath(org, repo)
       const counted = git(mirror, 'rev-list', '--count', `${ref(branch)}..${ref(base)}`)

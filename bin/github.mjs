@@ -9,6 +9,8 @@
 //   repo(org, name)                     { name, language, visibility } with GitHub's canonical name, or null;
 //                                       visibility is 'public', 'internal' or 'private', or null when not said
 //   prForBranch(org, name, branch)      { number, state, base, head, merge, url, openedAt, mergedAt, title, body, labels, additions, deletions, changedFiles } newest PR, or null
+//   prByNumber(org, name, number)       { number, state, base, branch, head, url, title, body, additions, deletions, changedFiles }, or null;
+//                                       `branch` is `owner:branch` for a PR from a fork
 //   pagesSite(org, name)                { url, public, branch, path, build }: its GitHub Pages site, or null for none
 //   putPage(org, name, { branch, path, content, message })   write one file on a branch, through the contents API
 //   labels(org, name)                   every label's name
@@ -124,6 +126,18 @@ export function githubViaGh ({ exec = spawnGh } = {}) {
       if (!Array.isArray(prs)) fail(`gh pr list returned something that is not a list: ${firstLine(out)}`)
       const [pr] = prs
       return pr ? { number: pr.number, state: pr.state, base: pr.baseRefName || null, head: pr.headRefOid || null, merge: pr.mergeCommit?.oid || null, url: pr.url, openedAt: pr.createdAt || null, mergedAt: pr.mergedAt || null, title: pr.title ?? null, body: pr.body ?? null, labels: (pr.labels || []).map(l => l.name), additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null } : null
+    },
+    // A PR named by its number rather than its branch, for one outside any work. gh says it has no
+    // such PR in words, with no HTTP status.
+    prByNumber (org, name, number) {
+      const args = ['pr', 'view', String(number), '--repo', `${org}/${name}`, '--json', 'number,state,baseRefName,headRefName,headRefOid,url,title,body,additions,deletions,changedFiles,isCrossRepository,headRepositoryOwner']
+      const r = gh(args)
+      if (r.code !== 0) {
+        if (/Could not resolve to a PullRequest/.test(r.err)) return null
+        refused(args, r)
+      }
+      const pr = parseJson(r.out, 'gh pr view')
+      return { number: pr.number, state: pr.state, base: pr.baseRefName || null, branch: pr.isCrossRepository ? `${pr.headRepositoryOwner?.login}:${pr.headRefName}` : pr.headRefName, head: pr.headRefOid || null, url: pr.url, title: pr.title ?? null, body: pr.body ?? null, additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null }
     },
     // Where a repo's GitHub Pages site publishes from and who can read it. `public` is the answer
     // that matters: a private repo's site is on the open internet outside Enterprise Cloud.
@@ -431,6 +445,11 @@ export function githubInMemory (state, { env } = {}) {
       ask(`${org}/${name}`)
       return (lookup(`${org}/${name}`)?.repo.mergeQueues || []).includes(branch)
     },
+    prByNumber (org, name, number) {
+      ask(`${org}/${name}`)
+      const pr = (lookup(`${org}/${name}`)?.repo.prs || []).find(p => p.number === Number(number))
+      return pr ? { number: pr.number, state: pr.state, base: pr.base || null, branch: pr.branch, head: pr.head || null, url: pr.url, title: pr.title ?? null, body: pr.body ?? null, additions: pr.additions ?? null, deletions: pr.deletions ?? null, changedFiles: pr.changedFiles ?? null } : null
+    },
     // A repo's `pages` is its site, absent where it has none; `pagesLookupFails` is one GitHub
     // will not say for, carrying gh's message.
     pagesSite (org, name) {
@@ -451,11 +470,9 @@ export function githubInMemory (state, { env } = {}) {
       found.repo.prs = found.repo.prs || []
       const number = Math.max(0, ...found.repo.prs.map(pr => pr.number)) + 1
       const url = `https://github.com/${found.key}/pull/${number}`
-      // `prSizeOnCreate` is how big GitHub will say the next PR opened is.
       found.repo.prs.push({
         branch, base, number, url, title, body,
         state: 'OPEN', openedAt: new Date().toISOString(), mergedAt: null, commits: [],
-        ...state.prSizeOnCreate,
       })
       return { number, url }
     },

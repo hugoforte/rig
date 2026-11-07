@@ -109,7 +109,7 @@ A repo whose checks last passed at the diff it carries now. `rig check --run` re
 _Avoid_: green, tested, passing (that is the run, not the record)
 
 **Reading page**:
-One self-contained HTML file for one big pull request, written by the `rig-pr-page` skill and published with `rig page --publish`: its parts and connections, its behaviour before and after, and every changed file, linked both ways. A snapshot of one commit, and a companion to the PR's body. Offered, never required.
+One self-contained HTML file for one big pull request, a work branch's, a stage's or any other's, written by the `rig-pr-page` skill and published with `rig page --publish` to the data root's Pages site: its parts and connections, its behaviour before and after, and every changed file, linked both ways. A snapshot of one commit, and a companion to the PR's body. Offered, never required.
 _Avoid_: review page, PR site, docs (that is the user docs), preview
 
 **Adversarial review**:

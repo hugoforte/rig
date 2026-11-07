@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { PAGE_DEFAULTS, pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageSaying, pageSourceAllowed } from '../bin/prpage.mjs'
+import { PAGE_DEFAULTS, pageThreshold, pageSize, pageDue, pageSite, pageAddress, pageMetas, pageLine, pageSaying, pageSourceAllowed, pageLinkable, pageRegion, prFromUrl } from '../bin/prpage.mjs'
 
 // ------------------------------------------------- how big is big
 
@@ -45,62 +45,141 @@ test('a value that is no threshold is named and passed over: a typo must not sto
 
 // ------------------------------------------------- where it may go
 
-const SITE = { url: 'https://example.invalid/site/', public: false, branch: 'gh-pages', path: '/', build: 'legacy' }
+const SITE = { url: 'https://wandering-otter-1a2b3c.pages.github.io/', public: false, branch: 'gh-pages', path: '/', build: 'legacy' }
 const PUBLIC_SITE = { ...SITE, public: true }
-const root = over => ({ spec: 'acme/rig-data', visibility: 'private', site: null, ...over })
-const place = over => pageSite({ spec: 'acme/billing', visibility: 'private', own: null, root: root(), ...over })
+const root = over => ({ spec: 'acme/rig-data', visibility: 'private', site: SITE, ...over })
+const place = over => pageSite({ spec: 'acme/billing', visibility: 'private', root: root(), ...over })
 
 const refused = (name, over, why) => test(`no page: ${name}`, () => {
   const r = place(over)
-  assert.equal(r.host, undefined, `expected no site, got ${JSON.stringify(r)}`)
+  assert.equal(r.spec, undefined, `expected no site, got ${JSON.stringify(r)}`)
   assert.match(r.why, why)
   assert.ok(!r.why.includes('\n'), 'one plain line')
 })
-const hosted = (name, over, host) => test(`${host} site: ${name}`, () => {
+const hosted = (name, over) => test(`the data root's site: ${name}`, () => {
   const r = place(over)
-  assert.equal(r.host, host, r.why)
-  assert.equal(r.spec, host === 'repo' ? (over.spec || 'acme/billing') : (over.root?.spec || 'acme/rig-data'))
+  assert.equal(r.spec, over.root?.spec || 'acme/rig-data', r.why)
   assert.equal(r.branch, 'gh-pages')
+  assert.equal(r.url, SITE.url)
 })
 
-hosted('a private repo and a private data root with one owner, on an access-controlled site', { root: root({ site: SITE }) }, 'root')
-hosted('a private repo\'s own access-controlled site, whatever the data root is', { own: SITE, root: { none: true } }, 'repo')
-hosted('the repo\'s own comes first: its readers are the code\'s exactly', { own: SITE, root: root({ site: SITE }) }, 'repo')
-hosted('a public repo\'s own public site', { visibility: 'public', own: PUBLIC_SITE, root: root() }, 'repo')
-hosted('a public repo and a public data root, whoever owns it', { visibility: 'public', root: root({ spec: 'other/rig-data', visibility: 'public', site: PUBLIC_SITE }) }, 'root')
-hosted('an internal repo and an internal data root', { visibility: 'internal', root: root({ visibility: 'internal', site: SITE }) }, 'root')
-hosted('a private repo whose own site is public falls through to the data root', { own: PUBLIC_SITE, root: root({ site: SITE }) }, 'root')
+hosted('a private repo and a private data root with one owner', {})
+hosted('an internal repo and an internal data root', { visibility: 'internal', root: root({ visibility: 'internal' }) })
+hosted('an internal repo and a private data root with one owner', { visibility: 'internal' })
+hosted('a public repo and a private data root, whose readers are fewer than the code\'s', { visibility: 'public' })
+hosted('a public repo and a private data root under another owner, since anyone can read the code', { visibility: 'public', root: root({ spec: 'other/rig-data' }) })
 
-refused('a private repo\'s public site, as Pages is outside Enterprise', { own: PUBLIC_SITE, root: root() }, /own Pages site is public/)
-refused('a private data root whose site is public', { root: root({ site: PUBLIC_SITE }) }, /data root's Pages site is public/)
-refused('a site that does not say it is restricted reads as public', { root: root({ site: { ...SITE, public: undefined } }) }, /data root's Pages site is public/)
-refused('a private data root under another owner has unrelated readers', { root: root({ spec: 'other/rig-data', site: SITE }) }, /another owner/)
-refused('a public repo and a private data root: the link would name it', { visibility: 'public', root: root({ site: SITE }) }, /more visible than the data root/)
-refused('a private repo and a public data root: the page would outreach the code', { root: root({ visibility: 'public', site: PUBLIC_SITE }) }, /wider than/)
-refused('an internal repo and a private data root: the link would name it', { visibility: 'internal', root: root({ site: SITE }) }, /more visible than the data root/)
+refused('a private data root under another owner has unrelated readers', { root: root({ spec: 'other/rig-data' }) }, /another owner/)
+refused('an internal repo and a private data root under another owner', { visibility: 'internal', root: root({ spec: 'other/rig-data' }) }, /another owner/)
+refused('a private repo and an internal data root: the page would outreach the code', { root: root({ visibility: 'internal' }) }, /wider than/)
 refused('a data root with no remote', { root: { none: true } }, /data root has no remote/)
 refused('a data root that is not on GitHub', { root: { elsewhere: true } }, /not on GitHub/)
-refused('a data root with no site', { root: root() }, /data root has no Pages site/)
-refused('a data root whose visibility GitHub would not say', { root: root({ visibility: null, site: SITE }) }, /would not say how visible the data root is/)
+refused('a data root with no site says what it would take', { root: root({ site: null }) }, /\(acme\/rig-data\) has no Pages site: turn it on in its Pages settings, deploying from the root of a gh-pages branch; on a personal account that site is public, and a private one takes GitHub Enterprise Cloud/)
+refused('a data root whose visibility GitHub would not say', { root: root({ visibility: null }) }, /would not say how visible the data root is/)
 refused('a data root whose site GitHub would not say', { root: root({ site: undefined }) }, /would not say whether the data root has a Pages site/)
-refused('a repo whose visibility GitHub would not say, or that is not on GitHub', { visibility: null, own: SITE, root: root({ site: SITE }) }, /would not say how visible acme\/billing is/)
-refused('a repo whose own site GitHub would not say, and nowhere else', { own: undefined }, /would not say whether it has a Pages site/)
-refused('a site built by a workflow, which a branch cannot publish to', { own: { ...SITE, build: 'workflow' }, root: { none: true } }, /gh-pages/)
-refused('a site published from the default branch, which rig must not commit to', { own: { ...SITE, branch: 'main' }, root: { none: true } }, /gh-pages/)
-refused('a site published from a folder of the branch', { own: { ...SITE, path: '/docs' }, root: { none: true } }, /gh-pages/)
+refused('a repo whose visibility GitHub would not say, or that is not on GitHub', { visibility: null }, /would not say how visible acme\/billing is/)
+refused('a site built by a workflow says what to change', { root: root({ site: { ...SITE, build: 'workflow', branch: 'main' } }) }, /served from main by a workflow.*Pages settings.*root of a gh-pages branch/)
+refused('a site served from the data root\'s own main says what to change', { root: root({ site: { ...SITE, branch: 'main' } }) }, /served from main.*Pages settings.*root of a gh-pages branch/)
+refused('a site served from a folder of the branch says what to change', { root: root({ site: { ...SITE, path: '/docs' } }) }, /gh-pages\/docs.*root of a gh-pages branch/)
 
-// The two rows decision 223 rests on, and the two a comparison of visibilities alone gets wrong.
-test('a private repo\'s site that is public is refused: Pages from a private repo is on the open internet outside Enterprise', () => {
-  assert.equal(place({ own: PUBLIC_SITE, root: root({ site: PUBLIC_SITE }) }).host, undefined)
+// The rows decision 223 rests on.
+const THE_PUBLIC_LINE = 'this page will be public: the data root\'s Pages site is on the open internet'
+
+test('public code on a public site goes up, saying in one line that the page is public', () => {
+  for (const rootOver of [{ site: PUBLIC_SITE }, { visibility: 'public', site: PUBLIC_SITE }, { spec: 'other/rig-data', site: PUBLIC_SITE }]) {
+    const r = place({ visibility: 'public', root: root(rootOver) })
+    assert.equal(r.spec, rootOver.spec || 'acme/rig-data', r.why)
+    assert.equal(r.needsPublicFlag, false)
+    assert.equal(r.warning, THE_PUBLIC_LINE)
+  }
 })
 
-test('a public repo beside a private data root is refused the data root\'s site: its link would name the data root', () => {
-  assert.equal(place({ visibility: 'public', root: root({ site: SITE }) }).host, undefined)
+test('non-public code on a public site needs the flag, and says a page cannot be taken back', () => {
+  for (const visibility of ['private', 'internal']) {
+    const r = place({ visibility, root: root({ site: PUBLIC_SITE }) })
+    assert.equal(r.why, undefined)
+    assert.equal(r.needsPublicFlag, true)
+    assert.equal(r.warning, `this page would be public: the data root's Pages site is on the open internet, and acme/billing is ${visibility}. A published page cannot be taken back, so publishing it takes --public and the person's word for this page`)
+  }
 })
 
-test('the reason names both places, so one line says what would change the answer', () => {
-  const { why } = place({ visibility: 'public', root: root() })
-  assert.match(why, /^acme\/billing .*it has no Pages site.*data root/)
+test('non-public code on a public site is not stopped by the private site\'s owner and width rules', () => {
+  assert.equal(place({ root: root({ spec: 'other/rig-data', visibility: 'public', site: PUBLIC_SITE }) }).needsPublicFlag, true)
+})
+
+test('a site that does not say exactly public: false counts as public, and says so', () => {
+  for (const site of [{ ...SITE, public: undefined }, { ...SITE, public: 'false' }, { ...SITE, public: null }]) {
+    const code = place({ visibility: 'public', root: root({ site }) })
+    assert.equal(code.needsPublicFlag, false)
+    assert.match(code.warning, /^this page will be public: the data root's Pages site does not say it is private, so it counts as public$/)
+    assert.equal(place({ root: root({ site }) }).needsPublicFlag, true)
+  }
+})
+
+test('a private site carries no warning and needs no flag', () => {
+  for (const visibility of ['private', 'internal', 'public']) {
+    const r = place({ visibility })
+    assert.equal(r.warning, undefined)
+    assert.equal(r.needsPublicFlag, false)
+  }
+})
+
+test('a public site served from main is still refused: rig writes only to gh-pages', () => {
+  assert.match(place({ visibility: 'public', root: root({ site: { ...PUBLIC_SITE, branch: 'main' } }) }).why, /gh-pages/)
+})
+
+test('the offer of a page on a public site carries the warning', () => {
+  const says = warning => pageSaying({ repo: 'billing', size: { lines: 900, files: 3 }, threshold: { lines: 500, files: 20 }, due: true, page: null, prHead: null, warning }).says
+  assert.ok(says(THE_PUBLIC_LINE).endsWith(` — ${THE_PUBLIC_LINE}`), says(THE_PUBLIC_LINE))
+})
+
+test('a public repo\'s page may sit on a private data root, however different the owner', () => {
+  assert.equal(place({ visibility: 'public', root: root({ spec: 'other/rig-data' }) }).spec, 'other/rig-data')
+})
+
+test('a page reaches no further than its code: one owner below public, and no wider data root', () => {
+  assert.equal(place({ root: root({ spec: 'other/rig-data' }) }).spec, undefined)
+  assert.equal(place({ root: root({ visibility: 'internal' }) }).spec, undefined)
+})
+
+test('a site served from main is refused, with what to change', () => {
+  assert.match(place({ root: root({ site: { ...SITE, branch: 'main' } }) }).why, /gh-pages/)
+})
+
+// ------------------------------------------------- the link
+
+test('a private site\'s random host names no repo, so its link goes into any PR', () => {
+  assert.equal(pageLinkable('https://wandering-otter-1a2b3c.pages.github.io/rig-pr-pages/acme/billing/12/', false), true)
+  assert.equal(pageLinkable('https://wandering-otter-1a2b3c.pages.github.io/rig-pr-pages/acme/billing/12/', null), true)
+})
+
+test('any other address goes by the context doc\'s rule, since it may name the data root', () => {
+  for (const url of ['https://docs.example.invalid/rig-pr-pages/acme/billing/12/', 'https://acme.github.io/rig-data/rig-pr-pages/acme/billing/12/', 'https://pages.github.io.example.invalid/x/']) {
+    assert.equal(pageLinkable(url, true), true, url)
+    assert.equal(pageLinkable(url, false), false, url)
+    assert.equal(pageLinkable(url, null), false, url)
+  }
+})
+
+test('a stage PR\'s link is a region at the top of its body, leaving the rest as written', () => {
+  const page = { url: 'https://wandering-otter-1a2b3c.pages.github.io/p/', head: 'a'.repeat(40) }
+  const once = pageRegion('What a person wrote.\n\nMore.', page)
+  assert.match(once, /^<!-- rig:reading-page -->\nReading page, at `aaaaaaa`: https:\S+\n<!-- \/rig:reading-page -->\n\nWhat a person wrote\.\n\nMore\.$/)
+  assert.equal(pageRegion(once, page), once, 'the same page changes nothing')
+  const moved = pageRegion(`${once}\n\nAdded later.`, { ...page, head: 'b'.repeat(40) })
+  assert.match(moved, /Reading page, at `bbbbbbb`/)
+  assert.doesNotMatch(moved, /aaaaaaa/)
+  assert.match(moved, /What a person wrote\.\n\nMore\.\n\nAdded later\.$/)
+  assert.equal(moved.match(/<!-- rig:reading-page -->/g).length, 1, 'one opening marker')
+  assert.match(pageRegion('', page), /^<!-- rig:reading-page -->/)
+  assert.match(pageRegion(null, page), /^<!-- rig:reading-page -->/)
+})
+
+test('a PR by URL gives its org, repo and number, and anything else is refused', () => {
+  assert.deepEqual(prFromUrl('https://github.com/acme/billing/pull/12'), { org: 'acme', repo: 'billing', number: 12, url: 'https://github.com/acme/billing/pull/12' })
+  assert.deepEqual(prFromUrl('https://github.com/acme/billing/pull/12/files').number, 12)
+  assert.equal(prFromUrl('https://gitlab.example.invalid/acme/billing/pull/12'), null)
+  assert.equal(prFromUrl('billing'), null)
 })
 
 // ------------------------------------------------- the address and the page's own word
@@ -155,6 +234,15 @@ test('a head moved past the page is said with both commits, however small the PR
   const s = pageSaying(fact({ due: false, prHead: 'b'.repeat(40), page: { head: HEAD, url: 'https://example.invalid/' } }))
   assert.match(s.says, /head has moved past its reading page \(page at aaaaaaa, PR at bbbbbbb\)/)
   assert.match(s.says, /rig-pr-page skill/)
+})
+
+test('a branch with no PR yet is told what is coming, and that the page follows the PR', () => {
+  const s = pageSaying(fact({ upcoming: true, prHead: null }))
+  assert.match(s.says, /^billing: about 1,240 lines across 31 files, over the size for a reading page/)
+  assert.match(s.says, /the rig-pr-page skill/)
+  assert.equal(s.command, 'rig pr')
+  assert.equal(pageSaying(fact({ upcoming: true, prHead: null, due: false })), null)
+  assert.match(pageSaying(fact({ upcoming: true, prHead: null, why: 'no site' })).says, /no reading page — no site/)
 })
 
 test('a head nobody could read is no moved head', () => {
