@@ -208,6 +208,25 @@ export async function checkPage (file, { chrome = findChrome(), shots = null } =
       await expectSoon('back returns to where it came from', state, fromTitle)
       await click('#pfwd')
       await expectSoon('forward returns again', state, targetTitle)
+      // Chrome fires popstate on the page's own hash changes too, so a link back to where the reader
+      // came from could read as a move back along the trail rather than a step of its own.
+      const trail = () => ev(`(function () { const a = [...document.querySelectorAll('#trail a')]; return { title: document.querySelector('#pbody h2')?.textContent, steps: a.length, at: a.findIndex(x => x.classList.contains('cur')), forward: !document.getElementById('pfwd').disabled } })()`)
+      // The tabs above left steps of their own, so the trail is read from where it stands now.
+      const { steps } = await trail()
+      const at = (title, n, forward) => t => t.title === title && t.steps === steps + 1 && t.at === n && t.forward === forward
+      const [fromName, targetName] = [page.ent[from].title, page.ent[target].title]
+      await ev(`[...document.querySelectorAll('#pbody .ref')].find(a => a.dataset.e === ${JSON.stringify(from)}).click()`)
+      await expectSoon('a link to a place already in the trail adds a step', trail, at(fromName, steps, false))
+      await click('#pback')
+      await expectSoon('back walks the trail a step at a time', trail, at(targetName, steps - 1, true))
+      await click('#pback')
+      await expectSoon('and again', trail, at(fromName, steps - 2, true))
+      await click('#pfwd')
+      await expectSoon('forward stays usable after back', trail, at(targetName, steps - 1, true))
+      await click('#pfwd')
+      await expectSoon('and walks to the last step', trail, at(fromName, steps, false))
+      await ev('history.back()')
+      await expectSoon('the browser\'s own back walks the trail too', trail, at(targetName, steps - 1, true))
       await ev('history.back()')
       const back = await expectSoon('the browser\'s own back works too', state, fromTitle)
       await click('#pclose')

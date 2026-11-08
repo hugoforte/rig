@@ -362,6 +362,8 @@ test('the built page clicks through in headless Chrome', { skip: browser.skip, t
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`)
     assert.match(r.stdout, /all good/)
     assert.match(r.stdout, /ok +a walkthrough opens with its steps/)
+    assert.match(r.stdout, /ok +a link to a place already in the trail adds a step/)
+    assert.match(r.stdout, /ok +forward stays usable after back/)
     assert.match(r.stdout, /ok +code in a table keeps its words whole on a phone/)
     // An entity and the tab called Open items once shared a name, and so one file.
     const taken = ['wide-load', 'wide-tab-start', 'wide-tab-map', 'wide-tab-open', 'wide-entity', 'wide-walkthrough', 'phone-tab', 'phone-open', 'phone-table']

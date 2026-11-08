@@ -168,7 +168,7 @@
   var KIND = { part: 'Map', flow: 'Behaviour', decision: 'Decisions', test: 'Tests', risk: 'Risks', open: 'Open items', word: 'Words', file: 'Files', sec: 'Sections' };
   var ORDER = ['part', 'flow', 'decision', 'test', 'risk', 'open', 'word', 'sec', 'file'];
   var STATUS = { 'new': 'New in this PR', changed: 'Changed', removed: 'Removed', unchanged: 'Unchanged, shown for context' };
-  var tab = 'start', cur = null, trail = [], pos = -1, moving = false;
+  var tab = 'start', cur = null, trail = [], pos = -1;
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -255,21 +255,22 @@
     document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('on', a.dataset.tab === t); });
   }
 
+  // Each history entry keeps, in its state, the step of the trail it shows. An entry with none is a
+  // new address, from a link or the address bar, so what it opens is a new step; back or forward
+  // to an entry returns to its step. Chrome fires popstate for the page's own hash changes as well
+  // as for back and forward, so which event came says nothing, and the state is what is read.
   function route() {
-    var r = parse();
+    var r = parse(), s = history.state;
     if (r.tab !== tab || !$('results').classList.contains('on')) showTab(r.tab);
     cur = r.ent;
     document.body.classList.toggle('open', !!cur);
+    if (s && s.pos < trail.length && (!cur || trail[s.pos] === cur)) pos = s.pos;
+    else if (cur && trail[pos] !== cur) { trail = trail.slice(0, pos + 1); trail.push(cur); pos = trail.length - 1; }
+    if (!s || s.pos !== pos) history.replaceState({ pos: pos }, '');
     if (cur) {
-      if (trail[pos] !== cur) {
-        var at = moving ? trail.lastIndexOf(cur) : -1;
-        if (at >= 0) pos = at;
-        else { trail = trail.slice(0, pos + 1); trail.push(cur); pos = trail.length - 1; }
-      }
       render(cur);
       drawTrail();
     }
-    moving = false;
     mark(cur);
   }
 
@@ -278,8 +279,9 @@
     if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
     if (a.dataset.trail !== undefined) {
       ev.preventDefault();
-      moving = true;
-      location.hash = addr(tab, trail[+a.dataset.trail]);
+      if (+a.dataset.trail === pos) return;
+      history.pushState({ pos: +a.dataset.trail }, '', '#' + addr(tab, trail[+a.dataset.trail]));
+      route();
       return;
     }
     if (a.dataset.e) {
@@ -289,9 +291,9 @@
   });
   function close() { location.hash = tab; }
   $('pclose').addEventListener('click', close);
-  $('pback').addEventListener('click', function () { moving = true; history.back(); });
-  $('pfwd').addEventListener('click', function () { moving = true; history.forward(); });
-  window.addEventListener('popstate', function () { moving = true; });
+  $('pback').addEventListener('click', function () { history.back(); });
+  $('pfwd').addEventListener('click', function () { history.forward(); });
+  window.addEventListener('popstate', route);
   window.addEventListener('hashchange', route);
 
   // What each tab holds, drawn once from the data.
