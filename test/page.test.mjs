@@ -757,3 +757,127 @@ test('`rig status` and `rig list --json` carry the page recorded', () => {
   const big = list.find(w => w.id === 'big-pr')
   assert.equal(big.repos[0].branches.find(b => b.branch === 'feat/big-pr').page.head, NEWER)
 })
+
+// ------------------------------------------------- a stack on side branches
+
+// A work whose PRs are a stack on branches of their own, each checked out outside the work's
+// worktrees: the work branch has no PR, the lowest layer is based on main and the next on it.
+const SIDE = 'feat/side-layer-a'
+const SIDE_ABOVE = 'feat/side-layer-b'
+const sideUrl = n => `https://github.com/acme/billing/pull/${n}`
+const sideRecord = id => record(id).repos[0].branches.find(b => b.branch === SIDE)
+function sideStack (id) {
+  assert.equal(rig(['new', id, '--title', id, '--type', 'feat', '--no-ticket']).code, 0)
+  assert.equal(rig(['attach', 'billing', '--work', id]).code, 0)
+  m.seedPr({ branch: SIDE, base: 'main', number: 901, url: sideUrl(901), state: 'OPEN', title: 'Layer a', body: 'What a person wrote.', head: HEAD, additions: 7000, deletions: 553, changedFiles: 69 })
+  m.seedPr({ branch: SIDE_ABOVE, base: SIDE, number: 902, url: sideUrl(902), state: 'OPEN', title: 'Layer b', body: 'Layer b.', head: HEAD, additions: 900, deletions: 2, changedFiles: 3 })
+}
+
+test('`rig page <url> --adopt` makes a side branch\'s PR the work\'s: recorded on its branch, offered by `rig next`, listed by `rig page`', () => {
+  sideStack('side')
+  assert.doesNotMatch(rig(['next', '--work', 'side']).out, /reading page/, 'rig cannot find it for itself')
+  const r = rig(['page', sideUrl(901), '--adopt', '--work', 'side'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /PR #901 on feat\/side-layer-a is now side's/)
+  assert.ok(sideRecord('side').adoptedAt)
+  assert.match(gitMust(dataRoot, 'log', '-1', '--format=%s'), /side/, 'mutating, like --publish')
+  assert.match(rig(['next', '--work', 'side']).out, /billing \(feat\/side-layer-a\): this PR is 7,553 lines across 69 files[\s\S]*rig-pr-page skill/)
+  const facts = JSON.parse(rig(['page', '--work', 'side', '--json']).out)
+  const fact = facts.find(f => f.pr?.branch === SIDE)
+  assert.equal(fact.adopted, true)
+  assert.equal(fact.stage, false)
+  assert.equal(fact.due, true)
+  assert.equal(fact.pr.url, sideUrl(901))
+  assert.match(fact.source, /work[\\/]side[\\/]pages[\\/]billing-901\.md$/)
+  assert.equal(facts.find(f => f.pr?.branch === SIDE_ABOVE), undefined, 'a layer adopted alone leaves the rest outside')
+  const listed = JSON.parse(rig(['list', '--json']).out)
+  const side = (Array.isArray(listed) ? listed : listed.works).find(w => w.id === 'side')
+  assert.equal(side.repos[0].branches.find(b => b.branch === SIDE).adoptedAt, sideRecord('side').adoptedAt)
+})
+
+test('adopting again changes nothing, and the work\'s own PR is already its own', () => {
+  const before = fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8')
+  const r = rig(['page', sideUrl(901), '--adopt', '--work', 'side'])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /already side's/)
+  assert.equal(fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8'), before)
+
+  const big = fs.readFileSync(path.join(dataRoot, 'work', 'big-pr', 'work.json'), 'utf8')
+  const own = rig(['page', prOf('feat/big-pr').url, '--adopt', '--work', 'big-pr'])
+  assert.equal(own.code, 0, own.out)
+  assert.match(own.out, /already big-pr's/)
+  assert.equal(fs.readFileSync(path.join(dataRoot, 'work', 'big-pr', 'work.json'), 'utf8'), big)
+})
+
+test('adopting refuses a PR of a repo not attached, one not open and one from a fork, and records nothing', () => {
+  seedOutside()
+  m.seedPr({ branch: 'feat/side-old', base: 'main', number: 903, url: sideUrl(903), state: 'MERGED', head: HEAD, additions: 1, deletions: 0, changedFiles: 1 })
+  m.seedPr({ branch: 'someone:feat/theirs', base: 'main', number: 904, url: sideUrl(904), state: 'OPEN', head: HEAD, additions: 1, deletions: 0, changedFiles: 1 })
+  const before = fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8')
+  const refused = (url, why) => {
+    const r = rig(['page', url, '--adopt', '--work', 'side'])
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, why)
+  }
+  refused(OUTSIDE, /acme\/orders is not attached to side/)
+  refused(sideUrl(903), /is merged/)
+  refused(sideUrl(904), /from a fork/)
+  refused(sideUrl(9999), /GitHub has no pull request/)
+  assert.equal(fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8'), before)
+})
+
+test('an adopted PR\'s page publishes from the page itself, is recorded on its branch, and is linked in a region of its body', () => {
+  const r = rig(['page', '--work', 'side', '--publish', pageFile({ pr: sideUrl(901) })])
+  assert.equal(r.code, 0, r.out)
+  assert.ok(writes('acme/rig-data').some(w => w.path === 'rig-pr-pages/acme/billing/901/index.html'))
+  assert.equal(sideRecord('side').page.head, HEAD)
+  assert.equal(sideRecord('side').page.number, 901)
+  const { body } = prOf(SIDE)
+  assert.match(body, /^<!-- rig:reading-page -->\nReading page, at `aaaaaaa`: https:\/\/wandering-otter-1a2b3c\.pages\.github\.io\/rig-pr-pages\/acme\/billing\/901\/\n<!-- \/rig:reading-page -->/)
+  assert.match(body, /What a person wrote\.$/)
+  assert.doesNotMatch(rig(['next', '--work', 'side']).out, /reading page/, 'nothing more to offer')
+})
+
+test('standing in the work, its adopted PR by URL is the work\'s: the publish is recorded and linked', () => {
+  const r = rig(['page', sideUrl(901), '--work', 'side', '--publish', pageFile({ pr: sideUrl(901), head: NEWER })])
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /recorded nowhere/)
+  assert.equal(sideRecord('side').page.head, NEWER)
+  const { body } = prOf(SIDE)
+  assert.equal(body.split('<!-- rig:reading-page -->').length, 2, 'one region')
+  assert.match(body, /Reading page, at `bbbbbbb`/)
+  const [fact] = JSON.parse(rig(['page', sideUrl(901), '--work', 'side', '--json']).out)
+  assert.equal(fact.adopted, true)
+  assert.equal(fact.outside, undefined)
+  assert.equal(fact.page.head, NEWER)
+})
+
+test('an adopted PR whose head moved past its page is said by `rig next` and `rig page`', () => {
+  setPr(SIDE, { head: HEAD })
+  assert.match(rig(['next', '--work', 'side']).out, /billing \(feat\/side-layer-a\): the PR's head has moved past its reading page \(page at bbbbbbb, PR at aaaaaaa\)/)
+  const [fact] = JSON.parse(rig(['page', sideUrl(901), '--work', 'side', '--json']).out)
+  assert.equal(fact.stale, true)
+})
+
+test('a PR of an attached repo the work has not adopted stays outside it: recorded nowhere, written to nothing', () => {
+  const before = fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8')
+  const [fact] = JSON.parse(rig(['page', sideUrl(902), '--work', 'side', '--json']).out)
+  assert.equal(fact.outside, true)
+  const r = rig(['page', sideUrl(902), '--work', 'side', '--publish', pageFile({ pr: sideUrl(902) })])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /recorded nowhere/)
+  assert.equal(prOf(SIDE_ABOVE).body, 'Layer b.')
+  assert.equal(fs.readFileSync(path.join(dataRoot, 'work', 'side', 'work.json'), 'utf8'), before)
+})
+
+test('`--disown` gives an adopted PR back: no longer offered or listed, its page left where it is', () => {
+  const r = rig(['page', sideUrl(901), '--disown', '--work', 'side'])
+  assert.equal(r.code, 0, r.out)
+  assert.equal(sideRecord('side').adoptedAt, undefined)
+  assert.equal(sideRecord('side').page.head, NEWER, 'the page stays where it is')
+  assert.doesNotMatch(rig(['next', '--work', 'side']).out, /feat\/side-layer-a/)
+  assert.equal(JSON.parse(rig(['page', '--work', 'side', '--json']).out).find(f => f.pr?.branch === SIDE), undefined)
+  const again = rig(['page', sideUrl(901), '--disown', '--work', 'side'])
+  assert.equal(again.code, 1, again.out)
+  assert.match(again.out, /side has not adopted/)
+})

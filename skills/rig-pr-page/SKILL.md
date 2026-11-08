@@ -13,10 +13,16 @@ Reply as rig's `AGENTS.md`'s "Replying to the user" says: the page's URL and the
 
 ## 1. Ask rig what this PR is
 
-From the work folder, for the work branch's PR and each open stage PR:
+From the work folder, for the work branch's PR, each open stage PR and each open PR the work adopted:
 
 ```bash
 rig page --json
+```
+
+**A PR of the work's that it does not list**, on a branch of its own such as a layer of a GitHub stack checked out outside the work's worktrees: adopt it first, so its page is recorded and linked like any of the work's, and `rig next` says when its head moves past the page. Only a PR the user or the context doc says is this work's; a colleague's stays outside, and a mistake is undone with `--disown`.
+
+```bash
+rig page https://github.com/<org>/<repo>/pull/<n> --adopt
 ```
 
 For a PR outside any work, from anywhere:
@@ -42,6 +48,8 @@ git clone --filter=blob:none --no-checkout https://github.com/<org>/<repo>.git <
 git -C <tmp>/clone fetch origin pull/<n>/head
 git -C <tmp>/clone worktree add --detach <tmp>/head <pr.head>
 ```
+
+**An adopted PR's** branch is checked out outside the work's worktrees. Build where it is checked out, or `git fetch origin <pr.branch>` in the repo's worktree, which is then `--repo-dir`.
 
 Read the whole diff (`git diff <merge-base> <head>` in the repo's worktree), its commits, the PR body, its review comments, and the ticket. Review comments are the inline threads and the conversation (`gh api repos/<org>/<repo>/pulls/<n>/comments`, `gh pr view <n> --repo <org>/<repo> --comments`). Read until you can say what each changed file is for. The test: you could tell someone what breaks if this PR is reverted.
 
@@ -132,7 +140,7 @@ rig page --publish <tmp>/dist.html
 Then the link:
 
 - **The work branch's PR:** `rig pr --refresh` puts it in the body.
-- **A stage PR:** `--publish` has already put it in a marked region at the top of the body, and left the rest as written.
+- **A stage PR, or one the work adopted:** `--publish` has already put it in a marked region at the top of the body, and left the rest as written.
 - **A PR outside any work:** `rig page <url> --publish <tmp>/dist.html`. It records nothing, writes nothing to the PR, and prints the link. Give the user that line to post: posting it is theirs.
 - **`--publish` printed "may not carry that link", on either route:** the site's address may name the data root in a more visible PR. Give the user the line and say so; whether to post it is theirs.
 

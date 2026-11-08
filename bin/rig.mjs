@@ -656,11 +656,13 @@ function freshnessEpilogue (command) {
 // write a record format it has never seen — and the sync below.
 const MUTATING = new Set(['new', 'ticket', 'attach', 'detach', 'restore', 'reopen', 'plan', 'save', 'note', 'struggle', 'close', 'backfill'])
 // `rig check` prints and writes nothing; `rig check --run` records what passed. `rig page` reports;
-// `rig page --publish` records the page, unless it names a PR by URL, which is in no record.
+// `rig page --publish` records the page, unless it names by URL a PR of no work in hand, which is in
+// no record, and `--adopt` and `--disown` record whether a PR is the work's.
 // `rig attempt` compares and writes nothing; cutting, running, keeping and dropping each write the
 // record.
 const mutates = (name, flags, positional = []) => MUTATING.has(name) || (name === 'check' && !!flags.run) ||
-  (name === 'page' && flags.publish !== undefined && !isUrl(positional[0])) ||
+  (name === 'page' && (flags.adopt !== undefined || flags.disown !== undefined ||
+    (flags.publish !== undefined && (!isUrl(positional[0]) || !!workInHand())))) ||
   (name === 'attempt' && ['n', 'run', 'keep', 'dropped'].some(f => flags[f] !== undefined))
 
 // Before a mutating command reads anything. rig pushes the data root but never pulled it, so
@@ -1246,7 +1248,7 @@ const trees = cfg => worktrees({
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 
 // Flags that never take a value, so `rig new --ticket my-id` keeps its positional.
-const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'land', 'by-agent', 'transcripts', 'all', 'public'])
+const BOOL_FLAGS = new Set(['ticket', 'no-ticket', 'dry-run', 'designed', 'adversarial', 'no-adversarial', 'reviewed', 'learned', 'documented', 'abandoned', 'setup', 'cut', 'force', 'run', 'refresh', 'quick', 'verbose', 'help', 'restarted', 'json', 'no-open', 'tip', 'planned', 'link', 'land', 'by-agent', 'transcripts', 'all', 'public', 'adopt', 'disown'])
 
 // The short flags rig accepts, each an alias of the long name commands read.
 const SHORT_FLAGS = { m: 'message', h: 'help' }
@@ -3286,6 +3288,7 @@ function repoEntryJson (cfg, entry, branch, live) {
     ...(br.pr ? { pr: { ...br.pr, state: 'MERGED', recorded: true } } : {}),
     ...(br.verified ? { verified: { branch: br.verified.branch, head: br.verified.head, base: br.verified.base, patchId: br.verified.patchId, at: br.verified.at } } : {}),
     ...(br.page ? { page: { url: br.page.url, head: br.page.head, number: br.page.number, at: br.page.at } } : {}),
+    ...(br.adoptedAt ? { adoptedAt: br.adoptedAt } : {}),
   }))
   const stored = (entry.branches || []).find(br => br.branch === branch)?.pr
   if (stored) {
@@ -4447,28 +4450,113 @@ function pagesForNext (cfg, work, repos, states, stack) {
     return before ? [before] : []
   })
   facts.push(...openStagePrs(work, stack).map(({ entry, branch, pr }) => pageFact(cfg, work, entry, pr, branch)))
+  facts.push(...adoptedPrs(work).filter(row => row.pr).map(({ entry, branch, pr }) => pageFact(cfg, work, entry, pr, branch)))
   for (const fact of facts) for (const problem of fact.threshold.problems) warn(`${fact.repo}: ${problem}`)
   return facts
 }
 
+// The open PRs this work adopted, for these repos: one lookup a recorded branch, since nothing else
+// reads them. A branch that is the work's own or a declared stage's is that already. A PR closed or
+// merged has no page to offer, and one GitHub would not say of is a row saying so, which `rig next`
+// passes over as it does a work branch's. The branch is what was adopted, as a stage is its branch,
+// so a new PR on it is the work's too, and `pageOf`'s number keeps the old page off it.
+function adoptedPrs (work, entries = work.repos) {
+  const own = new Set(workBranches(work))
+  return entries.flatMap(entry => (entry.branches || []).filter(b => b.adoptedAt && !own.has(b.branch)).flatMap(b => {
+    let pr = null
+    const failed = trackerFailure(() => { pr = github().prForBranch(entry.org, entry.repo, b.branch) })
+    if (failed) return [{ entry, branch: b.branch, pr: null, adopted: true, error: `GitHub would not say whether a PR is open (${failed})` }]
+    return pr?.state === 'OPEN' ? [{ entry, branch: b.branch, pr, adopted: true }] : []
+  }))
+}
+
 // `rig page`: what can be said of each PR's reading page, and with `--publish` the one write. A
 // report and an offer: nothing asks for a page, and nothing waits for one. A URL names a PR outside
-// any work, and everything else is about the work in hand.
+// any work, unless it is one of the work in hand's own, and everything else is about the work in hand.
 cmds.page = ({ flags, positional }) => {
   const [named] = positional
-  if (isUrl(named)) return pageOutside(named, flags)
+  if (flags.adopt !== undefined || flags.disown !== undefined) return adoption(named, flags)
+  if (isUrl(named)) {
+    const own = workPrAt(named, flags)
+    if (!own) return pageOutside(named, flags)
+    if (flags.publish !== undefined) return publishPage(own.cfg, own.work, own.rows, flags)
+    return sayReports(own.cfg, own.work, own.rows, flags)
+  }
   const cfg = config()
   const work = openWork(cfg, flags)
   if (!work.repos.length) die(`${work.id} has no repos attached — there is no PR to describe`)
   const entries = named ? work.repos.filter(r => r.repo.toLowerCase() === named.toLowerCase()) : work.repos
   if (!entries.length) die(`${named} is not attached to ${work.id}`)
-  if (flags.publish !== undefined) return publishPage(cfg, work, entries, flags)
-  const reports = pagePrs(cfg, work, entries).map(row => pageReport(cfg, work, row))
+  const rows = pagePrs(cfg, work, entries)
+  if (flags.publish !== undefined) return publishPage(cfg, work, rows, flags)
+  sayReports(cfg, work, rows, flags)
+}
+
+function sayReports (cfg, work, rows, flags) {
+  const reports = rows.map(row => pageReport(cfg, work, row))
   if (flags.json) return say(JSON.stringify(reports, null, 2))
   for (const report of reports) sayReport(report)
 }
 
-// One row for each repo's work-branch PR, or why there is none, and one for each open stage PR.
+const sameRepo = (entry, named) => repoSpec(entry).toLowerCase() === `${named.org}/${named.repo}`.toLowerCase()
+
+// The rows of the work in hand's own PR at this URL, its work branch's, a stage's or one it adopted,
+// or null where no work is in hand or the PR is none of those: then it is a PR outside any work.
+function workPrAt (text, flags) {
+  const named = prFromUrl(text)
+  const id = named && (typeof flags.work === 'string' ? flags.work : workIdAt(cwd()))
+  if (!id || (flags.work === undefined && !exists(recordFile(id)))) return null
+  const cfg = config()
+  const work = loadWork(cfg, id)
+  const entries = work.repos.filter(r => sameRepo(r, named))
+  if (!entries.length) return null
+  const rows = pagePrs(cfg, work, entries).filter(row => row.pr?.number === named.number)
+  return rows.length ? { cfg, work, rows } : null
+}
+
+// `rig page <url> --adopt`: a PR of the work's that rig cannot find for itself, on a branch that is
+// neither the work branch nor a declared stage, such as a layer of a stack GitHub holds whose
+// branches are checked out outside the work's worktrees. Recorded on that branch, where a stage's
+// page is, so `rig next` and `rig page` treat its PR as the work's for a reading page: offered when
+// due, linked in a region of its body, and said when its head moves past the page. `--disown` takes
+// it back. Neither says anything to GitHub.
+function adoption (text, flags) {
+  if (flags.adopt !== undefined && flags.disown !== undefined) die('--adopt and --disown undo each other — pass one')
+  const verb = flags.adopt !== undefined ? 'adopt' : 'disown'
+  if (flags.publish !== undefined) die(`--${verb} records whether a PR is the work's and publishes nothing — run --publish after it`)
+  const named = prFromUrl(text ?? '') || die(`--${verb} names a pull request by its URL: \`rig page https://github.com/<org>/<repo>/pull/<n> --${verb}\``)
+  const cfg = config()
+  const work = openWork(cfg, flags)
+  if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
+  const entry = work.repos.find(r => sameRepo(r, named)) || die(`${named.org}/${named.repo} is not attached to ${work.id} — a PR is adopted into a repo the work holds`)
+  let pr = null
+  const failed = trackerFailure(() => { pr = github().prByNumber(entry.org, entry.repo, named.number) })
+  if (failed) die(`GitHub would not say what ${named.url} is (${failed})`)
+  if (!pr) die(`GitHub has no pull request at ${named.url}`)
+  const which = `PR #${pr.number} on ${pr.branch}`
+  const found = branchRecord(entry, pr.branch)
+  if (verb === 'disown') {
+    if (!found?.adoptedAt) die(`${work.id} has not adopted ${which} — nothing to disown`)
+    delete found.adoptedAt
+    // A record that holds nothing else goes with it; one holding a page keeps it, and so does the site.
+    if (Object.keys(found).every(k => k === 'branch' || k === 'base')) entry.branches = entry.branches.filter(b => b !== found)
+    saveWork(cfg, work)
+    commitAs(work.id, `disown ${entry.repo} ${pr.branch}`)
+    return ok(`${entry.repo}: ${which} is no longer ${work.id}'s${found.page ? `; its page stays at ${found.page.url}` : ''}`)
+  }
+  if (pr.branch.includes(':')) die(`${named.url} is from a fork (${pr.branch}), so its branch is none of ${repoSpec(entry)}'s — nothing adopted`)
+  if (workBranches(work).includes(pr.branch)) return step(`${entry.repo}: ${which} is already ${work.id}'s, on its ${pr.branch === work.branch ? 'work branch' : 'stage'} — nothing to adopt`)
+  if (pr.state !== 'OPEN') die(`${named.url} is ${pr.state.toLowerCase()}, and a page describes an open PR — nothing adopted`)
+  if (found?.adoptedAt) return step(`${entry.repo}: ${which} is already ${work.id}'s`)
+  ensureBranchRecord(entry, pr.branch, null).adoptedAt = new Date().toISOString()
+  saveWork(cfg, work)
+  commitAs(work.id, `adopt ${entry.repo} ${pr.branch}`)
+  ok(`${entry.repo}: ${which} is now ${work.id}'s — \`rig next\` and \`rig page\` treat it as the work's`)
+  sayReport(pageReport(cfg, work, { entry, branch: pr.branch, pr, adopted: true }))
+}
+
+// One row for each repo's work-branch PR, or why there is none, one for each open stage PR, and one
+// for each open PR the work adopted.
 function pagePrs (cfg, work, entries) {
   const stack = work.stages.length ? stackOf(work, branchRows(cfg, work)) : []
   const rows = entries.map(entry => {
@@ -4477,14 +4565,14 @@ function pagePrs (cfg, work, entries) {
     if (pr?.state !== 'OPEN') return { entry, branch: work.branch, pr: null, error: 'no open PR, and a page describes one' }
     return { entry, branch: work.branch, pr }
   })
-  return [...rows, ...openStagePrs(work, stack, entries)]
+  return [...rows, ...openStagePrs(work, stack, entries), ...adoptedPrs(work, entries)]
 }
 
 // Everything the skill needs to write one PR's page, and everything `rig page` says of it.
-function pageReport (cfg, work, { entry, branch, pr, error }) {
-  const stage = branch !== work.branch
-  const label = stage ? `${entry.repo} (${branch})` : entry.repo
-  const base = { repo: entry.repo, label, spec: repoSpec(entry), stage, page: pageOf(entry, branch, pr) }
+function pageReport (cfg, work, { entry, branch, pr, error, adopted = false }) {
+  const side = branch !== work.branch
+  const label = side ? `${entry.repo} (${branch})` : entry.repo
+  const base = { repo: entry.repo, label, spec: repoSpec(entry), stage: side && !adopted, adopted, page: pageOf(entry, branch, pr) }
   if (error) return { ...base, pr: null, error }
   const placed = pageSiteOf(entry)
   const fact = pageFact(cfg, work, entry, pr, branch, placed)
@@ -4500,7 +4588,7 @@ function pageReport (cfg, work, { entry, branch, pr, error }) {
     warning: placed.warning ?? null,
     // Kept with the work so a rebuild starts from it. Null where the data root is wider than the
     // code: then the skill keeps it somewhere of its own.
-    source: pageSourceAllowed(visibilityOf(repoSpec(entry)), dataRootVisibility()) ? path.join(recordDir(work.id), 'pages', `${entry.repo}${stage ? `-${pr.number}` : ''}.md`) : null,
+    source: pageSourceAllowed(visibilityOf(repoSpec(entry)), dataRootVisibility()) ? path.join(recordDir(work.id), 'pages', `${entry.repo}${side ? `-${pr.number}` : ''}.md`) : null,
   }
 }
 
@@ -4558,13 +4646,12 @@ function writePage (entry, number, html, head, { root, allowPublic = false } = {
 
 // Publish one built page of this work's and record it, on the branch of the PR the page says it
 // describes. A page the head has moved past still goes up, since a current page is the author's
-// call, and says so. A stage PR's body is not rig's, so its link goes in a marked region there, now,
-// and `rig pr --refresh` carries the work branch's.
-function publishPage (cfg, work, entries, { publish: file, public: allowPublic }) {
+// call, and says so. A stage PR's body is not rig's, nor an adopted PR's, so its link goes in a
+// marked region there, now, and `rig pr --refresh` carries the work branch's. `rows` are `pagePrs`'s.
+function publishPage (cfg, work, rows, { publish: file, public: allowPublic }) {
   if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'}`)
-  const rows = pagePrs(cfg, work, entries)
   const open = rows.filter(r => r.pr)
-  if (!open.length) die(`${entries.map(e => e.repo).join(', ')}: ${rows[0]?.error ?? 'no open PR'} — nothing published`)
+  if (!open.length) die(`${[...new Set(rows.map(r => r.entry.repo))].join(', ')}: ${rows[0]?.error ?? 'no open PR'} — nothing published`)
   const { html, metas, target } = readBuiltPage(file, (wanted, built, said) =>
     open.find(r => r.pr.url.toLowerCase() === wanted) || die(`${built} describes ${said}, which is no open PR of ${work.id} (${open.map(r => r.pr.url).join(', ')}) — nothing published`))
   const { entry, branch, pr } = target
@@ -6871,15 +6958,20 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
   rig pr                          open one PR per repo, work branch to base branch
        [--refresh]                 rewrite each open PR's title and body from the record
                                    as it stands; opens nothing
-  rig page [repo|url]             a PR's reading page, for the work branch's and each open
-                                  stage PR, or any PR by URL: its size, whether one is due,
-                                  where it can go or why not, whether the head has passed it
+  rig page [repo|url]             a PR's reading page, for the work branch's, each open stage
+                                  PR and each one the work adopted, or any PR by URL: its size,
+                                  whether one is due, where it can go or why not, whether the
+                                  head has passed it
        [--json]                    the same for the rig-pr-page skill to read
        [--publish <file>]          write the built page to the data root's site and record its
-                                   head; the site is judged again at the write. By URL it
-                                   records nothing and prints the link to post
+                                   head; the site is judged again at the write. By URL, of a PR
+                                   that is not the work's, it records nothing and prints the
+                                   link to post
        [--public]                  publish non-public code to a public site: the person's word
                                    for this one page, never an agent's, as it cannot be undone
+  rig page <url> --adopt          record a PR of an attached repo, on a branch of its own such
+                                  as a layer of a GitHub stack, as the work's for its page
+  rig page <url> --disown         take that back; a page published for it stays where it is
   rig stage [branch]              the stack, in branch order; with a branch, declare one
   rig stage <branch> --cut        and make the branch, here, on top of this repo's stack
   rig stage <branch> --key <k>    give the stage its own ticket, closed when the slice lands

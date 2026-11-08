@@ -788,15 +788,26 @@ rig page                               # each PR's size, whether a page is due, 
 rig page --json                        # the same, for the skill
 rig page --publish dist.html           # write the built page to the data root's site, and record its head on that PR's branch
 rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
+rig page https://github.com/o/r/pull/9 --adopt   # that PR is this work's, though on a branch of its own
 ```
 
 - **When.** Due at 500 changed lines or 20 changed files, whichever comes first. `pr_page_lines` and
   `pr_page_files` in a catalogue entry, or `prPage.<org>` in `rig.json` (`{ "lines": 800, "files":
   30 }`), move it per measure, the repo over the org; `off` drops a measure. A value that is neither
   is warned about and passed over.
-- **Which PRs.** The work branch's and each open stage PR, offered by `rig next` and `rig page`,
-  each recorded on its own branch and addressed by its own number. A stage's page is found from the
-  page itself, so `--publish` needs no branch named. Any other PR goes by its URL.
+- **Which PRs.** The work branch's, each open stage PR and each open PR the work adopted, offered by
+  `rig next` and `rig page`, each recorded on its own branch and addressed by its own number. A
+  page is found from the page itself, so `--publish` needs no branch named. Any other PR goes by its
+  URL.
+- **Adopting a PR.** A work's PRs can live where rig does not look: a stack GitHub holds, each layer
+  on a branch of its own, checked out in a worktree outside the work's, the lowest based on the
+  default branch rather than the work branch. Those are no stages, since none lands in the work
+  branch. `rig page <url> --adopt`, in the work, records that PR's branch as the work's (`adoptedAt`
+  on its branch record), and from then on it is the work's PR for its page exactly as a stage's is,
+  a new PR on that branch included. Only an open PR of an attached repo, not from a fork, is
+  adopted; the work's own PRs already are its own. One layer at a time, so a layer added later is
+  adopted when it opens. `--disown` takes it back, leaving any page it had where it is. Neither
+  tells GitHub anything.
 - **How it is measured.** An open PR by GitHub's numbers, which ride on the lookup rig already makes.
   A pushed work branch with no PR by git against the base: `rig pr` says that before it opens the
   PR, and opens it whatever the answer, and `rig next` offers it. git's count is an estimate, said
@@ -838,10 +849,12 @@ rig page https://github.com/o/r/pull/9 # the same for any PR, outside any work
   - **A stage PR's** body is not rig's and `rig pr --refresh` leaves it alone, so `--publish` writes
     the line into a marked region (`rig:reading-page`) at its very top, replaced in place when
     published again and taken out where the link may no longer go, with everything else left as
-    written. A link it may not write, or could not, is printed.
+    written. A link it may not write, or could not, is printed. An adopted PR's body is treated the
+    same way.
   - **A PR by URL:** rig records nothing, writes nothing to the PR, and prints the link for the
     person to post. The data root is the one that holds the PR's org; none refuses, two ask for
-    `--data`.
+    `--data`. A URL naming one of the work in hand's own PRs, its work branch's, a stage's or an
+    adopted one, is that work's PR, recorded and linked like any of them.
 - **Staleness.** The page carries `rig:head`, and `--publish` records that. `rig next` and `rig page`
   say when a PR's head has passed it, naming both commits. A reader sees the commit in the PR's line
   and in a bar on every view of the page, with a link to GitHub's comparison from that commit to
