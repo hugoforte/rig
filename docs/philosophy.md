@@ -44,7 +44,7 @@ The seam is deliberate. Code changes with a release and is tested; a prompt chan
 
 ### 6. Prove it or mark it, and say when
 
-A claim rig can prove, it proves, and it records when. A claim it cannot, it marks: a catalogue entry drafted at attach says `DRAFT: unreviewed` until a human corrects it. Weight is derived from what a work contains, never declared (decision 67). The catalogue has a freshness of its own, measured against the mirror and reported without a verdict (decision 93). A reader says what it measured (decision 78).
+A claim rig can prove, it proves, and it records when. A claim it cannot, it marks: a catalogue entry drafted at attach says `DRAFT: unreviewed` until a human corrects it. Weight is derived from what a work contains, never declared before its shape is known (decision 67); how much risk a work accepts is the one thing declared, at the design gate with the design in hand, because no lookup can derive it (decision 168). The catalogue has a freshness of its own, measured against the mirror and reported without a verdict (decision 93). A reader says what it measured (decision 78).
 
 The rule that follows: anything that must be hand-maintained to stay true will rot (§1.2), so derive it on read, or date it so its staleness is visible.
 
