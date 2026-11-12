@@ -164,6 +164,12 @@ skipped, and none waits. rig records the choice and what the agent decided.
 2. **Never edit a generated file.** `C:\w\<work>\AGENTS.md` is regenerated on every mutating
    command. The context doc in `<data root>/work/<id>/context.md` is the only place prose
    lives.
+
+   Under each repo it names that repo's own guidance, read off the worktree as it is written:
+   its `AGENTS.md` and `CLAUDE.md`, and every skill folder with a `SKILL.md` under
+   `.claude/skills` or `.agents/skills`, each name once. A session starts above every repo,
+   where no host loads them by itself, so read a repo's instructions before changing it. A
+   path rig cannot read is left out with a warning, never a failure (DESIGN.md decision 227).
 3. **Never write derived state into a doc.** Branch, base, ahead/behind, PR state, and the
    **phase** — all of it comes from `rig status`. The previous attempt at this tool died of
    hand-maintained tables going stale. What rig *does* record are **gates**: `designedAt`,
