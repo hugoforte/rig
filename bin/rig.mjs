@@ -1770,19 +1770,37 @@ const REPLY_RULE = 'Open every reply with a **TL;DR**: a few lines with what hap
 // command; a worktree not on this machine has none. A session starts in the work folder, above
 // every repo: Claude Code loads a repo's `.claude/skills` only once the session touches a file in
 // it, and Codex reads AGENTS.md only from the root down to where it started (hugoforte/rig#376).
+//
+// What a repo holds is the repo's, so nothing in it may stop the command or write into this file:
+// a path that cannot be read (a folder no one may list, a link that loops) is left out and named
+// in `unreadable`, a folder whose name is no skill name is passed over, and a skill name found in
+// both folders, or a second folder that is the first one linked, is named once.
 const REPO_INSTRUCTIONS = ['AGENTS.md', 'CLAUDE.md']
 const REPO_SKILL_DIRS = ['.claude/skills', '.agents/skills']
+const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 function repoGuidance (dir) {
-  const isFile = p => fs.statSync(p, { throwIfNoEntry: false })?.isFile() ?? false
-  const instructions = REPO_INSTRUCTIONS.filter(f => isFile(path.join(dir, f)))
-  const skills = REPO_SKILL_DIRS.flatMap(d => {
-    const entries = fs.statSync(path.join(dir, d), { throwIfNoEntry: false })?.isDirectory()
-      ? fs.readdirSync(path.join(dir, d), { withFileTypes: true }) : []
-    return entries.filter(e => e.isDirectory() && isFile(path.join(dir, d, e.name, 'SKILL.md')))
-      .map(e => `${d}/${e.name}`).sort()
-  })
-  return { instructions, skills }
+  const unreadable = []
+  const absent = e => e.code === 'ENOENT' || e.code === 'ENOTDIR'
+  const read = (rel, fn, none) => {
+    try { return fn(path.join(dir, rel)) } catch (e) { if (!absent(e)) unreadable.push(rel); return none }
+  }
+  const isFile = rel => read(rel, p => fs.statSync(p).isFile(), false)
+  const instructions = REPO_INSTRUCTIONS.filter(isFile)
+  const skills = []
+  const seenFolders = new Set()
+  const seenNames = new Set()
+  for (const d of REPO_SKILL_DIRS) {
+    const real = read(d, p => fs.statSync(p).isDirectory() ? fs.realpathSync(p) : null, null)
+    if (!real || seenFolders.has(real)) continue
+    seenFolders.add(real)
+    const names = read(d, p => fs.readdirSync(p), [])
+      .filter(n => SKILL_NAME.test(n) && !seenNames.has(n) && isFile(`${d}/${n}/SKILL.md`))
+      .sort()
+    for (const n of names) seenNames.add(n)
+    if (names.length) skills.push({ folder: d, names })
+  }
+  return { instructions, skills, unreadable }
 }
 
 function regenerate (cfg, work) {
@@ -1820,7 +1838,10 @@ function regenerate (cfg, work) {
     if (c?.docs?.length) lines.push(`- Docs: ${c.docs.map(s => `\`${s}\``).join(' · ')}`)
     const guidance = repoGuidance(r.path)
     if (guidance.instructions.length) lines.push(`- Instructions: ${guidance.instructions.map(f => `\`${f}\``).join(' · ')}`)
-    if (guidance.skills.length) lines.push(`- Skills: ${guidance.skills.map(s => `\`${s}\``).join(' · ')}`)
+    if (guidance.skills.length) {
+      lines.push(`- Skills: ${guidance.skills.map(s => `${s.names.map(n => `\`${n}\``).join(' · ')} in \`${s.folder}\``).join('; ')}`)
+    }
+    for (const rel of guidance.unreadable) warn(`${r.repo}: could not read \`${rel}\` — left out of the work's AGENTS.md`)
     anyGuidance ||= guidance.instructions.length > 0 || guidance.skills.length > 0
     // An agent dropped into one of these folders reads this file to learn what it is in.
     for (const a of attemptFoldersHere(cfg, work).filter(a => a.repo === r.repo)) {
@@ -1850,8 +1871,8 @@ function regenerate (cfg, work) {
   lines.push('  Everything under the work root is rig-managed; `rig doctor` fails on strays.')
   lines.push('- Try a branch more than one way with `rig attempt <branch> --n <count>`, never by hand.')
   if (anyGuidance) {
-    lines.push('- A repo with `Instructions` or `Skills` above has its own instructions and skills, each path relative to')
-    lines.push('  the repo\'s folder: read its instructions before changing it, and a skill\'s `SKILL.md` before the task it names.')
+    lines.push('- A repo with `Instructions` or `Skills` above has its own instructions and skills, in its folder: read its')
+    lines.push('  instructions before changing it, and look in its skills for one that covers the task before doing it by hand.')
   }
   lines.push('- Everything here is disposable. Durable knowledge goes in the context doc.')
   lines.push('- This file is regenerated on every mutating rig command. Edits are lost.')
