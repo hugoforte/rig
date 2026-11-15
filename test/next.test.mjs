@@ -580,13 +580,13 @@ test('a draft catalogue entry for an attached repo is offered for correction', (
   assert.match(says(out), /catalogue entry for a is still a draft/)
 })
 
-test('the correction carries no command, because editing prose is not one', () => {
-  // Same idiom as the design gate: an offer whose work is a conversation names no command. The
-  // line points at `rig catalog`, which shows the entry and names its file, and stops there —
-  // rig has no edit mode and should not grow one.
+test('the correction\'s command is its brief, `rig prompt catalogue-entry` (#382)', () => {
+  // The command prints how to fill an entry in, as the pickup offer's prints how to pick a work
+  // up: it edits nothing, and rig still has no edit mode. The line still points at `rig catalog`,
+  // which shows the entry and names its file.
   const out = nextFor({ work: work({ repos: attached('a'), designedAt: AT }), repos: [repo('a')], drafts: ['a'] })
   const catalogue = out.find(o => /catalogue/.test(o.says))
-  assert.equal(catalogue.command, null)
+  assert.equal(catalogue.command, 'rig prompt catalogue-entry')
   assert.match(catalogue.says, /`rig catalog a` names the file/)
 })
 

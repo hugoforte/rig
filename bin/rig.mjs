@@ -1071,6 +1071,16 @@ function nestedOrgDoc (body) {
 
 const scalar = v => (typeof v === 'string' ? v : undefined)
 
+// An entry is a draft while `rig attach`'s DRAFT line stands, or while it still carries one of
+// the unconfirmed markers `rig prompt catalogue-entry` writes: `❓ UNCONFIRMED` in the prose, or a
+// `# unconfirmed` comment in the frontmatter, which only the raw text still has once it is parsed.
+// Both are matched exactly as the prompt spells them, so the word in a sentence or a heading in
+// the prose is not one.
+function isDraftEntry (text, body) {
+  const front = text.replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || ''
+  return /DRAFT: unreviewed/.test(body) || /❓ UNCONFIRMED/.test(body) || /(^|\s)# unconfirmed\b/m.test(front)
+}
+
 function loadCatalog (dataRootPath = dataRoot()) {
   const root = path.join(dataRootPath, 'catalog')
   if (!exists(root)) return []
@@ -1080,7 +1090,8 @@ function loadCatalog (dataRootPath = dataRoot()) {
     if (!fs.statSync(dir).isDirectory()) continue
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.md')) continue
-      const { data, body } = parseFrontmatter(readText(path.join(dir, f)))
+      const text = readText(path.join(dir, f))
+      const { data, body } = parseFrontmatter(text)
       entries.push({
         repo: data.repo || f.replace(/\.md$/, ''),
         org: data.org || org,
@@ -1092,7 +1103,7 @@ function loadCatalog (dataRootPath = dataRoot()) {
         docs: (Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : [])).map(docsAddress),
         // The size at which this repo's PRs are offered a reading page; absent says nothing.
         prPage: { lines: scalar(data.pr_page_lines), files: scalar(data.pr_page_files) },
-        draft: /DRAFT: unreviewed/.test(body),
+        draft: isDraftEntry(text, body),
         body: body.trim(),
         file: path.join(dir, f),
       })
@@ -1219,7 +1230,8 @@ docs: []
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
-     loaded in your head; that is where the catalogue's value comes from. -->
+     loaded in your head; that is where the catalogue's value comes from.
+     \`rig prompt catalogue-entry\` says how. -->
 
 TODO: what this repo actually is, its gotchas, and the expensive-to-rediscover facts.
 `)
@@ -2486,7 +2498,7 @@ function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {
   const entry = () => catalogEntryFor(loadCatalog(), { org, repo })
   const known = entry()
   if (!known && draftCatalogEntry(org, repo, language)) {
-    warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh`)
+    warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh: \`rig prompt catalogue-entry\` says how`)
   }
 
   const cat = known || entry()

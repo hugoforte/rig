@@ -195,7 +195,9 @@ skipped, and none waits. rig records the choice and what the agent decided.
    lookup: `reviewing` and `landing` are said by `rig status`, never by a document.
 4. **Correct the catalogue in passing.** `rig attach` drafts a stub entry marked
    `DRAFT: unreviewed` for any repo it hasn't seen. Fix it while the repo is still loaded in
-   your head — that is the only moment the knowledge is cheap. `rig next` offers it for the
+   your head — that is the only moment the knowledge is cheap. `rig prompt catalogue-entry` says
+   how: from the repo's own evidence, with what it does not support marked unconfirmed, and an
+   entry stays a draft while a marker is left in it. `rig next` offers it for the
    work in hand, through every phase in which the worktrees are still on disk, and `rig close`
    names what is still a draft on the way out. Neither refuses: prose that stays wrong destroys
    nothing. The offer is on `next` rather than on `close` because no rig command waits for a
@@ -237,7 +239,7 @@ One file per repo at `<data root>/catalog/<org>/<repo>.md`: YAML frontmatter (`r
 `pr_page_files`) plus prose.
 
 **Durable facts only.** No branch, no local path, no status — anything git or `gh` can
-answer is derived live. `talks_to` is the load-bearing field: repo selection is graph
+answer is derived live. `rig prompt catalogue-entry` is how to fill one in. `talks_to` is the load-bearing field: repo selection is graph
 traversal over it, and `rig impact <repo>` is that traversal as a command — the repos one and
 two hops away, what each end said about the relationship, which way it runs, and how far
 behind each entry is.
@@ -331,7 +333,7 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 
 **Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, from that work's next mutating command on, and `rig status` names each one, or says there is none and where it would go.
 
-**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
+**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: in an org with no doc, or a doc missing some of the four headings, `rig-learn` asks each missing heading as an optional question, with a draft answer where the work's story supports one, and writes only what the user answers or takes by name. A bare "go" for the review writes no draft.
 
 **The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
 
