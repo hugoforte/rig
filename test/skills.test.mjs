@@ -104,3 +104,19 @@ test('the catalogue-entry prompt keeps its rules, and points at AGENTS.md for wh
   assert.match(brief, /AGENTS\.md\`?'s "The catalogue"/)
   assert.doesNotMatch(brief, /Git for Windows/, 'the sh rule is pointed at, not restated')
 })
+
+test('the lesson review asks the org doc\'s four headings as AGENTS.md names them, and a bare go writes no draft (#382)', () => {
+  // The headings are named once, in AGENTS.md's fence; the interview asks them in that order and
+  // spelling, so renaming one there fails here rather than leaving the skill writing the old one.
+  const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
+  const fence = agents.split(/^## The org doc$/m)[1].match(/```markdown\n([\s\S]*?)```/)[1]
+  const headings = fence.trim().split('\n').map(h => h.replace(/^## /, ''))
+  assert.equal(headings.length, 4, fence)
+  const skill = fs.readFileSync(path.join(SKILLS, 'rig-learn', 'SKILL.md'), 'utf8')
+  const section = skill.split(/^### The org doc$/m)[1].split(/^## \d/m)[0]
+  // The interview's numbered lines, `1. <heading> — …`, are the questions it asks.
+  const asked = [...section.matchAll(/^\d\. (.+?) — /gm)].map(m => m[1])
+  assert.deepEqual(asked, headings, 'the interview asks AGENTS.md\'s headings, in its order and spelling')
+  assert.match(section, /A bare \*\*go\*\* for the review as a whole writes no drafted answer the user did not confirm/)
+  assert.doesNotMatch(section, /in one sentence, what is/, 'the single question is gone')
+})

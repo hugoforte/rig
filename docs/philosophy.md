@@ -70,7 +70,7 @@ The rule that follows: before writing something down a second time, point at the
 
 ## What rig asks of an org
 
-rig puts to an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, in its org doc, and every work reads them: the file each work's agents start from carries the doc of every org the work touches. The doc starts from one optional sentence at the lesson review in an org that has none, and grows the way this page does: each later review reads the work against it, retires what the work resolved, rewords what it had to bend and adds what it taught.
+rig puts to an org the same questions it answers about itself here, and nothing it would not answer. What are you trying to accomplish? What hurts now? What do you believe about how work should be done? Whose call is it? An org's answers live in its own data root, in its org doc, and every work reads them: the file each work's agents start from carries the doc of every org the work touches. The doc starts at the lesson review, which asks each of those questions an org has not answered yet, offering a draft from what the work showed and writing only what the org takes, and grows the way this page does: each later review reads the work against it, retires what the work resolved, rewords what it had to bend and adds what it taught.
 
 ## How this page grows
 

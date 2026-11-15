@@ -333,7 +333,7 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 
 **Every work reads it.** The generated work `AGENTS.md` inlines the doc of each org its repos belong to, from that work's next mutating command on, and `rig status` names each one, or says there is none and where it would go.
 
-**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: `rig-learn` asks one optional question in an org that has no doc, and writes the answer under the first heading.
+**Absent means no constraints**, and so does a doc with nothing under its frontmatter. Nothing blocks on one, and only the lesson review asks for one: in an org with no doc, or a doc missing some of the four headings, `rig-learn` asks each missing heading as an optional question, with a draft answer where the work's story supports one, and writes only what the user answers or takes by name. A bare "go" for the review writes no draft.
 
 **The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
 
