@@ -337,6 +337,12 @@ One file per org at `<data root>/orgs/<org>.md`. It says what the org is for, so
 
 **The lesson review keeps it true.** In an org with a doc, `rig-learn` reads the work's story against it and proposes edits like any other lesson: retire a "What hurts now" line the work resolved, reword a belief it had to bend, add what it taught, correcting before appending. It is the one place the review writes prose that every session reads, which its rule against new rules would otherwise forbid. It is allowed because the doc is the org speaking about itself rather than rig inventing a rule, and because every review prunes it; a belief that could be checked is offered as a check instead.
 
+## Earlier works
+
+A closed work's decisions stay in its `context.md` and `notes.tsv`, and the next work on the same repo is shown where they are. **Under each attached repo, the generated work `AGENTS.md` lists the works in the same data root that touched that repo and closed in the last 90 days, at most ten, newest first**: the close date, the id, the title, `(abandoned)` where the work was, and the first sentence of its outcome where one was recorded. A lead line gives the day the window opened, how many closed in it and how many before, how many work records would not read, when any would not, and the folder each one's context doc and notes are in. The list is an index: read the bodies of the works whose title bears on yours, before the Direction is written.
+
+Every work's line is a record or a gate of a closed work, and the lead line's counts are as of the regenerate, so the list can lag and never mislead: like the org doc, it reaches a work on that work's next mutating command. A repo is matched by its org as well as its name, a work that touched two attached repos is listed under each, an open work is never listed, and a repo nothing has closed on gets no line. Only the work's own data root is read, because the roots have separate readers (DESIGN.md decision 229).
+
 ## Writing a context doc
 
 `rig new` scaffolds four sections. Add more from `templates/context-sections.md` **only when
