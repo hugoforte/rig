@@ -110,11 +110,14 @@ test('an entry with an unconfirmed marker left in it is still a draft, whatever 
   // The prompt keeps the DRAFT line while a marker stands; rig reads the markers too, so dropping
   // the line early does not silence the offers while the entry is still partly a guess.
   const entry = path.join(dataRoot, 'catalog', 'acme', 'journal.md')
-  const write = (front, body) => fs.writeFileSync(entry, `---\nrepo: journal\norg: acme\nrole: The journal\n${front}---\n\n${body}\n`)
+  const write = (front, body, bom = '') => fs.writeFileSync(entry, `${bom}---\nrepo: journal\norg: acme\nrole: The journal\n${front}---\n\n${body}\n`)
   const flagged = () => /^journal .*\[draft\]$/m.test(strip(rig(['catalog']).out))
   try {
-    write('check:\n  - npm test  # unconfirmed: read from CI, not run here\n', 'The journal.')
+    write('# unconfirmed: read from CI, not run here\ncheck:\n  - npm test\n', 'The journal.')
     assert.ok(flagged(), 'a `# unconfirmed` comment in the frontmatter')
+    // PowerShell 5.1 writes a byte-order mark, which must not hide the frontmatter's marker.
+    write('# unconfirmed: read from CI, not run here\ncheck:\n  - npm test\n', 'The journal.', '﻿')
+    assert.ok(flagged(), 'a `# unconfirmed` comment behind a byte-order mark')
     write('', 'The journal. ❓ UNCONFIRMED: whether the nightly close still runs here.')
     assert.ok(flagged(), 'a `❓ UNCONFIRMED` marker in the prose')
     write('', '## Unconfirmed\n\nThe journal, whose unconfirmed rumours were all checked.')

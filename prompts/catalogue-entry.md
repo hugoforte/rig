@@ -43,7 +43,7 @@ A repo with little history, or none, has no facts yet. Write none: the lesson re
 
 Whatever you could not confirm is written with what you know, and marked, in one of two forms exactly as here, since rig reads them:
 
-- In the frontmatter, a YAML comment on the line: `- npm test  # unconfirmed: read from CI, not run here`.
+- In the frontmatter, a YAML comment on a line of its own, directly above the field it marks: `# unconfirmed: read from CI, not run here` above `check:`. Never at the end of a value's line, where it would become part of the value.
 - In the prose, after the sentence: `❓ UNCONFIRMED: <what would settle it>`.
 
 A field with no evidence at all keeps the stub's `TODO` rather than a guess. Once something is confirmed — you ran it, or the user said so — take the marker off, or write `✅ CONFIRMED (<date>)` with the evidence, as `AGENTS.md`'s "Writing a context doc" does.

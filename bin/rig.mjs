@@ -1077,7 +1077,7 @@ const scalar = v => (typeof v === 'string' ? v : undefined)
 // Both are matched exactly as the prompt spells them, so the word in a sentence or a heading in
 // the prose is not one.
 function isDraftEntry (text, body) {
-  const front = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || ''
+  const front = text.replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || ''
   return /DRAFT: unreviewed/.test(body) || /❓ UNCONFIRMED/.test(body) || /(^|\s)# unconfirmed\b/m.test(front)
 }
 

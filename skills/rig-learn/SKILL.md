@@ -120,7 +120,7 @@ Correct it before appending to it, as with the catalogue: an edit that contradic
 **An org with no doc, or a doc missing some of the four headings.** Put a short interview right after "Say **go**…", one per such org, asking each heading it lacks, in this order and spelled exactly so:
 
 ```markdown
-**`<org>`'s org doc** — optional; answer by number, say "as drafted", or skip:
+**`<org>`'s org doc** — optional; answer by number, take a draft by its number ("1 and 3 as drafted"), or skip:
 1. What we're trying to accomplish — draft: <a line or two> (from <what in the work shows it>)
 2. What hurts now — draft: <…> (from <…>)
 3. What we believe — <the question alone, when the story says nothing on it>
