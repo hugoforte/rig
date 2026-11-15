@@ -14,7 +14,7 @@ import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
-import { impact, unattached } from './catalog-graph.mjs'
+import { impact, unattached, earlierWorks, EARLIER_DAYS, EARLIER_CAP } from './catalog-graph.mjs'
 import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
@@ -1776,6 +1776,29 @@ const REPLY_RULE = 'Open every reply with a **TL;DR**: a few lines with what hap
   'for whoever wants to read on. A skill or prompt that sets its reply\'s shape keeps it: its opening lines ' +
   'are the TL;DR, and they name the user\'s action items.'
 
+// A repo's earlier works, for its block in the generated file: an index whose bodies the agent
+// opens on demand (decision 229). The lead line gives the window's start as a date, since the
+// file is read days after it was written, and the totals inside and before it, so the reader
+// knows what the list leaves out. A repo nothing has closed on gets no line.
+function earlierWorksLines (answer, now) {
+  if (!answer?.total) return []
+  const since = new Date(now.getTime() - EARLIER_DAYS * 86400000).toISOString().slice(0, 10)
+  const window = `closed on ${answer.repo} since ${since}, the last ${EARLIER_DAYS} days`
+  const before = answer.total - answer.recent
+  const shown = !answer.recent ? `none ${window}`
+    : answer.recent > EARLIER_CAP ? `the ${EARLIER_CAP} newest of the ${answer.recent} ${window}`
+      : `the ${answer.recent} ${window}, newest first`
+  const where = `\`${path.join(dataRoot(), 'work')}${path.sep}<id>${path.sep}\``
+  const lines = [`- Earlier works: ${shown}; ${before ? `${before} closed before` : 'none closed before'}. ` +
+    `Each one's \`context.md\` and \`notes.tsv\` are in ${where}; read the ones whose title bears on this work.`]
+  for (const w of answer.works) {
+    const title = w.title ? ` — ${w.title}${w.abandoned ? ' (abandoned)' : ''}` : (w.abandoned ? ' (abandoned)' : '')
+    const outcome = w.outcome ? `${/[.!?]$/.test(title) ? '' : '.'} Outcome: ${w.outcome}` : ''
+    lines.push(`  - ${String(w.closedAt).slice(0, 10)} \`${w.id}\`${title}${outcome}`)
+  }
+  return lines
+}
+
 function regenerate (cfg, work) {
   const wd = workDir(cfg, work.id)
   const cat = loadCatalog()
@@ -1795,7 +1818,13 @@ function regenerate (cfg, work) {
   lines.push('## Repos in this work')
   lines.push('')
   if (!work.repos.length) lines.push('_None attached yet — `rig attach <repo>`._')
-  for (const r of work.repos) {
+  // Read once for every repo. A record that will not read is left out and said nowhere here:
+  // this runs at the end of every mutating command, and `rig doctor` names it.
+  const now = new Date()
+  const earlier = work.repos.length
+    ? earlierWorks(readRecords(dataRoot()).works, work.repos, { now, exclude: work.id })
+    : []
+  for (const [i, r] of work.repos.entries()) {
     const c = catalogEntryFor(cat, r)
     lines.push(`### ${r.repo}`)
     lines.push('')
@@ -1812,6 +1841,7 @@ function regenerate (cfg, work) {
     for (const a of attemptFoldersHere(cfg, work).filter(a => a.repo === r.repo)) {
       lines.push(`- Attempt ${a.n} at \`${a.set.branch}\`: \`${a.dir}\` on \`${a.branch}\` — one way of ${a.set.count}; \`rig attempt ${a.set.branch}\` compares them, and \`--run\` checks them`)
     }
+    lines.push(...earlierWorksLines(earlier[i], now))
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc

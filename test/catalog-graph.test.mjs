@@ -3,7 +3,7 @@
 // beside an edge is gathered by the caller and joined on, for the same reason.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildGraph, impact, coAttached, unattached } from '../bin/catalog-graph.mjs'
+import { buildGraph, impact, coAttached, unattached, earlierWorks, firstSentence } from '../bin/catalog-graph.mjs'
 
 const entry = (repo, talks_to = [], rest = {}) => ({
   repo, org: 'acme', role: `${repo} does things`, stack: 'Node',
@@ -307,4 +307,94 @@ test('unattached: a disagreed direction is offered as no direction, not as eithe
 test('unattached: the offer is ordered by name, so it reads the same every time', () => {
   const found = unattached([entry('billing', [{ repo: 'zeta', how: 'a' }, { repo: 'alpha', how: 'b' }])], ['billing'])
   assert.deepEqual(found.map(n => n.repo), ['alpha', 'zeta'])
+})
+
+// ------------------------------------------------------ the earlier works
+
+// The works that touched a repo before this one, as an index the generated work file shows: a
+// line per closed work, read out of the records and stored nowhere. The window is measured
+// from `now`, which the caller passes so the answer is a function of its arguments.
+
+const NOW = new Date('2026-11-15T12:00:00Z')
+const daysAgo = d => new Date(NOW.getTime() - d * 86400000).toISOString()
+const closed = (id, ago, rest = {}, ...repos) => ({
+  ...work(id, ...(repos.length ? repos : ['billing'])),
+  title: `${id} title`,
+  closedAt: daysAgo(ago),
+  ...rest,
+})
+const billing = [{ repo: 'billing', org: 'acme' }]
+const listed = (answer, i = 0) => answer[i].works.map(w => w.id)
+
+test('earlierWorks: only closed works are listed, newest first', () => {
+  const answer = earlierWorks([
+    closed('older', 20), { ...work('open', 'billing'), title: 'still going' }, closed('newer', 2),
+  ], billing, { now: NOW })
+  assert.deepEqual(listed(answer), ['newer', 'older'])
+})
+
+test('earlierWorks: a work closed more than 90 days ago is outside the list, and counted in the total', () => {
+  const [answer] = earlierWorks([closed('inside', 89), closed('outside', 91)], billing, { now: NOW })
+  assert.deepEqual(answer.works.map(w => w.id), ['inside'])
+  assert.equal(answer.recent, 1)
+  assert.equal(answer.total, 2)
+})
+
+test('earlierWorks: at most ten are listed, and the window counts every one of them', () => {
+  const works = Array.from({ length: 13 }, (_, i) => closed(`w${String(i).padStart(2, '0')}`, i + 1))
+  const [answer] = earlierWorks(works, billing, { now: NOW })
+  assert.equal(answer.works.length, 10)
+  assert.equal(answer.works[0].id, 'w00', 'the ten kept are the newest')
+  assert.equal(answer.recent, 13)
+  assert.equal(answer.total, 13)
+})
+
+test('earlierWorks: a same-named repo in another org is not this repo', () => {
+  const elsewhere = { ...closed('elsewhere', 3), repos: [{ repo: 'billing', org: 'globex' }] }
+  assert.deepEqual(listed(earlierWorks([elsewhere, closed('here', 4)], billing, { now: NOW })), ['here'])
+})
+
+test('earlierWorks: a repo name matches whatever its case', () => {
+  assert.deepEqual(listed(earlierWorks([closed('w1', 1, {}, 'Billing')], billing, { now: NOW })), ['w1'])
+})
+
+test('earlierWorks: a recorded repo with no org matches by name', () => {
+  const bare = { ...closed('bare', 1), repos: [{ repo: 'billing' }] }
+  assert.deepEqual(listed(earlierWorks([bare], billing, { now: NOW })), ['bare'])
+})
+
+test('earlierWorks: the work in hand is not one of its own earlier works', () => {
+  assert.deepEqual(listed(earlierWorks([closed('me', 1), closed('other', 2)], billing, { now: NOW, exclude: 'me' })), ['other'])
+})
+
+test('earlierWorks: an abandoned work is listed and marked', () => {
+  const [answer] = earlierWorks([closed('stopped', 1, { abandonedAt: daysAgo(1) }), closed('landed', 2)], billing, { now: NOW })
+  assert.deepEqual(answer.works.map(w => [w.id, w.abandoned]), [['stopped', true], ['landed', false]])
+})
+
+test('earlierWorks: an outcome is carried as its first sentence, and a work with none has none', () => {
+  const [answer] = earlierWorks([
+    closed('said', 1, { outcome: { text: 'Agents see the earlier works. That saves a rediscovery.', at: daysAgo(1) } }),
+    closed('unsaid', 2),
+  ], billing, { now: NOW })
+  assert.deepEqual(answer.works.map(w => w.outcome), ['Agents see the earlier works.', null])
+})
+
+test('earlierWorks: a work that touched two attached repos is listed under each', () => {
+  const answer = earlierWorks([closed('both', 1, {}, 'billing', 'orders')],
+    [{ repo: 'billing', org: 'acme' }, { repo: 'orders', org: 'acme' }], { now: NOW })
+  assert.deepEqual(answer.map(a => [a.repo, a.works.map(w => w.id)]), [['billing', ['both']], ['orders', ['both']]])
+})
+
+test('earlierWorks: a repo nothing closed on answers with nothing to list and nothing to count', () => {
+  const [answer] = earlierWorks([closed('w1', 1, {}, 'orders')], billing, { now: NOW })
+  assert.deepEqual([answer.works, answer.recent, answer.total], [[], 0, 0])
+})
+
+test('firstSentence: the text up to its first full stop, question or exclamation mark', () => {
+  assert.equal(firstSentence('One thing landed. Another followed.'), 'One thing landed.')
+  assert.equal(firstSentence('Did it land? Yes.'), 'Did it land?')
+  assert.equal(firstSentence('A file named rig.json moved. Then more.'), 'A file named rig.json moved.', 'a dot inside a word ends nothing')
+  assert.equal(firstSentence('No stop at all'), 'No stop at all')
+  assert.equal(firstSentence('  Spread\nover lines.  More. '), 'Spread over lines.')
 })

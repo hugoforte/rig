@@ -122,6 +122,57 @@ export function coAttached (works) {
   return [...pairs.values()]
 }
 
+// The works that touched each of `repos` and have closed, for the generated work file to list:
+// an index of what was decided on a repo before, whose bodies (each work's context doc and
+// notes) the agent reads on demand. Every field is a record or a gate of a closed work, so a line
+// can lag the records until the next regenerate but never says something that was not so.
+//
+// **A window and a cap.** The works closed in the `EARLIER_DAYS` before `now`, at most
+// `EARLIER_CAP`, newest first: a window means the same thing in a busy repo and a quiet one,
+// where a fixed count is weeks of one and years of the other, and the cap keeps a busy repo's
+// list short. `recent` and `total` count what the window and the records hold, so the reader
+// knows what lies outside the list.
+//
+// **Matched by org and name**, because same-named repos in different orgs are normal, unlike
+// `coAttached`, whose pairs sit inside one work. A recorded repo with no org matches by name.
+// A work that touched two of `repos` is listed under each, since it is true of each.
+export const EARLIER_DAYS = 90
+export const EARLIER_CAP = 10
+
+export function earlierWorks (works, repos, { now = new Date(), exclude = null } = {}) {
+  const since = new Date(now).getTime() - EARLIER_DAYS * 86400000
+  const closedWorks = (works || [])
+    .filter(w => w.closedAt && w.id !== exclude)
+    .sort((x, y) => String(y.closedAt).localeCompare(String(x.closedAt)) || String(x.id).localeCompare(String(y.id)))
+  return repos.map(({ repo, org }) => {
+    const touched = closedWorks.filter(w => (w.repos || []).some(r =>
+      lower(r.repo) === lower(repo) && (!r.org || !org || lower(r.org) === lower(org))))
+    const inWindow = touched.filter(w => Date.parse(w.closedAt) >= since)
+    return {
+      repo,
+      org: org || '',
+      total: touched.length,
+      recent: inWindow.length,
+      works: inWindow.slice(0, EARLIER_CAP).map(w => ({
+        id: w.id,
+        title: w.title || '',
+        closedAt: w.closedAt,
+        abandoned: Boolean(w.abandonedAt),
+        outcome: w.outcome?.text ? firstSentence(w.outcome.text) : null,
+      })),
+    }
+  })
+}
+
+// The text up to its first `.`, `!` or `?` that a space or the end follows, on one line. A
+// dot inside a word (`rig.json`) ends nothing; an abbreviation does, which cuts the sentence
+// short and says nothing false.
+export function firstSentence (text) {
+  const flat = String(text).replace(/\s+/g, ' ').trim()
+  const m = /^.*?[.!?](?= |$)/.exec(flat)
+  return m ? m[0] : flat
+}
+
 // What else a change in `repo` reaches: the repos one hop away, and the repos those reach.
 //
 // **Two hops, fixed.** §6's rule is about neighbours; three hops across a well-connected
