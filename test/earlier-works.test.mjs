@@ -34,6 +34,8 @@ const generatedAgents = () => fs.readFileSync(path.join(workRoot, 't1', 'AGENTS.
 const day = 86400000
 const ago = days => new Date(Date.now() - days * day).toISOString()
 const dateOf = iso => iso.slice(0, 10)
+// Kept as written, so an assertion made after midnight still names the day the record says.
+const newestClosedAt = ago(2)
 
 const publish = repo => {
   const seed = path.join(tmp, 'seed', repo)
@@ -81,7 +83,7 @@ const earlierOf = repo => {
 test('a work on billing, with earlier works on it in the data root', () => {
   assert.equal(rig(['init', '--data-root', dataRoot, '--work-root', workRoot,
     '--orgs', 'acme', '--tracker', 'acme=none', '--email', 'you@acme.example']).code, 0)
-  record('newest', { closedAt: ago(2), outcome: { text: 'Refunds never double-charge. The retry is idempotent now.', at: ago(2) } })
+  record('newest', { closedAt: newestClosedAt, outcome: { text: 'Refunds never double-charge. The retry is idempotent now.', at: newestClosedAt } })
   record('stopped', { closedAt: ago(5), abandonedAt: ago(5) })
   record('oldest-in-window', { closedAt: ago(80) })
   record('long-ago', { closedAt: ago(200) })
@@ -99,12 +101,14 @@ test('a work on billing, with earlier works on it in the data root', () => {
 test('the generated file lists the works closed on the repo in the last 90 days, newest first', () => {
   const { items } = earlierOf('billing')
   assert.deepEqual(items.map(l => l.match(/`([^`]+)`/)[1]), ['newest', 'stopped', 'oldest-in-window'])
-  assert.ok(items[0].startsWith(`${dateOf(ago(2))} \`newest\` — newest title`), items[0])
+  assert.ok(items[0].startsWith(`${dateOf(newestClosedAt)} \`newest\` — newest title`), items[0])
 })
 
 test('the lead line gives the totals, the window\'s start and where the bodies are', () => {
   const { lead } = earlierOf('billing')
-  const since = lead.match(/the 3 closed on billing since (\d{4}-\d{2}-\d{2}), the last 90 days, newest first; 1 closed before\./)
+  // A date and no "last 90 days": the file is read days after it is written, and the phrase
+  // would turn false while the date stays true.
+  const since = lead.match(/the 3 closed on billing since (\d{4}-\d{2}-\d{2}), newest first; 1 closed before; 1 work record could not be read and may belong here \(`rig doctor` names it\)\./)
   assert.ok(since, lead)
   // The day the window opened, read at the regenerate: the day 90 days before this test, or the
   // one before it when the save ran on the far side of midnight.
@@ -139,7 +143,7 @@ test('more than ten in the window lists the newest ten, and the lead line says h
   assert.equal(rig(['save', '-m', 'a busy repo', '--work', 't1']).code, 0)
   const { lead, items } = earlierOf('billing')
   assert.equal(items.length, 10)
-  assert.match(lead, /the 10 newest of the 13 closed on billing since .*; 1 closed before\./)
+  assert.match(lead, /the 10 newest of the 13 closed on billing since \d{4}-\d{2}-\d{2}; 1 closed before; 1 work record could not be read/)
 })
 
 test('a repo whose works all closed before the window still says what there is', () => {
@@ -149,5 +153,5 @@ test('a repo whose works all closed before the window still says what there is',
   assert.equal(rig(['save', '-m', 'only history', '--work', 't1']).code, 0)
   const { lead, items } = earlierOf('billing')
   assert.deepEqual(items, [])
-  assert.match(lead, /^- Earlier works: none closed on billing since .*, the last 90 days; 1 closed before\./)
+  assert.match(lead, /^- Earlier works: none closed on billing since \d{4}-\d{2}-\d{2}; 1 closed before\. /, 'no unreadable record is left, so none is named')
 })

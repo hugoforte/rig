@@ -391,6 +391,22 @@ test('earlierWorks: a repo nothing closed on answers with nothing to list and no
   assert.deepEqual([answer.works, answer.recent, answer.total], [[], 0, 0])
 })
 
+test('earlierWorks: the window opens at the start of a day, so a work closed on that day is inside it', () => {
+  // Adversarial review: a rolling instant counted a work closed on the window's first day as
+  // closed before it, while the lead line said "since" that day.
+  const sameDay = { ...closed('same-day', 0), closedAt: '2026-08-17T03:00:00Z' }
+  const dayBefore = { ...closed('day-before', 0), closedAt: '2026-08-16T23:59:59Z' }
+  const [answer] = earlierWorks([sameDay, dayBefore], billing, { now: NOW })
+  assert.equal(answer.since, '2026-08-17')
+  assert.deepEqual([listed([answer]), answer.recent, answer.total], [['same-day'], 1, 2])
+})
+
+test('earlierWorks: a closedAt that is no date is neither listed nor counted', () => {
+  // Counting it in the total would report it as closed before the window, which nothing knows.
+  const [answer] = earlierWorks([{ ...closed('typo', 0), closedAt: '2026-13-01' }, closed('fine', 3)], billing, { now: NOW })
+  assert.deepEqual([listed([answer]), answer.recent, answer.total], [['fine'], 1, 1])
+})
+
 test('firstSentence: the text up to its first full stop, question or exclamation mark', () => {
   assert.equal(firstSentence('One thing landed. Another followed.'), 'One thing landed.')
   assert.equal(firstSentence('Did it land? Yes.'), 'Did it land?')

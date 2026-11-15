@@ -14,7 +14,7 @@ import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
-import { impact, unattached, earlierWorks, EARLIER_DAYS, EARLIER_CAP } from './catalog-graph.mjs'
+import { impact, unattached, earlierWorks, EARLIER_CAP } from './catalog-graph.mjs'
 import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
@@ -1777,19 +1777,23 @@ const REPLY_RULE = 'Open every reply with a **TL;DR**: a few lines with what hap
   'are the TL;DR, and they name the user\'s action items.'
 
 // A repo's earlier works, for its block in the generated file: an index whose bodies the agent
-// opens on demand (decision 229). The lead line gives the window's start as a date, since the
-// file is read days after it was written, and the totals inside and before it, so the reader
-// knows what the list leaves out. A repo nothing has closed on gets no line.
-function earlierWorksLines (answer, now) {
+// opens on demand (decision 229). The lead line gives the window's start as a date and no "last
+// 90 days", since the file is read days after it was written, and the totals inside and before
+// it as of that regenerate, so the reader knows what the list leaves out. Records that would not
+// read are counted there, since any of them may be one of this repo's. A repo nothing has closed
+// on gets no line.
+function earlierWorksLines (answer, unreadable = 0) {
   if (!answer?.total) return []
-  const since = new Date(now.getTime() - EARLIER_DAYS * 86400000).toISOString().slice(0, 10)
-  const window = `closed on ${answer.repo} since ${since}, the last ${EARLIER_DAYS} days`
+  const window = `closed on ${answer.repo} since ${answer.since}`
   const before = answer.total - answer.recent
   const shown = !answer.recent ? `none ${window}`
     : answer.recent > EARLIER_CAP ? `the ${EARLIER_CAP} newest of the ${answer.recent} ${window}`
       : `the ${answer.recent} ${window}, newest first`
+  const unread = unreadable
+    ? `; ${unreadable} work record${unreadable === 1 ? '' : 's'} could not be read and may belong here (\`rig doctor\` names ${unreadable === 1 ? 'it' : 'them'})`
+    : ''
   const where = `\`${path.join(dataRoot(), 'work')}${path.sep}<id>${path.sep}\``
-  const lines = [`- Earlier works: ${shown}; ${before ? `${before} closed before` : 'none closed before'}. ` +
+  const lines = [`- Earlier works: ${shown}; ${before ? `${before} closed before` : 'none closed before'}${unread}. ` +
     `Each one's \`context.md\` and \`notes.tsv\` are in ${where}; read the ones whose title bears on this work.`]
   for (const w of answer.works) {
     const title = w.title ? ` — ${w.title}${w.abandoned ? ' (abandoned)' : ''}` : (w.abandoned ? ' (abandoned)' : '')
@@ -1818,12 +1822,11 @@ function regenerate (cfg, work) {
   lines.push('## Repos in this work')
   lines.push('')
   if (!work.repos.length) lines.push('_None attached yet — `rig attach <repo>`._')
-  // Read once for every repo. A record that will not read is left out and said nowhere here:
-  // this runs at the end of every mutating command, and `rig doctor` names it.
-  const now = new Date()
-  const earlier = work.repos.length
-    ? earlierWorks(readRecords(dataRoot()).works, work.repos, { now, exclude: work.id })
-    : []
+  // Read once for every repo. A record that will not read is left out of the list and counted on
+  // each lead line, whose totals would otherwise claim to be complete; this runs at the end of
+  // every mutating command, so it is not said on stdout, and `rig doctor` names each one.
+  const records = work.repos.length ? readRecords(dataRoot()) : { works: [], unreadable: [] }
+  const earlier = earlierWorks(records.works, work.repos, { exclude: work.id })
   for (const [i, r] of work.repos.entries()) {
     const c = catalogEntryFor(cat, r)
     lines.push(`### ${r.repo}`)
@@ -1841,7 +1844,7 @@ function regenerate (cfg, work) {
     for (const a of attemptFoldersHere(cfg, work).filter(a => a.repo === r.repo)) {
       lines.push(`- Attempt ${a.n} at \`${a.set.branch}\`: \`${a.dir}\` on \`${a.branch}\` — one way of ${a.set.count}; \`rig attempt ${a.set.branch}\` compares them, and \`--run\` checks them`)
     }
-    lines.push(...earlierWorksLines(earlier[i], now))
+    lines.push(...earlierWorksLines(earlier[i], records.unreadable.length))
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc

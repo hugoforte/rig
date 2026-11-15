@@ -6,8 +6,11 @@
 // and having it means a corrected entry changes an outcome, which is the only thing that makes
 // rule 4's correction worth making.
 //
-// Pure by construction: a catalogue in, a graph or an answer out. No data root, no mirror, no
-// `gh`. The entry freshness `rig impact` prints beside an edge is gathered by the caller and
+// It also answers the one question asked of work records beside the catalogue: `earlierWorks`,
+// which closed works touched a repo, for the generated work file.
+//
+// Pure by construction: a catalogue or records in, a graph or an answer out. No data root, no
+// mirror, no `gh`. The entry freshness `rig impact` prints beside an edge is gathered by the caller and
 // joined on there, so this module stays answerable from a literal.
 //
 // **Direction is stored relative to one end and read relative to the other.** An edge is keyed
@@ -139,18 +142,26 @@ export function coAttached (works) {
 export const EARLIER_DAYS = 90
 export const EARLIER_CAP = 10
 
+//
+// **The window opens at the start of a UTC day**, `since`, which each answer carries for the
+// lead line to print: a rolling instant would count a work closed on that day as before it.
+// A `closedAt` that is no date is left out of the counts too, since nothing knows which side of
+// the window it fell.
 export function earlierWorks (works, repos, { now = new Date(), exclude = null } = {}) {
-  const since = new Date(now).getTime() - EARLIER_DAYS * 86400000
+  const n = new Date(now)
+  const sinceAt = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - EARLIER_DAYS)
+  const since = new Date(sinceAt).toISOString().slice(0, 10)
   const closedWorks = (works || [])
-    .filter(w => w.closedAt && w.id !== exclude)
+    .filter(w => w.closedAt && !Number.isNaN(Date.parse(w.closedAt)) && w.id !== exclude)
     .sort((x, y) => String(y.closedAt).localeCompare(String(x.closedAt)) || String(x.id).localeCompare(String(y.id)))
   return repos.map(({ repo, org }) => {
     const touched = closedWorks.filter(w => (w.repos || []).some(r =>
       lower(r.repo) === lower(repo) && (!r.org || !org || lower(r.org) === lower(org))))
-    const inWindow = touched.filter(w => Date.parse(w.closedAt) >= since)
+    const inWindow = touched.filter(w => Date.parse(w.closedAt) >= sinceAt)
     return {
       repo,
       org: org || '',
+      since,
       total: touched.length,
       recent: inWindow.length,
       works: inWindow.slice(0, EARLIER_CAP).map(w => ({
