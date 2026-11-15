@@ -70,6 +70,7 @@ test('attach cuts a real worktree from a mirror rig makes on first use', () => {
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /mirroring acme\/billing \(first use\)/)
   assert.match(r.out, /worktree billing → feat\/attach-work \(base main\)/)
+  assert.match(r.out, /drafted catalogue entry .*billing\.md — correct it while this is fresh: `rig prompt catalogue-entry` says how/)
 
   assert.equal(fs.readFileSync(path.join(worktree('billing'), 'README.md'), 'utf8'), '# billing\n')
   assert.equal(gitMust(worktree('billing'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/attach-work')
@@ -87,6 +88,40 @@ test('attaching a repo the catalogue has never seen drafts an entry to correct',
   const entry = path.join(dataRoot, 'catalog', 'acme', 'billing.md')
   assert.match(fs.readFileSync(entry, 'utf8'), /DRAFT: unreviewed/)
   assert.match(fs.readFileSync(entry, 'utf8'), /^stack: JavaScript$/m)
+})
+
+test('the drafted entry names the prompt that says how to fill it in (#382)', () => {
+  // The brief lives in one place, `rig prompt catalogue-entry`; the stub only points there.
+  const text = fs.readFileSync(path.join(dataRoot, 'catalog', 'acme', 'billing.md'), 'utf8')
+  assert.match(text, /<!-- DRAFT: unreviewed[^>]*rig prompt catalogue-entry[^>]*-->/)
+})
+
+test('every field the drafted entry carries is one the prompt says how to fill (#382)', () => {
+  // A key added to the stub with no line in the brief is a field agents are left to guess at.
+  const text = fs.readFileSync(path.join(dataRoot, 'catalog', 'acme', 'billing.md'), 'utf8')
+  const keys = [...text.split(/^---$/m)[1].matchAll(/^([a-z_]+):/gm)].map(m => m[1])
+  assert.ok(keys.includes('talks_to') && keys.includes('check'), `the stub's keys: ${keys.join(', ')}`)
+  const brief = rig(['prompt', 'catalogue-entry'])
+  assert.equal(brief.code, 0, brief.out)
+  for (const key of keys) assert.match(brief.out, new RegExp(`\`${key}\``), `the prompt names \`${key}\``)
+})
+
+test('an entry with an unconfirmed marker left in it is still a draft, whatever its DRAFT line says (#382)', () => {
+  // The prompt keeps the DRAFT line while a marker stands; rig reads the markers too, so dropping
+  // the line early does not silence the offers while the entry is still partly a guess.
+  const entry = path.join(dataRoot, 'catalog', 'acme', 'journal.md')
+  const write = (front, body) => fs.writeFileSync(entry, `---\nrepo: journal\norg: acme\nrole: The journal\n${front}---\n\n${body}\n`)
+  const flagged = () => /^journal .*\[draft\]$/m.test(strip(rig(['catalog']).out))
+  try {
+    write('check:\n  - npm test  # unconfirmed: read from CI, not run here\n', 'The journal.')
+    assert.ok(flagged(), 'a `# unconfirmed` comment in the frontmatter')
+    write('', 'The journal. ❓ UNCONFIRMED: whether the nightly close still runs here.')
+    assert.ok(flagged(), 'a `❓ UNCONFIRMED` marker in the prose')
+    write('', '## Unconfirmed\n\nThe journal, whose unconfirmed rumours were all checked.')
+    assert.ok(!flagged(), 'the word in prose, or a heading, is not a marker')
+  } finally {
+    fs.rmSync(entry, { force: true })
+  }
 })
 
 

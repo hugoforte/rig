@@ -91,3 +91,16 @@ test('every prompt rig sends someone to is one it ships', () => {
   assert.ok(named.has('pickup'), 'the pickup is sent to its prompt')
   for (const name of named) assert.ok(prompts.includes(name), `rig prompt ${name} is named, and prompts/ holds ${prompts.join(', ')}`)
 })
+
+test('the catalogue-entry prompt keeps its rules, and points at AGENTS.md for what an entry is (#382)', () => {
+  const brief = fs.readFileSync(path.join(ROOT, 'prompts', 'catalogue-entry.md'), 'utf8')
+  assert.match(brief, /never fabricate/i)
+  assert.match(brief, /never a changelog/i)
+  // The two markers, written exactly as rig's draft detection reads them in bin/rig.mjs.
+  assert.match(brief, /# unconfirmed/)
+  assert.match(brief, /❓ UNCONFIRMED/)
+  assert.match(brief, /Keep \`DRAFT: unreviewed\` while any unconfirmed marker/)
+  // What an entry is, and the POSIX sh rule, are AGENTS.md's; a copy here would drift.
+  assert.match(brief, /AGENTS\.md\`?'s "The catalogue"/)
+  assert.doesNotMatch(brief, /Git for Windows/, 'the sh rule is pointed at, not restated')
+})
