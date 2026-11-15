@@ -39,8 +39,10 @@ function build (tmp) {
   // The variables `gitfs.discover` steps aside for, which a developer's shell or a CI image
   // may set for reasons of its own.
   for (const name of MOVED_BY) delete env[name]
-  // Keep every inherited setting — and anything a test writes — out of the real config.
-  fs.writeFileSync(path.join(tmp, 'gitconfig'), '')
+  // Keep every inherited setting — and anything a test writes — out of the real config. And no
+  // guessed identity: with none configured, git makes up `<user>@<host>` wherever the host's
+  // name has a domain, so the test that takes the identity away would commit on some machines.
+  fs.writeFileSync(path.join(tmp, 'gitconfig'), '[user]\n\tuseConfigOnly = true\n')
   // Which config git reads is the sandbox, applied to every call. Who it commits as is not:
   // one test hands in an environment with no identity, and needs it to stay missing.
   const sandbox = { GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }

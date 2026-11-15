@@ -90,8 +90,11 @@ function buildInstall (tmp, {
   // platform can detach, holding `.git/objects/maintenance.lock` while it runs. On Linux it
   // outlives the command, and a cleanup that empties the temp dir meanwhile fails with
   // ENOTEMPTY on `.git/objects`.
+  // And no guessed identity: with no configured one, git makes up `<user>@<host>` wherever the
+  // host's name has a domain (a Tailscale or corporate DNS name gives it one), so a test that
+  // takes the identity away would see the commit succeed on some machines.
   env.GIT_CONFIG_GLOBAL = path.join(tmp, 'gitconfig')
-  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[maintenance]\n\tauto = false\n')
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[maintenance]\n\tauto = false\n[user]\n\tuseConfigOnly = true\n')
   env.GIT_CONFIG_NOSYSTEM = '1'
   env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = author
   env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = email
