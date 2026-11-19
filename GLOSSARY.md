@@ -136,6 +136,10 @@ _Avoid_: restored (that is a folder rebuilt from the record), revived, unclosed
 What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
 _Avoid_: summary, result, release note
 
+**Earlier works**:
+The works that touched a repo and closed in the 90 days before a work's last mutating command, at most ten, listed under that repo in the generated work file: an index of close date, id, title and outcome, whose context docs and notes the agent reads on demand. Read from the work's own data root only.
+_Avoid_: history, prior art, related work
+
 **Digest**:
 An explanation of what landed — a work, a repo, an org or a period — written for a reader at the altitude asked for, grouped by theme, every claim linked to the pull request or ticket it rests on. Written from the records each time and never stored, like the dashboard.
 _Avoid_: report, changelog, release notes, summary

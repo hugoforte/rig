@@ -117,11 +117,19 @@ Correct it before appending to it, as with the catalogue: an edit that contradic
 
 > Optional: did this work confirm, contradict or add to anything in `<org>`'s org doc? A bare **go** skips it.
 
-**An org with no doc.** Put one line right after "Say **go**…", naming every such org:
+**An org with no doc, or a doc missing some of the four headings.** Put a short interview right after "Say **go**…", one per such org, asking each heading it lacks, in this order and spelled exactly so:
 
-> Optional: in one sentence, what is `<org>` trying to accomplish? A bare **go** skips it.
+```markdown
+**`<org>`'s org doc** — optional; answer by number, take a draft by its number ("1 and 3 as drafted"), or skip:
+1. What we're trying to accomplish — draft: <a line or two> (from <what in the work shows it>)
+2. What hurts now — draft: <…> (from <…>)
+3. What we believe — <the question alone, when the story says nothing on it>
+4. Whose call it is — <the question alone, when the story says nothing on it>
+```
 
-If the user answers, write their answer for each org at the path `rig status` gave, in their words, and nothing more:
+- **Draft from the story, never fabricate.** A draft is a line or two, built from what the work showed — the context doc, review threads, notes, struggles, the org's catalogue entries — and it names what it rests on. A heading the story says nothing about is asked as a question, with no draft. "Whose call it is" is usually a question: who decides is rarely in a story.
+- **Only the user's word writes it.** A bare **go** for the review as a whole writes no drafted answer the user did not confirm. A draft is written only when the user takes it by number ("org doc: 1 and 3 as drafted") or answers in their own words; the doc is the org speaking about itself, not this skill.
+- **Write only what was answered**, at the path `rig status` gave, under its heading, in the user's words or the draft they took, and nothing more. A doc that did not exist starts with its frontmatter:
 
 ```markdown
 ---
@@ -133,7 +141,7 @@ org: <org>
 <the answer>
 ```
 
-Later reviews fill the other headings. A skip writes nothing, and the next review in that org asks again.
+A skip writes nothing, and the next review in that org asks again for whatever is still missing.
 
 ## 4. Record it
 

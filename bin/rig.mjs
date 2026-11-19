@@ -14,7 +14,7 @@ import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
 import { discover, notARepository, refSha, symref } from './gitfs.mjs'
 import { MAJOR, FORMAT_STAMP, dataMajor, stampUnreadable, pendingMigrations, writesBlocked, applyMigrations } from './version.mjs'
 import { REFRESH_COMMAND, skipReason, dueForRefresh, staleLine, announces } from './freshness.mjs'
-import { impact, unattached } from './catalog-graph.mjs'
+import { impact, unattached, earlierWorks, EARLIER_CAP } from './catalog-graph.mjs'
 import { releaseMark, BRANCH_PREFIXES, bumpFor, releasesByBump } from './release.mjs'
 import { renderDash } from './dash.mjs'
 import { workState } from './workstate.mjs'
@@ -1071,6 +1071,16 @@ function nestedOrgDoc (body) {
 
 const scalar = v => (typeof v === 'string' ? v : undefined)
 
+// An entry is a draft while `rig attach`'s DRAFT line stands, or while it still carries one of
+// the unconfirmed markers `rig prompt catalogue-entry` writes: `❓ UNCONFIRMED` in the prose, or a
+// `# unconfirmed` comment in the frontmatter, which only the raw text still has once it is parsed.
+// Both are matched exactly as the prompt spells them, so the word in a sentence or a heading in
+// the prose is not one.
+function isDraftEntry (text, body) {
+  const front = text.replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || ''
+  return /DRAFT: unreviewed/.test(body) || /❓ UNCONFIRMED/.test(body) || /(^|\s)# unconfirmed\b/m.test(front)
+}
+
 function loadCatalog (dataRootPath = dataRoot()) {
   const root = path.join(dataRootPath, 'catalog')
   if (!exists(root)) return []
@@ -1080,7 +1090,8 @@ function loadCatalog (dataRootPath = dataRoot()) {
     if (!fs.statSync(dir).isDirectory()) continue
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.md')) continue
-      const { data, body } = parseFrontmatter(readText(path.join(dir, f)))
+      const text = readText(path.join(dir, f))
+      const { data, body } = parseFrontmatter(text)
       entries.push({
         repo: data.repo || f.replace(/\.md$/, ''),
         org: data.org || org,
@@ -1092,7 +1103,7 @@ function loadCatalog (dataRootPath = dataRoot()) {
         docs: (Array.isArray(data.docs) ? data.docs : (data.docs ? [data.docs] : [])).map(docsAddress),
         // The size at which this repo's PRs are offered a reading page; absent says nothing.
         prPage: { lines: scalar(data.pr_page_lines), files: scalar(data.pr_page_files) },
-        draft: /DRAFT: unreviewed/.test(body),
+        draft: isDraftEntry(text, body),
         body: body.trim(),
         file: path.join(dir, f),
       })
@@ -1219,7 +1230,8 @@ docs: []
 ---
 
 <!-- DRAFT: unreviewed — drafted by \`rig attach\`. Correct this while the repo is
-     loaded in your head; that is where the catalogue's value comes from. -->
+     loaded in your head; that is where the catalogue's value comes from.
+     \`rig prompt catalogue-entry\` says how. -->
 
 TODO: what this repo actually is, its gotchas, and the expensive-to-rediscover facts.
 `)
@@ -1803,6 +1815,33 @@ function repoGuidance (dir) {
   return { instructions, skills, unreadable }
 }
 
+// A repo's earlier works, for its block in the generated file: an index whose bodies the agent
+// opens on demand (decision 229). The lead line gives the window's start as a date and no "last
+// 90 days", since the file is read days after it was written, and the totals inside and before
+// it as of that regenerate, so the reader knows what the list leaves out. Records that would not
+// read are counted there, since any of them may be one of this repo's. A repo nothing has closed
+// on gets no line.
+function earlierWorksLines (answer, unreadable = 0) {
+  if (!answer?.total) return []
+  const window = `closed on ${answer.repo} since ${answer.since}`
+  const before = answer.total - answer.recent
+  const shown = !answer.recent ? `none ${window}`
+    : answer.recent > EARLIER_CAP ? `the ${EARLIER_CAP} newest of the ${answer.recent} ${window}`
+      : `the ${answer.recent} ${window}, newest first`
+  const unread = unreadable
+    ? `; ${unreadable} work record${unreadable === 1 ? '' : 's'} could not be read and may belong here (\`rig doctor\` names ${unreadable === 1 ? 'it' : 'them'})`
+    : ''
+  const where = `\`${path.join(dataRoot(), 'work')}${path.sep}<id>${path.sep}\``
+  const lines = [`- Earlier works: ${shown}; ${before ? `${before} closed before` : 'none closed before'}${unread}. ` +
+    `Each one's \`context.md\` and \`notes.tsv\` are in ${where}; read the ones whose title bears on this work.`]
+  for (const w of answer.works) {
+    const title = w.title ? ` — ${w.title}${w.abandoned ? ' (abandoned)' : ''}` : (w.abandoned ? ' (abandoned)' : '')
+    const outcome = w.outcome ? `${/[.!?]$/.test(title) ? '' : '.'} Outcome: ${w.outcome}` : ''
+    lines.push(`  - ${String(w.closedAt).slice(0, 10)} \`${w.id}\`${title}${outcome}`)
+  }
+  return lines
+}
+
 function regenerate (cfg, work) {
   const wd = workDir(cfg, work.id)
   const cat = loadCatalog()
@@ -1823,7 +1862,12 @@ function regenerate (cfg, work) {
   lines.push('## Repos in this work')
   lines.push('')
   if (!work.repos.length) lines.push('_None attached yet — `rig attach <repo>`._')
-  for (const r of work.repos) {
+  // Read once for every repo. A record that will not read is left out of the list and counted on
+  // each lead line, whose totals would otherwise claim to be complete; this runs at the end of
+  // every mutating command, so it is not said on stdout, and `rig doctor` names each one.
+  const records = work.repos.length ? readRecords(dataRoot()) : { works: [], unreadable: [] }
+  const earlier = earlierWorks(records.works, work.repos, { exclude: work.id })
+  for (const [i, r] of work.repos.entries()) {
     const c = catalogEntryFor(cat, r)
     lines.push(`### ${r.repo}`)
     lines.push('')
@@ -1847,6 +1891,7 @@ function regenerate (cfg, work) {
     for (const a of attemptFoldersHere(cfg, work).filter(a => a.repo === r.repo)) {
       lines.push(`- Attempt ${a.n} at \`${a.set.branch}\`: \`${a.dir}\` on \`${a.branch}\` — one way of ${a.set.count}; \`rig attempt ${a.set.branch}\` compares them, and \`--run\` checks them`)
     }
+    lines.push(...earlierWorksLines(earlier[i], records.unreadable.length))
     lines.push('')
   }
   // Inlined in full rather than linked, because a link is what an agent skips, and the doc
@@ -2537,7 +2582,7 @@ function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {
   const entry = () => catalogEntryFor(loadCatalog(), { org, repo })
   const known = entry()
   if (!known && draftCatalogEntry(org, repo, language)) {
-    warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh`)
+    warn(`drafted catalogue entry ${catalogFile(org, repo)} — correct it while this is fresh: \`rig prompt catalogue-entry\` says how`)
   }
 
   const cat = known || entry()

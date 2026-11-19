@@ -36,6 +36,7 @@ const offer = (phase, says, command = null) => ({ phase, says, command })
 
 const DESIGNED = 'rig save -m "design agreed" --designed --adversarial'
 const PICKUP = 'rig prompt pickup'
+const CATALOGUE_ENTRY = 'rig prompt catalogue-entry'
 
 // Three repos is where deploy order stops being obvious and starts being a thing that causes
 // incidents. Two is a pair you can hold in your head. The weight threshold, derived from the
@@ -61,7 +62,8 @@ const HEAVY = 3
 //                  the work has none — which is most works, and is not a deficiency
 //   replaced       one `{ repo, branch, head, ... }` per merged stage `worktrees.replaced`
 //                  answered for, with what it answered: `head` is the commit its PR carried
-//   drafts         the attached repos whose catalogue entry is still `DRAFT: unreviewed`
+//   drafts         the attached repos whose catalogue entry is still a draft: `DRAFT: unreviewed`,
+//                  or an unconfirmed marker left in it
 //   neighbours     one `{ repo, via, direction }` per repo the catalogue says talks to an
 //                  attached one and which is not itself attached — `via` is the attached repo
 //                  it was reached from, `direction` its stated direction or null
@@ -439,13 +441,15 @@ export function nextFor ({ work, repos = [], directionTodo = false, prUnwritten 
   // teardown before reaching the line that needed the trees.
   if (drafts.length) {
     const many = drafts.length > 1
-    // Never a command. `rig catalog <repo>` shows an entry and names the file, but correcting
-    // one is editing prose — the design gate above sets the precedent for an offer whose work
-    // is a conversation and not a line to type.
+    // The command is the brief, not an edit: correcting an entry is editing prose, and rig has no
+    // edit mode. `rig prompt catalogue-entry` prints how to fill one in from the repo, as the
+    // pickup offer's prompt prints how to pick a work up; `rig catalog <repo>` names the file.
+    // An entry stays a draft while it carries an unconfirmed marker, so this keeps being offered
+    // until the human has confirmed what the evidence could not.
     out.push(offer(phase,
       `the catalogue ${many ? `entries for ${drafts.join(', ')} are still drafts` : `entry for ${drafts[0]} is still a draft`}`
       + ` — correct ${many ? 'them' : 'it'} while the repo${many ? 's are' : ' is'} still in your head`
-      + ` (\`rig catalog ${drafts[0]}\` names the file)`))
+      + ` (\`rig catalog ${drafts[0]}\` names the file)`, CATALOGUE_ENTRY))
   }
 
   // What the work taught, asked once a pull request gives it a story to read, and in this

@@ -106,6 +106,11 @@ them, and tell the user which stated problem this work addresses. When it addres
 none, say so plainly and let the user decide; it is still theirs to do. An org with no
 doc has nothing to name.
 
+Then read the earlier works the generated `AGENTS.md` lists under each repo, the ones
+whose title bears on this work, before the Direction is written: their context docs and
+notes hold what was decided on these repos and why. When an earlier decision bears on this
+work, say in the Direction whether it keeps or reverses it; when none does, say nothing.
+
 Once the Direction section
 of the context doc is agreed with the user, end that gate with
 `rig save -m "design agreed" --designed --adversarial` (or `--no-adversarial`) — rig commits
