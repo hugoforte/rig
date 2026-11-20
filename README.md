@@ -104,6 +104,12 @@ A **stage** is a delivery slice of a work: one coherent piece of scope, carried 
 
 Base is a relation, not a name for any particular branch. `rig status` reads each branch's base off its own PR, so a branch stacked on another one reads as `base main → feat/other-work` rather than still claiming `main`.
 
+### rig and the Home Repo Pattern
+
+The [Home Repo Pattern](https://aihero.dev/the-home-repo-pattern) keeps one repo for running agents across many: the shared skills, the agent instructions, a line per repo saying where its clone sits, and the docs that span repos. rig splits that repo three ways, by who should read each part. The skills and instructions every session needs stay where your agent host already loads them, from its skills folder or a dotfiles repo; rig ships its own under `skills/`. The pointers and the wiki are the data root: its catalogue says what each repo is and what it talks to, its org docs what each org is for, its work records what each work decided, and `rig.json` which orgs and trackers it serves. Public, personal and employer knowledge each get a data root of their own, so they never share a repo. The tooling is rig.
+
+What rig leaves out is the clone's path. rig's predecessor had the same shape: a coordination repo with a `repos.json`, abandoned because nothing kept that list true ([DESIGN.md §1.1](./DESIGN.md#11-v1-exists-and-it-failed)). rig stores only what stays true, works out the rest when asked, and clones a repo when a work first attaches it. A session starts in the work's folder, whose generated `AGENTS.md` names each repo's own instructions and skills.
+
 ## Setting up
 
 Ten minutes to a first work with two worktrees on disk. This path keeps everything on your machine and asks nothing about tickets.

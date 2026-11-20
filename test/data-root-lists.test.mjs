@@ -34,6 +34,7 @@ const LISTS = [
   { where: 'DESIGN.md §3, the on-disk layout', names: PATHS, text: () => slice('DESIGN.md', /^D:\\rig-data\\/, /^D:\\w\\/) },
   { where: 'DESIGN.md §9, publishing this repo', names: PATHS, text: () => slice('DESIGN.md', /^- \*\*Publishing this repo\*\*/, /^- |^$/) },
   { where: 'README.md, the three-roots diagram', names: PATHS, text: () => slice('README.md', /subgraph data\[/, /^\s+end$/) },
+  { where: 'README.md, rig and the Home Repo Pattern', names: PROSE, text: () => slice('README.md', /The pointers and the wiki are the data root/) },
   { where: 'the README `rig init` writes into a new data root', names: PROSE, text: () => slice('bin/rig.mjs', /^The data root for \[rig\]/) },
   { where: 'the rig skill', names: PROSE, text: () => slice('skills/rig/SKILL.md', /a committed checkout holding/) },
 ]
