@@ -33,6 +33,12 @@ test('a flow list is read, and a single scalar is one filter', () => {
   assert.deepEqual(pushBranches('on:\n  push:\n    branches: [main,\n      "fix/**"]\n  pull_request:\n'), ['main', 'fix/**'], 'a flow list may span lines')
 })
 
+test('a bracket or comma inside a quoted flow-list item is part of the item, not the list', () => {
+  assert.deepEqual(pushBranches("on:\n  push:\n    branches: ['release/[0-9]+.x', 'fix/**']\n"), ['release/[0-9]+.x', 'fix/**'])
+  assert.deepEqual(pushBranches('on:\n  push:\n    branches: ["release/[0-9]+.x",\n      "fix/**"]\n'), ['release/[0-9]+.x', 'fix/**'], 'and the list still spans lines')
+  assert.deepEqual(pushBranches("on:\n  push:\n    branches: ['a,b', main]\n"), ['a,b', 'main'])
+})
+
 test('a list item may sit at the key\'s own indent, as YAML allows', () => {
   assert.deepEqual(pushBranches('on:\n  push:\n    branches:\n    - main\n    - fix/**\n  pull_request:\n'), ['main', 'fix/**'])
 })
@@ -65,6 +71,14 @@ test('a filter matches the way GitHub matches: * stops at a slash, ** does not',
   assert.equal(branchMatches(['main'], 'main-ish'), false)
   assert.equal(branchMatches(['release/[0-9]+.x'], 'release/12.x'), true, 'a class and its + as GitHub reads them, the dot literal')
   assert.equal(branchMatches(['release/[0-9]+.x'], 'release/12ax'), false)
+})
+
+test('a backslash makes the character after it literal, as GitHub has it', () => {
+  assert.equal(branchMatches(['fix/c\\+\\+'], 'fix/c++'), true)
+  assert.equal(branchMatches(['fix/c\\+\\+'], 'fix/ccc'), false)
+  assert.equal(branchMatches(['fix/\\*'], 'fix/*'), true)
+  assert.equal(branchMatches(['fix/\\*'], 'fix/anything'), false)
+  assert.equal(branchMatches(['fix/c+'], 'fix/ccc'), true, 'an unescaped + is still a quantifier')
 })
 
 test('a later negated filter takes a branch back out, and a later positive one puts it back', () => {

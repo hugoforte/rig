@@ -58,6 +58,29 @@ function keyUnder (lines, at, key) {
   return null
 }
 
+// A flow list's items, read from its opening `[`, and whether its `]` was reached. A bracket or
+// comma inside a quoted item belongs to the item, as in `['release/[0-9]+.x', 'fix/**']`.
+function flowItems (flow) {
+  const items = []
+  let item = ''
+  let quote = null
+  for (let i = flow.indexOf('[') + 1; i < flow.length; i++) {
+    const c = flow[i]
+    if (quote) {
+      if (c === quote) quote = null
+      item += c
+    } else if (c === '"' || c === "'") {
+      quote = c
+      item += c
+    } else if (c === ',' || c === ']') {
+      items.push(unquote(item))
+      item = ''
+      if (c === ']') return { items, closed: true }
+    } else item += c
+  }
+  return { items, closed: false }
+}
+
 // The branch filters a workflow's push trigger names, in order, or null when it names none: no
 // push trigger, one on every branch, one on tags alone, or a form this does not read.
 export function pushBranches (text) {
@@ -72,8 +95,8 @@ export function pushBranches (text) {
   if (branches.rest.startsWith('[')) {
     // A flow list may run on over the lines below until it closes.
     let flow = branches.rest
-    for (let i = branches.line + 1; !flow.includes(']') && i < lines.length; i++) flow += ` ${lines[i].trim()}`
-    filters = flow.replace(/^\[/, '').replace(/\].*$/, '').split(',').map(unquote).filter(Boolean)
+    for (let i = branches.line + 1; !flowItems(flow).closed && i < lines.length; i++) flow += ` ${lines[i].trim()}`
+    filters = flowItems(flow).items.filter(Boolean)
   } else if (branches.rest) {
     filters = [unquote(branches.rest)]
   } else {
@@ -93,12 +116,16 @@ export function pushBranches (text) {
 }
 
 // One filter as a regular expression, the way GitHub reads it: `*` stops at a slash, `**` does
-// not, `?` and `+` apply to the character before them, `[…]` is a class, and the rest is literal.
+// not, `?` and `+` apply to the character before them, `[…]` is a class, a backslash makes the
+// character after it literal (`fix/c\+\+` is `fix/c++`), and the rest is literal.
+const literal = c => c.replace(/[.\\^$|(){}*+?[\]]/g, '\\$&')
 function filterRegex (filter) {
   let re = ''
   for (let i = 0; i < filter.length; i++) {
     const c = filter[i]
-    if (c === '*') {
+    if (c === '\\' && i + 1 < filter.length) {
+      re += literal(filter[++i])
+    } else if (c === '*') {
       if (filter[i + 1] === '*') { re += '.*'; i++ } else re += '[^/]*'
     } else if (c === '?' || c === '+') re += c
     else if (c === '[') {
@@ -106,7 +133,7 @@ function filterRegex (filter) {
       if (end < 0) { re += '\\['; continue }
       re += filter.slice(i, end + 1)
       i = end
-    } else re += c.replace(/[.\\^$|(){}]/g, '\\$&')
+    } else re += literal(c)
   }
   return new RegExp(`^${re}$`)
 }
