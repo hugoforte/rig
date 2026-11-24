@@ -451,6 +451,20 @@ test('an attached repo whose worktree is gone is named, and so is one whose secr
   assert.equal(problemCount(found), 2)
 })
 
+test('a work branch its repo runs workflows on at every push is named, and does not count', () => {
+  const found = doctorFindings(snap({
+    works: [{
+      id: 'w', closed: false, contradictions: [], folderMissing: false, strays: [],
+      repos: [{ repo: 'billing', worktreeMissing: false, secretsUnconfigured: false,
+        pushTriggers: [{ branch: 'fix/w', label: 'a push runs deploy.yml (fix/**) — `--type feat` would not' }] }],
+    }],
+  }))
+  const one = only(found, /deploy\.yml/)
+  assert.equal(one.verdict, 'warn')
+  assert.equal(one.says, 'w: billing on fix/w: a push runs deploy.yml (fix/**) — `--type feat` would not')
+  assert.equal(problemCount(found), 0, 'a hotfix branch may deploy on purpose, so it is said, never counted')
+})
+
 test('draft catalogue entries are an invitation, not a fault: they warn and do not count', () => {
   const found = doctorFindings(snap({ dataRoots: [root({ drafts: ['billing', 'orders'] })] }))
   const one = only(found, /draft catalogue/)

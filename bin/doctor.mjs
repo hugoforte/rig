@@ -215,7 +215,10 @@ function rootFindings (root) {
 //                     whose folder is still here, to when it stopped ("closed on 2026-09-30");
 //                     a record that would not read is { id, unreadable, holders } instead,
 //                     `unreadable` the sentence saying why. One entry per work that reads,
-//                     beside every copy that would not
+//                     beside every copy that would not. Each of `repos` is { repo,
+//                     worktreeMissing, secretsUnconfigured, pushTriggers }, `pushTriggers`
+//                     [{ branch, label }] for each of the work's branches a push of which runs
+//                     one of the repo's workflows
 //   disk              { label, freeGb } or null
 //
 // Returns the findings in the order they are printed. `problemCount` is the exit code.
@@ -355,6 +358,9 @@ export function doctorFindings (snap = {}) {
       if (r.secretsUnconfigured) {
         out.push(warn(`${w.id}: ${r.repo} mentions secrets in its catalogue entry but has no source in rig.local.json`))
       }
+      // A branch every push of which runs the repo's deploy is a hazard and not a fault: a
+      // hotfix branch may be cut to deploy on purpose, so it is said and never counted.
+      for (const t of r.pushTriggers || []) out.push(warn(`${w.id}: ${r.repo} on ${t.branch}: ${t.label}`, { counts: false }))
     }
   }
 

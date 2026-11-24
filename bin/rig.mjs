@@ -27,6 +27,7 @@ import { extractOf } from './extract.mjs'
 import { redact } from './redact.mjs'
 import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs'
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
+import { pushTriggers, quieterPrefixes, pushTriggersLabel } from './deploys.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
 import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
@@ -1815,6 +1816,36 @@ function repoGuidance (dir) {
   return { instructions, skills, unreadable }
 }
 
+// The repo's GitHub Actions workflows as the worktree has them, [{ file, text }], read every time
+// and never stored. What a repo holds is the repo's, as in `repoGuidance`: a file or folder that
+// will not read is passed over, and a worktree not on this machine has none.
+const WORKFLOW_DIR = '.github/workflows'
+function workflowsIn (dir) {
+  let names = []
+  try { names = fs.readdirSync(path.join(dir, WORKFLOW_DIR)) } catch { return [] }
+  return names.filter(n => /\.ya?ml$/i.test(n)).sort().flatMap(file => {
+    try { return [{ file, text: fs.readFileSync(path.join(dir, WORKFLOW_DIR, file), 'utf8') }] } catch { return [] }
+  })
+}
+
+// The prefixes offered instead of one a repo deploys from, the two that mean "not a fix" first.
+const QUIET_FIRST = ['feat', 'chore', ...BRANCH_PREFIXES.filter(p => p !== 'feat' && p !== 'chore')]
+
+// Each of these branches a push of which runs one of the repo's workflows, as [{ branch, label }]
+// (hugoforte/rig#386). Read off the worktree's workflow files, which are the branch's own as far
+// as the work has changed them.
+function pushTriggersIn (dir, branches) {
+  const workflows = workflowsIn(dir)
+  if (!workflows.length) return []
+  return [...new Set(branches)].flatMap(branch => {
+    const hits = pushTriggers(workflows, branch)
+    return hits.length ? [{ branch, label: pushTriggersLabel(hits, quieterPrefixes(workflows, branch, QUIET_FIRST)) }] : []
+  })
+}
+
+// The work's branches a repo may yet push: the work branch and each stage still in the plan.
+const branchesInPlay = work => [work.branch, ...(work.stages || []).filter(s => !withdrawalOf(s)).map(s => s.branch)]
+
 // A repo's earlier works, for its block in the generated file: an index whose bodies the agent
 // opens on demand (decision 229). The lead line gives the window's start as a date and no "last
 // 90 days", since the file is read days after it was written, and the totals inside and before
@@ -2598,6 +2629,11 @@ function attachRepo (cfg, work, repoName, { setup = false, byAgent = false } = {
   if (byAgent) work.agentDecided = [...new Set([...(work.agentDecided || []), 'repos'])]
   saveWork(cfg, work)
   ok(`attached ${C.bold(repo)} at ${dest}`)
+  // Said at the cut, which is before anything is pushed: the one moment the remedy is free.
+  // A warning and never a refusal, since a hotfix branch may be cut to deploy on purpose.
+  for (const t of pushTriggersIn(dest, [work.branch])) {
+    warn(`${repo}: ${t.branch}: ${t.label} — rig never renames a branch, so push it only when a deploy is meant`)
+  }
   offerSetup(cat, repo, dest, setup)
   return repo
 }
@@ -3839,6 +3875,7 @@ cmds.status = ({ flags }) => {
     // could prove, and `rig check` names where to write one. Said of a missing worktree too, since
     // a pass recorded on another machine is what a pickup reads.
     if (checked.includes(r)) say(`  checks  ${verificationLabel(r.repo, verificationOf(cfg, r, work))}`)
+    if (!v.missing) for (const t of pushTriggersIn(r.path, branchesInPlay(work))) say(`  pushes  ${C.yellow(`${t.branch}: ${t.label}`)}`)
     say(`  pr      ${v.pr ? `#${v.pr.number} ${v.pr.state} ${v.pr.url}${v.pr.recorded ? C.dim(' (recorded)') : ''}` : v.prUnknown ? `unknown — ${v.prUnknown}` : 'none'}`)
     const page = workBranch(r, work)?.page
     if (page && page.number === v.pr?.number) say(`  page    at ${page.head.slice(0, 7)} ${page.url}`)
@@ -6746,6 +6783,7 @@ function doctorWork (cfg, id, root, roots) {
       repo: r.repo,
       worktreeMissing: !exists(r.path),
       secretsUnconfigured: !!(cat?.body && /secrets|\.env/i.test(cat.body)),
+      pushTriggers: pushTriggersIn(r.path, branchesInPlay(work)),
     }
   })
   return out

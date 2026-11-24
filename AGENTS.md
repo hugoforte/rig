@@ -96,6 +96,8 @@ rig attach your-org/orders-web   # owner/repo: that org alone, never a same-name
 
 A bare name is looked up in each of the data root's orgs in turn. `owner/repo` names the org, which must be one of them; no other org is asked (DESIGN.md decision 217).
 
+**A branch can be a deploy.** A repo whose GitHub Actions workflow runs on push to `fix/**` puts every push of a `fix/` work branch wherever that workflow deploys. So when `rig attach` (or `rig new --repos`) cuts a branch that one of the repo's `.github/workflows` files names in `on.push.branches`, it warns, naming each workflow with the filter that matched and the `--type` that would not, before anything is pushed. `rig status` says it on the repo's `pushes` line while the work is open, and `rig doctor` names it without counting it. It is a warning, never a refusal: a hotfix branch is often meant to deploy. rig never renames a branch, so a work cut on the wrong type pushes only when a deploy is meant, or starts again with the other `--type`. A trigger on every push, or on tags alone, is not read (DESIGN.md decision 231).
+
 ### Naming the chat
 
 Once `rig new` has succeeded, or `rig restore` on a pickup, **name the chat for the work**, so it
