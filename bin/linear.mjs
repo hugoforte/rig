@@ -44,7 +44,9 @@ export function linearApiKey ({ env = {}, keyFile, readFile } = {}) {
   for (const line of text.split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?LINEAR_API_KEY\s*=\s*(.*?)\s*$/.exec(line)
     if (!m) continue
-    const value = m[1].replace(/^(['"])(.*)\1$/, '$2').trim()
+    // A quoted value is what the quotes hold; a bare one ends at a ` #` comment, as dotenv reads it.
+    const quoted = /^(['"])(.*?)\1/.exec(m[1])
+    const value = (quoted ? quoted[2] : m[1].replace(/\s+#.*$/, '')).trim()
     return value && value !== 'CHANGE_ME' ? value : null
   }
   return null

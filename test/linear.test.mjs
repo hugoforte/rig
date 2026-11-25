@@ -149,6 +149,13 @@ test('linearApiKey: the key file is a dotenv file holding LINEAR_API_KEY', () =>
   assert.equal(linearApiKey({ env: {}, keyFile: 'f', readFile: read("LINEAR_API_KEY='lin_single'") }), 'lin_single')
 })
 
+test('linearApiKey: a comment after the key is not part of it, quoted or not', () => {
+  const read = text => () => text
+  assert.equal(linearApiKey({ env: {}, keyFile: 'f', readFile: read('LINEAR_API_KEY=lin_bare # the personal key\n') }), 'lin_bare')
+  assert.equal(linearApiKey({ env: {}, keyFile: 'f', readFile: read('LINEAR_API_KEY="lin_quoted" # the personal key\n') }), 'lin_quoted')
+  assert.equal(linearApiKey({ env: {}, keyFile: 'f', readFile: read("LINEAR_API_KEY='lin#hash' # kept inside quotes\n") }), 'lin#hash')
+})
+
 test('linearApiKey: no key anywhere, or a placeholder still in the file, is no key', () => {
   assert.equal(linearApiKey({ env: {} }), null)
   assert.equal(linearApiKey({ env: {}, keyFile: 'f', readFile: () => 'LINEAR_API_KEY=CHANGE_ME\n' }), null)

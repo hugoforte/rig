@@ -2568,6 +2568,7 @@ cmds.new = ({ flags, positional }) => {
   let fetched = null
   const projectKey = keys.find(isProjectKey)
   const route = projectKey ? trackerOfKey(cfg.tracker, projectKey, cfg.orgs || []) : null
+  if (route?.kind === 'ambiguous') warn(`${projectKey}: not fetched, ${route.reason}`)
   const reader = route && trackerProviders()[route.kind]?.getIssue
   if (reader) {
     try { fetched = reader(projectKey, route) } catch (e) {

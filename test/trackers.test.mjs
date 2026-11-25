@@ -193,6 +193,20 @@ const realLinear = (extra = {}) => {
   return env
 }
 
+test('rig new --key on a prefix two kinds of tracker claim says why it fetched nothing', () => {
+  const file = path.join(install.dataRoot, 'rig.json')
+  const was = fs.readFileSync(file, 'utf8')
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(was), orgs: ['acme', 'beta'],
+    tracker: { acme: { kind: 'jira', project: 'ABC' }, beta: { kind: 'linear', team: 'ABC' } } }, null, 2))
+  try {
+    const r = install.rig(['new', 'amb', '--key', 'ABC-5'])
+    assert.equal(r.code, 0, r.out)
+    assert.match(r.out, /ABC-5: not fetched, acme \(jira\) and beta \(linear\) both claim ABC/)
+  } finally {
+    fs.writeFileSync(file, was)
+  }
+})
+
 test('a Linear tracker with no team refuses --ticket before the work is made', () => {
   setTracker({ kind: 'linear' })
   const r = install.rig(['new', 'teamless', '--title', 'No team', '--ticket'], { input: 'brief' })
