@@ -7,17 +7,19 @@ decision must be explicit, not left as an empty list nobody chose.
 ## Which tracker
 
 `rig.json` maps each org to a tracker: `github` (with a `repo`), `jira` (with a `project`,
-and per-org create defaults — `type`, `fields`, `board`), or none. `rig doctor` prints the
-mapping. `--org` is only needed when more than one org has a live tracker: a Jira `--key`
-resolves its org from the key's project prefix automatically, but `--ticket` on its own
-does not. If `rig new` refuses for exactly this reason ("several orgs have trackers —
+and per-org create defaults — `type`, `fields`, `board`), `linear` (with a `team`, the
+prefix of its issue keys, needed only to create one), or none. `rig doctor` prints the
+mapping. The org's tracker decides where a ticket is fetched from and told, never the key's
+shape: `PROJ-42` is a Jira key and a Linear key alike. `--org` is only needed when more
+than one org has a live tracker: a `--key` resolves its tracker from the key's prefix
+automatically, but `--ticket` on its own does not. If `rig new` refuses for exactly this reason ("several orgs have trackers —
 pass --org"), **ask the user which org** rather than guessing; it is a fast question and
 a wrong guess creates the ticket in the wrong tracker.
 
 ## You already have a key
 
 Fetch its title and description yourself only for a GitHub key (`owner/repo#7`) — pipe
-them in. A Jira key (`PROJ-42`) rig fetches itself:
+them in. A Jira or Linear key (`PROJ-42`) rig fetches itself, from the tracker the org keeps:
 
 ```
 <description> | rig new <id> --title "<title>" --key owner/repo#7
@@ -67,6 +69,17 @@ shot:
 <brief> | rig new <id> --title "<title>" --ticket --org <org> [--field k=v,...] [--parent <epic key>]
 ```
 
+**Tracker is Linear:**
+
+```
+<brief> | rig new <id> --title "<title>" --ticket --org <org> --dry-run
+```
+
+Prints the team, the title and the description in full, as Jira's preview does. It needs
+the org's `team` in `rig.json`; `--field` and `--parent` are ignored. Without a Linear API
+key the create fails and names where one goes (`LINEAR_API_KEY`, or `rig.local.json`'s
+`linear.keyFile`); never ask the user for the key in chat.
+
 **No tracker for this org, or a genuine spike that should have no ticket:** confirm with
 the user that no ticket is wanted, then:
 
@@ -79,7 +92,7 @@ a work nobody decided about, which `rig new` no longer allows to happen silently
 
 ## The ticket body
 
-Same shape on both trackers; rig writes exactly this, so match it if you ever open one by
+Same shape on every tracker; rig writes exactly this, so match it if you ever open one by
 hand:
 
 > <the brief>
@@ -89,9 +102,9 @@ hand:
 > Opened by `rig new <id> --ticket`.
 
 What differs is how much brief goes in. **GitHub** gets the first paragraph only: the
-issue is a pointer and the context doc is one click away for the same reader. **Jira**
-gets the whole brief, as markdown — a Jira reader may have no access to the data root the
-link points at, so the ticket has to stand on its own.
+issue is a pointer and the context doc is one click away for the same reader. **Jira** and
+**Linear** get the whole brief, as markdown: their readers may have no access to the data
+root the link points at, so the ticket has to stand on its own.
 
 ## After
 
@@ -122,6 +135,7 @@ The repo set and the design gate are stops a work may skip, when the user said s
 outset: pass `--stops` to `rig new`. `AGENTS.md`'s "Stops" lists them and says how the agent
 records what it decided in their place.
 
-When the work is done, `rig close` comments on every ticket with the PR links. GitHub
-tickets also close when every PR is merged. Jira tickets never auto-close or transition —
-move it yourself once the comment lands.
+When the work is done, `rig close` comments on every ticket with the PR links, in the tracker
+its org keeps. GitHub tickets also close when every PR is merged. Jira and Linear tickets never
+auto-close or transition: move it yourself once the comment lands. A ticket whose org tracks
+in none is passed over in one line.

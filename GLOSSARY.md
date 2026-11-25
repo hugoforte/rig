@@ -45,15 +45,15 @@ Two catalogue entries making different claims about one relationship's direction
 _Avoid_: conflict, mismatch, error
 
 **Tracker**:
-The ticket system an org uses: GitHub Issues or Jira. Configured per org in `rig.json`.
+The ticket system an org uses: GitHub Issues, Jira, Linear, or none. Configured per org in `rig.json`, and the only thing that says where a ticket is told.
 _Avoid_: issue tracker, Jira (when the kind is not fixed)
 
 **Ticket**:
-The record of a work in the org's tracker. A GitHub issue or a Jira work item. A work has zero or more.
+The record of a work in the org's tracker. A GitHub issue, a Jira work item or a Linear issue. A work has zero or more.
 _Avoid_: issue, story, work item (those are tracker-specific names for the same thing)
 
 **Key**:
-A ticket's identifier: `PROJ-42` for Jira, `owner/repo#7` for GitHub. Only the Jira shape goes in a branch name.
+A ticket's identifier: `PROJ-42` for Jira and Linear alike, `owner/repo#7` for GitHub. The `PROJ-42` shape says nothing about which tracker holds it; the org's tracker does. Only that shape goes in a branch name.
 _Avoid_: ticket number, id
 
 **Declined ticket**:

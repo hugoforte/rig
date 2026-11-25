@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
+import { linearViaApi, linearInMemory, linearApiKey, linearKeyFile, postViaNode } from './linear.mjs'
+import { trackerOfKey, providers, isProjectKey, isGithubKey } from './trackers.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable, REAL_MACHINE, LOCK_STALE_MS } from './checkouts.mjs'
 import { NO_PROMPT_ENV, signIn } from './remote-env.mjs'
@@ -29,7 +31,7 @@ import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { pushTriggers, quieterPrefixes, pushTriggersLabel } from './deploys.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, readMachine, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -499,11 +501,35 @@ function adapterResolver (envVar, viaCli, inMemory) {
   }
 }
 // The real CLI behind each adapter. Spawned here rather than inside the tracker module, so
-// the run's environment reaches `gh` and `twg` the way it reaches `git`.
-const CLI_FOR = { RIG_FAKE_GITHUB: 'gh', RIG_FAKE_TWG: 'twg' }
+// the run's environment reaches `gh` and `twg` the way it reaches `git`. Linear has no CLI:
+// its requests are posted by a node child (bin/linear.mjs says why).
+const CLI_FOR = { RIG_FAKE_GITHUB: 'gh', RIG_FAKE_TWG: 'twg', RIG_FAKE_LINEAR: process.execPath }
 const github = () => current.github.get()
 const jira = () => current.jira.get()
-const persistFakeTrackers = () => { current.github.persist(); current.jira.persist() }
+const linear = () => current.linear.get()
+const persistFakeTrackers = () => { current.github.persist(); current.jira.persist(); current.linear.persist() }
+// One provider per kind of tracker, over the adapters above (bin/trackers.mjs).
+const trackerProviders = () => (current.providers ??= providers({ github, jira, linear }))
+
+// The Linear API key, read at the call that needs it: from LINEAR_API_KEY, else the dotenv file
+// the machine half's `linear.keyFile` names. Read off the machine file itself, which needs no
+// data root in hand: doctor asks on a machine whose root it cannot select.
+function linearKeyOfRun () {
+  const { localFile } = registry(toolRoot(), env())
+  const keyFile = linearKeyFile(readMachine({ localFile })?.linear?.keyFile,
+    { home: env().USERPROFILE || env().HOME || os.homedir(), dir: path.dirname(localFile) })
+  return linearApiKey({ env: env(), keyFile, readFile: f => fs.readFileSync(f, 'utf8') })
+}
+// Whether a Linear call would have a key, and why not, for the two places that ask before any
+// call is made.
+function linearKeyState () {
+  try { return { present: linear().present() } } catch (e) {
+    if (e instanceof TrackerError) return { present: false, problem: e.message }
+    throw e
+  }
+}
+// A declaration, not a const: the first invocation is made before this line is reached.
+function linearViaNode ({ exec }) { return linearViaApi({ post: postViaNode(exec), apiKey: linearKeyOfRun }) }
 
 // Runs a tracker call the caller can carry on without, and answers why it failed, or
 // nothing when it didn't. Anything but a tracker failure is a bug and propagates.
@@ -1345,13 +1371,21 @@ function trackerFor (cfg, orgFlag) {
 const anyTrackerConfigured = cfg =>
   Object.values(cfg.tracker || {}).some(t => t && t.kind && t.kind !== 'none')
 
-// The org whose Jira project matches a key's prefix, or null when no org claims it (or
-// more than one does — misconfiguration, not a guess this function should make).
-function orgForJiraKey (cfg, key) {
-  const project = isJiraKey(key) ? /^([A-Z][A-Z0-9]+)-/.exec(key)[1] : null
-  if (!project) return null
-  const owners = Object.entries(cfg.tracker || {}).filter(([, t]) => t.kind === 'jira' && t.project === project)
-  return owners.length === 1 ? owners[0][0] : null
+// The orgs a work's tickets are read against: its repos' orgs, or every org in the data root
+// while it has no repo.
+const workOrgs = (cfg, work) => {
+  const orgs = [...new Set((work.repos || []).map(r => r.org).filter(Boolean))]
+  return orgs.length ? orgs : (cfg.orgs?.length ? cfg.orgs : Object.keys(cfg.tracker || {}))
+}
+// The tracker one of a work's tickets is in (bin/trackers.mjs), from the org's tracker in rig.json.
+const routeTicket = (cfg, work, key) => trackerOfKey(cfg.tracker, key, workOrgs(cfg, work))
+// Whether a routed ticket can be told anything, saying why not when it cannot: a ticket no
+// tracker holds is one quiet line, a ticket rig cannot place is a warning.
+function tellable (key, route) {
+  if (route.kind === 'none') { step(`${key}: not told, ${route.reason}`); return false }
+  if (route.kind === 'unknown') { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); return false }
+  if (route.kind === 'ambiguous') { warn(`${key}: skipped, ${route.reason}`); return false }
+  return true
 }
 
 // The context doc header's two rendered facts.
@@ -1456,11 +1490,6 @@ function linkOrSay (spec) {
 
 // The context-doc line and the blank line above it, as lines to spread into a body.
 const contextDocLines = (id, link) => (link ? ['', `Context doc: ${contextDocRef(id)}`] : [])
-
-// Ticket keys: Jira `PROJ-42`, or GitHub `owner/repo#n`. Only the Jira shape is
-// safe in a branch name.
-const isJiraKey = k => /^[A-Z][A-Z0-9]+-\d+$/.test(k)
-const isGithubKey = k => /^[\w.-]+\/[\w.-]+#\d+$/.test(k)
 
 // Resolves an org's `tracker.<org>.fields` (rig.json, e.g. `{ assignee: "me", sprint:
 // "active", story_points: 3, components: ["Payments"] }`), merged with `--field
@@ -1573,6 +1602,8 @@ const ticketBody = (work, prose, { link }) => [
   '', `Opened by \`rig new ${work.id} --ticket\`.`,
 ].join('\n')
 
+const noLinearTeam = t => `tracker for ${t.org} is Linear but has no "team" in rig.json: the team's key, the prefix of its issue keys (ABC in ABC-123)`
+
 // Creates a ticket in the org's tracker, or previews it: `dryRun` prints what would be
 // created and returns null without calling out. GitHub: the issue is the ticket, the
 // context doc is the design (DESIGN.md §7.1) — a thin body, the brief's first paragraph,
@@ -1622,27 +1653,46 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
     return key
   }
 
+  // The whole brief, as Jira gets it: a Linear workspace's readers may have no access to the
+  // data root either.
+  if (t.kind === 'linear') {
+    if (!t.team) die(noLinearTeam(t))
+    if (fieldOverrides.length) warn('--field is ignored for a Linear tracker')
+    if (parent) warn('--parent is ignored for a Linear tracker')
+    const description = ticketBody(work, brief.trim() || summary, { link: true })
+    if (dryRun) {
+      say(`would create a Linear issue in team ${t.team}:`)
+      say(`  title        ${summary}`)
+      say('  description  (markdown, as sent):')
+      for (const line of description.split('\n')) say(line ? `    ${line}` : '')
+      return null
+    }
+    step(`creating Linear issue in team ${t.team}`)
+    const key = linear().createIssue({ team: t.team, title: summary, description })
+    ok(`ticket ${key}`)
+    return key
+  }
+
   die(`unknown tracker kind "${t.kind}" for ${t.org}`)
 }
 
-// On close, every ticket gets a comment with the PR links. GitHub tickets also close
-// when every PR is merged; Jira tickets never do — transitions stay with the agent
-// (Direction: KTLO alone needs two hops to reach "In Progress", which is org workflow,
-// not rig's). `states` covers every attached repo, missing worktrees included, and what it
-// *means* is `workState`'s to say (decision 62): a ticket left open and a `close` that
-// refused now answer for the same reason, instead of each deriving "merged" its own way.
-function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {}) {
+// On close, every ticket gets a comment with the PR links, in the tracker its org keeps
+// (`routeTicket`). GitHub tickets also close when every PR is merged; Jira and Linear tickets
+// never do: moving one is org workflow, not rig's. `states` covers every attached repo, missing
+// worktrees included, and what it *means* is `workState`'s to say (decision 62): a ticket left
+// open and a `close` that refused now answer for the same reason, instead of each deriving
+// "merged" its own way.
+function ticketWriteBack (cfg, work, states, { abandoned = false, stages = [] } = {}) {
   const keys = work.tickets || []
-  for (const k of keys) {
-    if (!isJiraKey(k) && !isGithubKey(k)) warn(`ticket "${k}" is neither PROJ-123 nor owner/repo#n — skipped`)
-  }
   // A ticket a slice also holds is left to `stageWriteBack`, which says why.
   const sliceKeys = new Set(stages.flatMap(st => st.tickets || []))
-  const githubKeys = keys.filter(k => isGithubKey(k) && !sliceKeys.has(k))
-  const jiraKeys = keys.filter(k => isJiraKey(k) && !sliceKeys.has(k))
+  const told = keys.filter(k => !sliceKeys.has(k))
+    .map(key => ({ key, route: routeTicket(cfg, work, key) }))
+    .filter(({ key, route }) => tellable(key, route))
+    .map(t => ({ ...t, tracker: trackerProviders()[t.route.kind] }))
   // A work that declined a ticket can still have slices that carry one, so the stages are
   // written back either way.
-  if (!keys.length) return stageWriteBack(work, stages, { abandoned })
+  if (!keys.length) return stageWriteBack(cfg, work, stages, { abandoned })
 
   // The same stack `close` refused on, so the comment that explains a forced close can name
   // the slice that never landed. Without it `workState` reached a second, kinder verdict here
@@ -1669,32 +1719,34 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
     ...(prs.length ? ['', ...prs] : []),
     ...contextDocLines(work.id, link),
   ].join('\n')
-  for (const key of githubKeys) {
-    const [repo, n] = key.split('#')
-    const notCommented = trackerFailure(() => github().commentIssue(repo, n, githubBody(linkOrSay(repo))))
+  for (const { key, tracker } of told.filter(t => t.tracker.closes)) {
+    const [repo] = key.split('#')
+    const notCommented = trackerFailure(() => tracker.comment(key, githubBody(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
     if (abandoned) { step(`commented on ${key} (left open: abandoned)`); continue }
     if (!merged) { step(`commented on ${key} (left open: ${reason})`); continue }
-    const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+    const notClosed = trackerFailure(() => tracker.close(key))
     if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
     else step(`closed ${key}`)
   }
 
-  const jiraBody = [
+  // A Jira or Linear reader may have no access to the data root, but the link is no leak
+  // there: neither is public the way a GitHub repo can be.
+  const projectBody = footer => [
     abandoned
       ? '`rig close --abandoned` ran. The work was stopped without finishing.'
       : `\`${ranCmd}\` ran.${overridden}${merged ? ' Every attached PR is merged.' : ` ${reason}`}`,
     ...(prs.length ? ['', ...prs] : []),
     ...contextDocLines(work.id, true),
-    '', 'rig does not transition Jira tickets — move this one yourself.',
+    '', footer,
   ].join('\n')
-  for (const key of jiraKeys) {
-    const notCommented = trackerFailure(() => jira().commentIssue(key, jiraBody))
+  for (const { key, route, tracker } of told.filter(t => !t.tracker.closes)) {
+    const notCommented = trackerFailure(() => tracker.comment(key, projectBody(tracker.footer), route))
     if (notCommented) warn(`${key}: could not comment (${notCommented})`)
     else step(`commented on ${key}`)
   }
 
-  stageWriteBack(work, stages, { abandoned, landing: { done: merged, reason, prs } })
+  stageWriteBack(cfg, work, stages, { abandoned, landing: { done: merged, reason, prs } })
 }
 
 // A stage's own tickets, told what became of the slice they were opened for.
@@ -1711,7 +1763,7 @@ function ticketWriteBack (work, states, { abandoned = false, stages = [] } = {})
 // only when every role would close it: each slice landed, and, for a work ticket, the work did
 // too (`landing`, the verdict `ticketWriteBack` reached). Otherwise the first thing that kept
 // it open is what the comment says.
-function stageWriteBack (work, stages, { abandoned, landing = null }) {
+function stageWriteBack (cfg, work, stages, { abandoned, landing = null }) {
   const slicesOf = new Map()
   for (const st of stages) {
     for (const key of st.tickets || []) {
@@ -1744,15 +1796,17 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
       ...contextDocLines(work.id, link),
     ].join('\n')
 
-    if (isJiraKey(key)) {
-      const notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
+    const route = routeTicket(cfg, work, key)
+    if (!tellable(key, route)) continue
+    const tracker = trackerProviders()[route.kind]
+    if (!tracker.closes) {
+      const notCommented = trackerFailure(() => tracker.comment(key, `${body(true)}\n\n${tracker.footer}`, route))
       if (notCommented) warn(`${key}: could not comment (${notCommented})`)
       else step(`commented on ${key} (stage ${names})`)
       continue
     }
-    if (!isGithubKey(key)) { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
-    const [repo, n] = key.split('#')
-    const notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
+    const [repo] = key.split('#')
+    const notCommented = trackerFailure(() => tracker.comment(key, body(linkOrSay(repo))))
     if (notCommented) { warn(`${key}: could not comment (${notCommented})`); continue }
     if (!closes) {
       const why = stuck?.prUnknown && !stuck.withdrawn ? `GitHub would not say whether stage ${stuck.branch} landed`
@@ -1760,7 +1814,7 @@ function stageWriteBack (work, stages, { abandoned, landing = null }) {
       step(`commented on ${key} (left open: ${why})`)
       continue
     }
-    const notClosed = trackerFailure(() => github().closeIssue(repo, n))
+    const notClosed = trackerFailure(() => tracker.close(key))
     if (notClosed) warn(`${key}: commented, but could not close (${notClosed})`)
     else step(`closed ${key} (stage ${names} landed)`)
   }
@@ -2066,17 +2120,23 @@ const commitAs = (subject, detail) =>
 
 const cmds = {}
 
-// `--tracker org=github:owner/repo,org2=jira:PROJ,org3=none` -> the rig.json shape.
+// `--tracker org=github:owner/repo,org2=jira:PROJ,org3=linear:ABC,org4=none` -> the rig.json
+// shape. A Linear team key is optional: without one, rig comments on and reads the org's
+// tickets but cannot open one.
 function parseTrackerFlag (spec) {
   const out = {}
   for (const part of spec.split(',').map(s => s.trim()).filter(Boolean)) {
-    const m = /^([^=:]+)=(github|jira|none)(?::(.+))?$/.exec(part)
-    if (!m) die(`--tracker: cannot read "${part}" (want org=github:owner/repo, org=jira:KEY, or org=none)`)
+    const m = /^([^=:]+)=(github|jira|linear|none)(?::(.+))?$/.exec(part)
+    if (!m) die(`--tracker: cannot read "${part}" (want org=github:owner/repo, org=jira:KEY, org=linear[:TEAM], or org=none)`)
     const [, org, kind, arg] = m
     if (kind === 'github' && !/^[\w.-]+\/[\w.-]+$/.test(arg || '')) die(`--tracker: ${org}=github needs :owner/repo`)
     if (kind === 'jira' && !/^[A-Z][A-Z0-9]+$/.test(arg || '')) die(`--tracker: ${org}=jira needs :PROJECTKEY (upper case, as in ticket keys)`)
+    if (kind === 'linear' && arg !== undefined && !/^[A-Z][A-Z0-9]+$/.test(arg)) die(`--tracker: ${org}=linear takes :TEAMKEY (upper case, as in issue keys)`)
     if (kind === 'none' && arg) die(`--tracker: ${org}=none takes no argument`)
-    out[org] = kind === 'github' ? { kind, repo: arg } : kind === 'jira' ? { kind, project: arg } : { kind }
+    out[org] = kind === 'github' ? { kind, repo: arg }
+      : kind === 'jira' ? { kind, project: arg }
+        : kind === 'linear' ? { kind, ...(arg ? { team: arg } : {}) }
+          : { kind }
   }
   return out
 }
@@ -2329,11 +2389,15 @@ cmds.init = ({ flags }) => {
   if (Object.values(cfg.tracker || {}).some(t => t.kind === 'jira') && !jira().present()) {
     warn('twg not found on PATH — Jira ticket creation, fetch and write-back need it')
   }
+  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'linear')) {
+    const key = linearKeyState()
+    if (!key.present) warn(`${key.problem || 'no Linear API key'}: Linear ticket creation, fetch and write-back need one (LINEAR_API_KEY, or rig.local.json's linear.keyFile)`)
+  }
 
   say('')
   if (!orgs.length) {
     say('Not set up yet: no orgs in rig.json. Run the setup interview — `rig prompt setup` —')
-    say('or `rig init --orgs a,b --tracker a=github:owner/repo,b=jira:KEY` directly.')
+    say('or `rig init --orgs a,b --tracker a=github:owner/repo,b=jira:KEY,c=linear:TEAM` directly.')
     say('')
   }
   const missing = orgs.filter(o => !effectiveIdentity(cfg, o).email)
@@ -2423,7 +2487,7 @@ cmds.new = ({ flags, positional }) => {
 
   const keys = (flags.key || '').toString().split(',').map(s => s.trim()).filter(Boolean)
   for (const k of keys) {
-    if (!isJiraKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
+    if (!isProjectKey(k) && !isGithubKey(k)) die(`--key "${k}" is neither PROJ-123 nor owner/repo#n`)
   }
   // The branch prefix is the release check's bump (ADR 0004), so a type it does not know is
   // refused here, when the branch is named, rather than on the pull request.
@@ -2440,7 +2504,7 @@ cmds.new = ({ flags, positional }) => {
   const parent = flags.parent
   if (parent !== undefined) {
     if (!flags.ticket) die('--parent only makes sense with --ticket')
-    if (typeof parent !== 'string' || !isJiraKey(parent)) {
+    if (typeof parent !== 'string' || !isProjectKey(parent)) {
       die(`--parent wants a Jira key like PROJ-123${typeof parent === 'string' ? ` — not "${parent}"` : ''}`)
     }
   }
@@ -2464,6 +2528,7 @@ cmds.new = ({ flags, positional }) => {
     if (Object.keys(t.fields || {}).some(isParent)) {
       die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
     }
+    if (t.kind === 'linear' && !t.team) die(noLinearTeam(t))
   }
   // The ticket decision must be explicit whenever it could matter (DESIGN direction:
   // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
@@ -2497,20 +2562,27 @@ cmds.new = ({ flags, positional }) => {
   const folder = workDir(cfg, id)
   if (exists(folder)) die(`${folder} already exists — pick another id`)
 
-  // A Jira `--key` needs no piped brief any more: rig fetches summary/description
-  // itself, used as a default wherever `--title`/stdin didn't already supply one.
+  // A Jira or Linear `--key` needs no piped brief: rig fetches its title and description from
+  // the tracker the org keeps, used wherever `--title`/stdin didn't already supply one. The
+  // work has no repos yet, so every org in the data root is asked which tracker holds it.
   let fetched = null
-  const jiraKey = keys.find(isJiraKey)
-  if (jiraKey && orgForJiraKey(cfg, jiraKey)) {
-    try { fetched = jira().getIssue(jiraKey) } catch (e) { warn(`could not fetch ${jiraKey} from Jira: ${e.message}`) }
+  const projectKey = keys.find(isProjectKey)
+  const route = projectKey ? trackerOfKey(cfg.tracker, projectKey, cfg.orgs || []) : null
+  if (route?.kind === 'ambiguous') warn(`${projectKey}: not fetched, ${route.reason}`)
+  const reader = route && trackerProviders()[route.kind]?.getIssue
+  if (reader) {
+    try { fetched = reader(projectKey, route) } catch (e) {
+      if (!(e instanceof TrackerError)) throw e
+      warn(`could not fetch ${projectKey} from ${trackerProviders()[route.kind].label}: ${e.message}`)
+    }
   }
   const title = flags.title || fetched?.title || ''
 
   const idKey = /^([A-Z][A-Z0-9]+-\d+)/.exec(id)?.[1] ?? ''
-  // Only a Jira-shaped key goes in the branch name. GitHub keys carry `#` and `/`, and the
+  // Only a PROJ-123 key goes in the branch name. GitHub keys carry `#` and `/`, and the
   // PR body names those instead: `Fixes` where its merge is the work landing (`closedByPr`),
   // `Tickets:` everywhere else.
-  const branchKey = keys.find(isJiraKey) || idKey
+  const branchKey = keys.find(isProjectKey) || idKey
   const branchSlug = flags.slug || slug(title || id.replace(/^[A-Z][A-Z0-9]+-\d+-?/, '') || id)
   const branch = flags.branch ||
     `${type}/${branchKey ? branchKey + '-' : ''}${branchSlug}`.replace(/-$/, '')
@@ -2902,7 +2974,7 @@ cmds.ticket = ({ flags, positional }) => {
     return correctTicket(cfg, work, flags.remove)
   }
   const key = positional[0] || die(`rig ticket wants a key\n${usageOf('ticket')}`)
-  if (!isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
+  if (!isProjectKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#n`)
   if (flags.replaces !== undefined) {
     if (flags.replaces === true) die('--replaces needs the key it replaces')
     if (flags.replaces === key) die(`${key} cannot replace itself`)
@@ -5011,7 +5083,7 @@ cmds.stage = ({ flags, positional }) => {
     // declared, and declaring and cutting at once is just both in one command.
     const declared = work.stages.find(s => s.branch === branch)
     const key = flags.key === true ? die('--key needs a ticket, PROJ-123 or owner/repo#7') : flags.key
-    if (key && !isJiraKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#7`)
+    if (key && !isProjectKey(key) && !isGithubKey(key)) die(`"${key}" is neither PROJ-123 nor owner/repo#7`)
     if (!declared) {
       const problem = stageBranchProblem(work, branch)
       if (problem) die(problem)
@@ -5990,7 +6062,7 @@ cmds.close = ({ flags }) => {
   work.closedAt = new Date().toISOString()
   if (abandoned) work.abandonedAt = work.closedAt
   saveWork(cfg, work)   // regenerates only if the folder outlived the delete, so it reads as stopped
-  ticketWriteBack(work, states, { abandoned, stages: stack })
+  ticketWriteBack(cfg, work, states, { abandoned, stages: stack })
   ok(`${abandoned ? 'abandoned' : 'closed'} ${id} — context doc kept at ${contextFile(id)}`)
   // The last call. `rig next` is where the correction is offered, because it runs while the
   // worktrees are still on disk and this command has just removed them: no rig command waits for
@@ -6231,24 +6303,24 @@ cmds.reopen = ({ flags, positional }) => {
   if (work.repos.length) restoreFolder(cfg, work, { setup: !!flags.setup })
   else fs.mkdirSync(workDir(cfg, id), { recursive: true })
   saveWork(cfg, work)
-  reopenWriteBack(work, stopped)
+  reopenWriteBack(cfg, work, stopped)
   ok(`reopened ${id} — it was ${stopped}`)
 }
 
 // Every ticket the work and its stages hold, told once that the close is undone. A comment and
 // nothing more: rig closed none of them for a work it reopens, and a stage's ticket closed
 // because its slice landed is still right to be closed.
-function reopenWriteBack (work, stopped) {
+function reopenWriteBack (cfg, work, stopped) {
   const keys = [...new Set([work.tickets || [], ...work.stages.map(s => s.tickets || [])].flat())]
   const opening = `Reopened — \`rig reopen\` ran. The work was ${stopped} and is open again.`
   const body = link => [opening, ...contextDocLines(work.id, link)].join('\n')
   for (const key of keys) {
-    let notCommented
-    if (isJiraKey(key)) notCommented = trackerFailure(() => jira().commentIssue(key, `${body(true)}\n\nrig does not transition Jira tickets — move this one yourself.`))
-    else if (isGithubKey(key)) {
-      const [repo, n] = key.split('#')
-      notCommented = trackerFailure(() => github().commentIssue(repo, n, body(linkOrSay(repo))))
-    } else { warn(`ticket "${key}" is neither PROJ-123 nor owner/repo#n — skipped`); continue }
+    const route = routeTicket(cfg, work, key)
+    if (!tellable(key, route)) continue
+    const tracker = trackerProviders()[route.kind]
+    const notCommented = tracker.closes
+      ? trackerFailure(() => tracker.comment(key, body(linkOrSay(key.split('#')[0]))))
+      : trackerFailure(() => tracker.comment(key, `${body(true)}\n\n${tracker.footer}`, route))
     if (notCommented) warn(`${key}: could not comment (${notCommented})`)
     else step(`commented on ${key}`)
   }
@@ -6978,6 +7050,8 @@ function doctorSnapshot () {
   // Needed if *any* root tracks in Jira: twg is one tool on one machine, so the question is
   // about the installation and not about whichever knowledge happens to be in hand.
   const jiraTracked = roots.some(r => r.orgs.some(o => o.tracker?.kind === 'jira'))
+  // The same for Linear, whose one need is the API key the machine half points at.
+  const linearTracked = roots.some(r => r.orgs.some(o => o.tracker?.kind === 'linear'))
 
   return {
     setUp: true,
@@ -6998,6 +7072,7 @@ function doctorSnapshot () {
     freshness: doctorFreshness(cfg, tool),
     gh: github().auth(),
     jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
+    linear: linearTracked ? { needed: true, ...linearKeyState() } : { needed: false, present: false },
     // Skipped rather than attempted without git: doctor is the command you run *because*
     // something is wrong, so it has to reach the end and report everything it can.
     gitConfig: hasGit
@@ -7047,11 +7122,12 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --data-repo owner/name      join that private data repo, or create it if absent
        --name <name>               what to call this data root; it becomes the current one
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
-       [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY] -> rig.json (the data root)
+       [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY,c=linear:TEAM,d=none] -> rig.json (the data root)
   rig new <id> --title "..."      create a work (reads a brief on stdin)
        --key K | --ticket [--org o] [--field k=v,...] [--parent KEY] [--dry-run] | --no-ticket
        one of the three is required whenever a tracker is configured (the ticket
-       decision must be explicit); --key PROJ-42 fetches its brief from Jira;
+       decision must be explicit); --key PROJ-42 fetches its brief from the
+       org's Jira or Linear;
        --ticket creates in the org's tracker (rig.json); --parent PROJ-7 files a
        Jira ticket under that epic; --dry-run previews and creates nothing;
        --no-ticket records a declined ticket
@@ -7377,6 +7453,8 @@ function invocationOf ({
     machine,
     github: adapterResolver('RIG_FAKE_GITHUB', githubViaGh, githubInMemory),
     jira: adapterResolver('RIG_FAKE_TWG', twgViaCli, twgInMemory),
+    linear: adapterResolver('RIG_FAKE_LINEAR', linearViaNode, linearInMemory),
+    providers: null,
     location: null,
     requestedData: null,
     requestedWork: null,
@@ -7422,8 +7500,8 @@ export function run (argv, io = {}) {
 // surface (decision 55), which is neither pure nor cheap, since it reads every record and may
 // ask GitHub about every branch. Nothing below the guard runs on import.
 export {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isProjectKey, isGithubKey, slug, trackerFor, BOOL_FLAGS, RigError, repoOfRemote, webUrlOf,
+  anyTrackerConfigured, ticketsLabel,
   activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, baseLabel, baseMoved, sinceFlag, resolveJiraFields,
   spawnDefaults, refreshSpawn, refreshArgv, effectiveIdentity, parseDf, bytesFree, freeSpace, realGitFor, programPath, gitForWindowsSh,
   directionSection, directionBody, directionIsTodo, pullRequestSaid,

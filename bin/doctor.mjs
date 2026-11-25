@@ -52,7 +52,7 @@ const check = (label, good, detail = {}) =>
     : warn(`${label}${detail.bad ? ` — ${detail.bad}` : ''}`, { counts: detail.counts ?? true })
 
 const trackerLabel = t => t?.kind
-  ? `${t.kind}${t.repo ? ' ' + t.repo : ''}${t.project ? ' ' + t.project : ''}`
+  ? `${t.kind}${t.repo ? ' ' + t.repo : ''}${t.project ? ' ' + t.project : ''}${t.team ? ' ' + t.team : ''}`
   : 'none — `rig new --ticket` unavailable (rig.json)'
 
 // One data root, checked in full: where it is, what git makes of it, the org half it carries
@@ -197,6 +197,9 @@ function rootFindings (root) {
 //   gh                'ok' | 'missing' | anything else for a gh that is not authenticated
 //   jira              { needed, present } — needed when any root has an org tracking in
 //                     Jira, since twg is one tool on one machine
+//   linear            { needed, present, problem }: the same for Linear, `present` being
+//                     whether this machine has a Linear API key, `problem` why not when
+//                     the machine file names a key file rig cannot read
 //   gitConfig         { longpaths, symlinks } as git answered them, or null without git
 //   workRoot          { path, exists, entries } — `entries` is what is directly under it,
 //                     minus the two things rig keeps there itself
@@ -266,6 +269,10 @@ export function doctorFindings (snap = {}) {
   if (snap.jira?.needed) {
     out.push(check('twg present', snap.jira.present,
       { bad: 'Jira ticket creation, fetch and write-back will not work' }))
+  }
+  if (snap.linear?.needed) {
+    out.push(check('Linear API key', snap.linear.present,
+      { bad: snap.linear.problem || 'Linear ticket creation, fetch and write-back will not work (LINEAR_API_KEY, or rig.local.json\'s linear.keyFile)' }))
   }
 
   // Skipped rather than attempted without git, like every git-dependent check below it.

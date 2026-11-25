@@ -11,7 +11,7 @@ import path from 'node:path'
 import { strip } from './harness.mjs'
 import { billingInstall } from './billing-install.mjs'
 
-const { dataRoot, workRoot, rig, gitMust, commitWork, github, setGithub, squashMergeAndDeleteBranch, seedIssue, seedJiraIssue, jiraIssue, seedPr, issueNumbered, worktree, record, cleanup } = billingInstall('rig-reopen-')
+const { dataRoot, workRoot, rig, gitMust, commitWork, github, setGithub, squashMergeAndDeleteBranch, seedIssue, seedJiraIssue, jiraIssue, withTracker, seedPr, issueNumbered, worktree, record, cleanup } = billingInstall('rig-reopen-')
 
 after(cleanup)
 
@@ -217,7 +217,7 @@ test('a ticket the work and a stage both hold is told once, and a Jira one is to
   assert.equal(rig(['close', '--abandoned', '--work', 'told']).code, 0)
   const before = issueNumbered(14).comments.length
 
-  assert.equal(rig(['reopen', 'told']).code, 0)
+  assert.equal(withTracker({ kind: 'jira', project: 'PROJ' }, () => rig(['reopen', 'told'])).code, 0)
   const jira = jiraIssue('PROJ-7').comments.at(-1)
   assert.deepEqual([issueNumbered(14).comments.length - before, /move this one yourself/.test(jira)], [1, true])
 })

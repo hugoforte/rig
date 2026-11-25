@@ -24,15 +24,16 @@ import { DEFAULT_FRESHNESS } from './freshness.mjs'
 // is made here and nowhere else. `freshness` is in both on purpose: the policy travels in
 // the org half, and a machine that wants to handle updates its own way overrides one key
 // locally rather than the whole object.
-const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness', 'sessions', 'transcripts', 'transcriptSession']
+const MACHINE_KEYS = ['dataRoot', 'dataRoots', 'current', 'workRoot', 'mirrorRoot', 'identities', 'secrets', 'freshness', 'sessions', 'transcripts', 'transcriptSession', 'linear']
 const ORG_KEYS = ['orgs', 'tracker', 'writtenBy', 'freshness', 'personal']
 // The keys the org half owns outright. A copy in the machine file — `orgs` and `tracker`
 // were both written there by older versions of `init` — is dropped before the merge rather
 // than allowed to shadow the committed answer, and `rig doctor` says so.
 const ORG_ONLY = ORG_KEYS.filter(k => !MACHINE_KEYS.includes(k))
 // The keys only the machine half may set, so a copy committed into the org half is never read:
-// where one machine's agent host keeps its sessions is no other machine's business.
-const MACHINE_ONLY = ['sessions', 'transcripts', 'transcriptSession']
+// where one machine's agent host keeps its sessions is no other machine's business, and nor is
+// where it keeps its Linear API key (`linear.keyFile`).
+const MACHINE_ONLY = ['sessions', 'transcripts', 'transcriptSession', 'linear']
 
 // Relocates the machine half without relocating the tool. rig is driven as a subprocess, so
 // an environment variable is the way a test — or a second installation sharing one checkout
@@ -328,6 +329,8 @@ export const readOrg = location => readJsonFile(location.orgFile)
 // The two writers. `edit` is handed the file as it is — `null` when it does not exist yet,
 // which is the distinction that decides whether a stamp is written — and returns what
 // should be there.
+// The machine half as it sits on disk, for a key read before, or without, a data root in hand.
+export const readMachine = location => readJsonFile(location.localFile)
 export const writeMachine = (location, edit) => writeJsonFile(location.localFile, edit(readJsonFile(location.localFile)))
 export const writeOrg = (location, edit) => writeJsonFile(location.orgFile, edit(readJsonFile(location.orgFile)))
 

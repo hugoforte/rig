@@ -126,6 +126,9 @@ prompt while rig itself stays single-shot (DESIGN.md decision 13).
   `projectComponents`, takes no `-o` and passes the REST answer through unwrapped.
 - Org resolution for a Jira fetch (`rig new --key KTLO-42`) is by project-prefix match
   against `rig.json`'s configured orgs (`orgForJiraKey`); an unconfigured project is
-  silently not fetched (the old piped-brief flow still works). `--ticket`'s org
+  silently not fetched (the old piped-brief flow still works). Superseded by DESIGN.md
+  decision 232: `orgForJiraKey` is gone, and a `PROJ-123` key is fetched and told in the
+  tracker its org keeps (`trackerOfKey` in `bin/trackers.mjs`), so twg is reached only for
+  an org that tracks in Jira. `--ticket`'s org
   resolution is unchanged from PR 1's `trackerFor` — explicit `--org`, else the only
   live tracker, else a refusal naming `--org`.
