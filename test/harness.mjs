@@ -21,10 +21,10 @@
 //   put on disk: `rig()` below then calls `bin/rig.mjs`'s `run(argv, io)` here rather than
 //   starting a process for it.
 //
-// GitHub and Jira are the in-memory adapters selected by `RIG_FAKE_GITHUB` and
-// `RIG_FAKE_TWG`, each naming a JSON state file the tool reads on start and writes back on
-// exit. Pass `github`/`twg` to seed one; read the file back to see what the tool did. The
-// real `gh` and `twg` are never spawned; test/page-publish-gh.test.mjs, which is about the spawn,
+// GitHub, Jira and Linear are the in-memory adapters selected by `RIG_FAKE_GITHUB`,
+// `RIG_FAKE_TWG` and `RIG_FAKE_LINEAR`, each naming a JSON state file the tool reads on start
+// and writes back on exit. Pass `github`/`twg`/`linear` to seed one; read the file back to see
+// what the tool did. The real `gh` and `twg` are never spawned, and Linear's API is never called; test/page-publish-gh.test.mjs, which is about the spawn,
 // drops the in-memory GitHub and puts a stand-in `gh` first on PATH.
 //
 // Below `makeInstall` is what drives an installation through a *sequence* rather than one
@@ -74,6 +74,7 @@ function buildInstall (tmp, {
   localConfig = false,
   github,
   twg,
+  linear,
   remotes = false,
   inProcess = false,
 }) {
@@ -125,7 +126,7 @@ function buildInstall (tmp, {
     copyTool(install)
   }
 
-  let localConfigFile, githubStateFile, twgStateFile, remotesDir
+  let localConfigFile, githubStateFile, twgStateFile, linearStateFile, remotesDir
   if (localConfig) {
     localConfigFile = path.join(tmp, 'rig.local.json')
     env.RIG_LOCAL_CONFIG = localConfigFile
@@ -139,6 +140,11 @@ function buildInstall (tmp, {
     twgStateFile = path.join(tmp, 'twg.json')
     fs.writeFileSync(twgStateFile, JSON.stringify(twg))
     env.RIG_FAKE_TWG = twgStateFile
+  }
+  if (linear) {
+    linearStateFile = path.join(tmp, 'linear.json')
+    fs.writeFileSync(linearStateFile, JSON.stringify(linear))
+    env.RIG_FAKE_LINEAR = linearStateFile
   }
   if (remotes) {
     remotesDir = path.join(tmp, 'remotes')
@@ -206,7 +212,7 @@ function buildInstall (tmp, {
 
   return {
     tmp, install, origin, dataRoot, workRoot,
-    localConfig: localConfigFile, githubStateFile, twgStateFile, remotesDir,
+    localConfig: localConfigFile, githubStateFile, twgStateFile, linearStateFile, remotesDir,
     env, rig, git, gitMust, cleanup,
   }
 }

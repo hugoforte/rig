@@ -39,7 +39,10 @@ its tree is one `git add` from a leak. `doctor` reports that layout as not set u
 Propose the ones `gh` can see that look like work.
 
 **C. Tracker, per org** — *create and local only.* GitHub Issues (`owner/repo` that holds
-them), Jira (project key, upper case; rig reaches Jira through `twg`, which must be on PATH), or none.
+them), Jira (project key, upper case; rig reaches Jira through `twg`, which must be on PATH),
+Linear (team key, upper case, the prefix of its issue keys; rig reaches Linear with a personal API
+key, from `LINEAR_API_KEY` or the dotenv file `rig.local.json`'s `linear.keyFile` names), or none.
+Never ask for a Linear key in chat: say where it goes and let the user put it there.
 
 **D. Identity** — every path. The commit email for org repos, per machine. A personal org
 keeps the global default.

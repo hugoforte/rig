@@ -58,6 +58,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Design agreed with the user | ask whether the PRs get an adversarial review, then `rig save -m "design agreed" --designed --adversarial` or `--no-adversarial` |
 | The work's title turned out wrong | `rig save --title "…"` |
 | A ticket moved, or was recorded by mistake | `rig ticket <new> --replaces <old>`, `rig ticket --remove <key>` |
+| A ticket went to the wrong tracker, or was not told: the org's tracker (GitHub, Jira, Linear or none) decides, not the key | `rig doctor` names each org's tracker; `rig prompt setup` changes one |
 | What did this work teach | the `rig-learn` skill, then `rig save -m "lessons reviewed" --learned` |
 | What do we keep struggling with, across works; did last month's fixes hold | the `rig-retro` skill |
 | Every PR merged: what changed for someone, and why that is good | `rig save --outcome '…'`; the `rig-learn` skill drafts it with the lessons, or the `rig-digest` skill once they are reviewed |

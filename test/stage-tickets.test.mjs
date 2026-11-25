@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { billingInstall } from './billing-install.mjs'
 
-const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, seedPr, withVisibility, worktree, record, issueNumbered, github, setGithub, cleanup } = billingInstall('rig-stage-tickets-')
+const { rig, gitMust, commitWork, seedIssue, seedJiraIssue, jiraIssue, withTracker, seedPr, withVisibility, worktree, record, issueNumbered, github, setGithub, cleanup } = billingInstall('rig-stage-tickets-')
 
 after(cleanup)
 
@@ -287,7 +287,7 @@ test('a withdrawn slice is what a ticket two slices hold is told stays open for 
 
 test('a Jira ticket that is the work\'s and a slice\'s is told once too, and never moved (#229)', () => {
   bothRoles({ id: 'jira-both', jira: 'PROJ-80', stagePr: 81, workPr: { number: 82, ...MERGED } })
-  const c = rig(['close', '--work', 'jira-both'])
+  const c = withTracker({ kind: 'jira', project: 'PROJ' }, () => rig(['close', '--work', 'jira-both']))
   assert.equal(c.code, 0, c.out)
   assert.equal(c.out.match(/PROJ-80/g)?.length, 1, c.out)
   const { comments } = jiraIssue('PROJ-80')

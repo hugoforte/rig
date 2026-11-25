@@ -137,12 +137,23 @@ export function billingInstall (prefix) {
     try { return fn() } finally { setVisibility(spec, was) }
   }
 
+  // acme's tracker in rig.json for the length of `fn`. A ticket is told in the tracker its org
+  // keeps, so a test of what a Jira ticket is told gives acme one, and every other test keeps
+  // `none` and its freedom from the ticket decision.
+  const withTracker = (tracker, fn) => {
+    const file = path.join(dataRoot, 'rig.json')
+    const was = fs.readFileSync(file, 'utf8')
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(was), tracker: { acme: tracker } }, null, 2))
+    try { return fn() } finally { fs.writeFileSync(file, was) }
+  }
+
   return {
     ...m,
     bare,
     publish,
     jiraIssue,
     seedJiraIssue,
+    withTracker,
     setVisibility,
     withVisibility,
     github,

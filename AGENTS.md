@@ -46,8 +46,8 @@ one of `--key`, `--ticket`, or `--no-ticket` — the ticket decision must be exp
 rig new PROJ-42-refund-double-charge --title "Refunds double-charge on retry" --key PROJ-42
 ```
 
-Already have a key? A GitHub key (`owner/repo#7`) still needs its brief piped in; a Jira
-key (`PROJ-42`) rig fetches the summary and description for itself — no pipe needed:
+Already have a key? A GitHub key (`owner/repo#7`) still needs its brief piped in; a Jira or
+Linear key (`PROJ-42`) rig fetches the summary and description for itself, so no pipe is needed:
 
 ```bash
 <your github issue fetch> | rig new <id> --title "..." --key owner/repo#7
@@ -70,8 +70,18 @@ create alike (DESIGN.md decisions 145–146).
 
 No ticket wanted at all? `rig new <id> --title "..." --no-ticket` records the decision —
 `Tickets: none (declined)`, not a silent empty list. On `rig close`, every ticket gets a
-comment with the PR links; GitHub tickets also close when every PR is merged. Jira tickets
-never auto-transition — that stays with you (`docs/adr/0001-jira-via-twg.md`).
+comment with the PR links; GitHub tickets also close when every PR is merged. Jira and Linear
+tickets never auto-transition: that stays with you (`docs/adr/0001-jira-via-twg.md`).
+
+**The org's tracker says where a ticket is told, never the key's shape.** `rig.json` gives each
+org a tracker: `github` (`repo`), `jira` (`project`, reached through `twg`), `linear` (`team`,
+reached through Linear's GraphQL API with a personal API key), or `none`. A `PROJ-42` key is a
+Jira key and a Linear key alike, so it goes to the org whose `project` or `team` claims its
+prefix, else to the one kind of tracker the work's orgs keep; two kinds that could hold it are
+warned about, not guessed between. An `owner/repo#7` key names its repo, so it is always
+GitHub's. A ticket whose orgs track in `none` is passed over in one line, and nothing is sent
+(DESIGN.md decision 232). The Linear key comes from `LINEAR_API_KEY`, or the dotenv file
+`rig.local.json`'s `linear.keyFile` names; never ask for one in chat, and never print it.
 
 A key the record holds can turn out wrong: an issue transferred to another repo, or deleted and
 opened again, has a new number. Correct it in the record rather than by hand:

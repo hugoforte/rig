@@ -6,8 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  parseArgs, parseFrontmatter, parseTrackerFlag, isJiraKey, isGithubKey, slug, trackerFor, RigError,
-  anyTrackerConfigured, orgForJiraKey, ticketsLabel,
+  parseArgs, parseFrontmatter, parseTrackerFlag, isProjectKey, isGithubKey, slug, trackerFor, RigError,
+  anyTrackerConfigured, ticketsLabel,
   spawnDefaults, refreshSpawn, refreshArgv, parseDf, bytesFree, freeSpace, realGitFor, programPath, gitForWindowsSh, activityAt, relativeAge, prTiming, terminalPr, branchFirstCommitAt, sinceFlag,
   baseLabel, baseMoved, directionSection, directionBody, directionIsTodo, pullRequestSaid, run,
   spawnFailure, repoOfRemote, webUrlOf,
@@ -104,10 +104,10 @@ test('parseFrontmatter: no frontmatter means empty data and the whole text as bo
   assert.equal(body, 'just text')
 })
 
-test('isJiraKey: upper-case PROJECT-number only', () => {
-  assert.ok(isJiraKey('PROJ-42'))
-  assert.ok(!isJiraKey('proj-42'))
-  assert.ok(!isJiraKey('PROJ-42-slug'))
+test('isProjectKey: upper-case PROJECT-number only, the shape Jira and Linear keys share', () => {
+  assert.ok(isProjectKey('PROJ-42'))
+  assert.ok(!isProjectKey('proj-42'))
+  assert.ok(!isProjectKey('PROJ-42-slug'))
 })
 
 test('isGithubKey: owner/repo#number only', () => {
@@ -122,15 +122,17 @@ test('slug: lower-case, dashed, bounded', () => {
 })
 
 test('parseTrackerFlag: every kind, merged into one object', () => {
-  assert.deepEqual(parseTrackerFlag('a=github:acme/platform,b=jira:PROJ,c=none'), {
+  assert.deepEqual(parseTrackerFlag('a=github:acme/platform,b=jira:PROJ,c=none,d=linear:ABC,e=linear'), {
     a: { kind: 'github', repo: 'acme/platform' },
     b: { kind: 'jira', project: 'PROJ' },
     c: { kind: 'none' },
+    d: { kind: 'linear', team: 'ABC' },
+    e: { kind: 'linear' },
   })
 })
 
 test('parseTrackerFlag: rejects bad shapes with a RigError', () => {
-  for (const bad of ['a=github', 'a=github:noslash', 'a=jira:proj', 'a=none:junk', 'a=svn:x', 'nonsense']) {
+  for (const bad of ['a=github', 'a=github:noslash', 'a=jira:proj', 'a=linear:abc', 'a=none:junk', 'a=svn:x', 'nonsense']) {
     assert.throws(() => parseTrackerFlag(bad), RigError, bad)
   }
 })
@@ -157,18 +159,6 @@ test('anyTrackerConfigured: true when any org has a live tracker, false for none
   assert.equal(anyTrackerConfigured({ tracker: { a: { kind: 'none' } } }), false)
   assert.equal(anyTrackerConfigured({ tracker: {} }), false)
   assert.equal(anyTrackerConfigured({}), false)
-})
-
-test('orgForJiraKey: the org whose tracker project matches the key\'s prefix', () => {
-  const cfg = { tracker: { linenmaster: { kind: 'jira', project: 'KTLO' }, acme: { kind: 'github', repo: 'x/y' } } }
-  assert.equal(orgForJiraKey(cfg, 'KTLO-42'), 'linenmaster')
-  assert.equal(orgForJiraKey(cfg, 'OTHER-1'), null)
-  assert.equal(orgForJiraKey(cfg, 'acme/platform#3'), null, 'not a Jira key at all')
-})
-
-test('orgForJiraKey: null (not a guess) when two orgs claim the same project', () => {
-  const cfg = { tracker: { a: { kind: 'jira', project: 'KTLO' }, b: { kind: 'jira', project: 'KTLO' } } }
-  assert.equal(orgForJiraKey(cfg, 'KTLO-1'), null)
 })
 
 test('ticketsLabel: keys joined, declined, or the placeholder', () => {
