@@ -4,7 +4,9 @@
 // CLI tests. The answers below are shaped as Linear's API documents them; no test calls Linear.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { linearViaApi, linearInMemory, linearApiKey, postViaNode, LINEAR_API } from '../bin/linear.mjs'
+import { spawn, spawnSync } from 'node:child_process'
+import path from 'node:path'
+import { linearViaApi, linearInMemory, linearApiKey, linearKeyFile, postViaNode, LINEAR_API } from '../bin/linear.mjs'
 import { TrackerError } from '../bin/errors.mjs'
 
 const KEY = 'lin_api_test_not_a_real_key'
@@ -156,6 +158,83 @@ test('linearApiKey: no key anywhere, or a placeholder still in the file, is no k
 test('linearApiKey: a key file that is named and missing fails, naming the file', () => {
   const missing = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e }
   assert.throws(() => linearApiKey({ env: {}, keyFile: '/somewhere/.secrets.env', readFile: missing }), /linear\.keyFile names \/somewhere\/\.secrets\.env, which does not exist/)
+})
+
+test('linear adapter: a key no HTTP header can carry fails before anything is sent, and the key is not repeated', () => {
+  const key = 'lin_api_first_line\nsecond_line'
+  const { calls, linear } = canned(() => ({}), { apiKey: key })
+  assert.throws(() => linear.getIssue('ABC-1'), e => {
+    assert.match(e.message, /a character no HTTP header can carry/)
+    assert.ok(!e.message.includes('lin_api_first_line'))
+    return true
+  })
+  assert.equal(calls.length, 0)
+})
+
+test('linear adapter: a transport error that repeats the key has the key taken out', () => {
+  const { linear } = canned(() => ({ error: `Headers.append: "${KEY}" is an invalid header value.` }))
+  assert.throws(() => linear.getIssue('ABC-1'), e => {
+    assert.ok(!e.message.includes(KEY), e.message)
+    assert.match(e.message, /could not reach Linear \(Headers\.append: "<the API key>" is an invalid header value\.\)/)
+    return true
+  })
+})
+
+test('linear adapter: Linear\'s authentication error, on a 400, is said as a refused key', () => {
+  const { linear } = canned(() => ({ status: 400, body: { errors: [{ message: 'Authentication required, not authenticated', extensions: { code: 'AUTHENTICATION_ERROR' } }] } }))
+  assert.throws(() => linear.getIssue('ABC-1'), /Linear refused the API key \(HTTP 400\)/)
+})
+
+test('linear adapter: a create that times out, or meets a server error, says the issue may exist', () => {
+  for (const answer of [{ error: 'The operation was aborted due to timeout' }, { status: 502, text: 'Bad gateway' }]) {
+    const { linear } = canned(p => /issueCreate/.test(p.query) ? answer : { teams: { nodes: [{ id: 't' }] } })
+    assert.throws(() => linear.createIssue({ team: 'ABC', title: 'Slow one', description: 'd' }), /may have been created.*"Slow one"/s)
+  }
+})
+
+test('linearApiKey: a key file that cannot be read is a Linear failure naming the file, not a crash', () => {
+  const isDir = () => { const e = new Error('EISDIR: illegal operation on a directory'); e.code = 'EISDIR'; throw e }
+  assert.throws(() => linearApiKey({ env: {}, keyFile: '/a/folder', readFile: isDir }), e => {
+    assert.ok(e instanceof TrackerError)
+    assert.match(e.message, /could not read \/a\/folder, which linear\.keyFile names \(EISDIR\)/)
+    return true
+  })
+})
+
+test('linearKeyFile: ~ is the home folder, and a relative path is read against the machine file\'s folder', () => {
+  const home = path.resolve('/home/someone')
+  const dir = path.resolve('/opt/rig')
+  assert.equal(linearKeyFile('~/.agent-secrets/rig/.secrets.env', { home, dir }), path.join(home, '.agent-secrets/rig/.secrets.env'))
+  assert.equal(linearKeyFile('.secrets.env', { home, dir }), path.join(dir, '.secrets.env'))
+  assert.equal(linearKeyFile(path.resolve('/abs/key.env'), { home, dir }), path.resolve('/abs/key.env'))
+  assert.equal(linearKeyFile(undefined, { home, dir }), null)
+  assert.equal(linearKeyFile('', { home, dir }), null)
+})
+
+// The one test of the child itself: a real node posting to a real (local) server, which runs in a
+// process of its own because the post blocks this one.
+test('postViaNode: the child posts the payload with the key as its Authorization header', async () => {
+  const server = spawn(process.execPath, ['-e', `
+    const http = require('node:http')
+    const s = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', c => { body += c })
+      req.on('end', () => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { seen: { auth: req.headers.authorization, method: req.method, body: JSON.parse(body) } } })) })
+    })
+    s.listen(0, '127.0.0.1', () => console.log(s.address().port))
+  `], { stdio: ['ignore', 'pipe', 'inherit'] })
+  try {
+    const port = await new Promise((resolve, reject) => {
+      server.stdout.once('data', d => resolve(String(d).trim()))
+      server.once('exit', code => reject(new Error(`server exited ${code}`)))
+    })
+    const exec = (args, opts) => spawnSync(process.execPath, args, { encoding: 'utf8', ...opts, env: { ...process.env, ...opts.env } })
+    const answer = postViaNode(exec, `http://127.0.0.1:${port}/graphql`)({ query: 'q', variables: { id: 'ABC-1 ünïcode' } }, KEY)
+    assert.equal(answer.status, 200)
+    assert.deepEqual(JSON.parse(answer.text).data.seen, { auth: KEY, method: 'POST', body: { query: 'q', variables: { id: 'ABC-1 ünïcode' } } })
+  } finally {
+    server.kill()
+  }
 })
 
 test('in-memory adapter: getIssue, commentIssue and createIssue read and mutate canned issues', () => {

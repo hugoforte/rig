@@ -11,6 +11,7 @@
 // rig is synchronous throughout, and `fetch` is not, so a request is posted by a node child
 // (`postViaNode`): the query goes down its stdin and the key in its environment, so neither
 // reaches a command line that a process list would show.
+import path from 'node:path'
 import { TrackerError } from './errors.mjs'
 
 export class LinearError extends TrackerError {}
@@ -21,9 +22,16 @@ export const LINEAR_API = 'https://api.linear.app/graphql'
 
 const NO_KEY = 'no Linear API key: set LINEAR_API_KEY, or name a file holding it in rig.local.json\'s linear.keyFile'
 
+// The file `linear.keyFile` names, as a path: `~` is the home folder, and a relative path is
+// read against `dir`, the machine file's folder, as the machine file's other paths are.
+export function linearKeyFile (named, { home, dir }) {
+  if (typeof named !== 'string' || !named) return null
+  return path.resolve(dir, named.replace(/^~(?=$|[\\/])/, home))
+}
+
 // The key, from the run's environment or else the dotenv file the machine half names. A file
-// still holding a placeholder, or no LINEAR_API_KEY line, is no key; a file named and missing
-// is a mistake in the machine file, and said as one.
+// still holding a placeholder, or no LINEAR_API_KEY line, is no key; a file named that cannot be
+// read is a mistake in the machine file, and said as one.
 export function linearApiKey ({ env = {}, keyFile, readFile } = {}) {
   const fromEnv = (env.LINEAR_API_KEY || '').trim()
   if (fromEnv) return fromEnv
@@ -31,7 +39,7 @@ export function linearApiKey ({ env = {}, keyFile, readFile } = {}) {
   let text
   try { text = readFile(keyFile) } catch (e) {
     if (e.code === 'ENOENT') fail(`rig.local.json's linear.keyFile names ${keyFile}, which does not exist`)
-    throw e
+    fail(`could not read ${keyFile}, which linear.keyFile names (${e.code || e.message})`)
   }
   for (const line of text.split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?LINEAR_API_KEY\s*=\s*(.*?)\s*$/.exec(line)
@@ -42,14 +50,14 @@ export function linearApiKey ({ env = {}, keyFile, readFile } = {}) {
   return null
 }
 
-// The child that posts one request: it reads the payload from stdin, the key from its
+// The child that posts one request to `url`: it reads the payload from stdin, the key from its
 // environment, and answers `{ status, text }` or `{ error }` as one line of JSON.
-const POST_SCRIPT = `
+const postScript = url => `
 const chunks = []
 for await (const c of process.stdin) chunks.push(c)
 let answer
 try {
-  const r = await fetch(${JSON.stringify(LINEAR_API)}, {
+  const r = await fetch(${JSON.stringify(url)}, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: process.env.RIG_LINEAR_API_KEY },
     body: Buffer.concat(chunks).toString('utf8'),
@@ -60,10 +68,12 @@ try {
 process.stdout.write(JSON.stringify(answer))
 `
 
-// A `post(payload, key)` over `exec`, which is spawnSync-shaped and runs node.
-export function postViaNode (exec) {
+// A `post(payload, key)` over `exec`, which is spawnSync-shaped and runs node. `url` is Linear's
+// endpoint; a test names a local server instead.
+export function postViaNode (exec, url = LINEAR_API) {
+  const script = postScript(url)
   return (payload, key) => {
-    const r = exec(['--input-type=module', '-e', POST_SCRIPT], { input: JSON.stringify(payload), env: { RIG_LINEAR_API_KEY: key }, timeout: 45000 })
+    const r = exec(['--input-type=module', '-e', script], { input: JSON.stringify(payload), env: { RIG_LINEAR_API_KEY: key }, timeout: 45000 })
     if (r.error) return { error: r.error.message }
     try { return JSON.parse(r.stdout) } catch { return { error: firstLine(r.stderr) || `node exited ${r.status} with no answer` } }
   }
@@ -77,14 +87,25 @@ const COMMENT = 'mutation Comment($input: CommentCreateInput!) { commentCreate(i
 // `post` answers one request; `apiKey` is asked at each call, so a key added mid-run is used and
 // a run that never speaks to Linear never reads one.
 export function linearViaApi ({ post, apiKey }) {
-  const request = (query, variables) => {
+  // `onLost` is said instead of the failure when the request may have taken effect without rig
+  // hearing so: a timeout, or a server error after the request was sent.
+  const request = (query, variables, { onLost } = {}) => {
     const key = apiKey()
     if (!key) fail(NO_KEY)
+    // A header value is printable ASCII on one line; fetch's own refusal of one repeats it.
+    if (!/^[\x21-\x7e]+$/.test(key)) fail('the Linear API key has a character no HTTP header can carry, such as a line break or a space: store it on one line')
     const r = post({ query, variables }, key)
-    if (r.error) fail(`could not reach Linear (${r.error})`)
-    if (r.status === 401 || r.status === 403) fail(`Linear refused the API key (HTTP ${r.status}); make a new one and store it where linear.keyFile points`)
-    let body
-    try { body = JSON.parse(r.text) } catch { fail(`Linear answered HTTP ${r.status} with no JSON: ${firstLine(r.text)}`) }
+    if (r.error) {
+      if (onLost) onLost()
+      fail(`could not reach Linear (${String(r.error).split(key).join('<the API key>')})`)
+    }
+    let body = null
+    try { body = JSON.parse(r.text) } catch {}
+    const refused = r.status === 401 || r.status === 403 ||
+      body?.errors?.some(e => /AUTHENTICATION/i.test(e.extensions?.code || '') || /authentication/i.test(e.extensions?.type || ''))
+    if (refused) fail(`Linear refused the API key (HTTP ${r.status}); make a new one and store it where linear.keyFile points`)
+    if (r.status >= 500 && onLost) onLost()
+    if (!body) fail(`Linear answered HTTP ${r.status} with no JSON: ${firstLine(r.text)}`)
     if (body.errors?.length) fail(`Linear: ${body.errors.map(e => e.message).join('; ')}`)
     if (r.status >= 400 || !body.data) fail(`Linear answered HTTP ${r.status} with no data`)
     return body.data
@@ -99,13 +120,12 @@ export function linearViaApi ({ post, apiKey }) {
     },
     createIssue ({ team, title, description }) {
       const teamId = request(TEAM, { key: team }).teams?.nodes?.[0]?.id || fail(`no Linear team has the key ${team}`)
-      const created = request(CREATE, { input: { teamId, title, description } }).issueCreate
-      // Linear said yes, so the issue may exist whether or not its key can be read, and a retry
-      // makes a duplicate (as DESIGN.md decision 150 says for Jira).
-      if (!created?.success || !created.issue?.identifier) {
-        fail(`Linear did not answer the new issue's key, so it may have been created. Search team ${team} for "${title}" before retrying, ` +
-          'then record it on this work with `rig ticket <KEY> --work <id>`.')
-      }
+      // Once the create is sent, an answer rig cannot read leaves the issue possibly made, and a
+      // retry makes a duplicate (as DESIGN.md decision 150 says for Jira).
+      const mayExist = () => fail(`Linear did not answer the new issue's key, so it may have been created. Search team ${team} for "${title}" before retrying, ` +
+        'then record it on this work with `rig ticket <KEY> --work <id>`.')
+      const created = request(CREATE, { input: { teamId, title, description } }, { onLost: mayExist }).issueCreate
+      if (!created?.success || !created.issue?.identifier) mayExist()
       return created.issue.identifier
     },
     commentIssue (key, body) {

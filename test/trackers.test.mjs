@@ -53,7 +53,26 @@ test('trackerOfKey: two orgs claiming one prefix in the same kind of tracker rea
   const same = { a: { kind: 'jira', project: 'PP' }, b: { kind: 'jira', project: 'PP' } }
   assert.equal(trackerOfKey(same, 'PP-1', []).kind, 'jira')
   const split = { a: { kind: 'jira', project: 'PP' }, b: { kind: 'linear', team: 'PP' } }
-  assert.equal(trackerOfKey(split, 'PP-1', ['a']).kind, 'ambiguous')
+  assert.equal(trackerOfKey(split, 'PP-1', []).kind, 'ambiguous')
+})
+
+test('trackerOfKey: when the work\'s orgs keep no tracker for the key, the one kind the data root keeps holds it', () => {
+  const trackers = { lin: { kind: 'linear' }, gh: { kind: 'github', repo: 'gh/tracker' } }
+  assert.equal(trackerOfKey(trackers, 'XYZ-7', ['gh']).kind, 'linear', 'fetched at rig new from Linear, so told there at close')
+  assert.equal(trackerOfKey({ ...trackers, j: { kind: 'jira', project: 'MAIN' } }, 'XYZ-7', ['gh']).kind, 'ambiguous')
+})
+
+test('trackerOfKey: the reason for none says what each org keeps, an org rig.json does not name included', () => {
+  const { reason } = trackerOfKey({ gh: { kind: 'github', repo: 'gh/t' }, quiet: { kind: 'none' } }, 'ABC-1', ['gh', 'quiet', 'someoss'])
+  assert.match(reason, /gh: github, quiet: none, someoss: no tracker/)
+})
+
+test('trackerOfKey: a prefix two kinds both claim goes to the claim the work\'s own org makes', () => {
+  const trackers = { a: { kind: 'jira', project: 'ABC' }, b: { kind: 'linear', team: 'ABC' } }
+  assert.deepEqual(trackerOfKey(trackers, 'ABC-1', ['b']), { kind: 'linear', org: 'b', config: trackers.b })
+  const r = trackerOfKey(trackers, 'ABC-1', ['c'])
+  assert.equal(r.kind, 'ambiguous')
+  assert.match(r.reason, /a \(jira\) and b \(linear\) both claim ABC/)
 })
 
 test('trackerOfKey: a key of neither shape is said to be so', () => {
@@ -165,6 +184,46 @@ test('doctor names a missing Linear API key when an org tracks in Linear', () =>
   setLinear(state)
   assert.match(r.out, /Linear API key — Linear ticket creation, fetch and write-back will not work/)
   assert.doesNotMatch(r.out, /twg present/, 'no org tracks in Jira, so twg is not asked about')
+})
+
+// The real Linear adapter, for what is asked of the key before any request: no test sends one.
+const realLinear = (extra = {}) => {
+  const env = { ...install.env, LINEAR_API_KEY: '', ...extra }
+  delete env.RIG_FAKE_LINEAR
+  return env
+}
+
+test('a Linear tracker with no team refuses --ticket before the work is made', () => {
+  setTracker({ kind: 'linear' })
+  const r = install.rig(['new', 'teamless', '--title', 'No team', '--ticket'], { input: 'brief' })
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /tracker for acme is Linear but has no "team"/)
+  assert.ok(!fs.existsSync(path.join(install.dataRoot, 'work', 'teamless')), 'no record left behind')
+})
+
+test('doctor names the key file that is missing, rather than asking for one', () => {
+  setTracker({ kind: 'linear', team: 'ABC' })
+  const missing = path.join(install.tmp, 'no-such', '.secrets.env')
+  const machineFile = path.join(install.install, 'rig.local.json')
+  const local = readJson(machineFile)
+  fs.writeFileSync(machineFile, JSON.stringify({ ...local, linear: { keyFile: missing } }, null, 2))
+  try {
+    const r = install.rig(['doctor'], { env: realLinear() })
+    assert.ok(r.out.includes(`Linear API key — rig.local.json's linear.keyFile names ${missing}, which does not exist`), r.out)
+  } finally {
+    fs.writeFileSync(machineFile, JSON.stringify(local, null, 2))
+  }
+})
+
+test('doctor still reports on a machine with two data roots and none current, one of them tracking in Linear', () => {
+  const other = path.join(install.tmp, 'other-root')
+  fs.mkdirSync(other, { recursive: true })
+  fs.writeFileSync(path.join(other, 'rig.json'), JSON.stringify({ orgs: ['beta'], tracker: { beta: { kind: 'none' } } }))
+  const machine = path.join(install.tmp, 'two-roots.local.json')
+  fs.writeFileSync(machine, JSON.stringify({ workRoot: install.workRoot, dataRoots: { a: { path: install.dataRoot }, b: { path: other } } }))
+  const r = install.rig(['doctor'], { env: realLinear({ RIG_LOCAL_CONFIG: machine }) })
+  assert.match(r.out, /none is current/)
+  assert.match(r.out, /Linear API key/, 'the report goes on past the selection it cannot make')
 })
 
 test('an org tracking in Jira, with twg missing, says plainly that twg is what is missing', () => {

@@ -197,8 +197,9 @@ function rootFindings (root) {
 //   gh                'ok' | 'missing' | anything else for a gh that is not authenticated
 //   jira              { needed, present } — needed when any root has an org tracking in
 //                     Jira, since twg is one tool on one machine
-//   linear            { needed, present }: the same for Linear, `present` being whether
-//                     this machine has a Linear API key
+//   linear            { needed, present, problem }: the same for Linear, `present` being
+//                     whether this machine has a Linear API key, `problem` why not when
+//                     the machine file names a key file rig cannot read
 //   gitConfig         { longpaths, symlinks } as git answered them, or null without git
 //   workRoot          { path, exists, entries } — `entries` is what is directly under it,
 //                     minus the two things rig keeps there itself
@@ -271,7 +272,7 @@ export function doctorFindings (snap = {}) {
   }
   if (snap.linear?.needed) {
     out.push(check('Linear API key', snap.linear.present,
-      { bad: 'Linear ticket creation, fetch and write-back will not work (LINEAR_API_KEY, or rig.local.json\'s linear.keyFile)' }))
+      { bad: snap.linear.problem || 'Linear ticket creation, fetch and write-back will not work (LINEAR_API_KEY, or rig.local.json\'s linear.keyFile)' }))
   }
 
   // Skipped rather than attempted without git, like every git-dependent check below it.

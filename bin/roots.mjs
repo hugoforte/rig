@@ -329,6 +329,8 @@ export const readOrg = location => readJsonFile(location.orgFile)
 // The two writers. `edit` is handed the file as it is — `null` when it does not exist yet,
 // which is the distinction that decides whether a stamp is written — and returns what
 // should be there.
+// The machine half as it sits on disk, for a key read before, or without, a data root in hand.
+export const readMachine = location => readJsonFile(location.localFile)
 export const writeMachine = (location, edit) => writeJsonFile(location.localFile, edit(readJsonFile(location.localFile)))
 export const writeOrg = (location, edit) => writeJsonFile(location.orgFile, edit(readJsonFile(location.orgFile)))
 

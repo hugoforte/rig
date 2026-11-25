@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { RigError, TrackerError } from './errors.mjs'
 import { githubViaGh, githubInMemory } from './github.mjs'
 import { twgViaCli, twgInMemory, fieldValue } from './jira.mjs'
-import { linearViaApi, linearInMemory, linearApiKey, postViaNode } from './linear.mjs'
+import { linearViaApi, linearInMemory, linearApiKey, linearKeyFile, postViaNode } from './linear.mjs'
 import { trackerOfKey, providers, isProjectKey, isGithubKey } from './trackers.mjs'
 import { worktrees, remotesOnGitHub, remotesInDirectory } from './worktrees.mjs'
 import { checkouts, unreadable, REAL_MACHINE, LOCK_STALE_MS } from './checkouts.mjs'
@@ -31,7 +31,7 @@ import { contextDocProblems, sectionOf, promoteHeadings } from './contextdoc.mjs
 import { doctorFindings, problemCount, ISSUES_URL } from './doctor.mjs'
 import { pushTriggers, quieterPrefixes, pushTriggersLabel } from './deploys.mjs'
 import { stackOf, stageOrder, nextStage, unknownStages, stageBranchProblem, stageTable, renderPlanRegion, refreshedPlan, planIsStale, adriftNote, onLandedStage, backToWorkBranch, escapeRe, withdrawalOf, withdrawnLabel, stackState } from './stages.mjs'
-import { locate, withDataRoot, load, readOrg, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
+import { locate, withDataRoot, load, readOrg, readMachine, writeMachine, writeOrg, strayOrgKeys, sameDir, insideDir, registry, workIdAt, rootHoldingWork, rootsCataloguing, DEFAULT_ROOT_NAME, LOCAL_CONFIG_ENV } from './roots.mjs'
 
 // The tool checkout this file is part of, and the installation a run is a run *of* unless
 // it is told otherwise: a test drives this code against a throwaway installation in a temp
@@ -512,18 +512,19 @@ const persistFakeTrackers = () => { current.github.persist(); current.jira.persi
 const trackerProviders = () => (current.providers ??= providers({ github, jira, linear }))
 
 // The Linear API key, read at the call that needs it: from LINEAR_API_KEY, else the dotenv file
-// the machine half's `linear.keyFile` names, where `~` is the home folder.
+// the machine half's `linear.keyFile` names. Read off the machine file itself, which needs no
+// data root in hand: doctor asks on a machine whose root it cannot select.
 function linearKeyOfRun () {
-  const named = config().linear?.keyFile
-  const home = env().USERPROFILE || env().HOME || os.homedir()
-  const keyFile = typeof named === 'string' && named ? named.replace(/^~(?=$|[\\/])/, home) : null
+  const { localFile } = registry(toolRoot(), env())
+  const keyFile = linearKeyFile(readMachine({ localFile })?.linear?.keyFile,
+    { home: env().USERPROFILE || env().HOME || os.homedir(), dir: path.dirname(localFile) })
   return linearApiKey({ env: env(), keyFile, readFile: f => fs.readFileSync(f, 'utf8') })
 }
-// Whether a Linear call would have a key, for the two places that ask before any call is
-// made. A key file named and missing is no key, which those places say in their own words.
-function linearKeyPresent () {
-  try { return linear().present() } catch (e) {
-    if (e instanceof TrackerError) return false
+// Whether a Linear call would have a key, and why not, for the two places that ask before any
+// call is made.
+function linearKeyState () {
+  try { return { present: linear().present() } } catch (e) {
+    if (e instanceof TrackerError) return { present: false, problem: e.message }
     throw e
   }
 }
@@ -1601,6 +1602,8 @@ const ticketBody = (work, prose, { link }) => [
   '', `Opened by \`rig new ${work.id} --ticket\`.`,
 ].join('\n')
 
+const noLinearTeam = t => `tracker for ${t.org} is Linear but has no "team" in rig.json: the team's key, the prefix of its issue keys (ABC in ABC-123)`
+
 // Creates a ticket in the org's tracker, or previews it: `dryRun` prints what would be
 // created and returns null without calling out. GitHub: the issue is the ticket, the
 // context doc is the design (DESIGN.md §7.1) — a thin body, the brief's first paragraph,
@@ -1653,7 +1656,7 @@ function createTicket (cfg, work, brief, orgFlag, { dryRun = false, fields: fiel
   // The whole brief, as Jira gets it: a Linear workspace's readers may have no access to the
   // data root either.
   if (t.kind === 'linear') {
-    if (!t.team) die(`tracker for ${t.org} is Linear but has no "team" in rig.json: the team's key, the prefix of its issue keys (ABC in ABC-123)`)
+    if (!t.team) die(noLinearTeam(t))
     if (fieldOverrides.length) warn('--field is ignored for a Linear tracker')
     if (parent) warn('--parent is ignored for a Linear tracker')
     const description = ticketBody(work, brief.trim() || summary, { link: true })
@@ -2386,14 +2389,15 @@ cmds.init = ({ flags }) => {
   if (Object.values(cfg.tracker || {}).some(t => t.kind === 'jira') && !jira().present()) {
     warn('twg not found on PATH — Jira ticket creation, fetch and write-back need it')
   }
-  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'linear') && !linearKeyPresent()) {
-    warn('no Linear API key: Linear ticket creation, fetch and write-back need one (LINEAR_API_KEY, or rig.local.json\'s linear.keyFile)')
+  if (Object.values(cfg.tracker || {}).some(t => t.kind === 'linear')) {
+    const key = linearKeyState()
+    if (!key.present) warn(`${key.problem || 'no Linear API key'}: Linear ticket creation, fetch and write-back need one (LINEAR_API_KEY, or rig.local.json's linear.keyFile)`)
   }
 
   say('')
   if (!orgs.length) {
     say('Not set up yet: no orgs in rig.json. Run the setup interview — `rig prompt setup` —')
-    say('or `rig init --orgs a,b --tracker a=github:owner/repo,b=jira:KEY` directly.')
+    say('or `rig init --orgs a,b --tracker a=github:owner/repo,b=jira:KEY,c=linear:TEAM` directly.')
     say('')
   }
   const missing = orgs.filter(o => !effectiveIdentity(cfg, o).email)
@@ -2524,6 +2528,7 @@ cmds.new = ({ flags, positional }) => {
     if (Object.keys(t.fields || {}).some(isParent)) {
       die(`"parent" in ${t.org}'s rig.json fields is not a field rig sets — remove it, and pass --parent <key> to rig new`)
     }
+    if (t.kind === 'linear' && !t.team) die(noLinearTeam(t))
   }
   // The ticket decision must be explicit whenever it could matter (DESIGN direction:
   // "gates, not stages"). A data root with no live tracker anywhere has no decision to make.
@@ -7066,7 +7071,7 @@ function doctorSnapshot () {
     freshness: doctorFreshness(cfg, tool),
     gh: github().auth(),
     jira: { needed: jiraTracked, present: jiraTracked && jira().present() },
-    linear: { needed: linearTracked, present: linearTracked && linearKeyPresent() },
+    linear: linearTracked ? { needed: true, ...linearKeyState() } : { needed: false, present: false },
     // Skipped rather than attempted without git: doctor is the command you run *because*
     // something is wrong, so it has to reach the end and report everything it can.
     gitConfig: hasGit
@@ -7116,11 +7121,12 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        --data-repo owner/name      join that private data repo, or create it if absent
        --name <name>               what to call this data root; it becomes the current one
        [--email x] [--work-root d] [--data-root d]            -> rig.local.json (this machine)
-       [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY] -> rig.json (the data root)
+       [--orgs a,b] [--tracker a=github:owner/repo,b=jira:KEY,c=linear:TEAM,d=none] -> rig.json (the data root)
   rig new <id> --title "..."      create a work (reads a brief on stdin)
        --key K | --ticket [--org o] [--field k=v,...] [--parent KEY] [--dry-run] | --no-ticket
        one of the three is required whenever a tracker is configured (the ticket
-       decision must be explicit); --key PROJ-42 fetches its brief from Jira;
+       decision must be explicit); --key PROJ-42 fetches its brief from the
+       org's Jira or Linear;
        --ticket creates in the org's tracker (rig.json); --parent PROJ-7 files a
        Jira ticket under that epic; --dry-run previews and creates nothing;
        --no-ticket records a declined ticket

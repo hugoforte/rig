@@ -30,26 +30,35 @@ const prefixOf = t => (t.kind === 'jira' ? t.project : t.kind === 'linear' ? t.t
 //   { kind: 'jira' | 'linear', org, config }    the tracker that holds it
 //   { kind: 'none' | 'ambiguous' | 'unknown', reason }   nothing to tell, and why
 //
-// A `PROJ-123` key goes first to the org whose tracker claims its prefix (a Jira `project`, a
-// Linear `team`), whichever orgs the work has; then to the one kind of tracker the work's orgs
-// keep. Two kinds that could hold it are not guessed between.
+// A `PROJ-123` key goes, in order:
+//   1. to the org whose tracker claims its prefix (a Jira `project`, a Linear `team`), whichever
+//      orgs the work has; where two kinds claim it, to the claim the work's own org makes;
+//   2. to the one kind of tracker the work's orgs keep;
+//   3. when they keep none, to the one kind the data root keeps, which is where `rig new --key`
+//      fetched it from before the work had repos.
+// Two kinds that could hold it are not guessed between.
 export function trackerOfKey (trackers, key, orgs) {
   if (isGithubKey(key)) return { kind: 'github' }
   if (!isProjectKey(key)) return { kind: 'unknown', reason: `"${key}" is neither PROJ-123 nor owner/repo#n` }
   const prefix = key.slice(0, key.indexOf('-'))
   const entries = Object.entries(trackers || {}).filter(([, t]) => t && PROJECT_KINDS.includes(t.kind))
-  const claims = entries.filter(([, t]) => prefixOf(t) === prefix)
-  const held = claims.length ? claims : entries.filter(([org]) => orgs.includes(org))
-  const kinds = [...new Set(held.map(([, t]) => t.kind))]
-  if (kinds.length === 1) {
-    const [org, config] = held[0]
-    return { kind: config.kind, org, config }
+  const inWork = ([org]) => orgs.includes(org)
+  const kindsOf = held => [...new Set(held.map(([, t]) => t.kind))]
+  const who = held => held.map(([org, t]) => `${org} (${t.kind})`).join(' and ')
+  const route = ([org, config]) => ({ kind: config.kind, org, config })
+
+  let claims = entries.filter(([, t]) => prefixOf(t) === prefix)
+  if (kindsOf(claims).length > 1 && kindsOf(claims.filter(inWork)).length === 1) claims = claims.filter(inWork)
+  if (claims.length) {
+    return kindsOf(claims).length === 1 ? route(claims[0])
+      : { kind: 'ambiguous', reason: `${who(claims)} both claim ${prefix}; give the work a repo in one of those orgs, or the prefix to one of them only` }
   }
-  if (kinds.length > 1) {
-    const who = held.map(([org, t]) => `${org} (${t.kind})`).join(' and ')
-    return { kind: 'ambiguous', reason: `${who} could each hold it; give one of them "${prefix}" as its project or team in rig.json` }
+  for (const held of [entries.filter(inWork), entries]) {
+    const kinds = kindsOf(held)
+    if (kinds.length === 1) return route(held[0])
+    if (kinds.length > 1) return { kind: 'ambiguous', reason: `${who(held)} could each hold it; give one of them "${prefix}" as its project or team in rig.json` }
   }
-  const kept = orgs.length ? orgs.map(org => `${org}: ${trackers?.[org]?.kind || 'none'}`).join(', ') : 'no org'
+  const kept = orgs.length ? orgs.map(org => `${org}: ${trackers?.[org]?.kind || 'no tracker'}`).join(', ') : 'no org'
   return { kind: 'none', reason: `no tracker in rig.json holds it (${kept})` }
 }
 
