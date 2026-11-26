@@ -136,6 +136,10 @@ _Avoid_: restored (that is a folder rebuilt from the record), revived, unclosed
 What changed for someone once a work landed, and why that is good, in a sentence or two a person outside the work can read. Recorded with its date, like a gate, because nothing can derive it later; not a gate, since nothing stops for it. Saying it again replaces it.
 _Avoid_: summary, result, release note
 
+**Chat**:
+A conversation in an agent host that works on a work, recorded on the work by the link the host gives it. A work keeps every chat that took it on, oldest first, and the newest is the current one. rig stores the link and never calls the host.
+_Avoid_: thread (a host's word for it), session (the transcript a host keeps on disk)
+
 **Earlier works**:
 The works that touched a repo and closed in the 90 days before a work's last mutating command, at most ten, listed under that repo in the generated work file: an index of close date, id, title and outcome, whose context docs and notes the agent reads on demand. Read from the work's own data root only.
 _Avoid_: history, prior art, related work

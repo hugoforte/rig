@@ -108,21 +108,38 @@ A bare name is looked up in each of the data root's orgs in turn. `owner/repo` n
 
 **A branch can be a deploy.** A repo whose GitHub Actions workflow runs on push to `fix/**` puts every push of a `fix/` work branch wherever that workflow deploys. So when `rig attach` (or `rig new --repos`) cuts a branch that one of the repo's `.github/workflows` files names in `on.push.branches`, it warns, naming each workflow with the filter that matched and the `--type` that would not, before anything is pushed. `rig status` says it on the repo's `pushes` line while the work is open, and `rig doctor` names it without counting it. It is a warning, never a refusal: a hotfix branch is often meant to deploy. rig never renames a branch, so a work cut on the wrong type pushes only when a deploy is meant, or starts again with the other `--type`. A trigger on every push, or on tags alone, is not read (DESIGN.md decision 231).
 
-### Naming the chat
+### Binding the chat
 
-Once `rig new` has succeeded, or `rig restore` on a pickup, **name the chat for the work**, so it
-reads as that work from its first turn and not from its first handoff. rig cannot see the agent
-host, so this is the agent's: in T3 Code, `t3_thread_update` with `rename` and the title
-`RIG - [KEY] Short description`.
+Once `rig new` has succeeded, or `rig restore` on a pickup, **bind the chat to the work**: name it
+for the work, record it, and link the work's issues to it, so it reads as that work from its first
+turn and each can be found from the other. rig records the chat's link and never calls the agent
+host, so the host's side is the agent's (DESIGN.md decision 233):
 
-- **Key**: the first entry on `rig status`'s `tickets` line, with a GitHub issue (`owner/repo#N`)
-  written `repo#N`. A work with no ticket uses its id.
-- **Description**: the work's title cut to about five words, leading with the product when the
-  work is about one. It must not end in a number, which a handoff would read as its count.
+1. **Rename the chat** `RIG - [KEY] <id>`: in T3 Code, `t3_thread_update` with `rename`.
+   - **Key**: the first entry on `rig status`'s `tickets` line, with a GitHub issue
+     (`owner/repo#N`) written `repo#N`.
+   - **Id**: the work's id, so works that share a ticket stop sharing a title. An id that ends in
+     a digit is followed by a short description, `RIG - [KEY] <id> Short description`, because a
+     handoff reads a trailing number as its count.
+   - **Description**, where one is wanted: the work's title cut to about five words, leading with
+     the product when the work is about one, and never ending in a number.
+   - A work with no ticket has only its id for a key, so its title is
+     `RIG - [<id>] Short description`.
 
-A title already in that form stays as it is, count and all. Name only the chat you are in, and
-only when it is the work's own; one that starts several works or is passing through names nothing.
-A host with no such action has nothing to do.
+   A title already in that form stays as it is, count and all.
+2. **Record the chat** with `rig chat <link>`, or `--chat <link>` on the `rig new` or
+   `rig restore` just run. In T3 Code the link is the current thread's
+   `t3-thread://v2/<environment>/<thread>`: `t3_thread_list` gives `currentThreadId`, and the
+   matching thread's `link`. `rig status` names the current chat, `rig list --json` carries `chat`
+   and `chats`, bare `rig chat` lists them, and `rig chat --remove <link>` takes one recorded by
+   mistake off the record.
+3. **Link each GitHub issue** on `rig status`'s `tickets` line to the chat: in T3 Code,
+   `link_issue` with the issue's URL.
+
+Bind only the chat you are in, and only when it is the work's own; one that starts several works or
+is passing through binds nothing. Every chat that takes the work on binds itself: a delegated one,
+the next after a handoff, one on another machine. The newest is the current chat, and the earlier
+ones stay as the work's history. A host with no such action has nothing to do.
 
 ## Stops
 
@@ -202,6 +219,11 @@ skipped, and none waits. rig records the choice and what the agent decided.
    derive later; saying it again replaces it. `rig next` offers it once every PR has merged,
    and nothing refuses without one; `rig close` does not ask (see "Closing"), and it can be
    recorded after the close. `rig list --json` carries it for whatever renders what landed.
+
+   The **chats** are the fourth: each agent-host chat the work ran in, as `chats: [{ link, at }]`,
+   oldest first, appended by `rig chat <link>` and never rewritten (see "Binding the chat"). That
+   a chat was the work's on a date is a fact nothing can observe afterwards; the last entry is the
+   current one. The link is stored as the host gave it and never parsed.
 
    A repo's record carries `branches[]` — one entry per branch of this work it holds, each
    with the base it lands on and, once merged, that PR's terminal facts. A base belongs to the
@@ -387,7 +409,7 @@ Two habits worth keeping from the docs this inherits:
   expensive-to-rediscover facts. This is the section that must still be useful in two years.
 
 **End the design gate with `rig save --designed --adversarial` (or `--no-adversarial`).** Every rig command that changes a work
-(`new`, `ticket`, `attach`, `detach`, `restore`, `reopen`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
+(`new`, `ticket`, `chat` with a link, `attach`, `detach`, `restore`, `reopen`, `plan`, `save`, `note`, `close`, `backfill`, `check --run`) ends by committing the whole
 data root and pushing it when it has an upstream — one line says which commit and whether
 the push landed; a push that fails warns and never dies. But the context doc is edited by
 you, not by rig, so when the Direction section is agreed, run:
@@ -795,6 +817,13 @@ anyway: a report, never a stop.
 
 **Not a gate.** A command you run when the stages are in. Idempotent like everything else: a
 repo that already has an open PR is reported, not duplicated.
+
+**Link the PRs to the chat.** After `rig pr`, and after each stage PR opens, link every PR of the
+work to the chat bound to it (see "Binding the chat") and watch them, so the chat wakes on their
+checks and reviews: in T3 Code, `link_pull_requests` with each PR's URL, then
+`watch_pull_request`. A chat the host says may not watch, such as a delegated child, links them and
+hands back as the host says. "Closing" stops the watching. A chat passing through links nothing,
+and a host with no such action has nothing to do.
 
 **The PR is kept true.** A work's scope moves while its PR is open: a ticket folded in, the
 Direction rewritten after a trial run, the title corrected, a stage dropped. `rig pr --refresh`
