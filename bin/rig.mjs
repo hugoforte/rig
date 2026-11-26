@@ -2618,6 +2618,9 @@ cmds.new = ({ flags, positional }) => {
     .replace(/\{\{KEYS\}\}/g, work.tickets.join(', ') || '_none_')
     .replace(/\{\{DATE\}\}/g, new Date().toISOString().slice(0, 10))
     .replace(/\{\{BRIEF\}\}/g, brief || fetched?.body || '_TODO: one line, then the narrative. State scope explicitly._'))
+  // With the record itself, so a ticket or a repo that refuses below leaves the work bound to
+  // the chat that made it.
+  if (chat) recordChat(work, chat)
   saveWork(cfg, work)
 
   if (flags.ticket && work.tickets.length) {
@@ -2636,6 +2639,7 @@ cmds.new = ({ flags, positional }) => {
   say(`  folder   ${workDir(cfg, id)}`)
   say(`  branch   ${branch}`)
   say(`  tickets  ${ticketsLabel(work)}`)
+  if (chat) say(`  chat     ${chat}`)
   say('')
 
   if (repos.length) {
@@ -2644,12 +2648,6 @@ cmds.new = ({ flags, positional }) => {
     say('No repos attached yet:')
     say(`  ${C.dim(`rig attach <repo> --work ${id}`)}   add one, once per repo`)
     say(`  ${C.dim('rig prompt select-repos')}   or have your agent choose them with you`)
-  }
-  // Last, so the work it binds to is the one the steps above made.
-  if (chat) {
-    recordChat(work, chat)
-    saveWork(cfg, work)
-    ok(`${id}: recorded the chat ${chat}`)
   }
 }
 
@@ -2927,11 +2925,7 @@ cmds.restore = ({ flags, positional }) => {
   if (work.closedAt) die(`${work.id} is ${work.abandonedAt ? 'abandoned' : 'closed'} — there is nothing to restore${landedPrs(work) ? '' : ` (\`rig reopen ${work.id}\` if that was a mistake)`}`)
   if (!work.repos.length) die(`${work.id} has no repos attached — there is nothing to restore`)
   restoreFolder(cfg, work, { tip: !!flags.tip, setup: !!flags.setup })
-  if (chat && recordChat(work, chat)) {
-    commitAs(work.id, 'chat')
-    saveWork(cfg, work)
-    ok(`${work.id}: recorded the chat ${chat}`)
-  }
+  if (chat) bindChat(cfg, work, chat)
 }
 
 // The folder `restore` rebuilds, and `reopen` after it has put the record back to open.
@@ -3010,19 +3004,27 @@ cmds.ticket = ({ flags, positional }) => {
 // The chats a work has run in, oldest first: each a link the agent host gave, and the date it
 // was recorded. The last is the current one. The link is stored as given and never parsed, so
 // rig names no host and calls none (DESIGN.md decision 233); only its shape is asked, so that a
-// key or a title passed by mistake is refused.
-const isChatLink = v => typeof v === 'string' && /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(v)
+// key or a title passed by mistake is refused, and so is a link that would be unsafe to show or
+// to commit: one whatever shows the chat would run as script, and one carrying a password.
 const currentChat = work => (work.chats || []).at(-1) ?? null
+const distinctChats = chats => new Set(chats.map(c => c.link)).size
+
+// The link, or dies saying why it is not one rig records.
+function chatLink (v) {
+  const shape = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\s]*)\S*$/i.exec(v)
+  if (!shape) die(`"${v}" is not a link: a chat is recorded by its scheme://… link, as the agent host gives it`)
+  if (['javascript', 'data', 'vbscript'].includes(shape[1].toLowerCase())) die(`a ${shape[1].toLowerCase()}: link is refused: whatever shows the work's chat may open it`)
+  if (shape[2].includes('@')) die("a chat's link carries no user or password: it is committed to the data root and shown by rig status")
+  return v
+}
 
 // `--chat <link>` on `rig new` and `rig restore`, checked before the command does anything.
 function chatFlag (flags) {
   const v = flags.chat
   if (v === undefined) return undefined
   if (v === true) die('--chat needs the link of the chat you are in')
-  if (!isChatLink(v)) die(notAChatLink(v))
-  return v
+  return chatLink(v)
 }
-const notAChatLink = v => `"${v}" is not a link: a chat is recorded by its scheme://… link, as the agent host gives it`
 
 // Appends the chat, unless it is the current one already. A chat from earlier in the list is
 // appended again: it has come back, and the list says when each chat was the work's.
@@ -3043,7 +3045,9 @@ cmds.chat = ({ flags, positional }) => {
     if (positional.length) die('--remove takes the one link it removes, and nothing else')
     const held = [...new Set((work.chats || []).map(c => c.link))]
     if (!held.includes(flags.remove)) die(`${flags.remove} is not a chat recorded on ${id}, which has ${held.join(', ') || 'none'}`)
-    work.chats = work.chats.filter(c => c.link !== flags.remove)
+    // The chat on either side of one recorded by mistake never left, so it is one entry again,
+    // with the date it was first recorded.
+    work.chats = work.chats.filter(c => c.link !== flags.remove).filter((c, i, kept) => i === 0 || kept[i - 1].link !== c.link)
     // A work left with none goes back to the shape it had before any was recorded.
     if (!work.chats.length) delete work.chats
     commitAs(id, 'removed a chat')
@@ -3055,15 +3059,20 @@ cmds.chat = ({ flags, positional }) => {
   if (link === undefined) {
     const chats = [...(work.chats || [])].reverse()
     if (!chats.length) return say(`${id} has no chat recorded: \`rig chat <link>\` records the one you are in`)
-    say(`${id} has run in ${chats.length} chat${chats.length === 1 ? '' : 's'}, newest first:`)
+    const n = distinctChats(chats)
+    say(`${id} has run in ${n} chat${n === 1 ? '' : 's'}, newest first:`)
     chats.forEach((c, i) => say(`  ${c.at.slice(0, 10)}  ${c.link}${i === 0 ? '  (current)' : ''}`))
     return
   }
-  if (!isChatLink(link)) die(notAChatLink(link))
-  if (!recordChat(work, link)) return say(`${link} is already the current chat of ${id}, so there is nothing to do`)
-  commitAs(id, 'recorded')
+  bindChat(cfg, work, chatLink(link))
+}
+
+// Records the chat and commits it, or says it was the current one already.
+function bindChat (cfg, work, link) {
+  if (!recordChat(work, link)) return say(`${link} is already the current chat of ${work.id}, so there is nothing to do`)
+  commitAs(work.id, 'recorded a chat')
   saveWork(cfg, work)
-  ok(`${id}: recorded the chat ${link}`)
+  ok(`${work.id}: recorded the chat ${link}`)
 }
 
 cmds.attach = ({ flags, positional }) => {
@@ -3993,7 +4002,9 @@ cmds.status = ({ flags }) => {
   }
   say(`tickets ${ticketsLabel(work)}`)
   const chat = currentChat(work)
-  if (chat) say(`chat ${chat.link}${work.chats.length > 1 ? ` ${C.dim(`(${work.chats.length - 1} earlier)`)}` : ''}`)
+  // The earlier chats are the others, so the current one come back is not counted among them.
+  const earlier = chat ? distinctChats(work.chats.filter(c => c.link !== chat.link)) : 0
+  if (chat) say(`chat ${chat.link}${earlier ? ` ${C.dim(`(${earlier} earlier)`)}` : ''}`)
   say(`context ${contextFile(id)}`)
   // Named for the lesson review, which asks for a doc only where there is none and writes it
   // where this says, and which may run after the work folder that inlines them is gone.
@@ -7217,8 +7228,8 @@ const USAGE = `  rig init                        one-time setup; "rig prompt set
        [--stops repos,design | none]  the gates the agent waits at for the human;
                                    absent, it waits at both
        [--by-agent]                with --repos: the agent chose them, not the human
-       [--chat <link>]             record the chat you are in as the work's, last
-  rig use [<name>]              which knowledge is in hand; bare, it lists the data
+       [--chat <link>]             record the chat you are in as the work's
+  rig use [<name>]                which knowledge is in hand; bare, it lists the data
                                   roots this machine knows and marks the current one
   rig ticket <key>                record an existing ticket (PROJ-123 or owner/repo#n)
        --replaces <old>            put it in place of a key the record holds, on the work

@@ -126,13 +126,15 @@ host, so the host's side is the agent's (DESIGN.md decision 233):
    - A work with no ticket has only its id for a key, so its title is
      `RIG - [<id>] Short description`.
 
-   A title already in that form stays as it is, count and all.
+   A title already in that form, the work's id included, stays as it is, count and all. One
+   named before the id was part of the form gets the id, and keeps its count at the end.
 2. **Record the chat** with `rig chat <link>`, or `--chat <link>` on the `rig new` or
    `rig restore` just run. In T3 Code the link is the current thread's
    `t3-thread://v2/<environment>/<thread>`: `t3_thread_list` gives `currentThreadId`, and the
    matching thread's `link`. `rig status` names the current chat, `rig list --json` carries `chat`
    and `chats`, bare `rig chat` lists them, and `rig chat --remove <link>` takes one recorded by
-   mistake off the record.
+   mistake off the record. A link with a user or password in it, or a `javascript:`, `data:` or
+   `vbscript:` one, is refused, since the record is committed and whatever shows it may open it.
 3. **Link each GitHub issue** on `rig status`'s `tickets` line to the chat: in T3 Code,
    `link_issue` with the issue's URL.
 

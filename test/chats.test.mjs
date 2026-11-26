@@ -28,7 +28,7 @@ test('rig chat <link> records the chat with its date, and commits the data root'
   assert.equal(chats.length, 1)
   assert.equal(chats[0].link, FIRST)
   assert.match(chats[0].at, ISO)
-  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig chat chatty: recorded')
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig chat chatty: recorded a chat')
 })
 
 test('the chat that is already the current one is recorded once', () => {
@@ -48,14 +48,18 @@ test('an earlier chat that comes back is recorded again, as the current one', ()
   assert.deepEqual(record('chatty').chats.map(c => c.link), [FIRST, SECOND, FIRST])
 })
 
-test('bare rig chat lists the chats newest first, the current one marked', () => {
+test('bare rig chat lists the entries newest first, the current one marked, and counts each chat once', () => {
   const r = rig(['chat', '--work', 'chatty'])
   assert.equal(r.code, 0, r.out)
   const lines = r.stdout.trim().split('\n')
-  assert.match(lines[0], /chatty has run in 3 chats, newest first:/)
+  assert.match(lines[0], /chatty has run in 2 chats, newest first:/)
   assert.match(lines[1], new RegExp(`\\d{4}-\\d{2}-\\d{2}  ${FIRST}  \\(current\\)$`))
   assert.match(lines[2], new RegExp(`\\d{4}-\\d{2}-\\d{2}  ${SECOND}$`))
   assert.match(lines[3], new RegExp(`\\d{4}-\\d{2}-\\d{2}  ${FIRST}$`))
+})
+
+test('rig status counts the earlier chats, not the current one come back', () => {
+  assert.match(rig(['status', '--work', 'chatty']).out, new RegExp(`^chat ${FIRST} \\(1 earlier\\)$`, 'm'))
 })
 
 test('bare rig chat on a work with none says how to record one, and writes nothing', () => {
@@ -67,15 +71,16 @@ test('bare rig chat on a work with none says how to record one, and writes nothi
   assert.equal(gitMust(dataRoot, 'rev-parse', 'HEAD'), head)
 })
 
-test('rig chat --remove takes every entry with that link off the record', () => {
-  const r = rig(['chat', '--remove', FIRST, '--work', 'chatty'])
+test('rig chat --remove takes every entry with that link off the record, and the chat on either side of it is one again', () => {
+  const firstAt = record('chatty').chats[0].at
+  const r = rig(['chat', '--remove', SECOND, '--work', 'chatty'])
   assert.equal(r.code, 0, r.out)
-  assert.deepEqual(record('chatty').chats.map(c => c.link), [SECOND])
+  assert.deepEqual(record('chatty').chats, [{ link: FIRST, at: firstAt }])
   assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig chat chatty: removed a chat')
 })
 
 test('removing the last chat leaves the record as it was before any', () => {
-  assert.equal(rig(['chat', '--remove', SECOND, '--work', 'chatty']).code, 0)
+  assert.equal(rig(['chat', '--remove', FIRST, '--work', 'chatty']).code, 0)
   assert.equal(record('chatty').chats, undefined)
 })
 
@@ -88,10 +93,14 @@ test('a chat asked for badly is refused, says why, and changes nothing', () => {
     [[SECOND, '--remove', FIRST], /--remove takes the one link it removes, and nothing else/],
     [['--remove', SECOND], new RegExp(`${SECOND} is not a chat recorded on chatty, which has ${FIRST}`)],
     [[FIRST, SECOND], /rig chat takes one link/],
+    // Whatever shows the work's chat may open its link, and the record is committed.
+    [['javascript://%0aalert(1)'], /a javascript: link is refused: whatever shows the work's chat may open it/],
+    [['https://someone:hunter2@chat.example.invalid/x'], /a chat's link carries no user or password: it is committed to the data root and shown by rig status/],
   ]) {
     const r = rig(['chat', ...args, '--work', 'chatty'])
     assert.equal(r.code, 1, `${args.join(' ')}\n${r.out}`)
     assert.match(r.out, says)
+    assert.doesNotMatch(r.out, /hunter2/, 'a password in a refused link is not echoed')
   }
   assert.deepEqual(record('chatty').chats.map(c => c.link), [FIRST])
 })
@@ -128,14 +137,28 @@ test('rig new --chat with no link, or not a link, is refused before the work is 
   }
 })
 
-test('rig restore --chat records the chat that picked the work up, after putting its worktrees back', () => {
+test('rig new --chat records the chat even when a repo it was asked to attach refuses', () => {
+  const r = rig(['new', 'half', '--title', 'Half', '--no-ticket', '--repos', 'billing,nosuch', '--chat', FIRST])
+  assert.equal(r.code, 1, r.out)
+  assert.ok(record('half'), 'the work was made')
+  assert.deepEqual(record('half').chats.map(c => c.link), [FIRST])
+})
+
+test('rig restore --chat that is not a link is refused before any worktree is put back', () => {
   assert.equal(rig(['new', 'moved', '--title', 'Moved', '--no-ticket', '--repos', 'billing']).code, 0)
   fs.rmSync(path.join(workRoot, 'moved', 'billing'), { recursive: true, force: true, maxRetries: 5 })
+  const r = rig(['restore', 'moved', '--chat', 'nope'])
+  assert.equal(r.code, 1, r.out)
+  assert.match(r.out, /"nope" is not a link/)
+  assert.equal(fs.existsSync(path.join(workRoot, 'moved', 'billing')), false)
+})
+
+test('rig restore --chat records the chat that picked the work up, after putting its worktrees back', () => {
   const r = rig(['restore', 'moved', '--chat', FIRST])
   assert.equal(r.code, 0, r.out)
   assert.ok(fs.existsSync(path.join(workRoot, 'moved', 'billing', 'README.md')), r.out)
   assert.deepEqual(record('moved').chats.map(c => c.link), [FIRST])
-  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig restore moved: chat')
+  assert.equal(gitMust(dataRoot, 'log', '-1', '--format=%s'), 'rig restore moved: recorded a chat')
 })
 
 test('rig restore --chat records it when every worktree is already here, as on a pickup', () => {
@@ -146,6 +169,14 @@ test('rig restore --chat records it when every worktree is already here, as on a
   const { chats, ...after } = record('moved')
   assert.deepEqual(chats.map(c => c.link), [FIRST, SECOND])
   assert.deepEqual(after, rest, 'a restore records the chat and nothing else')
+})
+
+test('rig restore --chat with the current chat says so, and commits nothing', () => {
+  const head = gitMust(dataRoot, 'rev-parse', 'HEAD')
+  const r = rig(['restore', 'moved', '--chat', SECOND])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /already the current chat of moved, so there is nothing to do/)
+  assert.equal(gitMust(dataRoot, 'rev-parse', 'HEAD'), head)
 })
 
 test('rig restore with no --chat still commits nothing', () => {
@@ -178,4 +209,7 @@ test('rig chat --help and rig help --all carry its lines', () => {
   const all = rig(['help', '--all']).out
   assert.match(all, /rig chat <link>/)
   assert.match(all, /--chat <link>/)
+  // Each command's description starts in the same column.
+  const column = line => line.indexOf(line.trim().split(/ {2,}/)[1])
+  assert.equal(column(all.split('\n').find(l => l.startsWith('  rig use '))), column(all.split('\n').find(l => l.startsWith('  rig ticket <key> '))))
 })
