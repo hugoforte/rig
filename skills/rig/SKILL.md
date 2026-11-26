@@ -33,11 +33,11 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 
 | The request | Start here |
 |---|---|
-| Start a piece of work | `rig prompt new-work`, then `rig prompt select-repos`; name the chat for the work, as `AGENTS.md`'s "Naming the chat" says |
+| Start a piece of work | `rig prompt new-work`, then `rig prompt select-repos`; bind the chat to the work, as `AGENTS.md`'s "Binding the chat" says |
 | Which repos does it touch | `rig prompt select-repos` |
 | First run on this machine | `rig prompt setup` |
 | Standing in a work, what now | `rig next` |
-| Picking up a work someone else left | `rig prompt pickup`: the handoff, the context doc and `rig status` are the trail, and the trail is authoritative; it names the chat too |
+| Picking up a work someone else left | `rig prompt pickup`: the handoff, the context doc and `rig status` are the trail, and the trail is authoritative; it binds the chat too |
 | A work whose folder is not on this machine | `rig restore <id>` |
 | Closed works whose folders are still here | `rig tidy` (`--dry-run` to preview) |
 | Where has this work got to | `rig status` |
@@ -47,7 +47,7 @@ Read `<root>/AGENTS.md` in full. It is the single source of truth for how rig wo
 | Stage PRs show on GitHub as unrelated | `rig stage --link` |
 | Not clear how a stage, or the work branch, should be built: try it more than one way | `rig attempt [<branch>] --n <count>` in the repo's worktree, one agent per `<repo>@<n>` folder; `rig attempt` compares, `--run` checks each, `--keep <n> --why "…"` or `--dropped "why"` ends the set |
 | Every stage still to land has passed its review | `rig stage --land`, then hand over at the work branch's PR; stop at a stage instead when its review raised a design question |
-| Put it up for review | write the context doc's `## Pull request` section (what the work delivers: Summary, Evidence, Merge Danger), with your PR-body skill if you have one, then `rig pr` |
+| Put it up for review | write the context doc's `## Pull request` section (what the work delivers: Summary, Evidence, Merge Danger), with your PR-body skill if you have one, then `rig pr`; then link the PRs to the chat, as `AGENTS.md`'s "Opening the pull requests" says |
 | The PR says what the work used to be | `rig pr --refresh` |
 | A big PR, on the work branch, a stage or anyone's by URL: help a reviewer read it, or its page is behind its head | the `rig-pr-page` skill; `rig page [<url>]` says whether one is due and whether the data root has a site for it; `--public` is the person's word only |
 | A PR is open: review threads, adversarial review, hand-over | `rig next`; `rig save -m "adversarial review" --reviewed` once that review is done |

@@ -108,7 +108,7 @@ root the link points at, so the ticket has to stand on its own.
 
 ## After
 
-Name the chat for the work, as `AGENTS.md`'s "Naming the chat" says.
+Bind the chat to the work, as `AGENTS.md`'s "Binding the chat" says.
 
 Continue with the repo interview: `rig prompt select-repos`.
 

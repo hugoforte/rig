@@ -67,15 +67,25 @@ test('the stops are listed once, in AGENTS.md, and the skill and prompts that st
   }
 })
 
-test('the chat\'s title is set out once, in AGENTS.md, and starting or picking up a work points there (#363)', () => {
-  // A host's handoff counts up from this form, so a copy of it in each prompt that drifted would
-  // leave threads the handoff no longer recognises.
+test('binding the chat is set out once, in AGENTS.md, and starting or picking up a work points there (#363, #391)', () => {
+  // A host's handoff counts up from the title's form, so a copy of it in each prompt that drifted
+  // would leave threads the handoff no longer recognises.
   const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
-  assert.match(agents, /^### Naming the chat$/m)
-  assert.match(agents, /`RIG - \[KEY\] Short description`/)
+  assert.match(agents, /^### Binding the chat$/m)
+  assert.doesNotMatch(agents, /Naming the chat/, 'the old name is gone, so nothing points at it')
+  const section = agents.split(/^### Binding the chat$/m)[1].split(/^##/m)[0]
+  // The work id in the title, so works sharing a ticket stop sharing a title; the short
+  // description only after an id that ends in a digit, which a handoff would read as its count.
+  assert.match(section, /`RIG - \[KEY\] <id>`/)
+  assert.match(section, /`RIG - \[KEY\] <id> Short description`/)
+  assert.match(section, /`rig chat <link>`/)
+  assert.match(section, /`link_issue`/)
+  const opening = agents.split(/^## Opening the pull requests$/m)[1].split(/^## /m)[0]
+  assert.match(opening, /`link_pull_requests`/)
+  assert.match(opening, /`watch_pull_request`/)
   for (const file of ['skills/rig/SKILL.md', 'prompts/new-work.md', 'prompts/pickup.md']) {
     const text = fs.readFileSync(path.join(ROOT, file), 'utf8')
-    assert.match(text, /AGENTS\.md`?'s "Naming the chat"/, `${file} points at the rule`)
+    assert.match(text, /AGENTS\.md`?'s "Binding the chat"/, `${file} points at the rule`)
     assert.doesNotMatch(text, /RIG - \[/, `${file} does not copy the form`)
   }
 })
